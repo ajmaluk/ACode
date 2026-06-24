@@ -7,7 +7,7 @@ import { TerminalPanel } from "../terminal/TerminalPanel";
 import {
   GitBranch, FileCode, Check, X,
   RefreshCw, Globe, ListTodo, Circle,
-  Plus, Loader2, ArrowLeft, ArrowRight, ArrowUp, Eye,
+  Plus, Loader2, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Eye,
   Code2, PanelRightClose, GitCommitHorizontal,
   Columns, WandSparkles, History, TerminalSquare,
 } from "lucide-react";
@@ -501,14 +501,6 @@ function FileRow({ path, icon, action = "modified" }: { path: string; icon: Reac
       </div>
       <button className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-acode-text-muted hover:text-acode-text-primary" title="Open diff" onClick={handleOpenDiff}><Eye className="w-3 h-3" /></button>
     </div>
-  );
-}
-
-function ArrowDown(props: React.ComponentProps<typeof ArrowRight>) {
-  return (
-    <svg className={props.className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 5v14M19 12l-7 7-7-7" />
-    </svg>
   );
 }
 

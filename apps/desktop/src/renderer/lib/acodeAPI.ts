@@ -1,4 +1,4 @@
-import type { AcodeAPI, AgentSessionMode, AppSettings, FileNode, StreamEvent } from "@acode/shared-types";
+import type { AcodeAPI, AgentSessionMode, AppSettings, DiffProposal, FileNode, StreamEvent } from "@acode/shared-types";
 import { DEFAULT_SETTINGS } from "@acode/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt } from "./skills";
 
@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
 const activeControllers = new Map<string, AbortController>();
 const streamCallbacks = new Map<string, (event: StreamEvent) => void>();
 const streamCleanups = new Map<string, () => void>();
+const pendingDiffProposals = new Map<string, DiffProposal>();
 
 const SETTINGS_CACHE = new Map<string, string>();
 
@@ -67,8 +68,9 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
   let lastCompleteIdx = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith("data: ")) {
-      currentData += (currentData ? "\n" : "") + line.slice(6);
+    if (line.startsWith("data:")) {
+      const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
+      currentData += (currentData ? "\n" : "") + dataContent;
     } else if (line === "" && currentData) {
       if (currentData !== "[DONE]") parsed.push({ data: currentData });
       currentData = "";
@@ -83,13 +85,15 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
 
 async function* streamOpenAI(
   baseUrl: string, apiKey: string, model: string,
-  messages: { role: string; content: string }[], signal?: AbortSignal
+  messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+  const body: Record<string, any> = { model, messages, stream: true };
+  if (maxTokens) body.max_tokens = maxTokens;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, messages, stream: true, max_tokens: 4096 }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!resp.ok) {
@@ -134,15 +138,17 @@ async function* streamOpenAI(
 
 async function* streamAnthropic(
   baseUrl: string, apiKey: string, model: string,
-  messages: { role: string; content: string }[], signal?: AbortSignal
+  messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   const url = baseUrl.replace(/\/+$/, "") + "/v1/messages";
   const systemMsg = messages.find((m) => m.role === "system")?.content || "";
   const chatMessages = messages.filter((m) => m.role !== "system");
+  const body: Record<string, any> = { model, system: systemMsg, messages: chatMessages, stream: true };
+  if (maxTokens) body.max_tokens = maxTokens;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model, system: systemMsg, messages: chatMessages, stream: true, max_tokens: 4096 }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!resp.ok) {
@@ -195,12 +201,12 @@ async function* streamAnthropic(
 
 async function* streamChat(
   baseUrl: string, apiKey: string, apiFormat: string, model: string,
-  messages: { role: string; content: string }[], signal?: AbortSignal
+  messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   if (apiFormat === "anthropic") {
-    yield* streamAnthropic(baseUrl, apiKey, model, messages, signal);
+    yield* streamAnthropic(baseUrl, apiKey, model, messages, signal, maxTokens);
   } else {
-    yield* streamOpenAI(baseUrl, apiKey, model, messages, signal);
+    yield* streamOpenAI(baseUrl, apiKey, model, messages, signal, maxTokens);
   }
 }
 
@@ -234,7 +240,19 @@ const mockAcodeAPI: AcodeAPI = {
     async readFile(path) {
       const { readFile } = await import("@tauri-apps/plugin-fs");
       const bytes = await readFile(path);
-      return new TextDecoder().decode(bytes);
+      const ext = path.split(".").pop()?.toLowerCase() ?? "";
+      const textExts = new Set(["ts", "tsx", "js", "jsx", "json", "md", "mdx", "py", "rs", "css", "html", "yml", "yaml", "toml", "txt", "csv", "xml", "svg", "sh", "bash", "zsh", "fish", "sql", "graphql", "prisma", "env", "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc"]);
+      if (textExts.has(ext)) {
+        return new TextDecoder().decode(bytes);
+      }
+      // For unknown or binary extensions, try UTF-8 decode — if it contains
+      // null bytes or excessive replacement chars, treat as binary and return
+      // a placeholder.
+      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      if (decoded.includes("\0") || (decoded.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
+        return `[Binary file: ${path.split("/").pop()} — ${bytes.length} bytes]`;
+      }
+      return decoded;
     },
     async writeFile(path, content) {
       const { writeFile } = await import("@tauri-apps/plugin-fs");
@@ -278,7 +296,11 @@ const mockAcodeAPI: AcodeAPI = {
         await fsRemove(path);
       }
     },
-    async watchPath() {},
+    async watchPath(_path: string) {
+      // Tauri v2 doesn't expose fs.watch in the JS API yet.
+      // File tree refresh is handled manually via refreshFileTree().
+      // TODO: Implement when @tauri-apps/plugin-fs adds watch support.
+    },
   },
 
   terminal: (() => {
@@ -571,6 +593,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             + workspacePinnedBlock;
 
         let currentHistory: any[] = conversationHistory ? [...conversationHistory] : [];
+        const filteredHistory = currentHistory.filter((msg) => msg.role !== "system");
         let loopCount = 0;
         const MAX_LOOP = 10;
 
@@ -582,19 +605,19 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           ];
 
           // Layered context: if we have a summary and history is long, prune middle
-          if (compactionSummary && currentHistory.length > 10) {
+          if (compactionSummary && filteredHistory.length > 10) {
             messages.push({
               role: "system",
               content: `[CONVERSATION HISTORY SUMMARY (Compacted older history)]\nHere is a summary of the earlier part of the conversation:\n${compactionSummary}\n`
             });
-            for (const msg of currentHistory.slice(-6)) {
+            for (const msg of filteredHistory.slice(-6)) {
               messages.push({
                 role: msg.role === "user" ? "user" : "assistant",
                 content: msg.content,
               });
             }
-          } else if (currentHistory.length > 0) {
-            for (const msg of currentHistory.slice(-20)) {
+          } else if (filteredHistory.length > 0) {
+            for (const msg of filteredHistory.slice(-20)) {
               messages.push({
                 role: msg.role === "user" ? "user" : "assistant",
                 content: msg.content,
@@ -646,7 +669,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           emit({ type: "message-start", messageId: sessionId });
           useChat.setState({ isStreaming: true });
 
-          const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, messages, ac.signal);
+          const maxTokens = settings.maxTokens ?? 4096;
+          const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, messages, ac.signal, maxTokens);
           let fullContent = "";
           let lastMessageId = "";
           for (const p of state.pendingToolCalls) {
@@ -839,8 +863,29 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         return json.choices?.[0]?.message?.content || "";
       }
     },
-    async approveDiff() {},
-    async rejectDiff() {},
+    async approveDiff(sessionId: string, diffId: string) {
+      // The file is already written by executeTool. This just emits the
+      // file-changed event so the UI updates (diff viewer, file tree).
+      const pending = pendingDiffProposals.get(diffId);
+      if (pending) {
+        pendingDiffProposals.delete(diffId);
+        const cb = streamCallbacks.get(sessionId);
+        if (cb) {
+          cb({
+            type: "file-changed",
+            change: {
+              path: pending.filePath,
+              action: "modified",
+              additions: pending.hunks.reduce((n, h) => n + h.newLines, 0),
+              deletions: pending.hunks.reduce((n, h) => n + h.oldLines, 0),
+            },
+          });
+        }
+      }
+    },
+    async rejectDiff(_sessionId: string, diffId: string) {
+      pendingDiffProposals.delete(diffId);
+    },
     onStreamEvent(sessionId, cb) {
       // Clean up previous listener for this session to prevent leaks
       const prevCleanup = streamCleanups.get(sessionId);
@@ -865,8 +910,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         const result = await invoke<{ branch: string; modified: string[]; added: string[]; deleted: string[]; untracked: string[]; ahead?: number; behind?: number }>("git_status", { path: repoPath });
         return { ...result, ahead: result.ahead ?? 0, behind: result.behind ?? 0 };
-      } catch {
-        return { branch: "main", modified: [], added: [], deleted: [], untracked: [], ahead: 0, behind: 0 };
+      } catch (err) {
+        throw new Error(`Git status failed: ${(err as Error)?.message ?? String(err)}`);
       }
     },
     async commit(repoPath, message) {
@@ -881,8 +926,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         return await invoke<{ sha: string; message: string; date: string; author: string }[]>("git_log", { path: repoPath, limit });
-      } catch {
-        return [{ sha: "abc123", message: "Initial commit", date: new Date().toISOString(), author: "unknown" }];
+      } catch (err) {
+        throw new Error(`Git log failed: ${(err as Error)?.message ?? String(err)}`);
       }
     },
   },
@@ -1046,37 +1091,42 @@ function parseToolCalls(text: string): ParsedToolCall[] {
 
 function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied"> {
   return new Promise((resolve) => {
-    const check = async () => {
+    let resolved = false;
+    let unsubscribe: (() => void) | null = null;
+    let useChatRef: any = null;
+
+    const check = () => {
+      if (resolved || !useChatRef) return;
       try {
-        const { useChat } = await import("../store/useAppStore");
-        const { pendingToolCalls } = useChat.getState();
-        const tc = pendingToolCalls.find((t) => t.id === toolCallId);
-        if (!tc) return false;
+        const { pendingToolCalls } = useChatRef.getState();
+        const tc = pendingToolCalls.find((t: any) => t.id === toolCallId);
+        if (!tc) return;
         if (tc.status === "completed") {
+          resolved = true;
+          unsubscribe?.();
           resolve("approved");
-          return true;
+          return;
         }
         if (tc.status === "failed") {
+          resolved = true;
+          unsubscribe?.();
           resolve("denied");
-          return true;
+          return;
         }
       } catch (err) {
         console.error("Error checking tool approval:", err);
       }
-      return false;
     };
 
-    check().then((done) => {
-      if (done) return;
-      let unsubscribe: (() => void) | null = null;
-      const onStoreChange = async () => {
-        const done2 = await check();
-        if (done2 && unsubscribe) {
-          unsubscribe();
-        }
-      };
-      import("../store/useAppStore").then(({ useChat }) => {
-        unsubscribe = useChat.subscribe(onStoreChange);
+    // Import the store and cache the reference
+    import("../store/useAppStore").then(({ useChat }) => {
+      useChatRef = useChat;
+      // Initial check after import
+      check();
+      if (resolved) return;
+      // Subscribe to store changes
+      unsubscribe = useChat.subscribe(() => {
+        if (!resolved) check();
       });
     });
   });
@@ -1090,9 +1140,20 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "write_file") {
-    const { writeFile } = await import("@tauri-apps/plugin-fs");
-    await writeFile(args.path, new TextEncoder().encode(args.content));
-    const lines = args.content.split("\n").length;
+    const { writeFile, readFile: fsReadFile } = await import("@tauri-apps/plugin-fs");
+    let oldContent = "";
+    try {
+      const existingBytes = await fsReadFile(args.path);
+      oldContent = new TextDecoder().decode(existingBytes);
+    } catch { /* new file */ }
+    const newContent = args.content;
+    const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
+    const hunks = [{ oldStart: 1, oldLines: oldContent.split("\n").length, newStart: 1, newLines: newContent.split("\n").length, lines: [] }];
+    const proposal: DiffProposal = { diffId, filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() };
+    pendingDiffProposals.set(diffId, proposal);
+    emit({ type: "diff-proposed", proposal });
+    await writeFile(args.path, new TextEncoder().encode(newContent));
+    const lines = newContent.split("\n").length;
     emit({
       type: "file-changed",
       change: { path: args.path, action: "modified", additions: lines, deletions: 0 }
@@ -1108,9 +1169,16 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
       throw new Error(`Search block not found in file: ${args.path}`);
     }
     const updated = original.replace(args.search, args.replace);
+    const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
+    const oldLines = args.search.split("\n");
+    const newLines = args.replace.split("\n");
+    const hunks = [{ oldStart: 1, oldLines: oldLines.length, newStart: 1, newLines: newLines.length, lines: [] }];
+    const proposal: DiffProposal = { diffId, filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() };
+    pendingDiffProposals.set(diffId, proposal);
+    emit({ type: "diff-proposed", proposal });
     await writeFile(args.path, new TextEncoder().encode(updated));
-    const additions = args.replace.split("\n").length;
-    const deletions = args.search.split("\n").length;
+    const additions = newLines.length;
+    const deletions = oldLines.length;
     emit({
       type: "file-changed",
       change: { path: args.path, action: "modified", additions, deletions }
@@ -1240,9 +1308,9 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
           setTimeout(() => {
             if (!resolved) {
               child.kill().catch(() => {});
-              reject(new Error("Timeout waiting for tools/call response"));
+              reject(new Error("Timeout waiting for tools/call response (30s)"));
             }
-          }, 5000);
+          }, 30000);
         });
 
         return await resultPromise;

@@ -21,6 +21,7 @@ export interface AppSettings {
   codeFontSize: number;
   selectedModel: string;
   selectedProvider: string;
+  maxTokens?: number;
   indexingEnabled?: boolean;
   autoIndex?: boolean;
   maxFileSize?: number;
@@ -42,6 +43,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   codeFontSize: 13,
   selectedModel: "",
   selectedProvider: "",
+  maxTokens: 4096,
 };
 
 export type FileNode = {

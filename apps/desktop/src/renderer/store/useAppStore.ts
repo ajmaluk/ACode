@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  AcodeAPI,
   AgentInfo,
   AgentMode,
   AgentSession,
@@ -26,6 +27,7 @@ import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, fromConfig, canonicaliseBashCommand, type PermissionKey } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt } from "@/lib/skills";
+import { computeContextStats, selectMessagesForCompaction, parseContextWindow, type ContextStats } from "@/lib/contextManager";
 
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
@@ -131,6 +133,31 @@ function detectLanguage(path: string): string {
   return "plaintext";
 }
 
+async function initWorkspaceMemory(api: AcodeAPI, workspacePath: string) {
+  try {
+    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const dotAcode = joinPath(workspacePath, ".acode");
+    const memoryPath = joinPath(dotAcode, "memory.json");
+    if (!(await exists(dotAcode))) {
+      await mkdir(dotAcode);
+    }
+    if (!(await exists(memoryPath))) {
+      const defaultMemory = {
+        projectOverview: "An AI-native developer desktop environment.",
+        keyFiles: [],
+        buildCommands: ["npm run dev", "npm run build"],
+        learnedRules: [
+          "Always run build checks before declaring a task complete.",
+          "Maintain typescript type safety.",
+        ],
+      };
+      await api.fs.writeFile(memoryPath, JSON.stringify(defaultMemory, null, 2));
+    }
+  } catch (err) {
+    console.warn("Failed to initialize workspace memory:", err);
+  }
+}
+
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   activeWorkspaceId: null,
@@ -145,31 +172,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       const path = await api.system.openDirectoryPicker();
       if (!path) { set({ loading: false }); return; }
-      try {
-        const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-        const dotAcode = joinPath(path, ".acode");
-        const memoryPath = joinPath(dotAcode, "memory.json");
-        if (!(await exists(dotAcode))) {
-          await mkdir(dotAcode);
-        }
-        if (!(await exists(memoryPath))) {
-          const defaultMemory = {
-            projectOverview: "An AI-native developer desktop environment.",
-            keyFiles: [],
-            buildCommands: [
-              "npm run dev",
-              "npm run build"
-            ],
-            learnedRules: [
-              "Always run build checks before declaring a task complete.",
-              "Maintain typescript type safety."
-            ]
-          };
-          await api.fs.writeFile(memoryPath, JSON.stringify(defaultMemory, null, 2));
-        }
-      } catch (err) {
-        console.warn("Failed to initialize workspace memory:", err);
-      }
+      await initWorkspaceMemory(api, path);
       const tree = await api.fs.listDir(path);
       const name = basename(path) || "workspace";
       const workspace: Workspace = {
@@ -197,31 +200,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const api = ensureAcodeAPI();
       const path = await api.system.openDirectoryPicker();
       if (!path) { set({ loading: false }); return; }
-      try {
-        const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-        const dotAcode = joinPath(path, ".acode");
-        const memoryPath = joinPath(dotAcode, "memory.json");
-        if (!(await exists(dotAcode))) {
-          await mkdir(dotAcode);
-        }
-        if (!(await exists(memoryPath))) {
-          const defaultMemory = {
-            projectOverview: "An AI-native developer desktop environment.",
-            keyFiles: [],
-            buildCommands: [
-              "npm run dev",
-              "npm run build"
-            ],
-            learnedRules: [
-              "Always run build checks before declaring a task complete.",
-              "Maintain typescript type safety."
-            ]
-          };
-          await api.fs.writeFile(memoryPath, JSON.stringify(defaultMemory, null, 2));
-        }
-      } catch (err) {
-        console.warn("Failed to initialize workspace memory:", err);
-      }
+      await initWorkspaceMemory(api, path);
       const tree = await api.fs.listDir(path);
       const workspace: Workspace = {
         id: "ws-" + toPosix(path),
@@ -397,6 +376,8 @@ export const useGit = create<GitState>((set) => ({
     try {
       const status = await api.git.status(".");
       set({ status });
+    } catch {
+      set({ status: null });
     } finally {
       set({ loading: false });
     }
@@ -436,7 +417,9 @@ function loadEnabledSkills(): Set<string> {
   try {
     const raw = window.localStorage.getItem(ENABLED_SKILLS_STORAGE);
     if (!raw) return new Set(defaults);
-    return new Set(JSON.parse(raw) as string[]);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set(defaults);
+    return new Set(parsed as string[]);
   } catch {
     return new Set(defaults);
   }
@@ -877,7 +860,7 @@ export const useChat = create<ChatState>((set, get) => ({
   thinkingContent: "",
   isStreaming: false,
   activeAgentName: "build",
-  selectedModelId: (() => { try { return JSON.parse(localStorage.getItem("acode.settings.v1") || "{}").selectedModel ?? ""; } catch { return ""; } })(),
+  selectedModelId: "",
   todos: [],
   _pendingChanges: [],
   chatHistory: [],
@@ -943,31 +926,7 @@ export const useChat = create<ChatState>((set, get) => ({
   async startSession(workspacePath, mode) {
     const api = ensureAcodeAPI();
     if (workspacePath) {
-      try {
-        const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-        const dotAcode = joinPath(workspacePath, ".acode");
-        const memoryPath = joinPath(dotAcode, "memory.json");
-        if (!(await exists(dotAcode))) {
-          await mkdir(dotAcode);
-        }
-        if (!(await exists(memoryPath))) {
-          const defaultMemory = {
-            projectOverview: "An AI-native developer desktop environment.",
-            keyFiles: [],
-            buildCommands: [
-              "npm run dev",
-              "npm run build"
-            ],
-            learnedRules: [
-              "Always run build checks before declaring a task complete.",
-              "Maintain typescript type safety."
-            ]
-          };
-          await api.fs.writeFile(memoryPath, JSON.stringify(defaultMemory, null, 2));
-        }
-      } catch (err) {
-        console.warn("Failed to initialize workspace memory:", err);
-      }
+      await initWorkspaceMemory(api, workspacePath);
     }
     const model = useSettings.getState().settings.selectedModel;
     const { sessionId } = await api.agent.startSession({ workspacePath, model, mode });
@@ -1130,6 +1089,7 @@ export const useChat = create<ChatState>((set, get) => ({
         ),
       });
       savePersistedMessages(newSessionMessages);
+      savePersistedSessionSummaries(get().chatSessions);
     }
   },
 
@@ -1408,7 +1368,10 @@ export const useChat = create<ChatState>((set, get) => ({
               )
             : s.chatSessions,
         }));
-        if (sessionId) savePersistedMessages(newSessionMessages);
+        if (sessionId) {
+          savePersistedMessages(newSessionMessages);
+          savePersistedSessionSummaries(get().chatSessions);
+        }
         break;
       }
     }
@@ -1496,12 +1459,26 @@ export const useChat = create<ChatState>((set, get) => ({
       savePersistedMessages(restMessages);
       savePersistedAgents(restAgents);
       savePersistedSessionSummaries(newSessions);
+      
+      const isActive = s.activeSessionId === id;
       return {
         chatSessions: newSessions,
-        activeSessionId: s.activeSessionId === id ? null : s.activeSessionId,
+        activeSessionId: isActive ? null : s.activeSessionId,
         sessionVersions: restVersions,
         sessionMessages: restMessages,
         sessionAgentName: restAgents,
+        ...(isActive ? {
+          messages: [],
+          isStreaming: false,
+          streamingContent: "",
+          thinkingContent: "",
+          pendingToolCalls: [],
+          pendingActivities: [],
+          pendingAttachments: [],
+          restoredVersionId: null,
+          preRestoreMessages: null,
+          session: null,
+        } : {}),
       };
     });
   },
@@ -1639,16 +1616,26 @@ export const useChat = create<ChatState>((set, get) => ({
   async compactSessionHistory(sessionId) {
     const { sessionMessages, selectedModelId, compactionSummaries } = get();
     const messages = sessionMessages[sessionId];
-    if (!messages || messages.length <= 10) return;
+    if (!messages || messages.length <= 6) return;
 
-    // Take all messages except the last 6
-    const toSummarize = messages.slice(0, -6);
+    // Look up the model's actual context window
+    const modelId = selectedModelId || useSettings.getState().settings.selectedModel;
+    const allModels = useModelProviders.getState().getAllModels();
+    const found = allModels.find((m) => m.model.modelId === modelId);
+    const maxContext = parseContextWindow(found?.model.contextWindow);
+
+    // Use context manager to determine what to compact
+    const stats = computeContextStats(messages, maxContext);
+    if (!stats.needsCompaction) return;
+
+    const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
+    if (toCompact.length === 0) return;
+
     const api = ensureAcodeAPI();
-
     const previousSummary = compactionSummaries[sessionId];
 
     // Format messages for summarizing
-    const formatted = toSummarize.map((m) => ({
+    const formatted = toCompact.map((m) => ({
       role: m.role === "user" ? ("user" as const) : ("assistant" as const),
       content: m.content,
     }));
@@ -1952,9 +1939,9 @@ const queryStdioTools = (commandName: string, commandArgs: string[], env?: Recor
       setTimeout(() => {
         if (!resolved) {
           child.kill().catch(() => {});
-          reject(new Error("Timeout waiting for tools/list response"));
+          reject(new Error("Timeout waiting for tools/list response (15s)"));
         }
-      }, 3000);
+      }, 15000);
     } catch (e) {
       reject(e);
     }

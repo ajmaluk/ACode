@@ -15,6 +15,9 @@ import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import hljs from "highlight.js";
 
 // Map primary agent → UI-friendly label and icon. Mirrors ACode's
 // primary agent presentation.
@@ -305,7 +308,7 @@ function ChatView() {
     if (!isUserScrolledUp.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, thinkingContent]);
 
   const hasMessagesRef = useRef(hasMessages);
   hasMessagesRef.current = hasMessages;
@@ -1180,7 +1183,7 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
           {segments.filter((seg) => seg.type !== "text" || seg.content.trim()).map((seg, idx) =>
             seg.type === "code"
               ? <CodeBlock key={"code-" + idx} language={seg.language ?? ""} content={seg.content} />
-              : <p key={"txt-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0">{seg.content}</p>
+              : <div key={"txt-" + idx} className="prose-acode mb-2 last:mb-0"><MarkdownContent content={seg.content} /></div>
           )}
           {pending && (
             <span className="inline-block w-1.5 h-3.5 bg-acode-accent-primary ml-0.5 animate-pulse-soft rounded-sm align-middle" />
@@ -1300,19 +1303,99 @@ function AttachFileButton() {
   );
 }
 
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="whitespace-pre-wrap break-words mb-2 last:mb-0">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-acode-text-primary">{children}</strong>,
+        em: ({ children }) => <em className="italic">{children}</em>,
+        a: ({ href, children }) => (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-acode-accent-primary hover:underline"
+          >{children}</a>
+        ),
+        ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="text-acode-text-secondary">{children}</li>,
+        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 text-acode-text-primary">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-bold mb-2 text-acode-text-primary">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-bold mb-1 text-acode-text-primary">{children}</h3>,
+        code: ({ children, className }) => {
+          const isInline = !className;
+          if (isInline) {
+            return <code className="px-1 py-0.5 bg-acode-bg-tertiary rounded text-[12px] font-mono text-acode-accent-primary">{children}</code>;
+          }
+          return <code className={className}>{children}</code>;
+        },
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-acode-accent-primary/40 pl-3 my-2 text-acode-text-muted italic">{children}</blockquote>
+        ),
+        hr: () => <hr className="my-3 border-acode-border-primary" />,
+        table: ({ children }) => <div className="overflow-x-auto my-2"><table className="text-xs border-collapse">{children}</table></div>,
+        th: ({ children }) => <th className="px-2 py-1 border border-acode-border-primary text-left font-medium">{children}</th>,
+        td: ({ children }) => <td className="px-2 py-1 border border-acode-border-primary">{children}</td>,
+      }}
+    >
+      {content}
+    </Markdown>
+  );
+}
+
 function CodeBlock({ language, content }: { language: string; content: string }) {
   const toast = useToast();
+  const activeFilePath = useWorkspace((s) => s.activeFilePath);
+  const updateTabContent = useWorkspace((s) => s.updateTabContent);
+  const [expanded, setExpanded] = useState(true);
+  const lines = content.split("\n");
+  const isLong = lines.length > 30;
+
+  const highlighted = useMemo(() => {
+    if (language && hljs.getLanguage(language)) {
+      try { return hljs.highlight(content, { language }).value; } catch { /* fall through */ }
+    }
+    try { return hljs.highlightAuto(content).value; } catch { return content; }
+  }, [content, language]);
+
+  const handleApply = () => {
+    if (!activeFilePath) {
+      toast.info("No active file open in the editor");
+      return;
+    }
+    updateTabContent(activeFilePath, content);
+    toast.success("Applied to editor");
+  };
+
   return (
     <div className="my-2 bg-acode-bg-primary border border-acode-border-primary rounded-lg overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 bg-acode-bg-tertiary border-b border-acode-border-primary">
-        <div className="flex items-center gap-1.5 text-[10px] text-acode-text-muted"><FileCode className="w-3 h-3" />{language || "code"}</div>
+        <div className="flex items-center gap-1.5 text-[10px] text-acode-text-muted"><FileCode className="w-3 h-3" />{language || "code"}<span className="text-acode-text-muted/50">· {lines.length} lines</span></div>
         <div className="flex items-center gap-1">
-          <button className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors" onClick={() => toast.info("Apply to editor")}>Apply</button>
+          {isLong && (
+            <button
+              className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors"
+              onClick={() => setExpanded(!expanded)}
+            >{expanded ? "Collapse" : "Expand"}</button>
+          )}
+          <button className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors" onClick={handleApply}>Apply</button>
           <button className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors"
             onClick={() => { void navigator.clipboard.writeText(content); toast.success("Copied"); }}><Copy className="w-3 h-3" /></button>
         </div>
       </div>
-      <pre className="p-3 text-[12px] text-mono text-acode-text-primary overflow-x-auto scrollbar-thin leading-relaxed">{content}</pre>
+      <pre
+        className="p-3 text-[12px] text-mono text-acode-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
+        style={{ maxHeight: isLong && !expanded ? "240px" : undefined }}
+      ><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
+      {isLong && !expanded && (
+        <button
+          className="w-full py-1.5 text-[10px] text-acode-accent-primary hover:bg-acode-bg-hover border-t border-acode-border-primary transition-colors"
+          onClick={() => setExpanded(true)}
+        >Show all {lines.length} lines</button>
+      )}
     </div>
   );
 }
