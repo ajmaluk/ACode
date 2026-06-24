@@ -190,7 +190,12 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
               { role: "user", content: prompt }
             ]);
 
-            const cleanedResponse = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
+            let cleanedResponse = responseText.replace(/```json/gi, "").replace(/```/g, "").trim();
+            const startIdx = cleanedResponse.indexOf("{");
+            const endIdx = cleanedResponse.lastIndexOf("}");
+            if (startIdx !== -1 && endIdx !== -1) {
+              cleanedResponse = cleanedResponse.slice(startIdx, endIdx + 1);
+            }
             const parsed = JSON.parse(cleanedResponse);
 
             if (parsed.summary && parsed.content) {

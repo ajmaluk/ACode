@@ -54,6 +54,7 @@ type SettingsState = {
   loaded: boolean;
   load: () => Promise<void>;
   update: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => Promise<void>;
+  updateSettings: (updates: Partial<AppSettings>) => Promise<void>;
   effectiveTheme: () => "dark" | "light";
 };
 
@@ -79,6 +80,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const api = ensureAcodeAPI();
     await api.settings.set(key, value as never);
     set((s) => ({ settings: { ...s.settings, [key]: value } }));
+  },
+  async updateSettings(updates) {
+    const api = ensureAcodeAPI();
+    for (const [key, value] of Object.entries(updates)) {
+      await api.settings.set(key as keyof AppSettings, value as never);
+    }
+    set((s) => ({ settings: { ...s.settings, ...updates } }));
   },
   effectiveTheme() {
     const { theme } = get().settings;
@@ -923,12 +931,18 @@ export const useChat = create<ChatState>((set, get) => ({
   async setSelectedModel(id) {
     set({ selectedModelId: id });
     if (id) {
+      const currentSettings = useSettings.getState().settings;
+      if (currentSettings.selectedModel === id) {
+        return;
+      }
       const { providers } = useModelProviders.getState();
       for (const p of providers) {
         const m = p.models.find((m) => m.modelId === id);
         if (m) {
-          await useSettings.getState().update("selectedModel", id);
-          await useSettings.getState().update("selectedProvider", p.id);
+          await useSettings.getState().updateSettings({
+            selectedModel: id,
+            selectedProvider: p.id,
+          });
           break;
         }
       }

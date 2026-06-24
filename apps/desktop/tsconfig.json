@@ -23,5 +23,5 @@
       "@acode/shared-types": ["../../packages/shared-types/src"]
     }
   },
-  "include": ["src/renderer", "src/preload", "src/main"]
+  "include": ["src/renderer"]
 }
