@@ -1,0 +1,220 @@
+/**
+ * ACode Skills system.
+ *
+ * Skills are markdown files with a YAML frontmatter:
+ * ---
+ * name: my-skill
+ * description: A short tagline
+ * ---
+ *
+ * The body is the prompt that gets injected when the skill is invoked.
+ *
+ * Skills are scanned from:
+ *   - ~/.config/opencode/skills/ (global)
+ *   - .acode/skills/ (project-level)
+ */
+import type { SkillInfo } from "@acode/shared-types";
+
+// ----------------------------------------------------------------------------
+// Bundled skills — shipped with ACode.
+// ----------------------------------------------------------------------------
+
+const SKILL_BODY_ACCESSIBILITY = `You are an accessibility auditor. Review the user's selected code against WCAG 2.1 AA standards.
+
+For each issue you find, report:
+1. **Severity** — blocker / serious / moderate / minor
+2. **WCAG criterion** — e.g. "1.4.3 Contrast (Minimum)"
+3. **Location** — file:line where the issue occurs
+4. **Impact** — who is affected (screen reader users, low-vision, motor, etc.)
+5. **Fix** — a concrete, runnable code change
+
+Cover all four POUR principles: Perceivable, Operable, Understandable, Robust.
+Prefer ARIA roles and semantic HTML over custom JS workarounds.`;
+
+const SKILL_BODY_REFACTOR = `Analyze the selected code and propose refactors that improve readability and maintainability WITHOUT changing observable behavior.
+
+Focus on:
+- Naming (rename misleading identifiers)
+- Function size (split functions > 40 lines)
+- Duplication (extract repeated patterns)
+- Coupling (reduce dependencies between modules)
+- Magic values (extract named constants)
+- Control flow (replace nested conditionals with early returns or polymorphism)
+
+For each refactor:
+1. Show the BEFORE (1-3 lines) and AFTER (1-3 lines)
+2. Explain the benefit in 1 sentence
+3. Flag any risk to behavior
+
+Do NOT propose architectural rewrites unless the user explicitly asks.`;
+
+const SKILL_BODY_EXPLAIN = `Explain the selected code in plain English, focusing on the "why" behind its design choices.
+
+Cover:
+- What it does (1-2 sentences)
+- Why it's written this way (assumptions, constraints, trade-offs)
+- How it fits in the larger system (callers, callees, side effects)
+- Anything subtle or non-obvious (off-by-one, edge cases, race conditions)
+
+Use simple language. Avoid jargon. Use analogies when helpful. Keep it under 200 words unless the code is genuinely complex.`;
+
+const SKILL_BODY_TEST = `Write thorough unit tests for the provided function using the project's existing test framework.
+
+If the framework is unknown, default to **Vitest** (works for both Vite and Node).
+
+For each test:
+1. Test the happy path
+2. Test edge cases (empty, null, zero, max)
+3. Test error conditions (throws, rejects)
+4. Test boundary conditions (off-by-one)
+
+Aim for 80%+ branch coverage. Mock external dependencies. Use descriptive test names (e.g. "rejects negative numbers" not "test1").`;
+
+const SKILL_BODY_REVIEW = `Review the provided diff for correctness, security, and style.
+
+Categorize each finding as **info**, **warn**, or **error**:
+- **error**: must fix before merge (bugs, security issues, data loss)
+- **warn**: should fix soon (perf, maintainability, test gaps)
+- **info**: nice to have (naming, docs, polish)
+
+For each finding:
+1. **File:line** location
+2. **Why it matters** (1 sentence)
+3. **Suggested fix** (concrete code or steps)
+
+Pay special attention to: SQL injection, XSS, race conditions, integer overflow, auth bypass, PII leakage, and unbounded loops.`;
+
+const SKILL_BODY_DOCS = `Write clear, example-driven documentation for the selected API.
+
+Produce:
+1. **One-sentence summary** — what it does
+2. **Signature** — TypeScript types for params and return
+3. **Example** — minimal runnable usage (5-10 lines)
+4. **Common pitfalls** — 2-3 things people get wrong
+5. **Related APIs** — links to siblings
+
+Update JSDoc/TSDoc comments AND any external docs (.md files) in the same change.`;
+
+const SKILL_BODY_PERF = `Profile and optimize the selected code.
+
+Workflow:
+1. Identify the bottleneck (algorithmic complexity, I/O, allocations, sync vs async)
+2. Measure before and after (use \`performance.now()\` or \`console.time\`)
+3. Apply the optimization (cache, batch, lazy, parallel, native)
+4. Verify the speedup and that behavior is unchanged
+
+Prefer algorithmic improvements over micro-optimizations. Avoid premature optimization.`;
+
+const SKILL_BODY_DEBUG = `Debug the failing test or reported issue.
+
+Workflow:
+1. Reproduce the bug with the smallest possible test case
+2. Inspect the call stack, recent changes, and git log
+3. Form 2-3 hypotheses about the root cause
+4. Verify each hypothesis with a print/log/breakpoint
+5. Fix the root cause (not the symptom)
+6. Add a regression test
+7. Verify the fix doesn't break other tests
+
+Be methodical. Document your findings.`;
+
+const SKILL_BODY_PLAN = `Create a detailed implementation plan for the user's request.
+
+Structure:
+1. **Goal** — restate what the user wants
+2. **Constraints** — list non-negotiables (existing APIs, performance budget, etc.)
+3. **Approach** — high-level strategy (1-3 paragraphs)
+4. **Steps** — numbered list of concrete actions, each with:
+   - Estimated effort (S/M/L)
+   - Files to touch
+   - Risks
+5. **Test plan** — how you'll verify each step
+6. **Rollout** — how to ship safely (feature flag, gradual, canary)
+
+Do NOT write any code. The plan goes in \`.acode/plans/\`.`;
+
+export const BUNDLED_SKILLS: SkillInfo[] = [
+  { name: "accessibility-compliance", description: "Audit code for WCAG 2.1 AA compliance", content: SKILL_BODY_ACCESSIBILITY, location: "bundled://accessibility-compliance/SKILL.md", source: "bundled" },
+  { name: "refactor", description: "Suggest refactors for readability and maintainability", content: SKILL_BODY_REFACTOR, location: "bundled://refactor/SKILL.md", source: "bundled" },
+  { name: "explain", description: "Explain code in plain English", content: SKILL_BODY_EXPLAIN, location: "bundled://explain/SKILL.md", source: "bundled" },
+  { name: "test-writer", description: "Write unit tests for the given function", content: SKILL_BODY_TEST, location: "bundled://test-writer/SKILL.md", source: "bundled" },
+  { name: "code-review", description: "Review changes for correctness and style", content: SKILL_BODY_REVIEW, location: "bundled://code-review/SKILL.md", source: "bundled" },
+  { name: "docs-writer", description: "Write or update documentation", content: SKILL_BODY_DOCS, location: "bundled://docs-writer/SKILL.md", source: "bundled" },
+  { name: "perf-audit", description: "Profile and optimize hot paths", content: SKILL_BODY_PERF, location: "bundled://perf-audit/SKILL.md", source: "bundled" },
+  { name: "debug", description: "Debug a failing test or reported issue", content: SKILL_BODY_DEBUG, location: "bundled://debug/SKILL.md", source: "bundled" },
+  { name: "plan", description: "Create a detailed implementation plan", content: SKILL_BODY_PLAN, location: "bundled://plan/SKILL.md", source: "bundled" },
+];
+
+// ----------------------------------------------------------------------------
+// Skill registry (mutable so the UI can toggle / add / remove)
+// ----------------------------------------------------------------------------
+
+class SkillRegistry {
+  private skills: Map<string, SkillInfo> = new Map();
+  private listeners = new Set<() => void>();
+
+  constructor() {
+    for (const s of BUNDLED_SKILLS) this.skills.set(s.name, s);
+  }
+
+  /** Return every skill, sorted by name. */
+  list(): SkillInfo[] {
+    return Array.from(this.skills.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Return only skills the user has enabled (via Settings). */
+  enabled(enabledNames: Set<string>): SkillInfo[] {
+    return this.list().filter((s) => enabledNames.has(s.name));
+  }
+
+  get(name: string): SkillInfo | undefined {
+    return this.skills.get(name);
+  }
+
+  /** Add a new skill (from a SKILL.md file or user import). */
+  add(skill: SkillInfo): void {
+    this.skills.set(skill.name, skill);
+    this.emit();
+  }
+
+  remove(name: string): void {
+    this.skills.delete(name);
+    this.emit();
+  }
+
+  subscribe(cb: () => void): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  private emit() {
+    for (const l of this.listeners) l();
+  }
+}
+
+export const skillRegistry = new SkillRegistry();
+
+/**
+ * Render the body of a skill into a system-prompt fragment. Mirrors how
+ * ACode injects skills — the description goes into the agent's prompt
+ * and the content becomes available on demand.
+ */
+export function renderSkillForPrompt(skill: SkillInfo): string {
+  return `\n\n# Skill: ${skill.name}\n\n${skill.description}\n\n${skill.content}\n`;
+}
+
+/**
+ * Match a "$skill-name args…" reference from a chat prompt to a loaded
+ * skill. Returns the skill and the trailing args, or null if not found.
+ */
+export function matchSkillInvocation(
+  text: string,
+  registry: SkillInfo[]
+): { skill: SkillInfo; args: string } | null {
+  const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+?))?(?=\s|$)/i);
+  if (!m) return null;
+  const name = m[1].toLowerCase();
+  const args = (m[2] ?? "").trim();
+  const skill = registry.find((s) => s.name.toLowerCase() === name);
+  return skill ? { skill, args } : null;
+}
