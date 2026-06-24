@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useGit, useChat, useWorkspace, useDiffView, useUI } from "@/store/useAppStore";
 import type { GitStatus } from "@acode/shared-types";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { computeDiff } from "@/lib/diff";
 import { useToast } from "@/components/ui/Toaster";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import {
@@ -114,30 +115,59 @@ export function RightPanel() {
 
 function DiffTab() {
   const { current, history, forwardStack, close, open, prev, next } = useDiffView();
-  const [content, setContent] = useState<string>("");
   const [originalContent, setOriginalContent] = useState<string>("");
+  const [modifiedContent, setModifiedContent] = useState<string>("");
+  const [loading, setLoading] = useState(false);
   const [view, setView] = useState<"unified" | "split">("unified");
 
+  // Fetch original (old) and modified (new) content properly
   useEffect(() => {
     if (!current) return;
     let cancelled = false;
+    setLoading(true);
     void (async () => {
       const api = ensureAcodeAPI();
       try {
-        const fileContent = await api.fs.readFile(current.path);
+        // Modified content: always read the current file
+        const currentContent = await api.fs.readFile(current.path);
         if (cancelled) return;
-        setContent(fileContent);
+        setModifiedContent(currentContent);
+
         if (current.action === "created") {
           setOriginalContent("");
+        } else if (current.action === "deleted") {
+          setOriginalContent(currentContent);
+          setModifiedContent("");
         } else {
-          // For modified/renamed, show the current content as the "original"
-          // The actual diff is a semantic comparison, not line-truncation
-          setOriginalContent(fileContent);
+          // For modified files: get the original from git (HEAD version)
+          try {
+            const { Command } = await import("@tauri-apps/plugin-shell");
+            const wsPath = useWorkspace.getState().workspaces.find(
+              (w) => w.id === useWorkspace.getState().activeWorkspaceId
+            )?.path ?? "";
+            // git show HEAD: requires a path relative to the repo root
+            const relPath = wsPath && current.path.startsWith(wsPath)
+              ? current.path.slice(wsPath.length + 1)
+              : current.path.split("/").slice(-2).join("/");
+            const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+            const result = await cmd.execute();
+            if (!cancelled && result.stdout) {
+              setOriginalContent(result.stdout);
+            } else {
+              // Fallback: can't get git version, show full file as added
+              setOriginalContent("");
+            }
+          } catch {
+            // Fallback if git show fails
+            if (!cancelled) setOriginalContent("");
+          }
         }
       } catch {
         if (cancelled) return;
-        setContent("// Unable to load file");
+        setModifiedContent("// Unable to load file");
         setOriginalContent("// Unable to load file");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -178,49 +208,162 @@ function DiffTab() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-3">
-        {view === "unified" ? (
-          <div className="space-y-0 font-mono text-[11px] leading-relaxed">
-            {content.split("\n").map((line, i) => {
-              const origLine = originalContent.split("\n")[i];
-              const added = origLine === undefined && i >= originalContent.split("\n").length;
-              const removed = line !== origLine && origLine !== undefined;
-              return (
-                <div key={i} className={`flex hover:bg-acode-bg-hover/40 rounded-sm px-2 ${
-                  added ? "bg-acode-git-added/10" : removed ? "bg-acode-git-deleted/10" : ""
-                }`}>
-                  <span className="w-10 text-right pr-2 opacity-40 select-none tabular-nums text-acode-text-muted">{i + 1}</span>
-                  <span className={`flex-1 whitespace-pre ${added ? "text-acode-git-added" : removed ? "text-acode-git-deleted" : "text-acode-text-primary"}`}>{line || "\u00A0"}</span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="flex gap-0 h-full">
-            <div className="flex-1 min-w-0 overflow-y-auto border-r border-acode-border-primary pr-2">
-              <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-2 px-2">Original</div>
-              {originalContent.split("\n").map((line, i) => (
-                <div key={i} className="flex hover:bg-acode-bg-hover/40 rounded-sm px-2 text-[11px] font-mono leading-relaxed">
-                  <span className="w-8 text-right pr-1 opacity-40 select-none tabular-nums text-acode-text-muted">{i + 1}</span>
-                  <span className="flex-1 whitespace-pre text-acode-text-secondary">{line || "\u00A0"}</span>
-                </div>
-              ))}
-            </div>
-            <div className="flex-1 min-w-0 overflow-y-auto pl-2">
-              <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-2 px-2">Modified</div>
-              {content.split("\n").map((line, i) => {
-                const origLine = originalContent.split("\n")[i];
-                const added = origLine === undefined && i >= originalContent.split("\n").length;
+      {loading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="w-5 h-5 text-acode-accent-primary animate-spin" />
+        </div>
+      ) : (
+        <DiffContent originalContent={originalContent} modifiedContent={modifiedContent} view={view} />
+      )}
+    </div>
+  );
+}
+
+/** Render the actual diff content using the LCS-based diff algorithm. */
+function DiffContent({ originalContent, modifiedContent, view }: { originalContent: string; modifiedContent: string; view: "unified" | "split" }) {
+  const diff = useMemo(() => computeDiff(originalContent, modifiedContent), [originalContent, modifiedContent]);
+
+  if (diff.hunks.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="text-center">
+          <Check className="w-8 h-8 mx-auto mb-3 text-acode-git-added" />
+          <p className="text-sm text-acode-text-muted">No differences</p>
+          <p className="text-xs text-acode-text-muted/60 mt-1">Files are identical</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto p-3">
+      {/* Summary bar */}
+      <div className="flex items-center gap-3 mb-3 text-[11px]">
+        <span className="text-acode-git-added font-mono">+{diff.additions}</span>
+        <span className="text-acode-git-deleted font-mono">-{diff.deletions}</span>
+        <span className="text-acode-text-muted">{diff.hunks.length} hunk{diff.hunks.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      {view === "unified" ? (
+        <div className="font-mono text-[11px] leading-relaxed">
+          {diff.hunks.map((hunk, hunkIdx) => (
+            <div key={hunkIdx} className="mb-3">
+              {/* Hunk header */}
+              <div className="flex items-center px-2 py-1 bg-acode-bg-tertiary/60 text-acode-text-muted text-[10px] border-t border-b border-acode-border-primary/40">
+                <span>@@ -{hunk.oldStart},{hunk.oldCount} +{hunk.newStart},{hunk.newCount} @@</span>
+              </div>
+              {/* Lines */}
+              {hunk.lines.map((line, lineIdx) => {
+                const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
                 return (
-                  <div key={i} className={`flex hover:bg-acode-bg-hover/40 rounded-sm px-2 text-[11px] font-mono leading-relaxed ${added ? "bg-acode-git-added/10" : ""}`}>
-                    <span className="w-8 text-right pr-1 opacity-40 select-none tabular-nums text-acode-text-muted">{i + 1}</span>
-                    <span className={`flex-1 whitespace-pre ${added ? "text-acode-git-added" : "text-acode-text-primary"}`}>{line || "\u00A0"}</span>
+                  <div
+                    key={lineIdx}
+                    className={`flex hover:bg-acode-bg-hover/30 ${
+                      line.type === "add"
+                        ? "bg-acode-git-added/10"
+                        : line.type === "remove"
+                          ? "bg-acode-git-deleted/10"
+                          : ""
+                    }`}
+                  >
+                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
+                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
+                    <span className={`w-5 text-center select-none flex-shrink-0 ${
+                      line.type === "add"
+                        ? "text-acode-git-added"
+                        : line.type === "remove"
+                          ? "text-acode-git-deleted"
+                          : "text-acode-text-muted/40"
+                    }`}>{prefix}</span>
+                    <span className={`flex-1 whitespace-pre px-1 ${
+                      line.type === "add"
+                        ? "text-acode-git-added"
+                        : line.type === "remove"
+                          ? "text-acode-git-deleted"
+                          : "text-acode-text-primary"
+                    }`}>{line.content || "\u00A0"}</span>
                   </div>
                 );
               })}
             </div>
-          </div>
-        )}
+          ))}
+        </div>
+      ) : (
+        /* Split view: side-by-side diff */
+        <SplitDiffView hunks={diff.hunks} />
+      )}
+    </div>
+  );
+}
+
+/** Split (side-by-side) diff view aligned to hunks. */
+function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
+  // For split view, we render each hunk as a side-by-side table.
+  // Each hunk's lines are paired: context lines appear on both sides,
+  // remove on left only, add on right only.
+  const [leftLines, rightLines] = useMemo(() => {
+    const left: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
+    const right: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
+    let rowIdx = 0;
+
+    for (const hunk of hunks) {
+      // In split view, we need to align adds and removes.
+      // Simple approach: render removes and adds in sequence, context on both sides.
+      for (const line of hunk.lines) {
+        if (line.type === "context") {
+          left.push({ line, rowIdx });
+          right.push({ line, rowIdx });
+          rowIdx++;
+        } else if (line.type === "remove") {
+          left.push({ line, rowIdx });
+          rowIdx++;
+        } else {
+          right.push({ line, rowIdx });
+          rowIdx++;
+        }
+      }
+    }
+
+    return [left, right];
+  }, [hunks]);
+
+  const totalRows = Math.max(leftLines.length, rightLines.length);
+
+  return (
+    <div className="flex gap-0 border border-acode-border-primary/40 rounded-lg overflow-hidden">
+      {/* Left panel: old */}
+      <div className="flex-1 min-w-0 overflow-y-auto border-r border-acode-border-primary/40">
+        <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-1 px-2 py-1 bg-acode-bg-tertiary/40">Original</div>
+        {Array.from({ length: totalRows }, (_, i) => {
+          const entry = leftLines[i];
+          if (!entry) return <div key={i} className="h-[20px]" />;
+          const { line } = entry;
+          const isRemove = line.type === "remove";
+          return (
+            <div key={i} className={`flex hover:bg-acode-bg-hover/30 text-[11px] font-mono leading-relaxed ${isRemove ? "bg-acode-git-deleted/10" : ""}`}>
+              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
+              <span className={`w-4 text-center select-none flex-shrink-0 ${isRemove ? "text-acode-git-deleted" : "text-acode-text-muted/30"}`}>{isRemove ? "-" : " "}</span>
+              <span className={`flex-1 whitespace-pre px-1 ${isRemove ? "text-acode-git-deleted" : "text-acode-text-secondary"}`}>{line.content || "\u00A0"}</span>
+            </div>
+          );
+        })}
+      </div>
+      {/* Right panel: new */}
+      <div className="flex-1 min-w-0 overflow-y-auto">
+        <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-1 px-2 py-1 bg-acode-bg-tertiary/40">Modified</div>
+        {Array.from({ length: totalRows }, (_, i) => {
+          const entry = rightLines[i];
+          if (!entry) return <div key={i} className="h-[20px]" />;
+          const { line } = entry;
+          const isAdd = line.type === "add";
+          return (
+            <div key={i} className={`flex hover:bg-acode-bg-hover/30 text-[11px] font-mono leading-relaxed ${isAdd ? "bg-acode-git-added/10" : ""}`}>
+              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
+              <span className={`w-4 text-center select-none flex-shrink-0 ${isAdd ? "text-acode-git-added" : "text-acode-text-muted/30"}`}>{isAdd ? "+" : " "}</span>
+              <span className={`flex-1 whitespace-pre px-1 ${isAdd ? "text-acode-git-added" : "text-acode-text-primary"}`}>{line.content || "\u00A0"}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -83,6 +83,75 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
   return { parsed, remaining };
 }
 
+async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 1000): Promise<T> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (err instanceof ProviderError && (err.code === "auth" || err.code === "credit")) {
+        throw err; // Don't retry auth/credit errors
+      }
+      // Don't retry abort signals — user deliberately cancelled
+      if (lastError.name === "AbortError") {
+        throw err;
+      }
+      if (attempt < maxRetries) {
+        const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 500;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastError!;
+}
+
+/**
+ * Wraps a fetch call with retry-with-backoff for transient network/5xx errors.
+ * Classifies the response into a ProviderError and retries on transient failures.
+ * Non-transient errors (auth 401, credit 402/429) are thrown immediately.
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 2,
+  baseDelayMs = 1000,
+  signal?: AbortSignal
+): Promise<Response> {
+  return retryWithBackoff(async () => {
+    const resp = await fetch(url, { ...options, signal });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
+      if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
+      if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
+      throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "provider");
+    }
+    return resp;
+  }, maxRetries, baseDelayMs);
+}
+
+/**
+ * Wraps a non-streaming fetch call with retry for non-GET requests.
+ */
+async function fetchJsonWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 2,
+  baseDelayMs = 1000
+): Promise<any> {
+  return retryWithBackoff(async () => {
+    const resp = await fetch(url, options);
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
+      if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
+      throw new ProviderError(`Failed to summarize: HTTP ${resp.status} - ${text.slice(0, 300)}`, "provider");
+    }
+    return resp.json();
+  }, maxRetries, baseDelayMs);
+}
+
 async function* streamOpenAI(
   baseUrl: string, apiKey: string, model: string,
   messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
@@ -90,19 +159,11 @@ async function* streamOpenAI(
   const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
   const body: Record<string, any> = { model, messages, stream: true };
   if (maxTokens) body.max_tokens = maxTokens;
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
     body: JSON.stringify(body),
-    signal,
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
-    if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
-    if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
-    throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "provider");
-  }
+  }, 2, 1000, signal);
   const reader = resp.body?.getReader();
   if (!reader) throw new ProviderError("No response body", "network");
   const decoder = new TextDecoder();
@@ -145,19 +206,11 @@ async function* streamAnthropic(
   const chatMessages = messages.filter((m) => m.role !== "system");
   const body: Record<string, any> = { model, system: systemMsg, messages: chatMessages, stream: true };
   if (maxTokens) body.max_tokens = maxTokens;
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify(body),
-    signal,
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
-    if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
-    if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
-    throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "provider");
-  }
+  }, 2, 1000, signal);
   const reader = resp.body?.getReader();
   if (!reader) throw new ProviderError("No response body", "network");
   const decoder = new TextDecoder();
@@ -845,18 +898,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         ? { model, system: systemMsg, messages: chatMessages, max_tokens: 1000 }
         : { model, messages: [{ role: "system", content: systemPrompt }, ...chatMessages], max_tokens: 1000 };
 
-      const resp = await fetch(url, {
+      const json = await fetchJsonWithRetry(url, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        throw new ProviderError(`Failed to summarize: HTTP ${resp.status} - ${text}`, "provider");
-      }
-
-      const json = await resp.json();
+      }, 2, 1000);
       if (isAnthropic) {
         return json.content?.[0]?.text || "";
       } else {
@@ -928,6 +974,38 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         return await invoke<{ sha: string; message: string; date: string; author: string }[]>("git_log", { path: repoPath, limit });
       } catch (err) {
         throw new Error(`Git log failed: ${(err as Error)?.message ?? String(err)}`);
+      }
+    },
+    async branches(repoPath) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        return await invoke<{ name: string; current: boolean }[]>("git_branches", { path: repoPath });
+      } catch (err) {
+        throw new Error(`Git branches failed: ${(err as Error)?.message ?? String(err)}`);
+      }
+    },
+    async checkout(repoPath, branch) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("git_checkout", { path: repoPath, branch });
+      } catch (err) {
+        throw new Error(`Git checkout failed: ${(err as Error)?.message ?? String(err)}`);
+      }
+    },
+    async createBranch(repoPath, name) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("git_create_branch", { path: repoPath, name });
+      } catch (err) {
+        throw new Error(`Git create branch failed: ${(err as Error)?.message ?? String(err)}`);
+      }
+    },
+    async diffFile(repoPath, filePath) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        return await invoke<string>("git_diff_file", { path: repoPath, file_path: filePath });
+      } catch (err) {
+        throw new Error(`Git diff failed: ${(err as Error)?.message ?? String(err)}`);
       }
     },
   },

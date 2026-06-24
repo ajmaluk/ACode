@@ -64,6 +64,11 @@ export type GitStatus = {
   behind: number;
 };
 
+export type GitBranchInfo = {
+  name: string;
+  current: boolean;
+};
+
 export type TerminalTab = {
   id: string;
   title: string;
@@ -375,6 +380,10 @@ export interface AcodeAPI {
     status(repoPath: string): Promise<GitStatus>;
     commit(repoPath: string, message: string): Promise<{ sha: string }>;
     log(repoPath: string, limit?: number): Promise<{ sha: string; message: string; date: string; author: string }[]>;
+    branches(repoPath: string): Promise<GitBranchInfo[]>;
+    checkout(repoPath: string, branch: string): Promise<void>;
+    createBranch(repoPath: string, name: string): Promise<void>;
+    diffFile(repoPath: string, filePath: string): Promise<string>;
   };
   settings: {
     get<T = unknown>(key: keyof AppSettings): Promise<T>;

@@ -8,9 +8,6 @@
 
 import type { ChatMessage, AppSettings } from "@acode/shared-types";
 
-// Token estimation: ~4 chars per token for English text
-const CHARS_PER_TOKEN = 4;
-
 export type ContextPressure = "none" | "low" | "medium" | "high";
 
 export type ContextStats = {

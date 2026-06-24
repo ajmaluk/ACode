@@ -181,3 +181,80 @@ pub fn git_log(path: String, limit: Option<i32>) -> Result<Vec<GitLogEntry>, Str
 
     Ok(entries)
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct GitBranchInfo {
+    pub name: String,
+    pub current: bool,
+}
+
+#[command]
+pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+    let output = Command::new("git")
+        .args(["branch", "--list"])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("git branch failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git branch failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let branches: Vec<GitBranchInfo> = stdout
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            let current = trimmed.starts_with("*");
+            let name = trimmed.trim_start_matches("* ").trim().to_string();
+            GitBranchInfo { name, current }
+        })
+        .filter(|b| !b.name.is_empty())
+        .collect();
+
+    Ok(branches)
+}
+
+#[command]
+pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["checkout", &branch])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("git checkout failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git checkout failed: {}", stderr));
+    }
+
+    Ok(())
+}
+
+#[command]
+pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["checkout", "-b", &name])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("git create branch failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git create branch failed: {}", stderr));
+    }
+
+    Ok(())
+}
+
+#[command]
+pub fn git_diff_file(path: String, file_path: String) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["diff", "--no-color", "--", &file_path])
+        .current_dir(&path)
+        .output()
+        .map_err(|e| format!("git diff failed: {}", e))?;
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
