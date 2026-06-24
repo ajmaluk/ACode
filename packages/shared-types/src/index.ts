@@ -395,6 +395,14 @@ export interface AcodeAPI {
     openLink(url: string): Promise<void>;
     revealInFinder(path: string): Promise<void>;
     getAppVersion(): Promise<string>;
+    clipboardReadText(): Promise<string>;
+    clipboardWriteText(text: string): Promise<void>;
+    clipboardHasImage(): Promise<boolean>;
+    notify(payload: { title: string; body: string; icon?: string }): Promise<void>;
+    getSystemInfo(): Promise<{ os: string; arch: string; hostname: string; homeDir: string; shell: string; locale?: string }>;
+    getWorkingDir(): Promise<string>;
+    openWithSystemHandler(pathOrUrl: string): Promise<void>;
+    launchApp(appName: string, args?: string[], cwd?: string): Promise<string>;
   };
 }
 

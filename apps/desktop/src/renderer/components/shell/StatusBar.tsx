@@ -1,11 +1,14 @@
-import { useGit, useWorkspace, useSettings, useChat } from "@/store/useAppStore";
+import { useGit, useWorkspace, useSettings, useChat, useModelProviders } from "@/store/useAppStore";
 import { GitBranch, AlertCircle, Cpu, Wifi, CheckCircle2, Loader2, Circle } from "lucide-react";
 
 export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
   const { status } = useGit();
   const { openTabs, activeFilePath } = useWorkspace();
   const { settings } = useSettings();
-  const { session } = useChat();
+  const { session, selectedModelId } = useChat();
+  const { getAllModels } = useModelProviders();
+  const allModels = getAllModels();
+  const resolvedModel = allModels.find((m) => m.model.modelId === selectedModelId || m.model.modelId === settings.selectedModel);
   const activeTab = openTabs.find((t) => t.path === activeFilePath);
 
   const branch = status?.branch ?? "—";
@@ -57,7 +60,7 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
         )}
         <span className="flex items-center gap-1.5">
           <Cpu className="w-3 h-3" />
-          {settings.selectedModel || "No model"}
+          {resolvedModel?.model.name || settings.selectedModel || "No model"}
         </span>
         <span className="flex items-center gap-1.5 text-acode-git-added">
           <Wifi className="w-3 h-3" />

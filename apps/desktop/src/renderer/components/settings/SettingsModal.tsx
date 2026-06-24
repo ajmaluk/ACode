@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react";
 import {
-  useSettingsView, useSettings, useSkillsMcp, useModelProviders, useAgents,
+  useSettingsView, useSettings, useSkillsMcp, useModelProviders, useAgents, useWorkspace,
   type SettingsTab, type ModelProvider, type PrimaryAgentName, type AgentInfo, type PermissionRule, type PermissionAction,
 } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
+import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { joinPath } from "@/lib/pathUtils";
 import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
   Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
-  Bot, Zap, ClipboardList, FolderOpen, Shield,
+  Bot, Zap, ClipboardList, FolderOpen, Shield, FileText, CheckCircle2,
 } from "lucide-react";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
@@ -16,6 +18,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: "models", label: "Model settings", icon: Cpu },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "permissions", label: "Permissions", icon: Shield },
+  { id: "instructions", label: "Instructions", icon: ClipboardList },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP Servers", icon: Plug },
   { id: "plugins", label: "Plugins", icon: Puzzle },
@@ -70,6 +73,7 @@ export function SettingsModal() {
             {activeTab === "models" && <ModelsTab />}
             {activeTab === "agents" && <AgentsTab />}
             {activeTab === "permissions" && <PermissionsTab />}
+            {activeTab === "instructions" && <InstructionsTab />}
             {activeTab === "skills" && <SkillsTab />}
             {activeTab === "mcp" && <McpTab />}
             {activeTab === "plugins" && <PluginsTab />}
@@ -1415,7 +1419,319 @@ function IndexingTab() {
   );
 }
 
-// ---- Usage ---------------------------------------------------------------
+// ---- Instructions -------------------------------------------------------
+
+type LayerInfo = {
+  key: string;
+  name: string;
+  label: string;
+  description: string;
+  path: string;
+  gitTracked: boolean;
+  content: string;
+  exists: boolean;
+  pathScopedRules: { glob: string; rules: string }[];
+};
+
+const LAYER_CONFIGS = [
+  { key: "global", label: "Global", description: "Applies to all projects", gitTracked: false },
+  { key: "org", label: "Organization", description: "Shared across team workspaces", gitTracked: true },
+  { key: "project", label: "Project", description: "Project root, checked into git", gitTracked: true },
+  { key: "local", label: "Local", description: "Personal overrides, gitignored", gitTracked: false },
+] as const;
+
+function InstructionsTab() {
+  const [layers, setLayers] = useState<LayerInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingLayer, setEditingLayer] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [expandedLayer, setExpandedLayer] = useState<string | null>(null);
+  const toast = useToasts((s) => s.push);
+  const activeWorkspace = useWorkspace((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId));
+
+  useEffect(() => {
+    if (!activeWorkspace) { setLoading(false); return; }
+    const api = ensureAcodeAPI();
+    loadInstructions(api, activeWorkspace.path).then(setLayers).finally(() => setLoading(false));
+  }, [activeWorkspace?.id]);
+
+  if (!activeWorkspace) {
+    return (
+      <>
+        <h1 className="text-3xl font-bold text-acode-text-primary mb-2">Instructions</h1>
+        <p className="text-sm text-acode-text-muted">Open a workspace to view and edit its instructions.</p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <h1 className="text-3xl font-bold text-acode-text-primary mb-2">Instructions</h1>
+      <p className="text-sm text-acode-text-muted mb-8">
+        View and edit the ACODE.md instruction files that guide the agent.
+        Higher layers override lower ones. Use <code className="px-1 py-0.5 rounded bg-acode-bg-tertiary font-mono text-acode-text-primary text-xs">@path: glob</code> to scope rules to specific files.
+      </p>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="w-5 h-5 border-2 border-acode-accent-primary border-t-transparent rounded-full animate-spin" />
+          <span className="ml-3 text-sm text-acode-text-muted">Loading instructions…</span>
+        </div>
+      ) : layers.length === 0 ? (
+        <Card title="No instruction files found" description="Create an ACODE.md file in your project root to get started.">
+          <button
+            className="px-4 py-2 bg-acode-accent-primary hover:bg-acode-accent-hover text-white text-sm rounded-lg transition-colors"
+            onClick={async () => {
+              try {
+                const api = ensureAcodeAPI();
+                const acodeDir = joinPath(activeWorkspace.path, ".acode");
+                const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+                if (!(await exists(acodeDir))) await mkdir(acodeDir);
+                const projectPath = joinPath(activeWorkspace.path, "ACODE.md");
+                await api.fs.writeFile(projectPath, `# Project Instructions\n\nRules and conventions for this project.\n\n## Guidelines\n- Use TypeScript for all new files\n- Run typecheck before committing\n\n## Path-scoped rules\n\n@path: src/components/**/*.tsx\n- Use functional components with hooks\n- Name files PascalCase\n\n@path: **/*.test.ts\n- Always use vitest\n- Mock external dependencies\n\n@path: **/*.md\n- Use clear, concise language\n- Include code examples where helpful\n`);
+                toast({ kind: "success", title: "ACODE.md created" });
+                window.location.reload();
+              } catch (err) {
+                toast({ kind: "error", title: "Failed to create ACODE.md", description: String(err) });
+              }
+            }}
+          >
+            Create ACODE.md
+          </button>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {/* Priority legend */}
+          <div className="flex items-center gap-4 text-xs text-acode-text-muted mb-4">
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-acode-git-added" /> Active</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-acode-text-muted" /> Empty</span>
+            <span className="text-acode-text-muted/60">Higher layers override lower ones (Local &gt; Project &gt; Org &gt; Global)</span>
+          </div>
+
+          {layers.map((layer) => (
+            <div key={layer.key} className="bg-acode-bg-secondary border border-acode-border-primary rounded-xl overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-acode-bg-hover transition-colors text-left"
+                onClick={() => setExpandedLayer(expandedLayer === layer.key ? null : layer.key)}
+              >
+                <div className="flex items-center gap-3">
+                  {layer.exists ? (
+                    <CheckCircle2 className="w-4 h-4 text-acode-git-added flex-shrink-0" />
+                  ) : (
+                    <span className="w-4 h-4 rounded-full border-2 border-acode-border-secondary flex-shrink-0" />
+                  )}
+                  <div>
+                    <div className="text-sm font-medium text-acode-text-primary">{layer.label}</div>
+                    <div className="text-xs text-acode-text-muted">{layer.description}</div>
+                  </div>
+                  {!layer.gitTracked && (
+                    <span className="px-1.5 py-0.5 text-[9px] rounded bg-acode-bg-tertiary text-acode-text-muted border border-acode-border-secondary">not tracked</span>
+                  )}
+                  {layer.pathScopedRules.length > 0 && (
+                    <span className="px-1.5 py-0.5 text-[9px] rounded bg-acode-accent-subtle text-acode-accent-primary">{layer.pathScopedRules.length} path rules</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-acode-text-muted font-mono truncate max-w-[280px]">{layer.path}</span>
+                  <ChevronDown className={`w-4 h-4 text-acode-text-muted transition-transform ${expandedLayer === layer.key ? "rotate-180" : ""}`} />
+                </div>
+              </button>
+
+              {expandedLayer === layer.key && (
+                <div className="border-t border-acode-border-primary">
+                  {/* Path-scoped rules summary */}
+                  {layer.pathScopedRules.length > 0 && (
+                    <div className="px-5 py-3 bg-acode-bg-tertiary/50">
+                      <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-2">Path-scoped rules</div>
+                      <div className="flex flex-wrap gap-2">
+                        {layer.pathScopedRules.map((rule) => (
+                          <span
+                            key={rule.glob}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-acode-bg-secondary border border-acode-border-primary text-xs"
+                          >
+                            <span className="font-mono text-acode-accent-primary">@path:</span>
+                            <span className="font-mono text-acode-text-primary">{rule.glob}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Content / editor */}
+                  <div className="p-5">
+                    {editingLayer === layer.key ? (
+                      <>
+                        <textarea
+                          className="input-base w-full font-mono text-xs leading-relaxed min-h-[240px] bg-acode-bg-primary border-acode-border-primary"
+                          value={editContent}
+                          onChange={(e) => setEditContent(e.target.value)}
+                          spellCheck={false}
+                        />
+                        <div className="flex items-center justify-between mt-3">
+                          <span className="text-[10px] text-acode-text-muted">
+                            {editContent.split("\n").length} lines · {layer.gitTracked ? "Tracked in git" : "Not tracked"}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setEditingLayer(null)}
+                              className="px-3 py-1.5 text-xs text-acode-text-secondary hover:bg-acode-bg-hover rounded-md transition-colors"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={async () => {
+                                setSaving(true);
+                                try {
+                                  const api = ensureAcodeAPI();
+                                  await api.fs.writeFile(layer.path, editContent);
+                                  toast({ kind: "success", title: `${layer.label} saved` });
+                                  setEditingLayer(null);
+                                  const updated = await loadInstructions(api, activeWorkspace.path);
+                                  setLayers(updated);
+                                } catch (err) {
+                                  toast({ kind: "error", title: "Save failed", description: String(err) });
+                                } finally {
+                                  setSaving(false);
+                                }
+                              }}
+                              disabled={saving}
+                              className="px-3 py-1.5 text-xs bg-acode-accent-primary hover:bg-acode-accent-hover text-white rounded-md transition-colors disabled:opacity-50"
+                            >
+                              {saving ? "Saving…" : "Save"}
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {layer.exists ? (
+                          <>
+                            <pre className="text-xs font-mono leading-relaxed text-acode-text-secondary whitespace-pre-wrap max-h-[200px] overflow-y-auto bg-acode-bg-primary rounded-lg p-4 border border-acode-border-primary">
+                              {layer.content || "(empty)"}
+                            </pre>
+                            <button
+                              onClick={() => { setEditingLayer(layer.key); setEditContent(layer.content); }}
+                              className="mt-3 px-3 py-1.5 text-xs text-acode-accent-primary hover:bg-acode-accent-subtle rounded-md transition-colors"
+                            >
+                              Edit
+                            </button>
+                          </>
+                        ) : (
+                          <div className="text-center py-6">
+                            <p className="text-sm text-acode-text-muted mb-3">No instruction file at this layer.</p>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const api = ensureAcodeAPI();
+                                  const dir = layer.path.substring(0, layer.path.lastIndexOf("/"));
+                                  const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+                                  if (!(await exists(dir))) await mkdir(dir);
+                                  await api.fs.writeFile(layer.path, `# ${layer.label} Instructions\n\nRules for this layer.\n`);
+                                  toast({ kind: "success", title: `${layer.label} ACODE.md created` });
+                                  const updated = await loadInstructions(api, activeWorkspace.path);
+                                  setLayers(updated);
+                                } catch (err) {
+                                  toast({ kind: "error", title: "Failed to create file", description: String(err) });
+                                }
+                              }}
+                              className="px-3 py-1.5 text-xs bg-acode-accent-primary hover:bg-acode-accent-hover text-white rounded-md transition-colors"
+                            >
+                              Create {layer.label} ACODE.md
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Quick reference card */}
+          <Card title="Syntax reference" description="How to structure your ACODE.md files.">
+            <pre className="text-xs font-mono text-acode-text-secondary whitespace-pre-wrap leading-relaxed">{`# Global rules (apply to all files)
+- Use TypeScript for all new files
+- Follow the Airbnb style guide
+
+@path: src/components/**/*.tsx
+- Use functional components with hooks
+- Always destructure props
+
+@path: **/*.test.ts
+- Use vitest for testing
+- Mock all external API calls
+
+@path: **/*.md
+- Use clear, concise language
+- Include code examples`}</pre>
+          </Card>
+        </div>
+      )}
+    </>
+  );
+}
+
+async function loadInstructions(api: ReturnType<typeof ensureAcodeAPI>, workspacePath: string): Promise<LayerInfo[]> {
+  const { exists, readTextFile } = await import("@tauri-apps/plugin-fs");
+  const { homeDir: getHomeDir } = await import("@tauri-apps/api/path");
+  const homeDir = await getHomeDir().catch(() => "");
+
+  const layerDefs = [
+    { key: "global", label: "Global", description: "Applies to all projects", gitTracked: false, pathFn: () => joinPath(homeDir, ".acode", "ACODE.md") },
+    { key: "org", label: "Organization", description: "Shared across team workspaces", gitTracked: true, pathFn: () => joinPath(workspacePath, ".acode", "org", "ACODE.md") },
+    { key: "project", label: "Project", description: "Project root, checked into git", gitTracked: true, pathFn: () => joinPath(workspacePath, "ACODE.md") },
+    { key: "local", label: "Local", description: "Personal overrides, gitignored", gitTracked: false, pathFn: () => joinPath(workspacePath, ".acode", "local", "ACODE.md") },
+  ];
+
+  const results: LayerInfo[] = [];
+  for (const def of layerDefs) {
+    const path = def.pathFn();
+    let content = "";
+    let fileExists = false;
+    try {
+      fileExists = await exists(path);
+      if (fileExists) content = await readTextFile(path);
+    } catch { /* file doesn't exist */ }
+
+    const pathScopedRules: { glob: string; rules: string }[] = [];
+    if (content) {
+      const lines = content.split(/\r?\n/);
+      let currentGlob: string | null = null;
+      let currentBlock: string[] = [];
+      const flush = () => {
+        if (currentGlob && currentBlock.length > 0) {
+          pathScopedRules.push({ glob: currentGlob, rules: currentBlock.join("\n").trim() });
+        }
+        currentBlock = [];
+      };
+      for (const line of lines) {
+        const match = line.match(/^@path:\s+(.+?)\s*$/);
+        if (match) {
+          flush();
+          currentGlob = match[1];
+          continue;
+        }
+        if (currentGlob) currentBlock.push(line);
+      }
+      flush();
+    }
+
+    results.push({
+      key: def.key,
+      name: def.key,
+      label: def.label,
+      description: def.description,
+      path,
+      gitTracked: def.gitTracked,
+      content,
+      exists: fileExists,
+      pathScopedRules,
+    });
+  }
+  return results;
+}
 
 // ---- Onboard -------------------------------------------------------------
 

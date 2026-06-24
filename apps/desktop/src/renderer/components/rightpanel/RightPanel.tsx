@@ -100,7 +100,7 @@ export function RightPanel() {
             )}
           </div>
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           {tab === "git" && <GitTab status={status} onRefresh={() => void refresh()} />}
           {tab === "diff" && <DiffTab />}
           {tab === "review" && <ReviewTab />}

@@ -4,12 +4,19 @@ import { CheckCircle2, XCircle, AlertTriangle, Info, X } from "lucide-react";
 
 export type ToastKind = "info" | "success" | "warning" | "error";
 
+export type ToastAction = {
+  label: string;
+  onClick: () => void;
+  variant?: "primary" | "secondary" | "danger";
+};
+
 export type Toast = {
   id: string;
   kind: ToastKind;
   title: string;
   description?: string;
   durationMs?: number;
+  actions?: ToastAction[];
 };
 
 type ToastState = {
@@ -94,6 +101,28 @@ export function Toaster() {
                 {t.description && (
                   <div className="text-xs text-acode-text-muted mt-0.5">
                     {t.description}
+                  </div>
+                )}
+                {t.actions && t.actions.length > 0 && (
+                  <div className="flex gap-1.5 mt-2.5">
+                    {t.actions.map((act) => (
+                      <button
+                        key={act.label}
+                        className={`px-2 py-0.5 rounded text-xs font-semibold select-none cursor-pointer transition-colors ${
+                          act.variant === "primary"
+                            ? "bg-acode-accent-primary text-white hover:bg-opacity-90"
+                            : act.variant === "danger"
+                            ? "bg-acode-git-deleted text-white hover:bg-opacity-90"
+                            : "bg-acode-bg-hover text-acode-text-primary hover:bg-opacity-80"
+                        }`}
+                        onClick={() => {
+                          act.onClick();
+                          dismiss(t.id);
+                        }}
+                      >
+                        {act.label}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>

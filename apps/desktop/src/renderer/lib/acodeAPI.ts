@@ -1,12 +1,15 @@
 import type { AcodeAPI, AgentSessionMode, AppSettings, DiffProposal, FileNode, StreamEvent } from "@acode/shared-types";
 import { DEFAULT_SETTINGS } from "@acode/shared-types";
-import { matchSkillInvocation, renderSkillForPrompt } from "./skills";
+import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
+import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
+import { hookBus } from "./hookBus";
 
 const STORAGE_KEYS = {
   settings: "acode.settings.v1",
 } as const;
 
 const activeControllers = new Map<string, AbortController>();
+const sessionStartTimes = new Map<string, number>();
 const streamCallbacks = new Map<string, (event: StreamEvent) => void>();
 const streamCleanups = new Map<string, () => void>();
 const pendingDiffProposals = new Map<string, DiffProposal>();
@@ -59,6 +62,30 @@ export class ProviderError extends Error {
     super(message);
     this.name = "ProviderError";
   }
+}
+
+/**
+ * Shared helper to resolve the active provider configuration.
+ * Used by sendPrompt, summarizeMessages, and tool handlers.
+ */
+export function getActiveProvider(requireModel = true): {
+  settings: AppSettings;
+  providerId: string;
+  modelId: string;
+  config: { baseUrl: string; apiKey: string; apiFormat: string };
+} {
+  const settings = getStoredSettings();
+  const providerId = settings.selectedProvider;
+  const modelId = settings.selectedModel;
+
+  if (!providerId || (requireModel && !modelId)) {
+    throw new ProviderError("No provider configured. Add one in Settings.", "provider");
+  }
+  const config = getProviderConfig(providerId);
+  if (!config) {
+    throw new ProviderError(`Provider "${providerId}" not configured. Check settings.`, "provider");
+  }
+  return { settings, providerId, modelId: modelId ?? "", config };
 }
 
 function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining: string } {
@@ -423,21 +450,37 @@ const mockAcodeAPI: AcodeAPI = {
 
   agent: {
     async startSession(options: { workspacePath: string; model: string; mode: AgentSessionMode }) {
-      return { sessionId: "ses-" + Math.random().toString(36).slice(2, 14) };
+      const sessionId = "ses-" + Math.random().toString(36).slice(2, 14);
+      sessionStartTimes.set(sessionId, Date.now());
+      // Hook: SessionStart
+      await hookBus.emit("SessionStart", {
+        sessionId,
+        workspacePath: options.workspacePath,
+        model: options.model,
+        agentName: "build",
+        mode: options.mode,
+        timestamp: Date.now(),
+      });
+      return { sessionId };
     },
     async sendPrompt(sessionId, prompt, conversationHistory?, agentName?, attachments?) {
-      const settings = getStoredSettings();
-      const providerId = settings.selectedProvider;
-      const modelId = settings.selectedModel;
-
-      if (!providerId || !modelId) throw new ProviderError("No provider configured. Add one in Settings.", "provider");
-
-      const config = getProviderConfig(providerId);
-      if (!config) throw new ProviderError(`Provider "${providerId}" not configured. Check settings.`, "provider");
+      const { settings, providerId, modelId, config } = getActiveProvider();
 
       const ac = new AbortController();
       activeControllers.set(sessionId, ac);
       const emit = (event: StreamEvent) => { streamCallbacks.get(sessionId)?.(event); };
+
+      const sessionStartTime = Date.now();
+
+      // Hook: UserPromptSubmit
+      await hookBus.emit("UserPromptSubmit", {
+        sessionId,
+        prompt,
+        conversationHistory: conversationHistory ?? [],
+        agentName: agentName ?? "build",
+        attachments: (attachments ?? []).map((a) => ({ name: a.name, mimeType: a.mimeType })),
+        timestamp: Date.now(),
+      });
 
       try {
         // Resolve circular dependency by dynamic import of store
@@ -464,6 +507,10 @@ const mockAcodeAPI: AcodeAPI = {
         let cleanPrompt = prompt;
 
         if (matched) {
+          // Progressive disclosure: load skill content lazily from disk if not already loaded
+          if (!matched.skill.content) {
+            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockAcodeAPI.fs.readFile });
+          }
           activeSkillPrompt = renderSkillForPrompt(matched.skill);
           const regex = new RegExp(`\\$${matched.skill.name}\\b`, "i");
           cleanPrompt = prompt.replace(regex, "").trim();
@@ -535,6 +582,32 @@ const mockAcodeAPI: AcodeAPI = {
           }
         }
 
+        let sqliteMemoriesBlock = "";
+        if (workspacePath) {
+          try {
+            const { searchMemories, getCriticalMemories } = await import("./memoryStore");
+            const critical = await getCriticalMemories(5);
+            const queryText = cleanPrompt || prompt;
+            const relevant = queryText ? await searchMemories(queryText, { limit: 5 }).catch(() => []) : [];
+
+            // Deduplicate relevant memories that are already in critical
+            const criticalIds = new Set(critical.map((m) => m.id));
+            const uniqueRelevant = relevant.filter((m) => !criticalIds.has(m.id));
+
+            const allInjected = [...critical, ...uniqueRelevant];
+            if (allInjected.length > 0) {
+              sqliteMemoriesBlock = `\n\n=== RETRIEVED WORKSPACE MEMORIES ===\nThese are relevant memories retrieved from the persistent workspace memory store. Keep them in mind during the session:\n`;
+              for (const mem of allInjected) {
+                const tierIcon = { critical: "🔴", high: "🟡", medium: "🔵", low: "⚪" }[mem.tier];
+                sqliteMemoriesBlock += `\n- ${tierIcon} [${mem.category}] ${mem.summary} (tags: ${mem.tags.join(", ")})\n  ${mem.content.split("\n").join("\n  ")}\n`;
+              }
+              sqliteMemoriesBlock += `====================================`;
+            }
+          } catch (e) {
+            console.warn("Failed to retrieve memories for prompt injection:", e);
+          }
+        }
+
         let workspacePinnedBlock = "";
         if (workspacePath) {
           try {
@@ -565,35 +638,30 @@ const mockAcodeAPI: AcodeAPI = {
           }
         }
 
+        // Load 4-layer instructions hierarchy (global → project → local + path-scoped)
         let workspaceRulesBlock = "";
         if (workspacePath) {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
-            const cursorrulesPath = joinPath(workspacePath, ".cursorrules");
-            const agentrulesPath = joinPath(workspacePath, ".agentrules");
-            const rulesMdPath = joinPath(workspacePath, ".acode/rules.md");
-            
-            let rulesContent = "";
-            if (await exists(cursorrulesPath)) {
-              rulesContent = await mockAcodeAPI.fs.readFile(cursorrulesPath);
-            } else if (await exists(agentrulesPath)) {
-              rulesContent = await mockAcodeAPI.fs.readFile(agentrulesPath);
-            } else if (await exists(rulesMdPath)) {
-              rulesContent = await mockAcodeAPI.fs.readFile(rulesMdPath);
-            }
-            if (rulesContent) {
-              workspaceRulesBlock = `\n\n=== WORKSPACE CUSTOM RULES ===\nThese instructions define workspace styling guidelines, behavioral constraints, and project rules that you must strictly adhere to:\n${rulesContent}\n==============================`;
-            }
+            const instructions = await loadInstructions(workspacePath, {
+              readFile: mockAcodeAPI.fs.readFile,
+              exists: async (p: string) => exists(p),
+              getHomeDir: async () => {
+                const { homeDir } = await import("@tauri-apps/api/path");
+                return homeDir();
+              },
+            });
+            workspaceRulesBlock = formatInstructionsForPrompt(instructions, activeFile ?? undefined);
           } catch (e) {
-            console.warn("Failed to load workspace rules:", e);
+            console.warn("Failed to load workspace instructions:", e);
           }
         }
 
         const toolsDocumentation = `
 === AGENTIC TOOLS HARNESS ===
-You are equipped with tools to interact with the workspace. To invoke a tool, output the corresponding XML tag in your response. The system will pause, execute the tool, and provide the result in your next turn. You can invoke multiple tools in a single turn.
+You are equipped with tools to interact with the workspace and operating system. To invoke a tool, output the corresponding XML tag in your response. The system will pause, execute the tool, and provide the result in your next turn. You can invoke multiple tools in a single turn.
 
-Available Tools:
+--- File & Workspace Tools ---
 1. Read File:
    <read_file path="absolute_path"/>
    Reads the entire contents of a file.
@@ -617,6 +685,7 @@ Available Tools:
    <run_command command="shell command"/>
    Executes a shell command in the workspace directory and returns its output.
 
+--- Git Tools ---
 6. Git Status:
    <git_status/>
    Gets the git status of the project.
@@ -629,6 +698,76 @@ Available Tools:
    <git_log/>
    Gets the git commit history.
 
+--- Desktop / System Tools ---
+9. Clipboard Read:
+   <clipboard_read/>
+   Reads text from the system clipboard.
+
+10. Clipboard Write:
+    <clipboard_write>text to copy</clipboard_write>
+    Writes text to the system clipboard.
+
+11. Send Notification:
+    <notify title="Title" body="Notification body"/>
+    Sends a desktop notification.
+
+12. System Info:
+    <system_info/>
+    Gets OS, architecture, hostname, shell, and locale information.
+
+13. Open URL:
+    <open_url url="https://example.com"/>
+    Opens a URL in the system default browser.
+
+14. Launch Application:
+    <launch_app name="app_name" args="optional_args" cwd="optional_working_dir"/>
+    Launches a desktop application by name (e.g. "code", "firefox").
+    Supports optional arguments and working directory.
+
+15. Reveal in Finder:
+    <reveal_in_finder path="absolute_path"/>
+    Opens the file manager and reveals the file or directory.
+
+--- Memory Tools ---
+16. Save Memory:
+    <memory_save category="user" tier="high" summary="short summary" tags="tag1,tag2">detailed content</memory_save>
+    Saves a memory entry for this workspace. Categories: user, feedback, project, reference, task, decision.
+    Tiers: critical, high, medium, low. Use this to remember rules, preferences, key facts, or decisions.
+
+17. Search Memory:
+    <memory_search query="search terms" category="project" limit="5"/>
+    Searches the workspace memory store using full-text search. Returns matching memories.
+    Optional filters: category (user|feedback|project|reference|task|decision), limit (default 10).
+
+18. Delete Memory:
+    <memory_delete id="memory-id"/>
+    Soft-deletes a memory entry by marking it stale. Stale entries are excluded from search
+    results and purged during maintenance. Use memory_search first to find the id to delete.
+
+19. Memory Stats:
+    <memory_stats/>
+    Shows memory store statistics: total count, breakdown by category and tier, and stale count.
+
+20. Memory Maintenance:
+    <memory_maintain/>
+    Runs self-improving maintenance: detects stale memories, enforces budget (500 max),
+    and purges old stale entries. Returns a summary of actions taken.
+
+21. Extract Memories (LLM):
+    <memory_extract/>
+    Uses LLM to analyze the current conversation and extract high-quality memories.
+    More sophisticated than heuristic extraction. Saves results automatically.
+
+22. Export Memories:
+    <memory_export/>
+    Exports all memories to markdown files in .acode/memories/ for git sharing.
+    Teammates can import these files when they clone the repo.
+
+23. Import Memories:
+    <memory_import/>
+    Imports memories from markdown files in .acode/memories/ into the SQLite cache.
+    Use after cloning a repo to restore shared memories.
+
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
 `;
 
@@ -638,6 +777,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             ? "You are ACode in YOLO mode. You have FULL unrestricted access — read, write, execute anything without asking. Be efficient and direct. Execute tasks without seeking permission."
             : "You are ACode, an AI coding assistant. Help users write, debug, and understand code. Be concise and practical. When showing code, use markdown code blocks with the appropriate language. Always ask the user before executing shell commands or making file changes.") 
             + workspaceMemoryBlock 
+            + sqliteMemoriesBlock
             + workspaceRulesBlock 
             + toolsDocumentation
             + activeSkillPrompt
@@ -781,10 +921,22 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               const decision = await waitForToolApproval(toolCallId);
 
               if (decision === "approved") {
+                const toolStartTime = Date.now();
                 try {
                   emit({ type: "thinking", messageId: sessionId, content: `Executing tool ${pt.name}...` });
                   const toolResult = await executeTool(pt.name, pt.args, workspacePath || ".", emit);
+                  const toolDurationMs = Date.now() - toolStartTime;
                   emit({ type: "tool-result", toolCallId, result: toolResult });
+
+                  // Hook: PostToolUse
+                  await hookBus.emit("PostToolUse", {
+                    sessionId,
+                    toolName: pt.name,
+                    toolArgs: pt.args,
+                    result: toolResult,
+                    durationMs: toolDurationMs,
+                    timestamp: Date.now(),
+                  });
 
                   const toolResultMsg = {
                     id: "tr-" + Math.random().toString(36).slice(2, 9),
@@ -805,6 +957,17 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                 } catch (err) {
                   const errMsg = (err as Error)?.message ?? String(err);
                   emit({ type: "tool-result", toolCallId, result: `Error: ${errMsg}` });
+
+                  // Hook: PostToolUse (with error)
+                  await hookBus.emit("PostToolUse", {
+                    sessionId,
+                    toolName: pt.name,
+                    toolArgs: pt.args,
+                    result: `Error: ${errMsg}`,
+                    error: errMsg,
+                    durationMs: Date.now() - toolStartTime,
+                    timestamp: Date.now(),
+                  });
 
                   const toolResultMsg = {
                     id: "tr-" + Math.random().toString(36).slice(2, 9),
@@ -850,13 +1013,47 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           // Final response turn completed with no tools to execute
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
+
+          // Hook: Stop
+          await hookBus.emit("Stop", {
+            sessionId,
+            fullContent,
+            messageCount: currentHistory.length,
+            toolCallsExecuted: parsedTools.length,
+            timestamp: Date.now(),
+          });
+
+          // Hook: SessionEnd (natural completion)
+          await hookBus.emit("SessionEnd", {
+            sessionId,
+            reason: "completed",
+            messageCount: currentHistory.length,
+            durationMs: Date.now() - sessionStartTime,
+            timestamp: Date.now(),
+          });
+          sessionStartTimes.delete(sessionId);
           break;
         }
       } catch (err) {
         activeControllers.delete(sessionId);
+        const startTime = sessionStartTimes.get(sessionId) ?? Date.now();
+        sessionStartTimes.delete(sessionId);
+        let messageCount = 0;
+        try {
+          const { useChat } = await import("../store/useAppStore");
+          messageCount = useChat.getState().sessionMessages[sessionId]?.length ?? 0;
+        } catch {}
+
         if (err instanceof ProviderError) {
           emit({ type: "error", error: err.message });
           emit({ type: "message-end", messageId: sessionId });
+          await hookBus.emit("SessionEnd", {
+            sessionId,
+            reason: "error",
+            messageCount,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+          });
           return;
         }
         if ((err as Error)?.name === "AbortError") {
@@ -865,20 +1062,39 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         }
         emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
         emit({ type: "message-end", messageId: sessionId });
+        await hookBus.emit("SessionEnd", {
+          sessionId,
+          reason: "error",
+          messageCount,
+          durationMs: Date.now() - startTime,
+          timestamp: Date.now(),
+        });
       }
       activeControllers.delete(sessionId);
 
     },
     async abort(sessionId) {
+      const startTime = sessionStartTimes.get(sessionId) ?? Date.now();
+      let messageCount = 0;
+      try {
+        const { useChat } = await import("../store/useAppStore");
+        const sessionMessages = useChat.getState().sessionMessages[sessionId];
+        messageCount = sessionMessages?.length ?? 0;
+      } catch { /* store not available */ }
+      // Hook: SessionEnd
+      await hookBus.emit("SessionEnd", {
+        sessionId,
+        reason: "aborted",
+        messageCount,
+        durationMs: Date.now() - startTime,
+        timestamp: Date.now(),
+      });
       const ac = activeControllers.get(sessionId);
       if (ac) { ac.abort(); activeControllers.delete(sessionId); }
+      sessionStartTimes.delete(sessionId);
     },
     async summarizeMessages(model, messages) {
-      const settings = getStoredSettings();
-      const providerId = settings.selectedProvider;
-      if (!providerId) throw new ProviderError("No provider configured", "provider");
-      const config = getProviderConfig(providerId);
-      if (!config) throw new ProviderError(`Provider "${providerId}" not configured`, "provider");
+      const { settings, config } = getActiveProvider(false);
 
       const isAnthropic = config.apiFormat === "anthropic";
       const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
@@ -1046,6 +1262,39 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       }
     },
     async getAppVersion() { return "0.1.0"; },
+    async clipboardReadText() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("clipboard_read_text");
+    },
+    async clipboardWriteText(text: string) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("clipboard_write_text", { text });
+    },
+    async clipboardHasImage() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<boolean>("clipboard_has_image");
+    },
+    async notify(payload: { title: string; body: string; icon?: string }) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("notify", { payload });
+    },
+    async getSystemInfo() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const info = await invoke<{ os: string; arch: string; hostname: string; home_dir: string; shell: string; locale?: string }>("system_get_info");
+      return { os: info.os, arch: info.arch, hostname: info.hostname, homeDir: info.home_dir, shell: info.shell, locale: info.locale };
+    },
+    async getWorkingDir() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_working_dir");
+    },
+    async openWithSystemHandler(pathOrUrl: string) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_with_system_handler", { pathOrUrl });
+    },
+    async launchApp(appName: string, args?: string[], cwd?: string) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("launch_app", { appName, args, cwd });
+    },
   },
 };
 
@@ -1053,6 +1302,16 @@ interface ParsedToolCall {
   name: string;
   args: Record<string, any>;
   raw: string;
+}
+
+function parseAttributes(tagStr: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const regex = /([a-zA-Z0-9_-]+)=["']([^"']*)["']/g;
+  let match;
+  while ((match = regex.exec(tagStr)) !== null) {
+    attrs[match[1]] = match[2];
+  }
+  return attrs;
 }
 
 function parseToolCalls(text: string): ParsedToolCall[] {
@@ -1116,7 +1375,134 @@ function parseToolCalls(text: string): ParsedToolCall[] {
     toolCalls.push({ name: "git_log", args: {}, raw: match[0] });
   }
 
-  // 9. Generic MCP Tool calls
+  // 9. clipboard_read
+  const clipboardReadRegex = /<clipboard_read\s*\/>/gi;
+  while ((match = clipboardReadRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "clipboard_read", args: {}, raw: match[0] });
+  }
+
+  // 10. clipboard_write
+  const clipboardWriteRegex = /<clipboard_write>([\s\S]*?)<\/clipboard_write>/gi;
+  while ((match = clipboardWriteRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "clipboard_write", args: { text: match[1] }, raw: match[0] });
+  }
+
+  // 11. notify
+  const notifyRegex = /<notify\s+([\s\S]*?)\/?>/gi;
+  while ((match = notifyRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.title) {
+      toolCalls.push({ name: "notify", args: { title: attrs.title, body: attrs.body ?? "" }, raw: match[0] });
+    }
+  }
+
+  // 12. system_info
+  const systemInfoRegex = /<system_info\s*\/>/gi;
+  while ((match = systemInfoRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "system_info", args: {}, raw: match[0] });
+  }
+
+  // 13. open_url
+  const openUrlRegex = /<open_url\s+([\s\S]*?)\/?>/gi;
+  while ((match = openUrlRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.url) {
+      toolCalls.push({ name: "open_url", args: { url: attrs.url }, raw: match[0] });
+    }
+  }
+
+  // 14. launch_app
+  const launchAppRegex = /<launch_app\s+([\s\S]*?)\/?>/gi;
+  while ((match = launchAppRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.name) {
+      toolCalls.push({ name: "launch_app", args: { name: attrs.name, args: attrs.args, cwd: attrs.cwd }, raw: match[0] });
+    }
+  }
+
+  // 15. reveal_in_finder
+  const revealRegex = /<reveal_in_finder\s+([\s\S]*?)\/?>/gi;
+  while ((match = revealRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.path) {
+      toolCalls.push({ name: "reveal_in_finder", args: { path: attrs.path }, raw: match[0] });
+    }
+  }
+
+  // 16. memory_save
+  const memorySaveRegex = /<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi;
+  while ((match = memorySaveRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    toolCalls.push({
+      name: "memory_save",
+      args: {
+        category: attrs.category || "project",
+        tier: attrs.tier || "medium",
+        summary: attrs.summary || "",
+        tags: attrs.tags || "",
+        content: match[2].trim(),
+      },
+      raw: match[0],
+    });
+  }
+
+  // 17. memory_search
+  const memorySearchRegex = /<memory_search\s+([\s\S]*?)\/?>/gi;
+  while ((match = memorySearchRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.query) {
+      toolCalls.push({
+        name: "memory_search",
+        args: { query: attrs.query, category: attrs.category, limit: attrs.limit },
+        raw: match[0],
+      });
+    }
+  }
+
+  // 18. memory_delete
+  const memoryDeleteRegex = /<memory_delete\s+([\s\S]*?)\/?>/gi;
+  while ((match = memoryDeleteRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.id) {
+      toolCalls.push({
+        name: "memory_delete",
+        args: { id: attrs.id },
+        raw: match[0],
+      });
+    }
+  }
+
+  // 19. memory_stats
+  const memoryStatsRegex = /<memory_stats\s*\/>/gi;
+  while ((match = memoryStatsRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "memory_stats", args: {}, raw: match[0] });
+  }
+
+  // 20. memory_maintain
+  const memoryMaintainRegex = /<memory_maintain\s*\/>/gi;
+  while ((match = memoryMaintainRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "memory_maintain", args: {}, raw: match[0] });
+  }
+
+  // 21. memory_extract
+  const memoryExtractRegex = /<memory_extract\s*\/>/gi;
+  while ((match = memoryExtractRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "memory_extract", args: {}, raw: match[0] });
+  }
+
+  // 22. memory_export
+  const memoryExportRegex = /<memory_export\s*\/>/gi;
+  while ((match = memoryExportRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "memory_export", args: {}, raw: match[0] });
+  }
+
+  // 23. memory_import
+  const memoryImportRegex = /<memory_import\s*\/>/gi;
+  while ((match = memoryImportRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "memory_import", args: {}, raw: match[0] });
+  }
+
+  // 24. Generic MCP Tool calls
   const mcpTagRegex = /<mcp_([a-z0-9-]+)_([a-z0-9_-]+)([\s\S]*?)>/gi;
   let mcpMatch;
   while ((mcpMatch = mcpTagRegex.exec(text)) !== null) {
@@ -1294,6 +1680,189 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     return JSON.stringify(log, null, 2);
   }
 
+  if (name === "clipboard_read") {
+    return await mockAcodeAPI.system.clipboardReadText();
+  }
+
+  if (name === "clipboard_write") {
+    await mockAcodeAPI.system.clipboardWriteText(args.text);
+    return "Clipboard written successfully.";
+  }
+
+  if (name === "notify") {
+    await mockAcodeAPI.system.notify({ title: args.title, body: args.body });
+    return `Notification sent: ${args.title}`;
+  }
+
+  if (name === "system_info") {
+    const info = await mockAcodeAPI.system.getSystemInfo();
+    return JSON.stringify(info, null, 2);
+  }
+
+  if (name === "open_url") {
+    await mockAcodeAPI.system.openLink(args.url);
+    return `Opened URL: ${args.url}`;
+  }
+
+  if (name === "launch_app") {
+    const appArgs = args.args ? args.args.split(/\s+/).filter(Boolean) : undefined;
+    const result = await mockAcodeAPI.system.launchApp(args.name, appArgs, args.cwd || workspacePath);
+    return result || `Launched app: ${args.name}`;
+  }
+
+  if (name === "reveal_in_finder") {
+    await mockAcodeAPI.system.revealInFinder(args.path);
+    return `Revealed in Finder: ${args.path}`;
+  }
+
+  if (name === "memory_save") {
+    const { saveMemory } = await import("./memoryStore");
+    const tags = args.tags ? args.tags.split(/,\s*/).map((t: string) => t.trim()).filter(Boolean) : [];
+    const result = await saveMemory(
+      {
+        category: args.category as any || "project",
+        tier: args.tier as any || "medium",
+        summary: args.summary || args.content.slice(0, 150),
+        content: args.content,
+        tags,
+      },
+      workspacePath,
+    );
+    return `Memory ${result.action}: id=${result.id}`;
+  }
+
+  if (name === "memory_search") {
+    const { searchMemories } = await import("./memoryStore");
+    const limit = args.limit ? parseInt(args.limit, 10) : 10;
+    const results = await searchMemories(args.query, {
+      category: args.category as any || undefined,
+      limit,
+    });
+    if (results.length === 0) return "No memories found matching the query.";
+    return results.map((r) =>
+      `[${r.tier}/${r.category}] ${r.summary} (id:${r.id}, tags: ${r.tags.join(", ")})\n${r.content}`
+    ).join("\n---\n");
+  }
+
+  if (name === "memory_delete") {
+    const { markStale } = await import("./memoryStore");
+    await markStale(args.id);
+    return `Memory ${args.id} marked stale (soft-deleted). It will be excluded from search and purged during maintenance.`;
+  }
+
+  if (name === "memory_stats") {
+    const { getMemoryStats } = await import("./memoryStore");
+    const stats = await getMemoryStats();
+    const tierOrder = ["critical", "high", "medium", "low"];
+    const lines = [
+      `Total memories: ${stats.total}`,
+      `Stale (pending purge): ${stats.staleCount}`,
+      "",
+      "By category:",
+      ...Object.entries(stats.byCategory).map(([cat, count]) => `  ${cat}: ${count}`),
+      "",
+      "By tier:",
+      ...Object.entries(stats.byTier).map(([tier, count]) => `  ${tier}: ${count}`),
+      "",
+      "Per-category tier breakdown:",
+      ...Object.entries(stats.byCategoryTier).map(([cat, tiers]) => {
+        const tierStr = tierOrder.map((t) => `${t}: ${tiers[t] ?? 0}`).join(", ");
+        return `  ${cat} — ${tierStr}`;
+      }),
+    ];
+    return lines.join("\n");
+  }
+
+  if (name === "memory_maintain") {
+    const { runMaintenance } = await import("./memoryStore");
+    const result = await runMaintenance();
+    const lines = [
+      "Memory maintenance complete:",
+      `  Stale detected: ${result.staleDetected}`,
+      `  Budget pruned: ${result.pruned}`,
+      `  Purged (hard delete): ${result.purged}`,
+      `  Total actions: ${result.staleDetected + result.pruned + result.purged}`,
+    ];
+    return lines.join("\n");
+  }
+
+  if (name === "memory_export") {
+    const { exportMemories } = await import("./memoryStore");
+    const count = await exportMemories(workspacePath);
+    return `Exported ${count} memories to .acode/memories/ as markdown files. Ready for git commit.`;
+  }
+
+  if (name === "memory_import") {
+    const { importMemories } = await import("./memoryStore");
+    const count = await importMemories(workspacePath);
+    return `Imported ${count} memories from .acode/memories/ markdown files into SQLite cache.`;
+  }
+
+  if (name === "memory_extract") {
+    const { extractMemoriesWithLLM } = await import("./memoryStore");
+    let settings: AppSettings;
+    let config: { baseUrl: string; apiKey: string; apiFormat: string };
+    try {
+      ({ settings, config } = getActiveProvider());
+    } catch {
+      return "Error: No provider configured. Cannot run LLM extraction.";
+    }
+
+    // Build fetchLLM callback using the configured provider
+    const fetchLLM = async (prompt: string): Promise<string> => {
+      const isAnthropic = config.apiFormat === "anthropic";
+      const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (isAnthropic) {
+        headers["x-api-key"] = config.apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      } else {
+        headers["Authorization"] = `Bearer ${config.apiKey}`;
+      }
+      const body = isAnthropic
+        ? { model: settings.selectedModel, system: "You are a memory extraction assistant.", messages: [{ role: "user", content: prompt }], max_tokens: 1000 }
+        : { model: settings.selectedModel, messages: [{ role: "system", content: "You are a memory extraction assistant." }, { role: "user", content: prompt }], max_tokens: 1000 };
+      const resp = await fetchJsonWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, 2, 1000);
+      return isAnthropic ? (resp.content?.[0]?.text || "") : (resp.choices?.[0]?.message?.content || "");
+    };
+
+    // Get last exchange from session messages
+    const { useChat, useWorkspace } = await import("../store/useAppStore");
+    const activeSessionId = useChat.getState().session?.id ?? useChat.getState().chatSessions.at(-1)?.id;
+    if (!activeSessionId) return "Error: No active session found.";
+    const sessionMessages = useChat.getState().sessionMessages[activeSessionId];
+    if (!sessionMessages || sessionMessages.length < 2) return "Error: No conversation history available for extraction.";
+
+    let lastUserIdx = -1;
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      if (sessionMessages[i].role === "user") { lastUserIdx = i; break; }
+    }
+    if (lastUserIdx < 0) return "Error: No user message found in conversation.";
+    let assistantIdx = -1;
+    for (let i = lastUserIdx + 1; i < sessionMessages.length; i++) {
+      if (sessionMessages[i].role === "assistant") { assistantIdx = i; break; }
+    }
+    if (assistantIdx < 0) return "Error: No assistant response found after last user message.";
+
+    const userInput = sessionMessages[lastUserIdx].content;
+    const assistantResponse = sessionMessages[assistantIdx].content;
+
+    const result = await extractMemoriesWithLLM(userInput, assistantResponse, fetchLLM, {
+      sessionId: activeSessionId,
+      workspacePath,
+    });
+
+    const lines = [
+      `LLM memory extraction complete (${result.source} source):`,
+      `  Entries found: ${result.entries.length}`,
+      `  Saved: ${result.saved}`,
+      "",
+      "Extracted entries:",
+      ...result.entries.map((e) => `  [${e.tier}/${e.category}] ${e.summary}`),
+    ];
+    return lines.join("\n");
+  }
+
   if (name.startsWith("mcp_")) {
     const parts = name.split("_");
     const serverName = parts[1];
@@ -1393,15 +1962,8 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
 
         return await resultPromise;
       } catch (err) {
-        console.warn(`Stdio execution failed for ${name}, running mock fallback:`, err);
-        if (toolName === "get_weather") {
-          return `Mock Weather Report for ${args.city || "SF"}: Sunny, 72°F.`;
-        } else if (toolName === "read_memory") {
-          return `Mock Memory Value: key="${args.key || "default"}" is not set or empty.`;
-        } else if (toolName === "write_memory") {
-          return `Mock Memory Success: wrote key="${args.key}" value="${args.value}".`;
-        }
-        return `Mock response for ${toolName} with arguments: ${JSON.stringify(args)}`;
+        const errMsg = (err as Error)?.message ?? String(err);
+        throw new Error(`MCP tool "${toolName}" on server "${serverName}" failed: ${errMsg}`);
       }
     }
   }

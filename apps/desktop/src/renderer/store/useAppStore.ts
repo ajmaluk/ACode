@@ -26,8 +26,8 @@ import { DEFAULT_SETTINGS } from "@acode/shared-types";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, fromConfig, canonicaliseBashCommand, type PermissionKey } from "@/lib/agents";
-import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt } from "@/lib/skills";
-import { computeContextStats, selectMessagesForCompaction, parseContextWindow, type ContextStats } from "@/lib/contextManager";
+import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
+import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, buildCompactionPrompt, parseContextWindow, type ContextStats } from "@/lib/contextManager";
 
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
@@ -137,10 +137,27 @@ async function initWorkspaceMemory(api: AcodeAPI, workspacePath: string) {
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     const dotAcode = joinPath(workspacePath, ".acode");
-    const memoryPath = joinPath(dotAcode, "memory.json");
     if (!(await exists(dotAcode))) {
       await mkdir(dotAcode);
     }
+
+    // Initialize SQLite database for memory FTS5 search
+    try {
+      const { initDatabase } = await import("@/lib/database");
+      await initDatabase(workspacePath);
+      // Rebuild SQLite cache from markdown source files if needed
+      const { rebuildFromMarkdown } = await import("@/lib/memoryStore");
+      await rebuildFromMarkdown(workspacePath);
+
+      // Trigger background memory dream consolidation cycle if needed
+      const { triggerDreamCycleIfNeeded } = await import("@/lib/dreamAgent");
+      triggerDreamCycleIfNeeded(workspacePath);
+    } catch (e) {
+      console.warn("Failed to initialize memory database:", e);
+    }
+
+    // Backward compatibility: ensure old memory.json exists if it was already in use
+    const memoryPath = joinPath(dotAcode, "memory.json");
     if (!(await exists(memoryPath))) {
       const defaultMemory = {
         projectOverview: "An AI-native developer desktop environment.",
@@ -506,6 +523,23 @@ export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
   try {
     const { exists } = await import("@tauri-apps/plugin-fs");
 
+    // Load always-allowed permissions from disk first (needed for tool permission evaluations)
+    await usePermission.getState().loadFromDisk();
+
+    // Load project-level skills from .acode/skills/*/SKILL.md
+    try {
+      const projectSkills = await loadProjectSkills(workspacePath, {
+        listDir: async (path: string) => {
+          const nodes = await api.fs.listDir(path);
+          return nodes.map((n) => ({ name: n.name, path: n.path, type: n.type }));
+        },
+        readFile: api.fs.readFile,
+      });
+      await refreshProjectSkills(projectSkills);
+    } catch (e) {
+      console.warn("Failed to load project skills:", e);
+    }
+
     // Load configuration
     if (await exists(configPath)) {
       try {
@@ -705,13 +739,23 @@ export async function saveWorkspaceData() {
         status: "disconnected" as const,
       }));
 
+    // Read existing config first to preserve alwaysAllowed and other fields
+    let existingConfig: any = {};
+    try {
+      if (await exists(configPath)) {
+        existingConfig = JSON.parse(await api.fs.readFile(configPath));
+      }
+    } catch {}
     const configData = {
+      ...existingConfig,
       settings: {
         selectedModel: currentSettings.selectedModel,
         selectedProvider: currentSettings.selectedProvider,
       },
       providers: providerConfigs,
       mcpServers: projectMcpServers,
+      // Preserve alwaysAllowed from existing config (managed by usePermission)
+      alwaysAllowed: existingConfig.alwaysAllowed ?? usePermission.getState().alwaysAllowed,
     };
     await api.fs.writeFile(configPath, JSON.stringify(configData, null, 2));
   } catch (e) {
@@ -1185,11 +1229,13 @@ export const useChat = create<ChatState>((set, get) => ({
         set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, annotated] }));
         if (needsApproval) {
           const description = `ACode (${useAgents.getState().activeAgentName} agent) wants to use \`${tool.name}\`.`;
+          const activeSession = get().session;
           void usePermission.getState().ask({
             kind: permissionKey,
             title: tool.name,
             description,
             ...(commandStr ? { command: commandStr } : {}),
+            ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
           }).then((decision) => {
             get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied");
           });
@@ -1487,9 +1533,15 @@ export const useChat = create<ChatState>((set, get) => ({
     const { planApproval } = get();
     if (!planApproval) return;
     set({ planApproval: null });
+    // Switch to build mode — permissions auto-approve for file writes
     useAgents.getState().setActiveAgent("build");
     const planMsg = planApproval.planContent.replace(/\[PLAN_COMPLETE\]/g, "").trim();
-    const result = get().sendMessage(`Plan approved. Execute this plan:\n\n${planMsg}`);
+    // Save the plan as a version checkpoint before switching
+    const { activeSessionId } = get();
+    if (activeSessionId) {
+      get().saveVersion(activeSessionId, "Plan approved");
+    }
+    const result = get().sendMessage(`Plan approved. Now execute this plan step by step. Write each step as you complete it:\n\n${planMsg}`);
     if (result instanceof Promise) {
       result.catch((err) => {
         console.error("Failed to send plan approval message:", err);
@@ -1498,7 +1550,13 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   rejectPlan() {
+    const { planApproval, activeSessionId } = get();
+    if (planApproval && activeSessionId) {
+      // Save the rejected plan as a version so user can go back
+      get().saveVersion(activeSessionId, "Plan rejected — replan");
+    }
     set({ planApproval: null });
+    // Keep user in plan mode so they can provide feedback and the AI can replan
   },
 
   addPendingAttachment(file) {
@@ -1628,34 +1686,24 @@ export const useChat = create<ChatState>((set, get) => ({
     const stats = computeContextStats(messages, maxContext);
     if (!stats.needsCompaction) return;
 
-    const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
+    // Prune old tool outputs before summarization to reduce input size
+    const activeMessages = stats.shouldPrune
+      ? pruneToolOutputs(messages).pruned
+      : messages;
+
+    const { toCompact, toKeep } = selectMessagesForCompaction(activeMessages, 6);
     if (toCompact.length === 0) return;
 
     const api = ensureAcodeAPI();
     const previousSummary = compactionSummaries[sessionId];
 
-    // Format messages for summarizing
-    const formatted = toCompact.map((m) => ({
-      role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-      content: m.content,
-    }));
-
-    if (previousSummary) {
-      formatted.unshift(
-        {
-          role: "user",
-          content: `[PREVIOUS HISTORICAL CONVERSATION SUMMARY]\n${previousSummary}\n\nPlease update this summary by incorporating the new messages below.`
-        },
-        {
-          role: "assistant",
-          content: "Understood. I will merge the previous summary with the subsequent messages to produce an updated, comprehensive summary of the conversation history so far."
-        }
-      );
-    }
+    // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
+    // Pass raw ChatMessage[] directly — buildCompactionPrompt handles role mapping internally
+    const compactionMessages = buildCompactionPrompt(toCompact, previousSummary);
 
     try {
       const model = selectedModelId || useSettings.getState().settings.selectedModel;
-      const summary = await api.agent.summarizeMessages(model, formatted);
+      const summary = await api.agent.summarizeMessages(model, compactionMessages);
       if (summary) {
         set((s) => {
           const next = { ...s.compactionSummaries, [sessionId]: summary };
@@ -1868,6 +1916,7 @@ function loadMcpServers(): McpServer[] {
 }
 
 function loadSkills(): Skill[] {
+  const registrySkills = skillRegistry.list();
   const defaultBundledStates = BUNDLED_SKILLS.reduce((acc, bs) => {
     acc[bs.name] = true;
     return acc;
@@ -1881,14 +1930,18 @@ function loadSkills(): Skill[] {
     }
   } catch {}
 
-  const bundledSkills: Skill[] = BUNDLED_SKILLS.map((bs) => ({
-    name: bs.name,
-    description: bs.description,
-    prompt: bs.content,
-    enabled: loadedBundledStates[bs.name] ?? true,
-    scope: "global",
-    source: "bundled",
-  }));
+  const mappedRegistrySkills: Skill[] = registrySkills.map((rs) => {
+    const isBundled = rs.source === "bundled";
+    const isProject = rs.source === "project";
+    return {
+      name: rs.name,
+      description: rs.description,
+      prompt: rs.content,
+      enabled: isProject ? true : (loadedBundledStates[rs.name] ?? true),
+      scope: isProject ? "workspace" : "global",
+      source: isProject ? "project" : isBundled ? "bundled" : "user",
+    };
+  });
 
   let userSkills: Skill[] = [];
   try {
@@ -1898,7 +1951,17 @@ function loadSkills(): Skill[] {
     }
   } catch {}
 
-  return [...bundledSkills, ...userSkills];
+  const merged = [...mappedRegistrySkills];
+  for (const us of userSkills) {
+    const idx = merged.findIndex((m) => m.name.toLowerCase() === us.name.toLowerCase());
+    if (idx >= 0) {
+      merged[idx] = us;
+    } else {
+      merged.push(us);
+    }
+  }
+
+  return merged;
 }
 
 const queryStdioTools = (commandName: string, commandArgs: string[], env?: Record<string, string>): Promise<{ name: string; description: string }[]> => {
@@ -2056,23 +2119,11 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
         ),
       }));
     } catch (err: any) {
-      console.warn(`Failed to connect to MCP server "${name}", using fallback mocks:`, err);
-      let mockTools = [
-        { name: "demo_tool", description: "A demo tool from the mock MCP server" }
-      ];
-      if (name.toLowerCase().includes("weather")) {
-        mockTools = [
-          { name: "get_weather", description: "Get the current weather for a city" }
-        ];
-      } else if (name.toLowerCase().includes("memory")) {
-        mockTools = [
-          { name: "read_memory", description: "Read a value from memory" },
-          { name: "write_memory", description: "Write a value to memory" }
-        ];
-      }
+      const errorMsg = err?.message || String(err);
+      console.error(`MCP server "${name}" connection failed:`, errorMsg);
       set((s) => ({
         mcpServers: s.mcpServers.map((m) =>
-          m.name === name ? { ...m, status: "connected", tools: mockTools, error: undefined } : m
+          m.name === name ? { ...m, status: "error", error: errorMsg } : m
         ),
       }));
     }
@@ -2086,12 +2137,18 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
   },
 }));
 
+// Automatically sync useSkillsMcp state with skillRegistry updates
+skillRegistry.subscribe(() => {
+  useSkillsMcp.setState({ skills: loadSkills() });
+});
+
 export type SettingsTab =
   | "general"
   | "code-preview"
   | "models"
   | "agents"
   | "permissions"
+  | "instructions"
   | "skills"
   | "mcp"
   | "plugins"
@@ -2529,6 +2586,65 @@ export type PermissionRequest = {
   createdAt: number;
 };
 
+const ALWAYS_ALLOWED_KEY = "acode.alwaysAllowed.v1";
+
+function loadAlwaysAllowed(): Record<string, true> {
+  try {
+    const raw = localStorage.getItem(ALWAYS_ALLOWED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    const result: Record<string, true> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v === true) result[k] = true;
+    }
+    return result;
+  } catch { return {}; }
+}
+
+function saveAlwaysAllowed(data: Record<string, true>) {
+  try { localStorage.setItem(ALWAYS_ALLOWED_KEY, JSON.stringify(data)); } catch {}
+  // Also persist to .acode/config.json for project-level persistence
+  void persistAlwaysAllowedToDisk(data);
+}
+
+async function persistAlwaysAllowedToDisk(data: Record<string, true>) {
+  try {
+    const ws = useWorkspace.getState();
+    const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
+    if (!activeWs) return;
+    const api = ensureAcodeAPI();
+    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const dotAcode = joinPath(activeWs.path, ".acode");
+    if (!(await exists(dotAcode))) await mkdir(dotAcode);
+    const configPath = joinPath(dotAcode, "config.json");
+    let existing: any = {};
+    try {
+      if (await exists(configPath)) {
+        existing = JSON.parse(await api.fs.readFile(configPath));
+      }
+    } catch {}
+    existing.alwaysAllowed = data;
+    await api.fs.writeFile(configPath, JSON.stringify(existing, null, 2));
+  } catch (e) { console.warn("Failed to persist alwaysAllowed to disk:", e); }
+}
+
+async function loadAlwaysAllowedFromDisk(): Promise<Record<string, true>> {
+  try {
+    const ws = useWorkspace.getState();
+    const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
+    if (!activeWs) return {};
+    const api = ensureAcodeAPI();
+    const { exists } = await import("@tauri-apps/plugin-fs");
+    const configPath = joinPath(activeWs.path, ".acode", "config.json");
+    if (await exists(configPath)) {
+      const content = await api.fs.readFile(configPath);
+      const config = JSON.parse(content);
+      return config.alwaysAllowed || {};
+    }
+  } catch {}
+  return {};
+}
+
 type PermissionState = {
   request: PermissionRequest | null;
   alwaysAllowed: Record<string, true>;
@@ -2536,6 +2652,7 @@ type PermissionState = {
   allowAlways: (req: PermissionRequest) => void;
   resolve: (decision: "allow" | "always" | "deny") => void;
   cancel: () => void;
+  loadFromDisk: () => Promise<void>;
 };
 
 export const usePermission = create<PermissionState>((set, get) => {
@@ -2561,11 +2678,13 @@ export const usePermission = create<PermissionState>((set, get) => {
 
   return {
     request: null,
-    alwaysAllowed: {},
+    alwaysAllowed: loadAlwaysAllowed(),
     ask,
     allowAlways(req) {
       const key = `${req.workspacePath ?? ""}::${req.kind}::${req.command ?? ""}`;
-      set((s) => ({ alwaysAllowed: { ...s.alwaysAllowed, [key]: true } }));
+      const next: Record<string, true> = { ...get().alwaysAllowed, [key]: true };
+      set({ alwaysAllowed: next });
+      saveAlwaysAllowed(next);
     },
     resolve(decision) {
       const r = pendingResolve;
@@ -2578,6 +2697,17 @@ export const usePermission = create<PermissionState>((set, get) => {
       pendingResolve = null;
       r?.("deny");
       set({ request: null });
+    },
+    async loadFromDisk() {
+      try {
+        const diskData = await loadAlwaysAllowedFromDisk();
+        const localData = loadAlwaysAllowed();
+        // Merge disk + localStorage (localStorage overrides disk for same key)
+        const merged: Record<string, true> = { ...diskData, ...localData };
+        set({ alwaysAllowed: merged });
+      } catch (e) {
+        console.warn("Failed to load permissions from disk:", e);
+      }
     },
   };
 });

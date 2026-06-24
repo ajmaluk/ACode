@@ -1,0 +1,976 @@
+/**
+ * ============================================================
+ * ACODE MEMORY STORE — SQLite + Markdown Hybrid
+ * ============================================================
+ *
+ * Architecture (Git-first Markdown / SQLite-Cache Hybrid):
+ *   - Source of truth: Markdown files in .acode/memories/*.md
+ *     (git-friendly, human-readable, diffable)
+ *   - Search cache: SQLite via @tauri-apps/plugin-sql with FTS5
+ *     (fast keyword search, rebuilt from markdown if lost)
+ *
+ * FTS5 search handles ~95% of queries at sub-millisecond speed.
+ * No embedding model needed for v1 — BM25 keyword rank handles
+ * code identifiers perfectly.
+ *
+ * Memory lifecycle:
+ *   save() → write markdown + upsert SQLite → update index
+ *   search() → FTS5 query → return ranked results
+ *   export() → write markdown files for git commit
+ *   import() → parse markdown → rebuild SQLite cache
+ * ============================================================
+ */
+
+import type {
+  MemoryEntry,
+  MemoryCategory,
+  MemoryTier,
+} from "./memoryTypes";
+import { CTX } from "./memoryTypes";
+import { getDb } from "./database";
+import { joinPath } from "@/lib/pathUtils";
+
+// ─── Constants ───────────────────────────────────────────────
+const MEMORY_DIR = ".acode/memories";
+const MEMORY_INDEX = ".acode/MEMORY.md";
+
+// ─── Unique ID generation ────────────────────────────────────
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+}
+
+// ============================================================
+// SECTION 1 — CRUD OPERATIONS (SQLite)
+// ============================================================
+
+/**
+ * save() — Mem0-inspired ADD/UPDATE/NOOP conflict resolution.
+ *
+ * 1. Search FTS5 for similar existing memories
+ * 2. Near-duplicate (>0.90 Jaccard) → NOOP
+ * 3. Related conflict (>0.65, same category) → UPDATE
+ * 4. New info → INSERT
+ *
+ * Also writes a markdown file in .acode/memories/ as source of truth.
+ */
+export async function saveMemory(
+  entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">,
+  workspacePath: string
+): Promise<{ action: "add" | "update" | "noop"; id: string }> {
+  const db = getDb();
+
+  // Search for similar existing memories via FTS5
+  const existing = await searchMemories(entry.summary, { category: entry.category, limit: 3 });
+
+  for (const e of existing) {
+    const similarity = jaccardSimilarity(entry.content, e.content);
+    if (similarity > 0.90) {
+      return { action: "noop", id: e.id };
+    }
+    if (similarity > 0.65 && e.category === entry.category) {
+      // Update existing — newer truth wins
+      const now = Date.now();
+      const mergedTags = Array.from(new Set([...e.tags, ...entry.tags]));
+      await db.execute(
+        `UPDATE memories SET content=?, summary=?, tags=?, tier=?, updated_at=?, stale=0 WHERE id=?`,
+        [entry.content, entry.summary, JSON.stringify(mergedTags), entry.tier, now, e.id]
+      );
+      // Update markdown file
+      await writeMemoryMarkdown(workspacePath, { ...e, ...entry, tags: mergedTags, updatedAt: now, stale: false });
+      return { action: "update", id: e.id };
+    }
+  }
+
+  // New memory — INSERT
+  const id = generateId();
+  const now = Date.now();
+  const newEntry: MemoryEntry = {
+    id,
+    category: entry.category,
+    tier: entry.tier,
+    content: entry.content,
+    summary: entry.summary,
+    tags: entry.tags,
+    sourceSession: entry.sourceSession,
+    sourceFile: entry.sourceFile,
+    createdAt: now,
+    updatedAt: now,
+    accessCount: 0,
+    lastAccessedAt: 0,
+    verified: false,
+    stale: false,
+  };
+
+  await db.execute(
+    `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`,
+    [id, entry.category, entry.tier, entry.content, entry.summary, JSON.stringify(entry.tags),
+     entry.sourceSession ?? null, entry.sourceFile ?? null, now, now]
+  );
+
+  // Write markdown file as source of truth
+  await writeMemoryMarkdown(workspacePath, newEntry);
+
+  return { action: "add", id };
+}
+
+/**
+ * markStale() — Soft delete. Dream agent does actual cleanup.
+ */
+export async function markStale(id: string): Promise<void> {
+  const db = getDb();
+  await db.execute(
+    `UPDATE memories SET stale=1, updated_at=? WHERE id=?`,
+    [Date.now(), id]
+  );
+}
+
+/**
+ * purgeStale() — Hard delete stale entries (dream agent).
+ */
+export async function purgeStale(): Promise<number> {
+  const db = getDb();
+  const result = await db.execute(`DELETE FROM memories WHERE stale=1`);
+  return result.rowsAffected;
+}
+
+// ============================================================
+// SECTION 2 — SEARCH (FTS5 BM25)
+// ============================================================
+
+/**
+ * searchMemories() — FTS5 full-text search with BM25 ranking.
+ *
+ * FTS5 handles code identifiers, file paths, and technical terms
+ * perfectly. BM25 ranks by term frequency. Sub-millisecond for
+ * ~500 entries.
+ */
+export async function searchMemories(
+  query: string,
+  opts: {
+    category?: MemoryCategory;
+    tier?: MemoryTier;
+    limit?: number;
+    excludeStale?: boolean;
+  } = {}
+): Promise<MemoryEntry[]> {
+  const db = getDb();
+  const { category, tier, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
+
+  let sql = `
+    SELECT m.*, memories_fts.rank as _rank
+    FROM memories m
+    JOIN memories_fts ON memories_fts.id = m.id
+    WHERE memories_fts MATCH ?`;
+  const params: (string | number)[] = [query];
+
+  if (category) {
+    sql += ` AND m.category = ?`;
+    params.push(category);
+  }
+  if (excludeStale) {
+    sql += ` AND m.stale = 0`;
+  }
+  sql += ` ORDER BY memories_fts.rank LIMIT ?`;
+  params.push(limit);
+
+  try {
+    const rows = await db.select<MemoryEntryRow[]>(sql, params);
+
+    // Update access tracking for returned results
+    if (rows.length > 0) {
+      const now = Date.now();
+      const ids = rows.map((r) => r.id);
+      const placeholders = ids.map(() => "?").join(",");
+      await db.execute(
+        `UPDATE memories SET access_count=access_count+1, last_accessed=? WHERE id IN (${placeholders})`,
+        [now, ...ids]
+      );
+    }
+
+    return rows.map(parseRow);
+  } catch (e) {
+    console.warn("[MemoryStore] FTS5 search failed, falling back to LIKE:", e);
+    return searchMemoriesFallback(query, opts);
+  }
+}
+
+/**
+ * Fallback search using LIKE (if FTS5 query syntax fails).
+ */
+async function searchMemoriesFallback(
+  query: string,
+  opts: { category?: MemoryCategory; tier?: MemoryTier; limit?: number; excludeStale?: boolean } = {}
+): Promise<MemoryEntry[]> {
+  const db = getDb();
+  const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
+
+  let sql = `SELECT * FROM memories WHERE (content LIKE ? OR summary LIKE ? OR tags LIKE ?)`;
+  const likePattern = `%${query}%`;
+  const params: (string | number)[] = [likePattern, likePattern, likePattern];
+
+  if (category) {
+    sql += ` AND category = ?`;
+    params.push(category);
+  }
+  if (excludeStale) {
+    sql += ` AND stale = 0`;
+  }
+  sql += ` ORDER BY updated_at DESC LIMIT ?`;
+  params.push(limit);
+
+  const rows = await db.select<MemoryEntryRow[]>(sql, params);
+  return rows.map(parseRow);
+}
+
+/**
+ * getMemoriesByCategory() — Direct category query.
+ */
+export async function getMemoriesByCategory(
+  category: MemoryCategory,
+  opts: { tier?: MemoryTier; limit?: number; excludeStale?: boolean } = {}
+): Promise<MemoryEntry[]> {
+  const db = getDb();
+  const { tier, limit = 20, excludeStale = true } = opts;
+
+  let sql = `SELECT * FROM memories WHERE category = ?`;
+  const params: (string | number)[] = [category];
+
+  if (tier) {
+    sql += ` AND tier = ?`;
+    params.push(tier);
+  }
+  if (excludeStale) {
+    sql += ` AND stale = 0`;
+  }
+  sql += ` ORDER BY updated_at DESC LIMIT ?`;
+  params.push(limit);
+
+  const rows = await db.select<MemoryEntryRow[]>(sql, params);
+  return rows.map(parseRow);
+}
+
+/**
+ * getCriticalMemories() — Always-inject critical tier entries.
+ */
+export async function getCriticalMemories(limit = 10): Promise<MemoryEntry[]> {
+  const db = getDb();
+  const rows = await db.select<MemoryEntryRow[]>(
+    `SELECT * FROM memories WHERE tier = 'critical' AND stale = 0 ORDER BY last_accessed DESC LIMIT ?`,
+    [limit]
+  );
+  return rows.map(parseRow);
+}
+
+/**
+ * getAllMemories() — Full list (for dream agent, export, etc.)
+ */
+export async function getAllMemories(opts: { excludeStale?: boolean } = {}): Promise<MemoryEntry[]> {
+  const db = getDb();
+  const { excludeStale = true } = opts;
+  const sql = excludeStale
+    ? `SELECT * FROM memories WHERE stale = 0 ORDER BY updated_at DESC`
+    : `SELECT * FROM memories ORDER BY updated_at DESC`;
+  const rows = await db.select<MemoryEntryRow[]>(sql);
+  return rows.map(parseRow);
+}
+
+// ============================================================
+// SECTION 3 — STATS & ANALYTICS
+// ============================================================
+
+/**
+ * getMemoryStats() — Aggregate counts by category and tier.
+ */
+export async function getMemoryStats(): Promise<{
+  total: number;
+  byCategory: Record<string, number>;
+  byTier: Record<string, number>;
+  byCategoryTier: Record<string, Record<string, number>>;
+  staleCount: number;
+}> {
+  const db = getDb();
+
+  const totalRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
+  );
+  const total = totalRows[0]?.count ?? 0;
+
+  const catRows = await db.select<{ category: string; count: number }[]>(
+    `SELECT category, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY category`
+  );
+  const byCategory: Record<string, number> = {};
+  for (const row of catRows) byCategory[row.category] = row.count;
+
+  const tierRows = await db.select<{ tier: string; count: number }[]>(
+    `SELECT tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY tier`
+  );
+  const byTier: Record<string, number> = {};
+  for (const row of tierRows) byTier[row.tier] = row.count;
+
+  // Per-category tier breakdown
+  const catTierRows = await db.select<{ category: string; tier: string; count: number }[]>(
+    `SELECT category, tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY category, tier`
+  );
+  const byCategoryTier: Record<string, Record<string, number>> = {};
+  for (const row of catTierRows) {
+    if (!byCategoryTier[row.category]) byCategoryTier[row.category] = {};
+    byCategoryTier[row.category][row.tier] = row.count;
+  }
+
+  const staleRows = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) as count FROM memories WHERE stale = 1`
+  );
+  const staleCount = staleRows[0]?.count ?? 0;
+
+  return { total, byCategory, byTier, byCategoryTier, staleCount };
+}
+
+// ============================================================
+// SECTION 4 — MARKDOWN SYNC (Source of Truth)
+// ============================================================
+
+/**
+ * Write a memory entry as a Markdown file with YAML frontmatter.
+ * This is the source of truth for git tracking.
+ */
+export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEntry): Promise<void> {
+  try {
+    const { exists, mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const memDir = joinPath(workspacePath, MEMORY_DIR);
+    if (!(await exists(memDir))) {
+      await mkdir(memDir, { recursive: true });
+    }
+
+    const frontmatter = [
+      "---",
+      `id: "${entry.id}"`,
+      `category: "${entry.category}"`,
+      `tier: "${entry.tier}"`,
+      `summary: "${entry.summary.replace(/"/g, '\\"')}"`,
+      `tags: [${entry.tags.map((t) => `"${t}"`).join(", ")}]`,
+      `created_at: ${entry.createdAt}`,
+      `updated_at: ${entry.updatedAt}`,
+      `stale: ${entry.stale}`,
+      ...(entry.sourceSession ? [`source_session: "${entry.sourceSession}"`] : []),
+      ...(entry.sourceFile ? [`source_file: "${entry.sourceFile.replace(/"/g, '\\"')}"`] : []),
+      "---",
+      "",
+      entry.content,
+    ].join("\n");
+
+    const filename = `${entry.category}-${entry.id.slice(0, 8)}.md`;
+    const filePath = joinPath(memDir, filename);
+    await writeTextFile(filePath, frontmatter);
+  } catch (e) {
+    console.warn("[MemoryStore] Failed to write markdown:", e);
+  }
+}
+
+/**
+ * Rebuild SQLite cache from markdown files.
+ * Called on startup or when project.db is lost.
+ */
+export async function rebuildFromMarkdown(workspacePath: string): Promise<number> {
+  const db = getDb();
+  const { exists, readTextFile, mkdir } = await import("@tauri-apps/plugin-fs");
+  const memDir = joinPath(workspacePath, MEMORY_DIR);
+
+  if (!(await exists(memDir))) {
+    await mkdir(memDir, { recursive: true });
+    return 0;
+  }
+
+  const { readDir } = await import("@tauri-apps/plugin-fs");
+  const entries = await readDir(memDir);
+  let count = 0;
+
+  for (const entry of entries) {
+    if (!entry.name?.endsWith(".md")) continue;
+
+    try {
+      const filePath = joinPath(memDir, entry.name);
+      const content = await readTextFile(filePath);
+      const parsed = parseMarkdownMemory(content);
+      if (!parsed) continue;
+
+      // Upsert into SQLite
+      const existing = await db.select<MemoryEntryRow[]>(
+        `SELECT id FROM memories WHERE id = ?`,
+        [parsed.id]
+      );
+
+      if (existing.length > 0) {
+        await db.execute(
+          `UPDATE memories SET category=?, tier=?, content=?, summary=?, tags=?, updated_at=?, stale=?, source_session=?, source_file=? WHERE id=?`,
+          [parsed.category, parsed.tier, parsed.content, parsed.summary, JSON.stringify(parsed.tags), parsed.updatedAt, parsed.stale ? 1 : 0, parsed.sourceSession ?? null, parsed.sourceFile ?? null, parsed.id]
+        );
+      } else {
+        await db.execute(
+          `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)`,
+          [parsed.id, parsed.category, parsed.tier, parsed.content, parsed.summary, JSON.stringify(parsed.tags),
+           parsed.sourceSession ?? null, parsed.sourceFile ?? (parsed.sourceFile || filePath), parsed.createdAt, parsed.updatedAt, parsed.stale ? 1 : 0]
+        );
+      }
+      count++;
+    } catch (e) {
+      console.warn(`[MemoryStore] Failed to parse ${entry.name}:`, e);
+    }
+  }
+
+  console.log(`[MemoryStore] Rebuilt ${count} memories from markdown`);
+  return count;
+}
+
+/**
+ * Parse a markdown memory file with YAML frontmatter.
+ */
+export function parseMarkdownMemory(content: string): MemoryEntry | null {
+  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+  if (!frontmatterMatch) return null;
+
+  const [, frontmatter, body] = frontmatterMatch;
+  const fields: Record<string, string> = {};
+
+  for (const line of frontmatter.split(/\r?\n/)) {
+    const match = line.match(/^(\w+):\s*(.+)$/);
+    if (match) {
+      let value = match[2].trim();
+      // Strip quotes
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      // Unescape escaped quotes and backslashes
+      value = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      // Parse arrays
+      if (value.startsWith("[") && value.endsWith("]")) {
+        value = value.slice(1, -1);
+      }
+      fields[match[1]] = value;
+    }
+  }
+
+  if (!fields.id) return null;
+
+  return {
+    id: fields.id,
+    category: (fields.category as MemoryCategory) || "project",
+    tier: (fields.tier as MemoryTier) || "medium",
+    content: body.trim(),
+    summary: fields.summary || body.trim().slice(0, 150),
+    tags: fields.tags ? fields.tags.split(/,\s*/).map((t) => t.trim().replace(/^"|"$/g, "")).filter(Boolean) : [],
+    createdAt: parseInt(fields.created_at) || Date.now(),
+    updatedAt: parseInt(fields.updated_at) || Date.now(),
+    accessCount: 0,
+    lastAccessedAt: 0,
+    verified: false,
+    stale: fields.stale === "true",
+    sourceSession: fields.source_session || undefined,
+    sourceFile: fields.source_file || undefined,
+  };
+}
+
+// ============================================================
+// SECTION 5 — EXPORT / IMPORT (Git Sharing)
+// ============================================================
+
+/**
+ * exportMemories() — Write all memories as markdown files.
+ * For git commit: teammates can import these.
+ */
+export async function exportMemories(workspacePath: string): Promise<number> {
+  const memories = await getAllMemories({ excludeStale: false });
+  for (const mem of memories) {
+    await writeMemoryMarkdown(workspacePath, mem);
+  }
+  return memories.length;
+}
+
+/**
+ * importMemories() — Parse markdown files and upsert into SQLite.
+ * For restoring from git.
+ */
+export async function importMemories(workspacePath: string): Promise<number> {
+  return rebuildFromMarkdown(workspacePath);
+}
+
+// ============================================================
+// SECTION 6 — MEMORY INDEX (Claude Code MEMORY.md pattern)
+// ============================================================
+
+/**
+ * updateMemoryIndex() — Regenerate MEMORY.md pointer file.
+ * Claude Code caps at 200 lines. Sorted by tier then recency.
+ */
+export async function updateMemoryIndex(workspacePath: string): Promise<void> {
+  const memories = await getAllMemories();
+  const sorted = memories
+    .sort((a, b) => {
+      const tierDiff = tierWeight(a.tier) - tierWeight(b.tier);
+      if (tierDiff !== 0) return tierDiff;
+      return b.lastAccessedAt - a.lastAccessedAt;
+    })
+    .slice(0, CTX.MEMORY_INDEX_MAX_LINES);
+
+  const lines = sorted.map((r) => {
+    const icon = { critical: "🔴", high: "🟡", medium: "🔵", low: "⚪" }[r.tier];
+    const cat = `[${r.category}]`;
+    return `- ${icon} ${cat} ${r.summary} <!-- id:${r.id} -->`;
+  });
+
+  const header = [
+    "# MEMORY.md — Project Memory Index",
+    `<!-- generated: ${new Date().toISOString()} | entries: ${sorted.length}/${CTX.MEMORY_INDEX_MAX_LINES} -->`,
+    "<!-- This file is auto-maintained. Edit via /memory commands. -->",
+    "",
+    "## Tiers: 🔴 critical | 🟡 high | 🔵 medium | ⚪ low",
+    "",
+  ].join("\n");
+
+  try {
+    const { exists, mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const acodeDir = joinPath(workspacePath, ".acode");
+    if (!(await exists(acodeDir))) {
+      await mkdir(acodeDir, { recursive: true });
+    }
+    await writeTextFile(joinPath(workspacePath, MEMORY_INDEX), header + lines.join("\n") + "\n");
+  } catch (e) {
+    console.warn("[MemoryStore] Failed to write MEMORY.md index:", e);
+  }
+}
+
+// ============================================================
+// SECTION 7 — MEMORY EXTRACTION (Post-turn heuristics)
+// ============================================================
+
+/**
+ * extractMemoriesFromExchange() — Analyze a user/assistant exchange
+ * and extract worth-remembering facts using heuristics.
+ * No LLM call needed for basic patterns.
+ */
+export function extractMemoriesFromExchange(
+  userInput: string,
+  assistantResponse: string,
+  opts: { sessionId?: string; maxEntries?: number } = {}
+): Array<Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">> {
+  const { maxEntries = 3 } = opts;
+  const entries: Array<Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">> = [];
+  const combined = userInput + "\n" + assistantResponse;
+
+  // Detect project rules ("always", "never", "must")
+  const rulePatterns = [
+    /\b(always|never|must|don'?t|should|always use|always run)\b[^.]{10,80}/gi,
+    /\b(prefer|stick to|use instead of)\b[^.]{10,80}/gi,
+  ];
+
+  for (const pattern of rulePatterns) {
+    let match;
+    while ((match = pattern.exec(combined)) !== null && entries.length < maxEntries) {
+      const content = match[0].trim();
+      if (content.length < 15 || content.length > 200) continue;
+
+      entries.push({
+        category: "user",
+        tier: "medium",
+        content,
+        summary: content.slice(0, 150),
+        tags: extractTags(content),
+        sourceSession: opts.sessionId,
+      });
+    }
+  }
+
+  // Detect file paths
+  const pathPattern = /(?:in|from|to|at|file)\s+[`"']?([\/\w.-]+\.\w{1,5})[`"']?/gi;
+  let pathMatch;
+  while ((pathMatch = pathPattern.exec(combined)) !== null && entries.length < maxEntries) {
+    const filePath = pathMatch[1];
+    if (filePath.length < 5 || filePath.includes("node_modules")) continue;
+
+    entries.push({
+      category: "reference",
+      tier: "low",
+      content: `File reference: ${filePath}`,
+      summary: `Referenced file: ${filePath}`,
+      tags: [filePath.split("/").pop() ?? filePath],
+      sourceSession: opts.sessionId,
+      sourceFile: filePath,
+    });
+  }
+
+  // Detect build/test commands (npm, pnpm, cargo, etc.)
+  const cmdPattern = /\b(npm|pnpm|yarn|bun|cargo|go|make|docker)\s+(run|build|test|install|start|dev|serve|check)\b[^\n]{0,60}/gi;
+  let cmdMatch;
+  while ((cmdMatch = cmdPattern.exec(combined)) !== null && entries.length < maxEntries) {
+    const content = cmdMatch[0].trim();
+    if (content.length < 10) continue;
+    entries.push({
+      category: "project",
+      tier: "low",
+      content: `Build command: ${content}`,
+      summary: `Command: ${content}`,
+      tags: [cmdMatch[1]],
+      sourceSession: opts.sessionId,
+    });
+  }
+
+  // Detect tech stack decisions ("using X", "built with", "powered by")
+  const stackPattern = /\b(using|built with|powered by|migrating to|switched to)\b\s+([a-zA-Z][a-zA-Z0-9 ._-]{2,30})/gi;
+  let stackMatch;
+  while ((stackMatch = stackPattern.exec(combined)) !== null && entries.length < maxEntries) {
+    const content = stackMatch[0].trim();
+    entries.push({
+      category: "project",
+      tier: "medium",
+      content: `Stack decision: ${content}`,
+      summary: content,
+      tags: [stackMatch[2].toLowerCase().split(" ")[0]],
+      sourceSession: opts.sessionId,
+    });
+  }
+
+  return entries;
+}
+
+/**
+ * extractMemoriesWithLLM() — LLM-powered extraction for richer results.
+ * Sends the exchange to the configured model and parses structured memory entries.
+ * Falls back to heuristic extraction if the LLM call fails.
+ */
+export async function extractMemoriesWithLLM(
+  userInput: string,
+  assistantResponse: string,
+  fetchLLM: (prompt: string) => Promise<string>,
+  opts: { sessionId?: string; maxEntries?: number; workspacePath?: string } = {}
+): Promise<{ entries: Array<Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">>; saved: number; source: "llm" | "heuristic" }> {
+  const { sessionId, workspacePath } = opts;
+
+  // Try LLM extraction first
+  try {
+    const prompt = buildExtractionPrompt(userInput, assistantResponse);
+    const response = await fetchLLM(prompt);
+
+    // Parse JSON response — strip markdown fences if present
+    let cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+    const startIdx = cleaned.indexOf("[");
+    const endIdx = cleaned.lastIndexOf("]");
+    if (startIdx !== -1 && endIdx !== -1) {
+      cleaned = cleaned.slice(startIdx, endIdx + 1);
+    }
+    const parsed = JSON.parse(cleaned);
+
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      // LLM returned nothing worth remembering — fall back to heuristics
+      const entries = extractMemoriesFromExchange(userInput, assistantResponse, opts);
+      return { entries, saved: 0, source: "heuristic" };
+    }
+
+    // Validate and filter entries
+    const validCategories: MemoryCategory[] = ["user", "feedback", "project", "reference", "task", "decision"];
+    const validTiers: MemoryTier[] = ["critical", "high", "medium", "low"];
+
+    const entries = parsed
+      .filter((e: any) => e && typeof e.content === "string" && e.content.length > 10)
+      .slice(0, opts.maxEntries ?? 5)
+      .map((e: any) => ({
+        category: validCategories.includes(e.category) ? e.category : "project",
+        tier: validTiers.includes(e.tier) ? e.tier : "medium",
+        content: String(e.content),
+        summary: String(e.summary || e.content).slice(0, 150),
+        tags: Array.isArray(e.tags) ? e.tags.map(String).slice(0, 5) : [],
+        sourceSession: sessionId,
+      }));
+
+    // Save entries if workspacePath is provided
+    let saved = 0;
+    if (workspacePath) {
+      for (const entry of entries) {
+        try {
+          const result = await saveMemory(entry, workspacePath);
+          if (result.action === "add" || result.action === "update") saved++;
+        } catch { /* skip individual failures */ }
+      }
+    }
+
+    return { entries, saved, source: "llm" };
+  } catch (e) {
+    console.warn("[MemoryStore] LLM extraction failed, falling back to heuristics:", e);
+    const entries = extractMemoriesFromExchange(userInput, assistantResponse, opts);
+    return { entries, saved: 0, source: "heuristic" };
+  }
+}
+
+/**
+ * buildExtractionPrompt() — Full LLM-based extraction prompt.
+ * Use when heuristic extraction isn't sufficient.
+ */
+export function buildExtractionPrompt(userInput: string, assistantResponse: string): string {
+  return `Analyze this exchange and extract worth-remembering facts.
+Return a JSON array of { "category", "tier", "content", "summary", "tags" } objects.
+Only include facts that would help future sessions.
+Do NOT include transient information.
+Include: architectural decisions, user preferences, stack facts, key constraints.
+Return [] if nothing is worth remembering.
+
+Categories: user | feedback | project | reference | task | decision
+Tiers: critical | high | medium | low
+
+User: ${userInput.slice(0, 500)}
+Assistant: ${assistantResponse.slice(0, 500)}
+
+Return ONLY the JSON array, no markdown fences.`;
+}
+
+// ============================================================
+// SECTION 8 — UTILITY FUNCTIONS
+// ============================================================
+
+/** Parse a DB row into a MemoryEntry */
+function parseRow(row: MemoryEntryRow): MemoryEntry {
+  return {
+    id: row.id,
+    category: row.category as MemoryCategory,
+    tier: row.tier as MemoryTier,
+    content: row.content,
+    summary: row.summary,
+    tags: typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : row.tags,
+    sourceSession: row.source_session ?? undefined,
+    sourceFile: row.source_file ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    accessCount: row.access_count ?? 0,
+    lastAccessedAt: row.last_accessed ?? 0,
+    verified: !!row.verified,
+    stale: !!row.stale,
+  };
+}
+
+/** Jaccard similarity between two strings */
+export function jaccardSimilarity(a: string, b: string): number {
+  const wordsA = new Set(tokenize(a));
+  const wordsB = new Set(tokenize(b));
+  if (wordsA.size === 0 && wordsB.size === 0) return 1;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
+  }
+  const union = new Set([...wordsA, ...wordsB]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+/** Tokenize text into search terms */
+function tokenize(text: string): string[] {
+  const stopWords = new Set([
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "this", "that",
+    "these", "those", "it", "its", "not", "no", "nor", "and", "or",
+    "but", "if", "then", "else", "when", "where", "how", "what", "which",
+    "who", "whom", "why", "all", "each", "every", "both", "few", "more",
+    "most", "other", "some", "such", "than", "too", "very", "just",
+  ]);
+
+  return [
+    ...new Set(
+      text
+        .toLowerCase()
+        .split(/[^a-z0-9_/.-]+/)
+        .filter((w) => w.length > 2 && !stopWords.has(w))
+    ),
+  ];
+}
+
+/** Tier weight for sorting */
+function tierWeight(tier: MemoryTier): number {
+  return { critical: 4, high: 3, medium: 2, low: 1 }[tier];
+}
+
+/** Extract keyword tags from content */
+function extractTags(content: string): string[] {
+  const tags: string[] = [];
+  const extMatch = content.match(/\.(\w{1,5})\b/g);
+  if (extMatch) tags.push(...extMatch.map((e) => e.slice(1)));
+  const techPattern = /\b(typescript|javascript|rust|python|react|vue|svelte|tailwind|css|html|json|yaml|toml|docker|git|npm|pnpm|yarn|bun|vite|webpack|nextjs|nuxt|sveltekit)\b/gi;
+  let m;
+  while ((m = techPattern.exec(content)) !== null) {
+    tags.push(m[1].toLowerCase());
+  }
+  return [...new Set(tags)].slice(0, 5);
+}
+
+// ============================================================
+// SECTION 9 — SELF-IMPROVING MAINTENANCE
+// ============================================================
+
+/**
+ * scoreMemory() — Composite quality score for ranking/pruning.
+ * Higher = more valuable. Used for budget enforcement and stale detection.
+ *
+ * Factors:
+ *  - Tier weight (critical=4, high=3, medium=2, low=1)
+ *  - Access frequency (log-scaled to prevent runaway scores)
+ *  - Recency decay (exponential, half-life ~14 days)
+ *  - Age penalty for never-accessed memories
+ */
+export function scoreMemory(m: MemoryEntry): number {
+  const now = Date.now();
+  const DAY = 86_400_000;
+
+  // Base tier score
+  let score = tierWeight(m.tier) * 10;
+
+  // Access frequency bonus (log-scaled)
+  if (m.accessCount > 0) {
+    score += Math.log2(m.accessCount + 1) * 5;
+  }
+
+  // Recency bonus (exponential decay, half-life 14 days)
+  if (m.lastAccessedAt > 0) {
+    const daysSinceAccess = (now - m.lastAccessedAt) / DAY;
+    const recencyBonus = Math.max(0, 10 * Math.pow(0.5, daysSinceAccess / 14));
+    score += recencyBonus;
+  }
+
+  // Age penalty for never-accessed memories
+  if (m.accessCount === 0) {
+    const daysSinceCreation = (now - m.createdAt) / DAY;
+    if (daysSinceCreation > 7) {
+      score -= Math.min(10, daysSinceCreation * 0.5);
+    }
+  }
+
+  // Verified bonus
+  if (m.verified) score += 5;
+
+  return Math.max(0, score);
+}
+
+/**
+ * detectStaleMemories() — Find memories that should be pruned.
+ *
+ * A memory is stale if:
+ *  - Not accessed in >30 days AND tier is low/medium, OR
+ *  - Never accessed AND created >14 days ago AND tier is low
+ */
+export async function detectStaleMemories(): Promise<string[]> {
+  const db = getDb();
+  const now = Date.now();
+  const DAY = 86_400_000;
+  const staleIds: string[] = [];
+
+  // 1. Not accessed in >30 days, low/medium tier
+  const oldAccess = await db.select<MemoryEntryRow[]>(
+    `SELECT * FROM memories WHERE stale = 0 AND last_accessed > 0
+     AND last_accessed < ? AND tier IN ('low', 'medium')`,
+    [now - 30 * DAY]
+  );
+  staleIds.push(...oldAccess.map((r) => r.id));
+
+  // 2. Never accessed, created >14 days ago, low tier
+  const neverAccessed = await db.select<MemoryEntryRow[]>(
+    `SELECT * FROM memories WHERE stale = 0 AND access_count = 0
+     AND created_at < ? AND tier = 'low'`,
+    [now - 14 * DAY]
+  );
+  staleIds.push(...neverAccessed.map((r) => r.id));
+
+  return [...new Set(staleIds)];
+}
+
+/**
+ * autoMarkStale() — Automatically mark stale memories.
+ * Returns count of newly stale entries.
+ */
+export async function autoMarkStale(): Promise<number> {
+  const staleIds = await detectStaleMemories();
+  if (staleIds.length === 0) return 0;
+
+  const db = getDb();
+  const now = Date.now();
+  const placeholders = staleIds.map(() => "?").join(",");
+  await db.execute(
+    `UPDATE memories SET stale=1, updated_at=? WHERE id IN (${placeholders})`,
+    [now, ...staleIds]
+  );
+  return staleIds.length;
+}
+
+/**
+ * enforceMemoryBudget() — Keep memory count under budget.
+ * If over budget, prunes lowest-quality non-critical entries.
+ * Returns count of pruned entries.
+ */
+export async function enforceMemoryBudget(
+  budget: number = CTX.MEMORY_BUDGET
+): Promise<number> {
+  const db = getDb();
+  const total = await db.select<{ count: number }[]>(
+    `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
+  );
+  const currentCount = total[0]?.count ?? 0;
+  if (currentCount <= budget) return 0;
+
+  const excess = currentCount - budget;
+
+  // Get all non-critical memories ordered by quality score (lowest first)
+  const rows = await db.select<MemoryEntryRow[]>(
+    `SELECT * FROM memories WHERE stale = 0 AND tier != 'critical'
+     ORDER BY access_count ASC, updated_at ASC LIMIT ?`,
+    [excess + 10] // fetch a few extra for scoring
+  );
+
+  // Score and sort to find the worst candidates
+  const candidates = rows.map(parseRow).map((m) => ({ entry: m, score: scoreMemory(m) }));
+  candidates.sort((a, b) => a.score - b.score);
+
+  const toPrune = candidates.slice(0, excess).map((c) => c.entry.id);
+  if (toPrune.length === 0) return 0;
+
+  const placeholders = toPrune.map(() => "?").join(",");
+  await db.execute(
+    `UPDATE memories SET stale=1, updated_at=? WHERE id IN (${placeholders})`,
+    [Date.now(), ...toPrune]
+  );
+
+  console.log(`[MemoryStore] Budget enforced: pruned ${toPrune.length} low-quality memories (budget: ${budget})`);
+  return toPrune.length;
+}
+
+/**
+ * runMaintenance() — Full self-improving maintenance cycle.
+ * Detects stale, enforces budget, purges old stale entries.
+ * Returns summary of actions taken.
+ */
+export async function runMaintenance(): Promise<{
+  staleDetected: number;
+  pruned: number;
+  purged: number;
+}> {
+  const staleDetected = await autoMarkStale();
+  const pruned = await enforceMemoryBudget();
+  const purged = await purgeStale();
+
+  return { staleDetected, pruned, purged };
+}
+
+// ─── Types ───────────────────────────────────────────────────
+
+interface MemoryEntryRow {
+  id: string;
+  category: string;
+  tier: string;
+  content: string;
+  summary: string;
+  tags: string;
+  source_session: string | null;
+  source_file: string | null;
+  created_at: number;
+  updated_at: number;
+  access_count: number;
+  last_accessed: number;
+  verified: number;
+  stale: number;
+}

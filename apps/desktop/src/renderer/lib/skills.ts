@@ -10,10 +10,74 @@
  * The body is the prompt that gets injected when the skill is invoked.
  *
  * Skills are scanned from:
- *   - ~/.config/opencode/skills/ (global)
- *   - .acode/skills/ (project-level)
+ *   - `.acode/skills/<name>/SKILL.md` (project-level, highest priority)
+ *   - BUNDLED_SKILLS (shipped with ACode, lowest priority)
  */
 import type { SkillInfo } from "@acode/shared-types";
+import { joinPath } from "@/lib/pathUtils";
+
+// ---------------------------------------------------------------------------
+// YAML frontmatter parser (lightweight, no external deps)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse YAML frontmatter from a SKILL.md file.
+ * Supports simple `key: value` pairs. Values can be quoted or unquoted.
+ * Returns { frontmatter, body } where frontmatter is a record of parsed
+ * key-value pairs and body is the markdown content after the closing `---`.
+ */
+export function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; body: string } {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return { frontmatter: {}, body: raw };
+
+  const fmBlock = match[1];
+  const body = raw.slice(match[0].length).trimStart();
+  const frontmatter: Record<string, string> = {};
+
+  for (const line of fmBlock.split(/\r?\n/)) {
+    // Skip comments and empty lines
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    // Skip continuation lines (indented)
+    if (line.match(/^\s+/)) continue;
+
+    const kvMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/);
+    if (!kvMatch) continue;
+
+    let value = kvMatch[2].trim();
+    // Strip surrounding quotes
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    // Unescape escaped quotes and backslashes
+    value = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    frontmatter[kvMatch[1]] = value;
+  }
+
+  return { frontmatter, body };
+}
+
+/**
+ * Validate and extract SkillInfo from parsed frontmatter + body.
+ * Returns null if the frontmatter is missing required fields.
+ */
+export function skillInfoFromParsed(
+  frontmatter: Record<string, string>,
+  body: string,
+  location: string,
+  source: SkillInfo["source"]
+): SkillInfo | null {
+  const name = frontmatter.name?.trim();
+  if (!name) return null; // name is required
+
+  return {
+    name,
+    description: frontmatter.description?.trim() || name,
+    content: body,
+    location,
+    source,
+  };
+}
 
 // ----------------------------------------------------------------------------
 // Bundled skills — shipped with ACode.
@@ -193,6 +257,129 @@ class SkillRegistry {
 }
 
 export const skillRegistry = new SkillRegistry();
+
+// ---------------------------------------------------------------------------
+// Project-level skill loading (from .acode/skills/*/SKILL.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan a directory for SKILL.md files and parse them into SkillInfo objects.
+ * Each subdirectory of `skillsDir` is treated as a skill folder containing
+ * a SKILL.md file with YAML frontmatter.
+ *
+ * Example layout:
+ *   .acode/skills/my-skill/SKILL.md
+ *   .acode/skills/another-skill/SKILL.md
+ *
+ * This is designed to be called from the Tauri backend via acodeAPI.fs.*
+ * but since the renderer uses dynamic imports, we accept a filesystem
+ * adapter that provides listDir and readFile.
+ */
+export async function loadSkillsFromDirectory(
+  skillsDir: string,
+  fsAdapter: {
+    listDir: (path: string) => Promise<{ name: string; path: string; type: string }[]>;
+    readFile: (path: string) => Promise<string>;
+  },
+  source: SkillInfo["source"]
+): Promise<SkillInfo[]> {
+  const skills: SkillInfo[] = [];
+
+  try {
+    const entries = await fsAdapter.listDir(skillsDir);
+    for (const entry of entries) {
+      if (entry.type !== "directory") continue;
+
+      const skillMdPath = joinPath(entry.path, "SKILL.md");
+      try {
+        const raw = await fsAdapter.readFile(skillMdPath);
+        const { frontmatter } = parseFrontmatter(raw);
+        // Progressive disclosure: store metadata only, load content on demand
+        const info = skillInfoFromParsed(frontmatter, "", skillMdPath, source);
+        if (info) skills.push(info);
+      } catch {
+        // SKILL.md doesn't exist or can't be read — skip this skill folder
+      }
+    }
+  } catch {
+    // skillsDir doesn't exist yet — not an error on first run
+  }
+
+  return skills;
+}
+
+/**
+ * Load project-level skills from .acode/skills/ in the workspace.
+ * Called during workspace init to populate the skill registry.
+ */
+export async function loadProjectSkills(
+  workspacePath: string,
+  fsAdapter: {
+    listDir: (path: string) => Promise<{ name: string; path: string; type: string }[]>;
+    readFile: (path: string) => Promise<string>;
+  }
+): Promise<SkillInfo[]> {
+  const skillsDir = joinPath(workspacePath, ".acode", "skills");
+  return loadSkillsFromDirectory(skillsDir, fsAdapter, "project");
+}
+
+/**
+ * Refresh the skill registry with project-level skills.
+ * Removes any previously loaded project skills and re-adds from disk.
+ * Project skills override bundled skills with the same name.
+ */
+export function refreshProjectSkills(
+  projectSkills: SkillInfo[],
+  registry: SkillRegistry = skillRegistry
+): void {
+  // Remove all existing project-level skills
+  for (const existing of registry.list()) {
+    if (existing.source === "project") {
+      registry.remove(existing.name);
+    }
+  }
+  // Re-register bundled skills that were shadowed by removed project skills
+  for (const bs of BUNDLED_SKILLS) {
+    if (!registry.get(bs.name)) registry.add(bs);
+  }
+  // Add the freshly loaded project skills (overrides bundled if same name)
+  for (const skill of projectSkills) {
+    registry.add(skill);
+  }
+}
+
+/**
+ * Load the full content of a skill from disk (progressive disclosure).
+ * If the skill already has content loaded, returns it immediately.
+ * Otherwise reads the SKILL.md file from the skill's location.
+ */
+export async function loadSkillContent(
+  skill: SkillInfo,
+  fsAdapter?: {
+    readFile: (path: string) => Promise<string>;
+  },
+  registry: SkillRegistry = skillRegistry
+): Promise<string> {
+  // Already loaded (bundled skills always have content)
+  if (skill.content) return skill.content;
+  // Can't load without adapter or non-file location
+  if (!fsAdapter || !skill.location || skill.location.startsWith("bundled://")) {
+    return skill.content || "";
+  }
+  try {
+    const raw = await fsAdapter.readFile(skill.location);
+    const { body } = parseFrontmatter(raw);
+    // Cache the loaded content back into the registry so subsequent
+    // invocations don't re-read from disk.
+    const registered = registry.get(skill.name);
+    if (registered) registered.content = body;
+    skill.content = body;
+    return body;
+  } catch (e) {
+    console.warn(`Failed to load skill content from ${skill.location}:`, e);
+    return "";
+  }
+}
 
 /**
  * Render the body of a skill into a system-prompt fragment. Mirrors how

@@ -2,13 +2,31 @@
  * ACode Context Manager
  *
  * Manages context window pressure, automatic compaction,
- * and workspace memory. Inspired by MiMo-Code's overflow
- * detection and compaction system.
+ * tool output pruning, checkpoint triggers, and workspace memory.
+ *
+ * Research basis:
+ * - MiMo-Code: 3-trigger checkpoint system (20%/45%/70%), budgeted injection (~65K)
+ * - OpenCode: COMPACTION_BUFFER=20K, PRUNE_PROTECT=40K, backward-scan pruning,
+ *   SUMMARY_TEMPLATE (Goal/Instructions/Discoveries/Accomplished)
+ * - Claude Code: MEMORY.md pointer index (≤200 lines)
  */
 
 import type { ChatMessage, AppSettings } from "@acode/shared-types";
 
 export type ContextPressure = "none" | "low" | "medium" | "high";
+
+// Import shared CTX from memoryTypes to avoid duplication
+import { CTX } from "./memoryTypes";
+
+// Re-export for backward compatibility
+export { CTX } from "./memoryTypes";
+
+// ContextManager-specific overrides (OUTPUT_RESERVE here is for context pressure
+// calculation, not the MiMo budget — keep it small for accurate pressure detection)
+const CTX_LOCAL = {
+  ...CTX,
+  OUTPUT_RESERVE: 4_000,
+};
 
 export type ContextStats = {
   totalTokens: number;
@@ -18,7 +36,19 @@ export type ContextStats = {
   pressureRatio: number;
   messageCount: number;
   needsCompaction: boolean;
+  shouldPrune: boolean;      // tool outputs should be pruned
+  nextCheckpointTrigger: number | null; // next unfired trigger threshold (e.g. 0.20), or null if none pending
+  shouldCompact: boolean;    // full compaction needed (≥85%)
 };
+
+/**
+ * Compute the next checkpoint trigger that hasn't fired yet.
+ * Caller is responsible for tracking which triggers have fired.
+ */
+export function getNextCheckpointTrigger(firedUpToPercent: number): number | null {
+  const next = CTX.CHECKPOINT_TRIGGERS.find((t) => t > firedUpToPercent);
+  return next ?? null;
+}
 
 /**
  * Parse a context window string like "128k", "200k", "1m" into a number.
@@ -98,8 +128,8 @@ export function computePressure(
 export function computeContextStats(
   messages: ChatMessage[],
   maxContextTokens: number = 128000,
-  outputReserveTokens: number = 4096,
-  compactionBufferTokens: number = 20000
+  outputReserveTokens: number = CTX_LOCAL.OUTPUT_RESERVE,
+  compactionBufferTokens: number = CTX.COMPACTION_BUFFER
 ): ContextStats {
   const totalTokens = messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
   const reservedTokens = outputReserveTokens + compactionBufferTokens;
@@ -113,7 +143,10 @@ export function computeContextStats(
     pressure,
     pressureRatio: ratio,
     messageCount: messages.length,
-    needsCompaction: pressure === "high" || pressure === "medium",
+    needsCompaction: ratio >= CTX.CHECKPOINT_HARD,
+    shouldPrune: totalTokens > (usableTokens - CTX.PRUNE_PROTECT),
+    nextCheckpointTrigger: getNextCheckpointTrigger(ratio),
+    shouldCompact: ratio >= CTX.CHECKPOINT_HARD,
   };
 }
 
@@ -141,6 +174,31 @@ export function selectMessagesForCompaction(
  * Generate a compaction prompt for summarizing old messages.
  * Utility function — may be used by UI for manual compaction triggers.
  */
+/**
+ * OpenCode SUMMARY_TEMPLATE pattern for compaction.
+ * Produces structured summaries with Goal/Instructions/Discoveries/Accomplished.
+ */
+export const SUMMARY_TEMPLATE = `You are a conversation compaction assistant. Produce a structured summary of the conversation below.
+
+Format your summary as:
+
+## Goal
+[What the user asked for / what we're trying to accomplish]
+
+## Key Instructions
+[Any specific constraints, preferences, or rules the user specified]
+
+## Discoveries
+[Important findings about the codebase, bugs found, architecture decisions]
+
+## Accomplished
+[What has been completed so far — file changes, features implemented, etc.]
+
+## Pending
+[What still needs to be done]
+
+Keep the summary concise (under 300 words). Focus on actionable facts. Do not include any meta-commentary or intros.`;
+
 export function buildCompactionPrompt(
   messages: ChatMessage[],
   previousSummary?: string
@@ -154,11 +212,11 @@ export function buildCompactionPrompt(
     return [
       {
         role: "user",
-        content: `[PREVIOUS SUMMARY]\n${previousSummary}\n\nUpdate this summary with the new messages below. Keep it under 200 words.`,
+        content: `[PREVIOUS CONVERSATION SUMMARY]\n${previousSummary}\n\nUpdate this summary by incorporating the new messages below. Use the structured format: Goal, Key Instructions, Discoveries, Accomplished, Pending.`,
       },
       {
         role: "assistant",
-        content: "I will merge the previous summary with the new messages.",
+        content: "I will merge the previous summary with the new messages to produce an updated, comprehensive summary.",
       },
       ...formatted,
     ];
@@ -167,10 +225,73 @@ export function buildCompactionPrompt(
   return [
     {
       role: "user",
-      content: `Summarize this conversation history concisely. Focus on:\n1. What was achieved\n2. Key decisions\n3. Current state\nKeep under 200 words.`,
+      content: SUMMARY_TEMPLATE + "\n\nConversation to summarize:",
     },
     ...formatted,
   ];
+}
+
+/**
+ * Tool output pruning (OpenCode backward-scan algorithm).
+ *
+ * In ACode's architecture, tool results come back as user messages with
+ * `[TOOL RESULT: ...]` or `[TOOL ERROR: ...]` prefixes (from acodeAPI.ts).
+ * This function identifies those messages and prunes their content to
+ * reclaim tokens, while protecting the last N user turns.
+ *
+ * Returns pruned messages and tokens reclaimed.
+ */
+export function pruneToolOutputs(
+  messages: ChatMessage[],
+  toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens
+): { pruned: ChatMessage[]; tokensReclaimed: number } {
+  // In ACode, tool results are user messages with tool result prefixes
+  const isToolResult = (m: ChatMessage) =>
+    m.role === "user" && (
+      m.content.startsWith("[TOOL RESULT:") ||
+      m.content.startsWith("[TOOL ERROR:")
+    );
+
+  const toolMessages = messages.filter(isToolResult);
+  const totalToolTokens = toolMessages.reduce((s, m) => s + toolTokenEstimate(m), 0);
+
+  if (totalToolTokens < CTX.PRUNE_PROTECT) {
+    return { pruned: messages, tokensReclaimed: 0 };
+  }
+
+  // Identify which turns to protect (last N user turns that are NOT tool results)
+  const realUserTurnIndexes: number[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user" && !isToolResult(messages[i])) {
+      realUserTurnIndexes.push(i);
+    }
+    if (realUserTurnIndexes.length >= CTX.TURN_PROTECT) break;
+  }
+  const protectAfter = realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
+
+  let tokensReclaimed = 0;
+  const pruned = messages.map((msg, idx) => {
+    // Protect recent turns, non-tool-result messages, already-pruned messages
+    if (idx >= protectAfter || !isToolResult(msg)) return msg;
+
+    if (tokensReclaimed >= CTX.PRUNE_MINIMUM && totalToolTokens - tokensReclaimed < CTX.PRUNE_PROTECT) {
+      return msg; // enough reclaimed
+    }
+
+    const reclaimed = toolTokenEstimate(msg);
+    tokensReclaimed += reclaimed;
+
+    // Extract tool name from prefix: [TOOL RESULT: toolName] or [TOOL ERROR: toolName]
+    const toolMatch = msg.content.match(/^\[TOOL (?:RESULT|ERROR):\s*(\S+)/);
+    const toolName = toolMatch?.[1] ?? "unknown";
+
+    return {
+      ...msg,
+      content: `[Tool output pruned — ~${reclaimed} tokens reclaimed. Tool: ${toolName}]`,
+    };
+  });
+
+  return { pruned, tokensReclaimed };
 }
 
 /**
@@ -231,24 +352,3 @@ export function formatMemoryForPrompt(memory: WorkspaceMemory): string {
   ].join("\n");
 }
 
-/**
- * Context window budget calculator.
- * Determines how many tokens we can safely use for messages
- * given the model's context window and output requirements.
- */
-export function computeBudget(maxContextWindow: number): {
-  maxInputTokens: number;
-  outputReserve: number;
-  compactionBuffer: number;
-  safeZone: number;
-} {
-  const outputReserve = 4096; // Reserve for model output
-  const compactionBuffer = 20000; // Buffer for compaction summarization
-  const safeZone = maxContextWindow - outputReserve - compactionBuffer;
-  return {
-    maxInputTokens: safeZone,
-    outputReserve,
-    compactionBuffer,
-    safeZone,
-  };
-}

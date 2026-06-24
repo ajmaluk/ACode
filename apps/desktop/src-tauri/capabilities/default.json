@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "fs:default",
+    "sql:default",
     "fs:allow-read",
     "fs:allow-write",
     "fs:allow-exists",
