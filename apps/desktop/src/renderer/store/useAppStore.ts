@@ -25,13 +25,127 @@ import type {
 import { DEFAULT_SETTINGS } from "@acode/shared-types";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
-import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, fromConfig, canonicaliseBashCommand, type PermissionKey } from "@/lib/agents";
+import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection, type PermissionKey } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
 import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, buildCompactionPrompt, parseContextWindow, type ContextStats } from "@/lib/contextManager";
 
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
 export { BUNDLED_SKILLS, skillRegistry, matchSkillInvocation, renderSkillForPrompt };
+
+// ============================================================================
+// XML Tool Call Parser
+// ============================================================================
+// Some models output tool calls as XML tags in their text response instead of
+// using the proper tool-call protocol. This parser extracts those XML tags and
+// converts them to ToolCall objects so they can be executed and displayed properly.
+
+const XML_TOOL_CALL_RE = /<([a-zA-Z_][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z_][a-zA-Z0-9_-]*="[^"]*")*)\s*\/?>/g;
+const XML_ATTR_RE = /([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]*)"/g;
+
+// Known tool name mappings from XML tags to internal tool names
+const TAG_TO_TOOL: Record<string, string> = {
+  list_dir: "list_dir",
+  read_file: "read_file",
+  write_file: "write_file",
+  edit_file: "edit_file",
+  bash: "bash",
+  shell: "bash",
+  search: "file_search",
+  grep: "grep",
+  webfetch: "webfetch",
+  websearch: "websearch",
+  run_command: "bash",
+};
+
+// Tool name → permission kind mappings (module-level to avoid recreation per event)
+const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file"]);
+const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command"]);
+const NETWORK_TOOLS = new Set(["webfetch", "websearch"]);
+
+interface ParsedXmlToolCall {
+  toolCall: import("@acode/shared-types").ToolCall;
+  rawMatch: string;
+  matchIndex: number;
+}
+
+/**
+ * Parse XML-style tool calls from assistant text content.
+ * Returns extracted tool calls and the cleaned content with XML tags removed.
+ */
+export function parseXmlToolCalls(content: string): {
+  toolCalls: import("@acode/shared-types").ToolCall[];
+  cleanedContent: string;
+} {
+  const toolCalls: import("@acode/shared-types").ToolCall[] = [];
+  const rawMatches: string[] = [];
+  let match: RegExpExecArray | null;
+
+  // Reset regex state
+  XML_TOOL_CALL_RE.lastIndex = 0;
+
+  while ((match = XML_TOOL_CALL_RE.exec(content)) !== null) {
+    const [fullMatch, tagName, attrString] = match;
+    const toolName = TAG_TO_TOOL[tagName] ?? tagName;
+
+    // Skip if it's not a recognized tool and doesn't look like a tool call
+    if (!TAG_TO_TOOL[tagName] && !attrString) continue;
+
+    const args: Record<string, unknown> = {};
+    if (attrString) {
+      let attrMatch: RegExpExecArray | null;
+      XML_ATTR_RE.lastIndex = 0;
+      while ((attrMatch = XML_ATTR_RE.exec(attrString)) !== null) {
+        args[attrMatch[1]] = attrMatch[2];
+      }
+    }
+
+    // Check if this is a self-closing tag (ends with />)
+    const isSelfClosing = fullMatch.endsWith("/>");
+
+    // Extract content between opening and closing tags (only for non-self-closing)
+    let tagContent = "";
+    if (!isSelfClosing) {
+      const closingTag = `</${tagName}>`;
+      const closeIdx = content.indexOf(closingTag, match.index + fullMatch.length);
+      if (closeIdx !== -1) {
+        tagContent = content.slice(match.index + fullMatch.length, closeIdx);
+      }
+    }
+
+    // If there's tag content, add it as "content" arg
+    if (tagContent.trim()) {
+      args.content = tagContent.trim();
+    }
+
+    toolCalls.push({
+      id: "xml-tc-" + Math.random().toString(36).slice(2, 9),
+      name: toolName,
+      args,
+      status: "completed" as const,
+      result: tagContent || undefined,
+    });
+    rawMatches.push(fullMatch);
+  }
+
+  // Strip XML tool calls from content for clean display
+  // Build a single regex that matches all found tool call tags
+  let cleanedContent = content;
+  if (rawMatches.length > 0) {
+    // Escape special regex chars in raw matches and join with OR
+    const escaped = rawMatches.map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const stripRe = new RegExp(escaped.join("|"), "g");
+    cleanedContent = content.replace(stripRe, "");
+  }
+  // Strip MCP tool call tags (not in TAG_TO_TOOL, dynamic server+tool names)
+  cleanedContent = cleanedContent
+    .replace(/<mcp_[\s\S]*?<\/mcp_[^>]*>/g, "")
+    .replace(/<mcp_[^>]*\/>/g, "");
+  // Clean up excessive whitespace left behind
+  cleanedContent = cleanedContent.replace(/\n{3,}/g, "\n\n").trim();
+
+  return { toolCalls, cleanedContent };
+}
 
 type CommandPaletteState = {
   open: boolean;
@@ -113,7 +227,7 @@ type WorkspaceState = {
   openTabs: OpenTab[];
   loading: boolean;
   openWorkspace: () => Promise<void>;
-  loadSample: () => Promise<void>;
+  loadWorkspace: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
   setActiveFile: (path: string | null) => void;
   openFile: (path: string) => Promise<void>;
@@ -219,7 +333,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  async loadSample() {
+  async loadWorkspace() {
     set({ loading: true });
     try {
       const api = ensureAcodeAPI();
@@ -370,7 +484,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const oldTabs = get().openTabs.filter((t) => t.path === path);
       await api.fs.renamePath(path, newName);
       if (oldTabs.length > 0) {
-        const dir = path.substring(0, path.lastIndexOf("/"));
+        const posixPath = toPosix(path);
+        const dir = posixPath.substring(0, posixPath.lastIndexOf("/"));
         const newPath = dir + "/" + newName;
         set((s) => ({
           openTabs: s.openTabs.map((t) =>
@@ -521,7 +636,29 @@ function savePersistedCompactionSummaries(summaries: Record<string, string>) {
   void saveWorkspaceData();
 }
 
+// Concurrency guard: track workspace loading to prevent duplicate loads
+let _workspaceLoadPromise: Promise<void> | null = null;
+let _workspaceLoadPath: string | null = null;
+
 export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
+  // If the same workspace is already loading, return the existing promise
+  if (_workspaceLoadPromise && _workspaceLoadPath === workspacePath) {
+    return _workspaceLoadPromise;
+  }
+  // If a different workspace is loading, let it complete but start ours fresh
+  _workspaceLoadPath = workspacePath;
+  _workspaceLoadPromise = _doLoadWorkspaceConfigAndSessions(workspacePath);
+  try {
+    await _workspaceLoadPromise;
+  } finally {
+    if (_workspaceLoadPath === workspacePath) {
+      _workspaceLoadPromise = null;
+      _workspaceLoadPath = null;
+    }
+  }
+}
+
+async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
   const api = ensureAcodeAPI();
   const dotAcode = joinPath(workspacePath, ".acode");
   const sessionsPath = joinPath(dotAcode, "sessions.json");
@@ -664,7 +801,9 @@ export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
           sessionVersions: data.sessionVersions || {},
           compactionSummaries: data.compactionSummaries || {},
         });
-        const lastSession = data.chatSessions?.[0];
+        const lastSession = data.chatSessions
+          ? [...data.chatSessions].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0]
+          : undefined;
         if (lastSession) {
           useChat.setState({
             session: lastSession,
@@ -705,7 +844,14 @@ export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
   }
 }
 
+let _saveWorkspaceDataTimer: ReturnType<typeof setTimeout> | null = null;
+
 export async function saveWorkspaceData() {
+  if (_saveWorkspaceDataTimer) clearTimeout(_saveWorkspaceDataTimer);
+  _saveWorkspaceDataTimer = setTimeout(() => void _doSaveWorkspaceData(), 100);
+}
+
+async function _doSaveWorkspaceData() {
   const activeWorkspaceId = useWorkspace.getState().activeWorkspaceId;
   if (!activeWorkspaceId) return;
   const ws = useWorkspace.getState().workspaces.find((w) => w.id === activeWorkspaceId);
@@ -744,7 +890,8 @@ export async function saveWorkspaceData() {
       .filter((m) => m.scope === "project")
       .map(({ status, tools, error, ...rest }) => ({
         ...rest,
-        status: "disconnected" as const,
+        // Preserve current connection status instead of forcing disconnected
+        status: status || "disconnected",
       }));
 
     // Read existing config first to preserve alwaysAllowed and other fields
@@ -780,7 +927,7 @@ export const useAgents = create<AgentStoreState>((set, get) => ({
 
   setActiveAgent(name) {
     set({ activeAgentName: name });
-    useChat.setState({ activeAgentName: name });
+    useChat.setState({ activeAgentName: name, _userSelectedAgent: true });
     // Persist agent name for the active session
     const { activeSessionId, sessionAgentName } = useChat.getState();
     if (activeSessionId) {
@@ -860,6 +1007,7 @@ type ChatState = {
   selectedModelId: string;
   todos: TodoItem[];
   _pendingChanges: FileChange[];
+  _userSelectedAgent: boolean;
   chatHistory: import("@acode/shared-types").ChatMessage[][];
   chatHistoryIdx: number;
   chatSessions: ChatSessionSummary[];
@@ -872,6 +1020,7 @@ type ChatState = {
   preRestoreMessages: import("@acode/shared-types").ChatMessage[] | null;
   pendingAttachments: FileAttachment[];
   compactionSummaries: Record<string, string>;
+  _compactingSessions: Set<string>;
   compactSessionHistory: (sessionId: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
   startSession: (workspacePath: string, mode: import("@acode/shared-types").AgentSessionMode) => Promise<void>;
@@ -885,7 +1034,7 @@ type ChatState = {
   appendStream: (event: StreamEvent) => void;
   setTodos: (todos: TodoItem[]) => void;
   updateTodo: (id: string, patch: Partial<TodoItem>) => void;
-  resolveToolApproval: (toolCallId: string, decision: "approved" | "denied", result?: string) => void;
+  resolveToolApproval: (toolCallId: string, decision: "approved" | "denied", result?: string) => Promise<void>;
   openFile: (path: string) => void;
   newChat: () => void;
   goBackChat: () => boolean;
@@ -915,6 +1064,7 @@ export const useChat = create<ChatState>((set, get) => ({
   selectedModelId: "",
   todos: [],
   _pendingChanges: [],
+  _userSelectedAgent: false,
   chatHistory: [],
   chatHistoryIdx: -1,
   chatSessions: loadPersistedSessionSummaries(),
@@ -927,6 +1077,7 @@ export const useChat = create<ChatState>((set, get) => ({
   preRestoreMessages: null,
   pendingAttachments: [],
   compactionSummaries: loadPersistedCompactionSummaries(),
+  _compactingSessions: new Set<string>(),
 
   async setSelectedModel(id) {
     set({ selectedModelId: id });
@@ -936,16 +1087,18 @@ export const useChat = create<ChatState>((set, get) => ({
         return;
       }
       const { providers } = useModelProviders.getState();
+      let matchedProvider: string | undefined;
       for (const p of providers) {
         const m = p.models.find((m) => m.modelId === id);
         if (m) {
-          await useSettings.getState().updateSettings({
-            selectedModel: id,
-            selectedProvider: p.id,
-          });
+          matchedProvider = p.id;
           break;
         }
       }
+      await useSettings.getState().updateSettings({
+        selectedModel: id,
+        ...(matchedProvider ? { selectedProvider: matchedProvider } : {}),
+      });
     }
   },
   setTodos(todos) { set({ todos }); },
@@ -990,6 +1143,8 @@ export const useChat = create<ChatState>((set, get) => ({
     const { sessionId } = await api.agent.startSession({ workspacePath, model, mode });
     const now = Date.now();
     const activeAgentName = useAgents.getState().activeAgentName;
+    // Reset user agent selection flag for the new session
+    set({ _userSelectedAgent: false });
     const wsName =
       useWorkspace.getState().workspaces.find((w) => w.path === workspacePath)?.name ??
       basename(workspacePath) ??
@@ -1019,6 +1174,11 @@ export const useChat = create<ChatState>((set, get) => ({
       },
       messages: [],
       pendingToolCalls: [],
+      pendingActivities: [],
+      todos: [],
+      streamingContent: "",
+      thinkingContent: "",
+      _pendingChanges: [],
       chatSessions: [
         ...get().chatSessions.filter((s) => s.id !== sessionId),
         summary,
@@ -1029,6 +1189,7 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     // Clean up previous stream listener to prevent ghost events
     api.agent.cleanupStream(sessionId);
+    // Register stream listener for this session (single registration)
     api.agent.onStreamEvent(sessionId, (event) => get().appendStream(event));
     savePersistedSessionSummaries(get().chatSessions);
     savePersistedMessages(get().sessionMessages);
@@ -1041,18 +1202,22 @@ export const useChat = create<ChatState>((set, get) => ({
       await api.agent.abort(sessionId);
     } finally {
       api.agent.cleanupStream(sessionId);
+      // Guard against race with newChat — if session was already cleared,
+      // don't overwrite the fresh state with stale abort data
+      const currentSession = get().session;
+      const isStillOurSession = currentSession && currentSession.id === sessionId;
       set({
         isStreaming: false,
         streamingContent: "",
         thinkingContent: "",
         pendingToolCalls: [],
         pendingActivities: [],
-        chatSessions: get().chatSessions.map((s) =>
-          s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now() } : s
-        ),
-        session: get().session && get().session!.id === sessionId
-          ? { ...get().session!, status: "aborted" }
-          : get().session,
+        ...(isStillOurSession ? {
+          chatSessions: get().chatSessions.map((s) =>
+            s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now() } : s
+          ),
+          session: { ...currentSession, status: "aborted" },
+        } : {}),
       });
     }
   },
@@ -1060,6 +1225,18 @@ export const useChat = create<ChatState>((set, get) => ({
   async sendMessage(content) {
     const { isStreaming } = get();
     if (isStreaming) return;
+
+    // Auto-select agent based on prompt content (evolver-inspired adaptive routing)
+    // Only auto-select if user hasn't explicitly chosen an agent for this session
+    const currentAgent = useAgents.getState().activeAgentName;
+    const selectedAgent = autoSelectAgent(content, currentAgent);
+    if (selectedAgent !== currentAgent && !get()._userSelectedAgent) {
+      useAgents.getState().setActiveAgent(selectedAgent);
+    }
+    // Note: _userSelectedAgent is NOT reset here. It persists for the session
+    // so that user's explicit agent choice isn't overridden by auto-select on
+    // subsequent messages. It is reset when starting a new session.
+
     let { session } = get();
     if (!session) {
       const targetWs = useWorkspace.getState().activeWorkspaceId
@@ -1120,9 +1297,9 @@ export const useChat = create<ChatState>((set, get) => ({
     get().saveVersion(session.id, content.length > 60 ? content.slice(0, 57) + "…" : content);
     try {
       const agentName = useAgents.getState().activeAgentName;
-      await api.agent.sendPrompt(session.id, content, [...messages, userMsg], agentName, pendingAttachments);
+      await api.agent.sendPrompt(session.id, content, get().messages, agentName, pendingAttachments);
     } catch (err: unknown) {
-      const { isStreaming } = get();
+      const { isStreaming, session: currentSession } = get();
       // If appendStream already handled the error (streaming ended), don't add duplicate error message
       if (!isStreaming) return;
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -1132,7 +1309,8 @@ export const useChat = create<ChatState>((set, get) => ({
         content: `**Error**: ${msg}\n\nCheck your provider settings and try again.`,
         timestamp: Date.now(),
       };
-      const sessionId = session!.id;
+      const sessionId = currentSession?.id;
+      if (!sessionId) return;
       const newSessionMessages = { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), errorMsg] };
       set({
         isStreaming: false,
@@ -1153,26 +1331,121 @@ export const useChat = create<ChatState>((set, get) => ({
 
   appendStream(event) {
     switch (event.type) {
-      case "message-start":
-        set({ streamingContent: "", thinkingContent: "", isStreaming: true });
+      case "message-start": {
+        // Only reset pendingToolCalls if they are all resolved (completed/failed/denied).
+        // Don't clear tools that are still awaiting approval from a previous turn.
+        const pending = get().pendingToolCalls;
+        const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
+        set({
+          streamingContent: "",
+          thinkingContent: "",
+          pendingActivities: [],
+          ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
+          isStreaming: true,
+        });
         break;
+      }
       case "message-delta":
-        set((s) => ({ streamingContent: (s.streamingContent + event.content).slice(-50000) }));
+        set((s) => {
+          const newContent = s.streamingContent + event.content;
+          // Truncate at word boundary to avoid splitting XML tags, markdown fences, etc.
+          if (newContent.length > 50000) {
+            const trimmed = newContent.slice(-50000);
+            // Find the first space to avoid cutting mid-word/mid-tag
+            const spaceIdx = trimmed.indexOf(" ");
+            return { streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed };
+          }
+          return { streamingContent: newContent };
+        });
         break;
-      case "diff-proposed":
+      case "diff-proposed": {
+        const proposal = event.proposal;
+        set((s) => {
+          let idx = -1;
+          for (let i = s.pendingToolCalls.length - 1; i >= 0; i--) {
+            const tc = s.pendingToolCalls[i];
+            if (tc.status === "awaiting-approval" || tc.status === "pending") {
+              idx = i;
+              break;
+            }
+          }
+          if (idx === -1) return s;
+          const updated = [...s.pendingToolCalls];
+          updated[idx] = { ...updated[idx], diffId: proposal.diffId, diff: proposal };
+          return { pendingToolCalls: updated };
+        });
+        // Open diff view so user can preview the proposed change,
+        // but only if not streaming to avoid hijacking the terminal tab
+        if (!get().isStreaming) {
+          useDiffView.getState().openFile({
+            path: proposal.filePath,
+            action: "modified",
+            additions: proposal.hunks.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0),
+            deletions: proposal.hunks.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0),
+          });
+        }
         break;
+      }
       case "message-end": {
         const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
-        const planComplete = useAgents.getState().activeAgentName === "plan" && streamingContent.includes("[PLAN_COMPLETE]");
+
+        // Tools are already populated in pendingToolCalls via tool-call events
+        // emitted by the API layer. Use them as the single source of truth.
+        // Clean XML tool call tags from display content only.
+        let finalContent = streamingContent;
+        const allToolCalls = pendingToolCalls;
+        const { toolCalls: xmlToolCalls, cleanedContent } = parseXmlToolCalls(streamingContent);
+        if (xmlToolCalls.length > 0 || cleanedContent !== streamingContent) {
+          finalContent = cleanedContent;
+        }
+
+        // Skip creating a message if there's nothing to show (e.g., error already
+        // handled the turn and cleared streamingContent)
+        if (!finalContent && allToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent) {
+          set({ isStreaming: false, pendingToolCalls: [], pendingActivities: [], streamingContent: "", thinkingContent: "" });
+          break;
+        }
+
+        // If there are pending tool calls, this is an intermediate turn (tools
+        // were just executed). Save the current turn's content and clear transient
+        // state so the agentic loop can continue streaming.
+        if (allToolCalls.length > 0) {
+          const intermediateMsg: ChatMessage = {
+            id: event.messageId,
+            role: "assistant",
+            content: finalContent,
+            timestamp: Date.now(),
+            ...(thinkingContent ? { thinking: thinkingContent } : {}),
+            ...(allToolCalls.length > 0 ? { toolCalls: allToolCalls } : {}),
+            ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
+          };
+          const sessionId = get().activeSessionId;
+          const newSessionMessages = sessionId
+            ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), intermediateMsg] }
+            : get().sessionMessages;
+          set({
+            messages: [...get().messages, intermediateMsg],
+            sessionMessages: newSessionMessages,
+            streamingContent: "",
+            thinkingContent: "",
+            _pendingChanges: [],
+            pendingToolCalls: [],
+            pendingActivities: [],
+          });
+          if (sessionId) savePersistedMessages(newSessionMessages);
+          break;
+        }
+
+        const planComplete = useAgents.getState().activeAgentName === "plan" && finalContent.includes("[PLAN_COMPLETE]");
         const assistantMsg: ChatMessage = {
           id: event.messageId,
           role: "assistant",
-          content: streamingContent,
+          content: finalContent,
           timestamp: Date.now(),
           ...(thinkingContent ? { thinking: thinkingContent } : {}),
           ...(todos.length > 0 ? { todos: [...todos] } : {}),
           ...(_pendingChanges.length > 0 ? { fileChanges: [..._pendingChanges] } : {}),
-          ...(pendingToolCalls.length > 0 ? { toolCalls: [...pendingToolCalls] } : {}),
+          ...(allToolCalls.length > 0 ? { toolCalls: allToolCalls } : {}),
           ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
         };
         const api = ensureAcodeAPI();
@@ -1190,7 +1463,7 @@ export const useChat = create<ChatState>((set, get) => ({
           _pendingChanges: [],
           pendingToolCalls: [],
           pendingActivities: [],
-          ...(planComplete ? { planApproval: { planContent: streamingContent, status: "pending" } } : {}),
+          ...(planComplete ? { planApproval: { planContent: finalContent, status: "pending" } } : {}),
           chatSessions: liveSession
             ? get().chatSessions.map((s) =>
                 s.id === liveSession.id
@@ -1203,6 +1476,11 @@ export const useChat = create<ChatState>((set, get) => ({
         savePersistedSessionSummaries(get().chatSessions);
         if (sessionId) {
           void get().compactSessionHistory(sessionId);
+          // Record successful agent selection for learning
+          const lastUserMsg = messages.filter(m => m.role === "user").pop();
+          if (lastUserMsg) {
+            recordAgentSelection(lastUserMsg.content, useAgents.getState().activeAgentName, true);
+          }
         }
         break;
       }
@@ -1215,15 +1493,15 @@ export const useChat = create<ChatState>((set, get) => ({
         const commandStr = typeof tool.args.command === "string" ? tool.args.command : "";
         const canonicalPattern = isBashTool && commandStr ? canonicaliseBashCommand(commandStr) : tool.name;
         // Map tool names to permission keys
-        const permissionKey = (tool.name === "edit_file" || tool.name === "edit" || tool.name === "write_file" || tool.name === "write"
+        const permissionKey: PermissionKind = EDIT_TOOLS.has(tool.name)
           ? "edit"
-          : tool.name === "shell" || tool.name === "bash" || tool.name === "execute" || tool.name === "run_command"
+          : BASH_TOOLS.has(tool.name)
             ? "bash"
-            : tool.name === "webfetch" || tool.name === "websearch"
+            : NETWORK_TOOLS.has(tool.name)
               ? "network"
               : tool.name.startsWith("mcp_")
                 ? "mcp"
-                : tool.name) as "bash" | "edit" | "network" | "mcp";
+                : "edit";
         const agentAction = useAgents.getState().evaluatePermission(permissionKey, canonicalPattern);
         const needsApproval = agentAction === "ask";
         const denied = agentAction === "deny";
@@ -1261,51 +1539,68 @@ export const useChat = create<ChatState>((set, get) => ({
       case "tool-result":
         set((s) => ({
           pendingToolCalls: s.pendingToolCalls.map((tc) =>
-            tc.id === event.toolCallId ? { ...tc, status: "completed", result: event.result } : tc
+            tc.id === event.toolCallId
+              ? {
+                  ...tc,
+                  status: typeof event.result === "string" && event.result.startsWith("Error:") ? "failed" as const : "completed" as const,
+                  result: event.result,
+                }
+              : tc
           ),
         }));
         break;
       case "file-changed": {
-        const { streamingContent, messages, isStreaming } = get();
-        if (isStreaming && streamingContent) {
+        const { isStreaming } = get();
+        if (isStreaming) {
           set((s) => ({
             _pendingChanges: [...(s._pendingChanges ?? []), event.change],
           }));
         } else {
+          // Find the last assistant message to attach file changes to.
+          // Walk backwards to find it even if tool results are at the end.
           set((s) => {
-            const last = s.messages[s.messages.length - 1];
-            if (!last || last.role !== "assistant") return s;
+            let lastAssistantIdx = -1;
+            for (let i = s.messages.length - 1; i >= 0; i--) {
+              if (s.messages[i].role === "assistant") {
+                lastAssistantIdx = i;
+                break;
+              }
+            }
+            if (lastAssistantIdx === -1) return s;
             return {
               messages: s.messages.map((m, i) =>
-                i === s.messages.length - 1
+                i === lastAssistantIdx
                   ? { ...m, fileChanges: [...(m.fileChanges ?? []), event.change] }
                   : m
               ),
             };
           });
         }
-        useDiffView.getState().openFile(event.change);
+        // Only open diff view when not streaming — during streaming, changes
+        // accumulate in _pendingChanges and open when the turn completes
+        if (!get().isStreaming) {
+          useDiffView.getState().openFile(event.change);
+        }
         break;
       }
       case "todo-update": {
-        set({ todos: event.todos });
         set((s) => {
           const last = s.messages[s.messages.length - 1];
-          if (!last || last.role !== "assistant") return s;
-          return {
-            messages: s.messages.map((m, i) =>
-              i === s.messages.length - 1
-                ? { ...m, todos: event.todos }
-                : m
-            ),
-          };
+          const updatedMessages = last && last.role === "assistant"
+            ? s.messages.map((m, i) =>
+                i === s.messages.length - 1
+                  ? { ...m, todos: event.todos }
+                  : m
+              )
+            : s.messages;
+          return { todos: event.todos, messages: updatedMessages };
         });
         break;
       }
       case "activity-think": {
         set((s) => ({
-          pendingActivities: [...s.pendingActivities, { type: "think", content: event.content }],
-          thinkingContent: s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content,
+          pendingActivities: [...s.pendingActivities, { type: "think" as const, content: event.content }].slice(-500) as typeof s.pendingActivities,
+          thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000),
         }));
         break;
       }
@@ -1314,12 +1609,12 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
-              type: "explore",
+              type: "explore" as const,
               query: event.query,
               ...(event.kind ? { kind: event.kind } : {}),
               matches: event.matches,
             },
-          ],
+          ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
       }
@@ -1328,12 +1623,12 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
-              type: "read",
+              type: "read" as const,
               path: event.path,
               content: event.content,
               ...(event.lineRange ? { lineRange: event.lineRange } : {}),
             },
-          ],
+          ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
       }
@@ -1342,12 +1637,12 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
-              type: "skill",
+              type: "skill" as const,
               name: event.name,
               content: event.content,
               ...(event.args ? { args: event.args } : {}),
             },
-          ],
+          ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
       }
@@ -1355,8 +1650,8 @@ export const useChat = create<ChatState>((set, get) => ({
         set((s) => ({
           pendingActivities: [
             ...s.pendingActivities,
-            { type: "bash", command: event.command, result: event.result },
-          ],
+            { type: "bash" as const, command: event.command, result: event.result },
+          ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
       }
@@ -1364,13 +1659,13 @@ export const useChat = create<ChatState>((set, get) => ({
         set((s) => ({
           pendingActivities: [
             ...s.pendingActivities,
-            { type: "plan", plan: event.plan },
-          ],
+            { type: "plan" as const, plan: event.plan },
+          ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
       }
       case "thinking":
-        set((s) => ({ thinkingContent: s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content }));
+        set((s) => ({ thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000) }));
         break;
       case "status":
         set((s) => ({
@@ -1385,11 +1680,16 @@ export const useChat = create<ChatState>((set, get) => ({
         }));
         break;
       case "ask-permission": {
-        void usePermission.getState().ask({
-          kind: (event.kind as "bash" | "edit" | "network" | "mcp") ?? "bash",
+        const permKind = (["bash", "edit", "network", "mcp"] as const).includes(event.kind as any) ? (event.kind as "bash" | "edit" | "network" | "mcp") : "bash";
+        usePermission.getState().ask({
+          kind: permKind,
           title: "Permission required",
           description: event.description ?? `ACode wants to run: ${event.kind}`,
           ...(event.command ? { command: event.command } : {}),
+        }).then((decision) => {
+          if (event.toolCallId) {
+            get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied");
+          }
         });
         break;
       }
@@ -1398,7 +1698,7 @@ export const useChat = create<ChatState>((set, get) => ({
           header: event.header,
           question: event.question,
           options: event.options,
-        });
+        }).catch((err) => console.error("ask-question error:", err));
         break;
       }
       case "error": {
@@ -1434,6 +1734,9 @@ export const useChat = create<ChatState>((set, get) => ({
         }
         break;
       }
+      default:
+        console.warn("Unknown stream event type:", (event as any).type);
+        break;
     }
   },
 
@@ -1476,8 +1779,22 @@ export const useChat = create<ChatState>((set, get) => ({
     const messages = sessionMessages[id] ?? [];
     const agent = sessionAgentName[id] ?? "build";
     useAgents.getState().setActiveAgent(agent);
+    // Reconstruct the AgentSession object from stored data
+    const chatSession = get().chatSessions.find((cs) => cs.id === id);
+    const restoredSession: AgentSession | null = chatSession
+      ? {
+          id: chatSession.id,
+          workspacePath: chatSession.workspacePath,
+          model: useSettings.getState().settings.selectedModel,
+          mode: chatSession.mode,
+          startedAt: chatSession.startedAt,
+          messages,
+          status: chatSession.status === "completed" ? "idle" : chatSession.status,
+        }
+      : null;
     set({
       activeSessionId: id,
+      session: restoredSession,
       messages,
       isStreaming: false,
       streamingContent: "",
@@ -1487,33 +1804,39 @@ export const useChat = create<ChatState>((set, get) => ({
       pendingAttachments: [],
       restoredVersionId: null,
       planApproval: null,
+      preRestoreMessages: null,
     });
   },
 
   renameSession(id, title) {
-    set((s) => ({
-      chatSessions: s.chatSessions.map((cs) =>
+    set((s) => {
+      const newSessions = s.chatSessions.map((cs) =>
         cs.id === id ? { ...cs, title } : cs
-      ),
-    }));
+      );
+      savePersistedSessionSummaries(newSessions);
+      return { chatSessions: newSessions };
+    });
   },
 
   setSessionStatus(id, status) {
-    set((s) => ({
-      chatSessions: s.chatSessions.map((cs) =>
+    set((s) => {
+      const newSessions = s.chatSessions.map((cs) =>
         cs.id === id ? { ...cs, status, lastActivityAt: Date.now() } : cs
-      ),
-    }));
+      );
+      savePersistedSessionSummaries(newSessions);
+      return { chatSessions: newSessions };
+    });
   },
 
   removeSession(id) {
     const api = ensureAcodeAPI();
-    get().abort(id);
+    void get().abort(id).catch(() => {});
     api.agent.cleanupStream(id);
     set((s) => {
       const { [id]: _, ...restVersions } = s.sessionVersions;
       const { [id]: __, ...restMessages } = s.sessionMessages;
       const { [id]: ___, ...restAgents } = s.sessionAgentName;
+      const { [id]: ____, ...restCompaction } = s.compactionSummaries;
       const newSessions = s.chatSessions.filter((cs) => cs.id !== id);
       savePersistedVersions(restVersions);
       savePersistedMessages(restMessages);
@@ -1527,6 +1850,7 @@ export const useChat = create<ChatState>((set, get) => ({
         sessionVersions: restVersions,
         sessionMessages: restMessages,
         sessionAgentName: restAgents,
+        compactionSummaries: restCompaction,
         ...(isActive ? {
           messages: [],
           isStreaming: false,
@@ -1686,36 +2010,42 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async compactSessionHistory(sessionId) {
-    const { sessionMessages, selectedModelId, compactionSummaries } = get();
+    const { sessionMessages, selectedModelId, compactionSummaries, _compactingSessions } = get();
+    if (_compactingSessions.has(sessionId)) return;
     const messages = sessionMessages[sessionId];
     if (!messages || messages.length <= 6) return;
 
-    // Look up the model's actual context window
-    const modelId = selectedModelId || useSettings.getState().settings.selectedModel;
-    const allModels = useModelProviders.getState().getAllModels();
-    const found = allModels.find((m) => m.model.modelId === modelId);
-    const maxContext = parseContextWindow(found?.model.contextWindow);
-
-    // Use context manager to determine what to compact
-    const stats = computeContextStats(messages, maxContext);
-    if (!stats.needsCompaction) return;
-
-    // Prune old tool outputs before summarization to reduce input size
-    const activeMessages = stats.shouldPrune
-      ? pruneToolOutputs(messages).pruned
-      : messages;
-
-    const { toCompact, toKeep } = selectMessagesForCompaction(activeMessages, 6);
-    if (toCompact.length === 0) return;
-
-    const api = ensureAcodeAPI();
-    const previousSummary = compactionSummaries[sessionId];
-
-    // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
-    // Pass raw ChatMessage[] directly — buildCompactionPrompt handles role mapping internally
-    const compactionMessages = buildCompactionPrompt(toCompact, previousSummary);
+    // Create new Set first to avoid mutating the existing one
+    const nextCompacting = new Set(_compactingSessions);
+    nextCompacting.add(sessionId);
+    set({ _compactingSessions: nextCompacting });
 
     try {
+      // Look up the model's actual context window
+      const modelId = selectedModelId || useSettings.getState().settings.selectedModel;
+      const allModels = useModelProviders.getState().getAllModels();
+      const found = allModels.find((m) => m.model.modelId === modelId);
+      const maxContext = parseContextWindow(found?.model.contextWindow);
+
+      // Use context manager to determine what to compact
+      const stats = computeContextStats(messages, maxContext);
+      if (!stats.needsCompaction) return;
+
+      // Prune old tool outputs before summarization to reduce input size
+      const activeMessages = stats.shouldPrune
+        ? pruneToolOutputs(messages).pruned
+        : messages;
+
+      const { toCompact } = selectMessagesForCompaction(activeMessages, 6);
+      if (toCompact.length === 0) return;
+
+      const api = ensureAcodeAPI();
+      const previousSummary = compactionSummaries[sessionId];
+
+      // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
+      // Pass raw ChatMessage[] directly — buildCompactionPrompt handles role mapping internally
+      const compactionMessages = buildCompactionPrompt(toCompact, previousSummary);
+
       const model = selectedModelId || useSettings.getState().settings.selectedModel;
       const summary = await api.agent.summarizeMessages(model, compactionMessages);
       if (summary) {
@@ -1727,17 +2057,35 @@ export const useChat = create<ChatState>((set, get) => ({
       }
     } catch (e) {
       console.warn("Background compaction failed:", e);
+    } finally {
+      const remaining = new Set(get()._compactingSessions);
+      remaining.delete(sessionId);
+      set({ _compactingSessions: remaining });
     }
   },
 
-  resolveToolApproval(toolCallId, decision, result) {
+  async resolveToolApproval(toolCallId, decision, result) {
     const api = ensureAcodeAPI();
     const sessionId = get().activeSessionId;
     const tool = get().pendingToolCalls.find((tc) => tc.id === toolCallId);
     if (decision === "approved" && sessionId && tool?.diffId) {
-      void api.agent.approveDiff(sessionId, tool.diffId);
+      try {
+        await api.agent.approveDiff(sessionId, tool.diffId);
+      } catch (err) {
+        console.error("Failed to approve diff:", err);
+        set((s) => ({
+          pendingToolCalls: s.pendingToolCalls.map((tc) =>
+            tc.id === toolCallId ? { ...tc, status: "failed" as const, result: `Diff approval failed: ${err}` } : tc
+          ),
+        }));
+        return;
+      }
     } else if (decision === "denied" && sessionId && tool?.diffId) {
-      void api.agent.rejectDiff(sessionId, tool.diffId);
+      try {
+        await api.agent.rejectDiff(sessionId, tool.diffId);
+      } catch (err) {
+        console.error("Failed to reject diff:", err);
+      }
     }
     set((s) => ({
       pendingToolCalls: s.pendingToolCalls.map((tc) =>
@@ -1763,7 +2111,7 @@ export const useChat = create<ChatState>((set, get) => ({
       ? chatHistory.slice(0, chatHistoryIdx + 1)
       : chatHistory;
     const newHistory = messages.length > 0
-      ? [...trimmedHistory, messages]
+      ? [...trimmedHistory, messages].slice(-20)
       : trimmedHistory;
     const finalizedSessions = session && messages.length > 0
       ? chatSessions.map((cs) =>
@@ -1781,6 +2129,7 @@ export const useChat = create<ChatState>((set, get) => ({
       chatHistoryIdx: -1,
       messages: [],
       pendingToolCalls: [],
+      pendingActivities: [],
       streamingContent: "",
       thinkingContent: "",
       isStreaming: false,
@@ -1803,7 +2152,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (chatHistoryIdx === -1) {
       if (chatHistory.length === 0) return false;
       const lastHist = chatHistory[chatHistory.length - 1];
-      const matchesLast = lastHist && JSON.stringify(lastHist) === JSON.stringify(msgs);
+      const matchesLast = lastHist && lastHist.length === msgs.length && lastHist.every((m, i) => m.id === msgs[i]?.id);
       const newHistory = msgs.length > 0 && !matchesLast ? [...chatHistory, msgs] : chatHistory;
       const targetIdx = msgs.length > 0 && !matchesLast ? Math.max(0, newHistory.length - 2) : newHistory.length - 1;
       if (targetIdx < 0 || targetIdx >= newHistory.length) return false;
@@ -1862,7 +2211,7 @@ type TerminalState = {
 };
 
 export const useTerminal = create<TerminalState>((set) => ({
-  tabs: [{ id: "t-1", title: "zsh", cwd: "~" }],
+  tabs: [{ id: "t-1", title: "zsh", cwd: process.cwd() }],
   activeTabId: "t-1",
   output: {},
   addTab(cwd) {
@@ -1888,7 +2237,7 @@ export const useTerminal = create<TerminalState>((set) => ({
   },
   appendOutput(id, data) {
     set((s) => ({
-      output: { ...s.output, [id]: (s.output[id] ?? "") + data },
+      output: { ...s.output, [id]: ((s.output[id] ?? "") + data).slice(-102400) },
     }));
   },
 }));
@@ -1978,50 +2327,62 @@ function loadSkills(): Skill[] {
   return merged;
 }
 
-const queryStdioTools = (commandName: string, commandArgs: string[], env?: Record<string, string>): Promise<{ name: string; description: string }[]> => {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const { Command } = await import("@tauri-apps/plugin-shell");
-      const cmd = Command.create(commandName, commandArgs, { env });
-      let outputBuffer = "";
-      let resolved = false;
+const queryStdioTools = async (commandName: string, commandArgs: string[], env?: Record<string, string>): Promise<{ name: string; description: string }[]> => {
+  const { Command } = await import("@tauri-apps/plugin-shell");
+  const cmd = Command.create(commandName, commandArgs, { env });
+  let outputBuffer = "";
 
-      cmd.stdout.on("data", (data: string) => {
-        outputBuffer += data;
+  return new Promise<{ name: string; description: string }[]>((resolve, reject) => {
+    let resolved = false;
+
+    const stdoutHandler = (data: string) => {
+      outputBuffer += data;
+      // Try to parse the entire buffer as a single JSON-RPC message
+      // (MCP responses may be multi-line JSON)
+      const trimmed = outputBuffer.trim();
+      if (trimmed.startsWith("{")) {
         try {
-          const lines = outputBuffer.split("\n");
-          for (const line of lines) {
-            if (line.trim().startsWith("{")) {
-              const parsed = JSON.parse(line.trim());
-              if (parsed.result?.tools || parsed.tools) {
-                resolved = true;
-                resolve(parsed.result?.tools || parsed.tools);
-                break;
-              }
-            }
+          const parsed = JSON.parse(trimmed);
+          if (parsed.result?.tools || parsed.tools) {
+            resolved = true;
+            cleanup();
+            resolve(parsed.result?.tools || parsed.tools);
+            outputBuffer = "";
           }
-        } catch (e) {
-          // Ignore partial parse error
+        } catch {
+          // Incomplete JSON — wait for more data
         }
-      });
+      }
+    };
 
-      cmd.stderr.on("data", (data: string) => {
-        console.warn("MCP Server Stderr:", data);
-      });
+    const stderrHandler = (data: string) => {
+      console.warn("MCP Server Stderr:", data);
+    };
 
-      const child = await cmd.spawn();
+    const cleanup = () => {
+      cmd.stdout.removeListener("data", stdoutHandler);
+      cmd.stderr.removeListener("data", stderrHandler);
+    };
+
+    cmd.stdout.on("data", stdoutHandler);
+    cmd.stderr.on("data", stderrHandler);
+
+    void cmd.spawn().then(async (child) => {
       const req = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", params: {}, id: 1 }) + "\n";
       await child.write(req);
 
       setTimeout(() => {
         if (!resolved) {
+          resolved = true;
+          cleanup();
           child.kill().catch(() => {});
           reject(new Error("Timeout waiting for tools/list response (15s)"));
         }
       }, 15000);
-    } catch (e) {
-      reject(e);
-    }
+    }).catch((err) => {
+      cleanup();
+      reject(err);
+    });
   });
 };
 
@@ -2165,6 +2526,7 @@ export type SettingsTab =
   | "instructions"
   | "skills"
   | "mcp"
+  | "memory-graph"
   | "plugins"
   | "commands"
   | "indexing"
@@ -2178,7 +2540,7 @@ export type ModelProvider = {
   baseUrl: string;
   apiKey: string;
   apiFormat: "openai" | "anthropic";
-  models: { name: string; modelId: string; contextWindow: string; connected?: boolean }[];
+  models: { name: string; modelId: string; contextWindow: string; connected?: boolean; enabled?: boolean }[];
 };
 
 const PROVIDERS_STORAGE_KEY = "acode.providers.v1";
@@ -2489,7 +2851,7 @@ function normalizeBrowserUrl(input: string): string {
 
 export const useUI = create<UIState>((set, get) => ({
   sidebarOpen: true,
-  rightPanelOpen: true,
+  rightPanelOpen: false,
   browserTabs: [],
   activeBrowserTabId: null,
   rightPanelTab: "git",
@@ -2535,7 +2897,9 @@ export const useUI = create<UIState>((set, get) => ({
           ...t,
           url: truncated,
           title: deriveTitleFromUrl(truncated),
-          history: [...t.history.slice(0, t.historyIdx + 1), truncated],
+          history: t.history[t.historyIdx] === truncated
+            ? t.history
+            : [...t.history.slice(0, t.historyIdx + 1), truncated],
           historyIdx: t.historyIdx + 1,
           loading: false,
         };
@@ -2572,11 +2936,12 @@ export const useUI = create<UIState>((set, get) => ({
         return { ...t, url: refreshedUrl, loading: true };
       }),
     }));
+    // Fallback timeout in case onLoad doesn't fire (e.g., blocked by sandbox)
     setTimeout(() => {
       useUI.setState((s2) => ({
         browserTabs: s2.browserTabs.map((t) => t.id === id ? { ...t, loading: false } : t),
       }));
-    }, 350);
+    }, 5000);
   },
   updateBrowserTab: (id, patch) => {
     set((s) => ({
@@ -2827,9 +3192,16 @@ export const useDiffView = create<DiffViewState>((set, get) => ({
     set((s) => ({
       open: true,
       current: change,
-      history: s.current ? [...s.history, s.current] : s.history,
+      // Only push to history if navigating to a different file
+      history: s.current && s.current.path !== change.path
+        ? [...s.history, s.current]
+        : s.history,
       forwardStack: [],
     }));
+    // Open the right panel and switch to diff tab so the user sees the diff
+    const ui = useUI.getState();
+    if (!ui.rightPanelOpen) ui.setRightPanelOpen(true);
+    ui.setRightPanelTab("diff");
   },
   close() {
     set({ open: false, current: null, history: [], forwardStack: [] });

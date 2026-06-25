@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useWorkspace,
   useSettingsView,
@@ -7,7 +7,7 @@ import {
   useQuestion,
   useCommandPalette,
 } from "@/store/useAppStore";
-import { shortcut } from "@/lib/platform";
+import { shortcut, modKey } from "@/lib/platform";
 import {
   Search,
   Plus,
@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   FolderOpen,
+  Folder,
   Circle,
   CheckCircle2,
   Loader2,
@@ -26,18 +27,11 @@ import {
   Pencil,
   History,
   Undo2,
+  MoreHorizontal,
+  X,
 } from "lucide-react";
 import type { ChatSessionSummary, ChatVersion } from "@acode/shared-types";
 
-/**
- * Map a session status to the right sidebar icon + tailwind color.
- *
- *   running   → spinning blue (AI is actively working)
- *   completed → green dot with a check (AI answered successfully)
- *   aborted   → yellow (the user pressed stop / aborted)
- *   error     → red (the agent errored out)
- *   idle      → empty gray circle (a brand-new session, no messages yet)
- */
 function statusPresentation(status: ChatSessionSummary["status"], isStreaming: boolean) {
   if (isStreaming || status === "running") {
     return { Icon: Loader2, color: "text-acode-accent-primary", spin: true };
@@ -58,9 +52,9 @@ function statusPresentation(status: ChatSessionSummary["status"], isStreaming: b
 function formatRelative(ts: number, now: number): string {
   const diff = Math.max(0, now - ts);
   if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+  return `${Math.floor(diff / 86_400_000)}d`;
 }
 
 interface SessionRowProps {
@@ -76,9 +70,19 @@ interface SessionRowProps {
 function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRename, onShowVersions }: SessionRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpen]);
 
   useEffect(() => { setDraft(session.title); }, [session.title]);
-  const { Icon, color, spin } = statusPresentation(session.status, isStreaming);
 
   const submit = () => {
     const next = draft.trim();
@@ -88,20 +92,12 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
 
   return (
     <div
-      className={`group relative w-full flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md transition-colors cursor-pointer ${
+      className={`group relative w-full flex items-center gap-2 pl-2 pr-1.5 py-1.5 rounded-md transition-colors cursor-pointer ${
         isActive ? "bg-acode-bg-active" : "hover:bg-acode-bg-hover"
       }`}
-      onClick={() => !editing && onSelect()}
+      onClick={() => { if (!editing) { onSelect(); setMenuOpen(false); } }}
       title={session.preview ?? session.title}
     >
-      {/* Status indicator (spinner for running, dot+icon otherwise) */}
-      <div className="relative flex-shrink-0 w-3.5 h-3.5 flex items-center justify-center">
-        <Icon className={`w-3.5 h-3.5 ${color} ${spin ? "animate-spin" : ""}`} />
-        {/* Live pulsing ring for running sessions */}
-        {(spin || session.status === "running") && (
-          <span className="absolute inset-0 rounded-full bg-acode-accent-primary/30 animate-ping" />
-        )}
-      </div>
       {editing ? (
         <input
           autoFocus
@@ -110,67 +106,43 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
           onBlur={submit}
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
-            else if (e.key === "Escape") {
-              setDraft(session.title);
-              setEditing(false);
-            }
+            else if (e.key === "Escape") { setDraft(session.title); setEditing(false); }
           }}
           onClick={(e) => e.stopPropagation()}
           className="flex-1 min-w-0 text-xs px-1 py-0.5 rounded border border-acode-border-primary bg-acode-bg-primary text-acode-text-primary outline-none focus:border-acode-accent-primary"
         />
       ) : (
-        <div className="flex-1 min-w-0 flex items-center gap-1.5">
-          <span className="truncate text-xs text-acode-text-secondary">
+        <>
+          <span className="flex-1 min-w-0 truncate text-xs text-acode-text-secondary">
             {session.title}
           </span>
-          {session.messageCount > 0 && (
-            <span className="text-[10px] text-acode-text-muted flex-shrink-0">
-              · {session.messageCount}
-            </span>
-          )}
-          {session.versionCount > 0 && (
-            <span className="text-[10px] text-acode-text-muted/50 flex-shrink-0">
-              v{session.versionCount}
-            </span>
-          )}
-        </div>
+          <span className="text-[10px] text-acode-text-muted flex-shrink-0 tabular-nums">
+            {formatRelative(session.lastActivityAt, Date.now())}
+          </span>
+          <div className="relative" ref={menuRef}>
+            <button
+              className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-acode-bg-hover transition-all"
+              onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
+            >
+              <MoreHorizontal className="w-3 h-3 text-acode-text-muted" />
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-40 bg-acode-bg-secondary border border-acode-border-primary rounded-lg shadow-xl z-50 py-1">
+                <button className="w-full text-left px-3 py-1.5 text-xs text-acode-text-secondary hover:bg-acode-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setEditing(true); setMenuOpen(false); }}>
+                  <Pencil className="w-3 h-3" /> Rename
+                </button>
+                <button className="w-full text-left px-3 py-1.5 text-xs text-acode-text-secondary hover:bg-acode-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onShowVersions(); setMenuOpen(false); }}>
+                  <History className="w-3 h-3" /> Versions
+                </button>
+                <div className="border-t border-acode-border-primary my-1" />
+                <button className="w-full text-left px-3 py-1.5 text-xs text-acode-git-deleted hover:bg-acode-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onRemove(); setMenuOpen(false); }}>
+                  <Trash2 className="w-3 h-3" /> Delete
+                </button>
+              </div>
+            )}
+          </div>
+        </>
       )}
-      <span className="text-[10px] text-acode-text-muted flex-shrink-0 hidden group-hover:inline">
-        {formatRelative(session.lastActivityAt, Date.now())}
-      </span>
-      {/* Hover actions */}
-      <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0">
-        <button
-          className="btn-icon !p-0.5"
-          title="Rename session"
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditing(true);
-          }}
-        >
-          <Pencil className="w-3 h-3" />
-        </button>
-        <button
-          className="btn-icon !p-0.5"
-          title="Version history"
-          onClick={(e) => {
-            e.stopPropagation();
-            onShowVersions();
-          }}
-        >
-          <History className="w-3 h-3" />
-        </button>
-        <button
-          className="btn-icon !p-0.5"
-          title="Remove session"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-        >
-          <Trash2 className="w-3 h-3" />
-        </button>
-      </div>
     </div>
   );
 }
@@ -182,18 +154,15 @@ export function Sidebar() {
   const { cancel: cancelPermission } = usePermission();
   const { resolve: resolveQuestion } = useQuestion();
   const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
-  // Re-render the relative timestamps every 30s so "5m ago" doesn't get stale.
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState<Record<string, boolean>>({});
+
   const [, force] = useState(0);
   useEffect(() => {
     const t = setInterval(() => force((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
 
-  /**
-   * Bucket every chat session under its workspace. We render an empty placeholder
-   * for workspaces that have no sessions yet so the user knows where the next
-   * "New task" will land.
-   */
   const sessionsByWorkspace = useMemo(() => {
     const map = new Map<string, ChatSessionSummary[]>();
     for (const s of chatSessions) {
@@ -208,18 +177,24 @@ export function Sidebar() {
     return map;
   }, [chatSessions]);
 
+  const toggleWorkspace = (wsId: string) => {
+    setExpandedWorkspaces((prev) => {
+      const next = new Set(prev);
+      if (next.has(wsId)) next.delete(wsId);
+      else next.add(wsId);
+      return next;
+    });
+  };
+
+  const VISIBLE_LIMIT = 5;
+
   return (
     <aside className="h-full flex flex-col bg-acode-bg-secondary border-r border-acode-border-primary">
       {/* Primary actions */}
       <div className="px-3 py-2 flex flex-col gap-0.5 border-b border-acode-border-primary flex-shrink-0">
         <button
           className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
-          onClick={() => {
-            // Cancel any pending permission/question prompts so the new task starts clean.
-            cancelPermission();
-            resolveQuestion(null);
-            newChat();
-          }}
+          onClick={() => { cancelPermission(); resolveQuestion(null); newChat(); }}
         >
           <Plus className="w-4 h-4" />
           <span>New task</span>
@@ -239,26 +214,10 @@ export function Sidebar() {
       {/* Workspaces header */}
       <div className="flex items-center justify-between px-3 py-2 flex-shrink-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-acode-text-muted font-medium">
-            Workspaces
-          </span>
+          <span className="text-[11px] uppercase tracking-wider text-acode-text-muted font-medium">Workspaces</span>
           <ChevronRight className="w-3 h-3 text-acode-text-muted" />
         </div>
         <div className="flex items-center gap-0.5">
-          <button className="btn-icon" title="Filter">
-            <svg
-              className="w-3.5 h-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M3 6h18M7 12h10M10 18h4" />
-            </svg>
-          </button>
-          <button className="btn-icon" title="Search">
-            <Search className="w-3.5 h-3.5" />
-          </button>
           <button className="btn-icon" onClick={openWorkspace} title="Add workspace">
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -268,54 +227,60 @@ export function Sidebar() {
       {/* Workspace + session list */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {workspaces.map((ws) => {
-          const isActive = ws.id === activeWorkspaceId;
+          const isExpanded = expandedWorkspaces.has(ws.id) || ws.id === activeWorkspaceId;
           const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
+          const showAllSessions = showAll[ws.id] ?? false;
+          const visibleSessions = showAllSessions ? wsSessions : wsSessions.slice(0, VISIBLE_LIMIT);
+          const hasMore = wsSessions.length > VISIBLE_LIMIT;
+
           return (
             <div key={ws.id} className="mb-1">
               <button
                 className={`w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-acode-bg-hover transition-colors ${
-                  isActive ? "bg-acode-bg-hover" : ""
+                  ws.id === activeWorkspaceId ? "bg-acode-bg-hover" : ""
                 }`}
-                onClick={() => setActiveWorkspace(ws.id)}
+                onClick={() => { toggleWorkspace(ws.id); setActiveWorkspace(ws.id); }}
               >
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-acode-text-muted transition-transform ${
-                    !isActive ? "-rotate-90" : ""
-                  }`}
-                />
-                <FolderOpen className="w-4 h-4 text-acode-text-muted flex-shrink-0" />
-                <span className="truncate text-sm text-acode-text-primary font-medium">
-                  {ws.name}
-                </span>
-                {wsSessions.length > 0 && (
-                  <span className="ml-auto text-[10px] text-acode-text-muted tabular-nums">
-                    {wsSessions.length}
-                  </span>
+                {isExpanded ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-acode-text-muted" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 text-acode-text-muted" />
                 )}
+                <Folder className="w-4 h-4 text-acode-text-muted flex-shrink-0" />
+                <span className="truncate text-sm text-acode-text-primary font-medium">{ws.name}</span>
               </button>
-              {isActive && (
-                <div className="ml-4 mb-2 flex flex-col gap-0.5">
-                  {wsSessions.length > 0 ? (
-                    wsSessions.map((s) => (
-                      <SessionRow
-                        key={s.id}
-                        session={s}
-                        isActive={s.id === activeSessionId}
-                        isStreaming={isStreaming && s.id === activeSessionId}
-                        onSelect={() => setActiveSession(s.id)}
-                        onRemove={() => removeSession(s.id)}
-                        onRename={(title) => renameSession(s.id, title)}
-                        onShowVersions={() => setVersionsSessionId(s.id)}
-                      />
-                    ))
+              {isExpanded && (
+                <div className="ml-4 mb-1 flex flex-col gap-0.5">
+                  {visibleSessions.length > 0 ? (
+                    <>
+                      {visibleSessions.map((s) => (
+                        <SessionRow
+                          key={s.id}
+                          session={s}
+                          isActive={s.id === activeSessionId}
+                          isStreaming={isStreaming && s.id === activeSessionId}
+                          onSelect={() => setActiveSession(s.id)}
+                          onRemove={() => removeSession(s.id)}
+                          onRename={(title) => renameSession(s.id, title)}
+                          onShowVersions={() => setVersionsSessionId(s.id)}
+                        />
+                      ))}
+                      {hasMore && !showAllSessions && (
+                        <button
+                          className="text-[11px] text-acode-text-muted hover:text-acode-text-secondary px-2 py-1 transition-colors"
+                          onClick={() => setShowAll((prev) => ({ ...prev, [ws.id]: true }))}
+                        >
+                          Show more ({wsSessions.length - VISIBLE_LIMIT})
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <div className="flex flex-col items-center gap-1.5 px-2 py-3 text-center">
                       <MessageSquare className="w-4 h-4 text-acode-text-muted" />
                       <p className="text-[11px] text-acode-text-muted leading-snug">
-                        No chat sessions yet.
+                        No sessions yet.
                         <br />
-                        Press <span className="font-mono text-acode-text-secondary">⌘N</span> to
-                        start one.
+                        Press <span className="font-mono text-acode-text-secondary">{modKey()}N</span> to start.
                       </p>
                     </div>
                   )}
@@ -352,15 +317,12 @@ export function Sidebar() {
             if (currentId !== versionsSessionId) {
               useChat.getState().setActiveSession(versionsSessionId);
             }
-            // Use setTimeout to ensure state update completes before restore
             setTimeout(() => {
               useChat.getState().restoreVersion(versionsSessionId, versionId);
             }, 0);
             setVersionsSessionId(null);
           }}
-          onDelete={(versionId) => {
-            deleteVersion(versionsSessionId, versionId);
-          }}
+          onDelete={(versionId) => deleteVersion(versionsSessionId, versionId)}
           onClose={() => setVersionsSessionId(null)}
         />
       )}

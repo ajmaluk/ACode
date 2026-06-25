@@ -1,8 +1,8 @@
+@import "highlight.js/styles/github-dark.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import "highlight.js/styles/github-dark.css";
 
 /* ============================================================================
    ACode theme tokens
@@ -12,18 +12,18 @@
 
 :root,
 [data-theme="dark"] {
-  /* Surfaces (dark defaults) */
-  --acode-bg-primary: #0d0d0d;
-  --acode-bg-secondary: #161616;
-  --acode-bg-tertiary: #1f1f1f;
-  --acode-bg-hover: #262626;
-  --acode-bg-active: #2e2e2e;
-  --acode-bg-overlay: rgba(13, 13, 13, 0.85);
-  --acode-bg-input: #0a0a0a;
+  /* Surfaces (soft gray — matching Z Code aesthetic) */
+  --acode-bg-primary: #1e1e1e;
+  --acode-bg-secondary: #252526;
+  --acode-bg-tertiary: #2d2d2d;
+  --acode-bg-hover: #383838;
+  --acode-bg-active: #444444;
+  --acode-bg-overlay: rgba(30, 30, 30, 0.88);
+  --acode-bg-input: #1a1a1a;
 
   /* Borders */
-  --acode-border-primary: #2a2a2a;
-  --acode-border-secondary: #383838;
+  --acode-border-primary: #3c3c3c;
+  --acode-border-secondary: #4a4a4a;
   --acode-border-focus: #4f8ef7;
 
   /* Text */
@@ -63,18 +63,18 @@
 }
 
 [data-theme="light"] {
-  /* Surfaces */
+  /* Surfaces (clean white — matching Z Code) */
   --acode-bg-primary: #ffffff;
-  --acode-bg-secondary: #f6f7f9;
-  --acode-bg-tertiary: #eceef2;
-  --acode-bg-hover: #e2e6ec;
-  --acode-bg-active: #d6dae0;
-  --acode-bg-overlay: rgba(255, 255, 255, 0.85);
+  --acode-bg-secondary: #f8f8f8;
+  --acode-bg-tertiary: #f0f0f0;
+  --acode-bg-hover: #e8e8e8;
+  --acode-bg-active: #e0e0e0;
+  --acode-bg-overlay: rgba(255, 255, 255, 0.92);
   --acode-bg-input: #ffffff;
 
   /* Borders */
-  --acode-border-primary: #d6dae0;
-  --acode-border-secondary: #c4c8ce;
+  --acode-border-primary: #e0e0e0;
+  --acode-border-secondary: #d0d0d0;
   --acode-border-focus: #2563eb;
 
   /* Text */

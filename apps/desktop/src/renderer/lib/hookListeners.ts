@@ -76,17 +76,6 @@ function onPostToolUse(event: PostToolUseEvent): void {
   const durationStr = event.durationMs > 1000
     ? `${(event.durationMs / 1000).toFixed(1)}s`
     : `${event.durationMs}ms`;
-
-  if (event.error) {
-    console.log(
-      `[ToolStats] ✗ ${event.toolName} failed (${durationStr}):`,
-      event.error.slice(0, 100)
-    );
-  } else {
-    console.log(
-      `[ToolStats] ✓ ${event.toolName} (${durationStr})`
-    );
-  }
 }
 
 // ─── 2. Auto-Save Context on SessionEnd ───
@@ -99,23 +88,8 @@ function onPostToolUse(event: PostToolUseEvent): void {
  */
 async function onSessionEnd(event: SessionEndEvent): Promise<void> {
   const stats = sessionStats.get(event.sessionId);
-  const durationSec = event.durationMs / 1000;
-
-  // Log session summary
-  console.log(
-    `[SessionEnd] ${event.sessionId} (${event.reason}) — ` +
-    `${event.messageCount} messages, ${durationSec.toFixed(1)}s`
-  );
 
   if (stats) {
-    const toolSummary = Object.entries(stats.byTool)
-      .map(([name, s]) => `${name}×${s.calls}${s.errors > 0 ? `(${s.errors}err)` : ""}`)
-      .join(", ");
-
-    console.log(
-      `[SessionEnd] Tools: ${stats.calls} total, ${stats.errors} errors — ${toolSummary || "none"}`
-    );
-
     // Persist session summary for next session's context
     try {
       const { useWorkspace } = await import("../store/useAppStore");
@@ -169,7 +143,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
   // ── Auto-extract memories from the last exchange ──
   try {
     const { useChat, useWorkspace } = await import("../store/useAppStore");
-    const { extractMemoriesFromExchange, saveMemory } = await import("./memoryStore");
+    const { extractMemoriesFromExchange, extractMemoriesWithLLM, saveMemory } = await import("./memoryStore");
 
     const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
     if (!sessionMessages || sessionMessages.length < 2) return;
@@ -194,17 +168,55 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     // Only extract from substantial exchanges (>200 chars combined)
     if (userInput.length + assistantResponse.length < 200) return;
 
-    const entries = extractMemoriesFromExchange(userInput, assistantResponse, {
-      sessionId: event.sessionId,
-      maxEntries: 3,
-    });
-
-    if (entries.length === 0) return;
-
     const workspace = useWorkspace.getState().workspaces.find(
       (w) => w.id === useWorkspace.getState().activeWorkspaceId
     );
     if (!workspace) return;
+
+    let entries = extractMemoriesFromExchange(userInput, assistantResponse, {
+      sessionId: event.sessionId,
+      maxEntries: 3,
+    });
+
+    if (entries.length === 0) {
+      // Try LLM extraction for richer results
+      try {
+        const { getActiveProvider } = await import("./acodeAPI");
+        const { settings, config } = getActiveProvider();
+        const isAnthropic = config.apiFormat === "anthropic";
+        const fetchLLM = async (prompt: string): Promise<string> => {
+          const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (isAnthropic) {
+            headers["x-api-key"] = config.apiKey;
+            headers["anthropic-version"] = "2023-06-01";
+          } else {
+            headers["Authorization"] = `Bearer ${config.apiKey}`;
+          }
+          const body = isAnthropic
+            ? { model: settings.selectedModel, system: "You are a memory extraction assistant.", messages: [{ role: "user", content: prompt }], max_tokens: 1000 }
+            : { model: settings.selectedModel, messages: [{ role: "system", content: "You are a memory extraction assistant." }, { role: "user", content: prompt }], max_tokens: 1000 };
+          const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+          if (!resp.ok) throw new Error(`LLM extraction failed: HTTP ${resp.status}`);
+          const json = await resp.json();
+          return isAnthropic ? (json.content?.[0]?.text || "") : (json.choices?.[0]?.message?.content || "");
+        };
+        const llmResult = await extractMemoriesWithLLM(userInput, assistantResponse, fetchLLM, {
+          sessionId: event.sessionId,
+          maxEntries: 3,
+          workspacePath: workspace.path,
+        });
+        entries = llmResult.entries;
+      } catch {
+        // Fall back to heuristic extraction (already computed above as empty)
+        entries = extractMemoriesFromExchange(userInput, assistantResponse, {
+          sessionId: event.sessionId,
+          maxEntries: 3,
+        });
+      }
+    }
+
+    if (entries.length === 0) return;
 
     let saved = 0;
     for (const entry of entries) {
@@ -217,7 +229,6 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     }
 
     if (saved > 0) {
-      console.log(`[HookListener] Auto-extracted ${saved} memory(ies) from session ${event.sessionId}`);
     }
   } catch (e) {
     console.warn("[HookListener] Failed to auto-extract memories:", e);
@@ -231,12 +242,6 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
       const { runMaintenance } = await import("./memoryStore");
       const result = await runMaintenance();
       const total = result.staleDetected + result.pruned + result.purged;
-      if (total > 0) {
-        console.log(
-          `[HookListener] Memory maintenance: ${result.staleDetected} stale, ` +
-          `${result.pruned} pruned, ${result.purged} purged`
-        );
-      }
     } catch (e) {
       console.warn("[HookListener] Memory maintenance failed:", e);
     }
@@ -250,13 +255,41 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     );
     if (workspace) {
       const { proposeSkillFromSession } = await import("./skillCrystallizer");
+      const { useToasts } = await import("../components/ui/Toaster");
+      const pushToast = useToasts.getState().push;
       // Asynchronously trigger proposal check without blocking SessionEnd execution
-      proposeSkillFromSession(event.sessionId, workspace.path).catch((err) => {
+      proposeSkillFromSession(event.sessionId, workspace.path, false, (t) => pushToast(t as any)).catch((err) => {
         console.warn("[HookListener] Background skill crystallization failed:", err);
       });
     }
   } catch (e) {
     console.warn("[HookListener] Failed to assess session for skill crystallization:", e);
+  }
+
+  // ── Gene reflection: detect patterns and create genes ──
+  try {
+    const { useChat } = await import("../store/useAppStore");
+    const messages = useChat.getState().sessionMessages[event.sessionId] || [];
+    if (messages.length >= 4) {
+      const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId } = await import("./genes");
+      const reflection = reflectOnSession(messages, event.sessionId);
+      
+      if (reflection.suggestedGenes.length > 0) {
+        let pool = loadGenePool();
+        for (const candidate of reflection.suggestedGenes) {
+          // Assign unique IDs to avoid collisions in concurrent reflections
+          const uniqueCandidate = { ...candidate, id: createGeneId() };
+          pool = addGene(pool, uniqueCandidate);
+        }
+        // Evolve the pool periodically
+        if (pool.genes.length > 10) {
+          pool = evolveGenes(pool);
+        }
+        saveGenePool(pool);
+      }
+    }
+  } catch (e) {
+    console.warn("[HookListener] Gene reflection failed:", e);
   }
 }
 
@@ -275,24 +308,13 @@ function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
   const hasAttachments = event.attachments.length > 0;
   const historySize = event.conversationHistory.length;
 
-  console.log(
-    `[PromptAnalytics] user → ${event.agentName} | ` +
-    `${promptChars} chars (~${estimatedTokens} tokens) | ` +
-    `history: ${historySize} msgs` +
-    (hasAttachments ? ` | ${event.attachments.length} attachment(s)` : "")
-  );
 }
 
 // ─── 4. Session Start Tracking (SessionStart) ───
 /**
  * Logs when a new session begins with context about the workspace and model.
  */
-function onSessionStart(event: SessionStartEvent): void {
-  console.log(
-    `[SessionStart] ${event.sessionId} | ` +
-    `model: ${event.model} | agent: ${event.agentName} | ` +
-    `mode: ${event.mode} | workspace: ${event.workspacePath}`
-  );
+function onSessionStart(_event: SessionStartEvent): void {
 }
 
 // ─── 5. Stop Event (Turn Complete) ───
@@ -300,7 +322,7 @@ function onSessionStart(event: SessionStartEvent): void {
  * Logs when an LLM turn completes, with tool call counts.
  */
 function onStop(event: StopEvent): void {
-  console.log(
+  console.warn(
     `[TurnStop] ${event.sessionId} | ` +
     `${event.messageCount} msgs | ` +
     `${event.toolCallsExecuted} tool call(s)`
@@ -324,12 +346,9 @@ export function registerHookListeners(): {
     hookBus.on("Stop", onStop),
   ];
 
-  console.log("[HookListeners] Registered 5 lifecycle handlers");
-
   return {
     unsubscribe: () => {
       unsubscribes.forEach((fn) => fn());
-      console.log("[HookListeners] Unregistered all handlers");
     },
   };
 }

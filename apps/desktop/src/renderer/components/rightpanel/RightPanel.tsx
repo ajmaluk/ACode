@@ -34,14 +34,15 @@ export function RightPanel() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // Unified tab-switching effect with priority: diff > browser > git
+  // Unified tab-switching + panel-opening effect with priority: terminal > diff > browser > git
   useEffect(() => {
     if (tab === "terminal") return; // Keep terminal open if explicitly selected
-    if (diffOpen && diffCurrent) { setTab("diff"); return; }
-    if (activeBrowserTabId && browserTabs.length > 0) { setTab("browser"); return; }
+    const needsOpen = !useUI.getState().rightPanelOpen;
+    if (diffOpen && diffCurrent) { setTab("diff"); if (needsOpen) useUI.getState().setRightPanelOpen(true); return; }
+    if (activeBrowserTabId && browserTabs.length > 0) { setTab("browser"); if (needsOpen) useUI.getState().setRightPanelOpen(true); return; }
     if (activeWorkspaceId) setTab("git");
     else setTab("browser");
-  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, tab, setTab]);
+  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab]);
 
   return (
     <aside className="h-full flex flex-row-reverse bg-acode-bg-primary border-l border-acode-border-primary">
@@ -55,7 +56,7 @@ export function RightPanel() {
             return (
               <button
                 key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => { setTab(t.id); if (!useUI.getState().rightPanelOpen) useUI.getState().setRightPanelOpen(true); }}
                 title={t.label}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-100 relative group ${
                   isActive
@@ -114,7 +115,7 @@ export function RightPanel() {
 }
 
 function DiffTab() {
-  const { current, history, forwardStack, close, open, prev, next } = useDiffView();
+  const { current, history, forwardStack, close, prev, next } = useDiffView();
   const [originalContent, setOriginalContent] = useState<string>("");
   const [modifiedContent, setModifiedContent] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -370,12 +371,13 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
 }
 
 function ReviewTab() {
-  const { messages } = useChat();
+  const { messages, _pendingChanges } = useChat();
   const openDiff = useDiffView((s) => s.openFile);
   const setDiff = useDiffView((s) => s.setOpen);
 
   const fileChanges = useMemo(() => {
     const changes: { path: string; action: string; additions: number; deletions: number }[] = [];
+    // Include committed changes from messages
     for (const msg of messages) {
       if (msg.fileChanges) {
         for (const fc of msg.fileChanges) {
@@ -385,8 +387,16 @@ function ReviewTab() {
         }
       }
     }
+    // Include pending (streaming) changes
+    if (_pendingChanges) {
+      for (const fc of _pendingChanges) {
+        if (!changes.find((c) => c.path === fc.path)) {
+          changes.push(fc);
+        }
+      }
+    }
     return changes;
-  }, [messages]);
+  }, [messages, _pendingChanges]);
 
   if (fileChanges.length === 0) {
     return (
@@ -416,7 +426,7 @@ function ReviewTab() {
           <div
             key={fc.path}
             className="flex items-center gap-2 px-3 py-2 hover:bg-acode-bg-hover transition-colors cursor-pointer"
-            onClick={() => { openDiff({ path: fc.path, action: fc.action as any, additions: fc.additions, deletions: fc.deletions }); setDiff(true); }}
+            onClick={() => { openDiff({ path: fc.path, action: fc.action as any, additions: fc.additions, deletions: fc.deletions }); }}
           >
             <FileCode className="w-3.5 h-3.5 text-acode-text-muted flex-shrink-0" />
             <div className="flex-1 min-w-0">
@@ -510,7 +520,10 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
     if (!commitMsg.trim()) { toast.error("Empty", "Commit message is required"); return; }
     try {
       const api = ensureAcodeAPI();
-      await api.git.commit(".", commitMsg.trim());
+      const wsPath = useWorkspace.getState().workspaces.find(
+        (w) => w.id === useWorkspace.getState().activeWorkspaceId
+      )?.path ?? ".";
+      await api.git.commit(wsPath, commitMsg.trim());
       toast.success("Committed", commitMsg.trim().slice(0, 50));
       setCommitMsg("");
       onRefresh();
@@ -627,13 +640,11 @@ function SectionHeader({ label, count, color }: { label: string; count: number; 
 
 function FileRow({ path, icon, action = "modified" }: { path: string; icon: React.ReactNode; action?: "created" | "modified" | "deleted" | "renamed" }) {
   const openDiff = useDiffView((s) => s.openFile);
-  const setDiff = useDiffView((s) => s.setOpen);
   const fileName = path.split("/").pop() ?? path;
   const dir = path.split("/").slice(0, -1).join("/");
   const handleOpenDiff = (e: React.MouseEvent) => {
     e.stopPropagation();
     openDiff({ path, action, additions: 0, deletions: 0 });
-    setDiff(true);
   };
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-acode-bg-hover transition-colors group" onClick={handleOpenDiff}>
@@ -744,7 +755,16 @@ function BrowserTab() {
               src={activeTab.url}
               title={activeTab.title}
               className="w-full h-full border-0 bg-white"
-              sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+              sandbox="allow-same-origin allow-scripts allow-popups"
+              onLoad={() => {
+                if (activeTab.loading) {
+                  useUI.setState((s) => ({
+                    browserTabs: s.browserTabs.map((t) =>
+                      t.id === activeTab.id ? { ...t, loading: false } : t
+                    ),
+                  }));
+                }
+              }}
             />
             {activeTab.loading && (
               <div className="absolute inset-0 bg-acode-bg-primary/50 flex items-center justify-center backdrop-blur-[1px]">

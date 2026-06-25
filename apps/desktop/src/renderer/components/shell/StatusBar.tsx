@@ -62,8 +62,9 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
           <Cpu className="w-3 h-3" />
           {resolvedModel?.model.name || settings.selectedModel || "No model"}
         </span>
-        <span className="flex items-center gap-1.5 text-acode-git-added">
+        <span className={`flex items-center gap-1.5 ${resolvedModel ? "text-acode-git-added" : "text-acode-text-muted"}`}>
           <Wifi className="w-3 h-3" />
+          {resolvedModel ? "Connected" : "No model"}
         </span>
       </div>
     </footer>

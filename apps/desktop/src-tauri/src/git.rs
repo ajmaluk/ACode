@@ -111,16 +111,6 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
 
 #[command]
 pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
-    let add_output = Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(&path)
-        .output()
-        .map_err(|e| format!("git add failed: {}", e))?;
-    if !add_output.status.success() {
-        let stderr = String::from_utf8_lossy(&add_output.stderr);
-        return Err(format!("git add failed: {}", stderr));
-    }
-
     let output = Command::new("git")
         .args(["commit", "-m", &message])
         .current_dir(&path)

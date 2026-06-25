@@ -1,11 +1,19 @@
 import { useState, useEffect, useRef } from "react";
-import { useUI, useChat, useWorkspace, useSettingsView } from "@/store/useAppStore";
+import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
+import { modKey } from "@/lib/platform";
+import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import {
   ChevronLeft, ChevronRight, Plus, PanelLeft, PanelRight,
   FolderOpen, Code2, Sparkles, TerminalSquare, FolderTree, Settings,
-  Brain,
+  Brain, Sun, Moon, Monitor, Loader2, Zap, ClipboardList,
 } from "lucide-react";
+
+const AGENT_META: Record<string, { label: string; icon: React.ElementType; color: string }> = {
+  build: { label: "Build", icon: Zap, color: "text-amber-400" },
+  plan: { label: "Plan", icon: ClipboardList, color: "text-emerald-400" },
+  yolo: { label: "YOLO", icon: Sparkles, color: "text-rose-400" },
+};
 
 export function TopNav() {
   const { sidebarOpen, toggleSidebar, rightPanelOpen, toggleRightPanel } = useUI();
@@ -13,7 +21,10 @@ export function TopNav() {
   const { activeWorkspaceId, workspaces, openWorkspace } = useWorkspace();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const { open: openSettings } = useSettingsView();
+  const { settings, update: updateSetting } = useSettings();
+  const { activeAgentName } = useAgents();
   const toast = useToasts((s) => s.push);
+  const mod = modKey();
 
   const activeSessionId = useChat((s) => s.activeSessionId);
   const summaries = useChat((s) => s.compactionSummaries);
@@ -21,10 +32,7 @@ export function TopNav() {
   const [memoryActive, setMemoryActive] = useState(false);
 
   useEffect(() => {
-    if (!activeWorkspace) {
-      setMemoryActive(false);
-      return;
-    }
+    if (!activeWorkspace) return;
     let active = true;
     void (async () => {
       try {
@@ -59,11 +67,24 @@ export function TopNav() {
     return () => document.removeEventListener("mousedown", handler);
   }, [filePickerOpen]);
 
-  const openInApp = (app: "vscode" | "qoder" | "terminal" | "finder") => {
+  const openInApp = async (app: "vscode" | "qoder" | "terminal" | "finder") => {
     setFilePickerOpen(false);
     const path = activeWorkspace?.path;
-    const appName = app === "vscode" ? "VS Code" : app === "qoder" ? "Qoder" : app === "terminal" ? "Terminal" : "Finder";
-    toast({ kind: "info", title: `Open in ${appName}`, description: path ?? "No workspace selected" });
+    if (!path) return;
+    try {
+      const api = ensureAcodeAPI();
+      if (app === "finder") {
+        await api.system.revealInFinder(path);
+      } else if (app === "terminal") {
+        useUI.getState().setRightPanelTab("terminal");
+        useUI.getState().setRightPanelOpen(true);
+      } else {
+        const appName = app === "vscode" ? "code" : "qoder";
+        await api.system.launchApp(appName, [path]);
+      }
+    } catch (err) {
+      toast({ kind: "error", title: `Failed to open in ${app}`, description: (err as Error)?.message ?? String(err) });
+    }
   };
 
   return (
@@ -76,14 +97,14 @@ export function TopNav() {
               ? "text-acode-text-secondary hover:bg-acode-bg-hover"
               : "text-acode-accent-primary bg-acode-accent-subtle hover:bg-acode-bg-hover"
           }`}
-          title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
+          title={sidebarOpen ? `Hide sidebar (${mod}B)` : `Show sidebar (${mod}B)`}
           onClick={toggleSidebar}
         >
           <PanelLeft className="w-3.5 h-3.5" />
         </button>
         <button
           className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:bg-acode-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title="Back (⌘[)"
+          title={`Back (${mod}[)`}
           onClick={() => goBackChat()}
           disabled={!canGoBack}
         >
@@ -91,7 +112,7 @@ export function TopNav() {
         </button>
         <button
           className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:bg-acode-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title="Forward (⌘])"
+          title={`Forward (${mod}])`}
           onClick={() => goForwardChat()}
           disabled={!canGoForward}
         >
@@ -99,7 +120,7 @@ export function TopNav() {
         </button>
         <button
           className="w-7 h-7 flex items-center justify-center rounded-full border border-acode-border-secondary text-acode-text-secondary hover:bg-acode-bg-hover hover:text-acode-text-primary transition-colors"
-          title="New task (⌘N)"
+          title={`New task (${mod}N)`}
           onClick={() => newChat()}
         >
           <Plus className="w-4 h-4" />
@@ -190,8 +211,33 @@ export function TopNav() {
         )}
       </div>
 
-      {/* Right section: terminal, settings, right panel toggle */}
+      {/* Right section: agent, theme, terminal, settings, right panel toggle */}
       <div className="flex items-center gap-0.5 px-1.5">
+        {/* Agent indicator */}
+        <button
+          onClick={() => useSettingsView.getState().open("agents")}
+          className="flex items-center gap-1.5 px-2 h-7 text-xs text-acode-text-secondary hover:text-acode-text-primary bg-acode-bg-active hover:bg-acode-bg-tertiary rounded-md border border-acode-border-primary transition-colors"
+          title="Active agent"
+        >
+          <Zap className={`w-3.5 h-3.5 ${AGENT_META[activeAgentName]?.color || "text-amber-400"}`} />
+          <span>{AGENT_META[activeAgentName]?.label || "Build"}</span>
+        </button>
+
+        {/* Theme switcher */}
+        <button
+          className="btn-icon"
+          aria-label="Toggle theme"
+          title={`Theme: ${settings.theme}`}
+          onClick={() => {
+            const next = settings.theme === "dark" ? "light" : settings.theme === "light" ? "system" : "dark";
+            void updateSetting("theme", next);
+          }}
+        >
+          {settings.theme === "dark" ? <Moon className="w-4 h-4" /> :
+           settings.theme === "light" ? <Sun className="w-4 h-4" /> :
+           <Monitor className="w-4 h-4" />}
+        </button>
+
         {inChat && activeWorkspace && (
           <button
             className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
@@ -206,7 +252,7 @@ export function TopNav() {
         )}
         <button
           className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
-          title="Settings (⌘,)"
+          title={`Settings (${mod},)`}
           onClick={() => openSettings()}
         >
           <Settings className="w-4 h-4" />
@@ -217,7 +263,7 @@ export function TopNav() {
               ? "text-acode-text-secondary hover:bg-acode-bg-hover"
               : "text-acode-accent-primary bg-acode-accent-subtle hover:bg-acode-bg-hover"
           }`}
-          title={rightPanelOpen ? "Hide right panel (⌘\\)" : "Show right panel (⌘\\)"}
+          title={rightPanelOpen ? `Hide right panel (${mod}\\)` : `Show right panel (${mod}\\)`}
           onClick={toggleRightPanel}
         >
           <PanelRight className="w-3.5 h-3.5" />

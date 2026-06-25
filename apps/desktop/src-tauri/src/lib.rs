@@ -11,6 +11,7 @@ pub fn run() {
     .plugin(tauri_plugin_clipboard_manager::init())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_sql::Builder::default().build())
+    .plugin(tauri_plugin_http::init())
     .invoke_handler(tauri::generate_handler![
         // Git commands
         git::git_status,
@@ -29,6 +30,13 @@ pub fn run() {
         system::get_working_dir,
         system::open_with_system_handler,
         system::launch_app,
+        system::reveal_in_finder,
+        system::get_env,
+        system::set_env,
+        system::get_screen_info,
+        system::list_processes,
+        system::kill_process,
+        system::get_disk_space,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

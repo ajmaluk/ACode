@@ -1,6 +1,6 @@
 import MonacoEditor, { loader, type OnMount } from "@monaco-editor/react";
-import { useSettings, useWorkspace } from "@/store/useAppStore";
-import { useEffect, useRef, useState } from "react";
+import { useSettings } from "@/store/useAppStore";
+import { useEffect, useRef, useState, useMemo } from "react";
 
 loader.config({
   paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" },
@@ -85,9 +85,15 @@ type Props = {
 };
 
 export function CodeView({ path, content, onChange }: Props) {
-  const { settings, effectiveTheme } = useSettings();
-  const { setCursor } = useWorkspace();
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(effectiveTheme());
+  const { settings } = useSettings();
+  const theme = (() => {
+    if (settings.theme === "dark") return "dark";
+    if (settings.theme === "light") return "light";
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return "dark";
+  })();
   const language = path?.split(".").pop()?.toLowerCase() ?? "plaintext";
 
   const monacoLang = (() => {
@@ -103,38 +109,28 @@ export function CodeView({ path, content, onChange }: Props) {
     return "plaintext";
   })();
 
-  // Track the resolved theme so Monaco re-themes when the user toggles.
-  useEffect(() => {
-    setResolvedTheme(effectiveTheme());
-  }, [settings.theme, effectiveTheme]);
-
   const onMount: OnMount = (editor, monaco) => {
     monaco.editor.defineTheme("acode-dark", ACODE_DARK as never);
     monaco.editor.defineTheme("acode-light", ACODE_LIGHT as never);
-    monaco.editor.setTheme(resolvedTheme === "light" ? "acode-light" : "acode-dark");
-    editor.onDidChangeCursorPosition((e) => {
-      if (path) setCursor(path, e.position.lineNumber, e.position.column);
-    });
+    monaco.editor.setTheme(theme === "light" ? "acode-light" : "acode-dark");
   };
 
-  // Switch theme live (e.g. when user toggles in Settings).
   useEffect(() => {
-    // Defer to next tick to ensure Monaco is loaded.
     const t = setTimeout(() => {
       try {
         const monaco = (window as unknown as { monaco?: { editor: { setTheme: (name: string) => void } } }).monaco;
-        if (monaco) monaco.editor.setTheme(resolvedTheme === "light" ? "acode-light" : "acode-dark");
+        if (monaco) monaco.editor.setTheme(theme === "light" ? "acode-light" : "acode-dark");
       } catch { /* noop */ }
     }, 0);
     return () => clearTimeout(t);
-  }, [resolvedTheme]);
+  }, [theme]);
 
   return (
     <MonacoEditor
       path={path ?? undefined}
       value={content}
       language={monacoLang}
-      theme={resolvedTheme === "light" ? "acode-light" : "acode-dark"}
+      theme={theme === "light" ? "acode-light" : "acode-dark"}
       onChange={(v) => onChange?.(v ?? "")}
       onMount={onMount}
       loading={

@@ -145,7 +145,10 @@ class HookEventBus {
     const handlers = this.listeners.get(eventName);
     if (!handlers || handlers.size === 0) return;
 
-    for (const handler of handlers) {
+    // Snapshot the handlers to avoid issues if a handler modifies the Set during iteration
+    const handlerList = [...handlers];
+
+    for (const handler of handlerList) {
       const start = Date.now();
       const handlerName = handler.name || "anonymous";
       try {

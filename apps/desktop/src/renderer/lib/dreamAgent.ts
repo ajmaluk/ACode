@@ -39,7 +39,6 @@ export interface DreamReport {
  * Runs a full memory dream consolidation cycle using the active LLM.
  */
 export async function runDreamCycle(workspacePath: string): Promise<DreamReport> {
-  console.log("[DreamAgent] Starting memory consolidation cycle...");
   const api = ensureAcodeAPI();
   const model = useSettings.getState().settings.selectedModel;
 
@@ -50,7 +49,6 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
 
   // 1. Purge already-flagged stale memories from SQLite & update MEMORY.md
   const purgedCount = await purgeStale();
-  console.log(`[DreamAgent] Purged ${purgedCount} stale memories.`);
 
   // 2. Validate file references
   const memories = await getAllMemories({ excludeStale: false });
@@ -65,7 +63,6 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
           : joinPath(workspacePath, mem.sourceFile);
         const fileExists = await exists(fullPath);
         if (!fileExists) {
-          console.log(`[DreamAgent] Flagging memory ${mem.id} as stale (file ${mem.sourceFile} does not exist)`);
           await markStale(mem.id);
           validatedCount++;
         }
@@ -115,7 +112,6 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
         }
         const parsed = JSON.parse(cleanedResponse);
         if (parsed.content && parsed.content !== mem.content) {
-          console.log(`[DreamAgent] Adjusted relative dates in memory ${mem.id}`);
           const db = getDb();
           const now = Date.now();
           await db.execute(
@@ -154,8 +150,6 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
         const similarity = jaccardSimilarity(m1.content, m2.content);
         if (similarity > 0.40) {
           try {
-            console.log(`[DreamAgent] Merging similar memories in category '${category}' (Jaccard: ${similarity.toFixed(2)})`);
-
             const prompt = `You are a memory consolidation assistant. Your task is to merge two related memory entries into a single, comprehensive memory entry.
 
 Memory 1 (Created: ${new Date(m1.createdAt).toISOString()}):
@@ -240,8 +234,6 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
 
   // Update MEMORY.md index
   await updateMemoryIndex(workspacePath);
-  console.log("[DreamAgent] Consolidation cycle completed.");
-
   return {
     purgedCount,
     deduplicatedCount,
@@ -324,8 +316,6 @@ export async function executeWorkspaceDreamOptimization(workspacePath: string): 
         
         // Threshold triggering context merging via background LLM pass
         if (coefficientScore > 0.45) {
-          console.log(`[DreamAgent] Consolidating redundant skills: ${skillB.name} and ${skillA.name} (similarity: ${coefficientScore.toFixed(2)})`);
-          
           const consolidationPrompt = `You are a background compilation refactoring process.
 We found two highly similar, overlapping procedural instructions files inside our local project workspace configuration.
 Your task is to merge these two structural documents into a single comprehensive SKILL.md document.
@@ -355,8 +345,7 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           const projectSkills = await loadProjectSkills(workspacePath, api.fs);
           refreshProjectSkills(projectSkills);
           
-          console.log(`[Dream Worker Engine] Successfully consolidated redundant components: ${skillB.name} -> ${skillA.name}`);
-          return; // Process one consolidation per idle loop to mitigate spike delays
+          continue; // Skip skillB in subsequent comparisons
         }
       }
     }

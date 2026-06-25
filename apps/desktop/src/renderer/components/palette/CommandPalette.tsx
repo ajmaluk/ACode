@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Command } from "cmdk";
-import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useAgents, useChat } from "@/store/useAppStore";
+import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useAgents, useChat, useUI } from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
 import {
   Settings,
@@ -19,6 +19,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { getRecentFiles } from "@/lib/acodeAPI";
+import { modKey } from "@/lib/platform";
 
 type Item = {
   id: string;
@@ -33,7 +34,7 @@ type Item = {
 export function CommandPalette() {
   const { open, setOpen, query, setQuery } = useCommandPalette();
   const { open: openSettings } = useSettingsView();
-  const { openWorkspace, loadSample, fileTree, openFile } = useWorkspace();
+  const { openWorkspace, loadWorkspace, fileTree, openFile } = useWorkspace();
   const { toggle: toggleShortcuts } = useShortcuts();
   const { setActiveAgent } = useAgents();
   const [recent, setRecent] = useState<string[]>([]);
@@ -50,7 +51,7 @@ export function CommandPalette() {
         hint: "Themes, models, skills, MCP servers",
         group: "Preferences",
         icon: <Settings className="w-3.5 h-3.5" />,
-        shortcut: "⌘,",
+        shortcut: `${modKey()},`,
         perform: () => {
           setOpen(false);
           openSettings();
@@ -81,12 +82,12 @@ export function CommandPalette() {
       },
       {
         id: "reload-sample",
-        label: "Reload sample workspace",
+        label: "Reload workspace",
         group: "Workspace",
         icon: <RefreshCcw className="w-3.5 h-3.5" />,
         perform: () => {
           setOpen(false);
-          void loadSample();
+          void loadWorkspace();
         },
       },
       {
@@ -95,7 +96,7 @@ export function CommandPalette() {
         hint: "Open the empty prompt",
         group: "Agent",
         icon: <Sparkles className="w-3.5 h-3.5" />,
-        shortcut: "⌘N",
+        shortcut: `${modKey()}N`,
         perform: () => {
           useChat.getState().newChat();
           setOpen(false);
@@ -128,27 +129,27 @@ export function CommandPalette() {
         label: "New Terminal",
         group: "View",
         icon: <TerminalSquare className="w-3.5 h-3.5" />,
-        shortcut: "⌘`",
-        perform: () => setOpen(false),
+        shortcut: `${modKey()}\``,
+        perform: () => { useChat.getState().newChat(); useUI.getState().toggleRightPanel(); setOpen(false); },
       },
       {
         id: "search-files",
         label: "Search files in project",
         group: "View",
         icon: <Search className="w-3.5 h-3.5" />,
-        shortcut: "⌘P",
-        perform: () => setOpen(false),
+        shortcut: `${modKey()}P`,
+        perform: () => { void (async () => { const { openTabs } = useWorkspace.getState(); if (openTabs.length > 0) { useUI.getState().toggleSidebar(); } setOpen(false); })(); },
       },
       {
         id: "go-symbol",
         label: "Go to symbol",
         group: "View",
         icon: <Code2 className="w-3.5 h-3.5" />,
-        shortcut: "⌘⇧O",
-        perform: () => setOpen(false),
+        shortcut: `${modKey()}⇧O`,
+        perform: () => { setOpen(false); },
       },
     ],
-    [setOpen, openSettings, openWorkspace, loadSample, toggleShortcuts]
+    [setOpen, openSettings, openWorkspace, loadWorkspace, toggleShortcuts]
   );
 
   const fileItems = useMemo<Item[]>(() => {

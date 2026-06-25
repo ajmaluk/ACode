@@ -398,7 +398,7 @@ export function matchSkillInvocation(
   text: string,
   registry: SkillInfo[]
 ): { skill: SkillInfo; args: string } | null {
-  const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+?))?(?=\s|$)/i);
+  const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+))?(?=\s|$)/i);
   if (!m) return null;
   const name = m[1].toLowerCase();
   const args = (m[2] ?? "").trim();

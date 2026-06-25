@@ -347,13 +347,13 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
       `id: "${entry.id}"`,
       `category: "${entry.category}"`,
       `tier: "${entry.tier}"`,
-      `summary: "${entry.summary.replace(/"/g, '\\"')}"`,
+      `summary: "${entry.summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
       `tags: [${entry.tags.map((t) => `"${t}"`).join(", ")}]`,
       `created_at: ${entry.createdAt}`,
       `updated_at: ${entry.updatedAt}`,
       `stale: ${entry.stale}`,
       ...(entry.sourceSession ? [`source_session: "${entry.sourceSession}"`] : []),
-      ...(entry.sourceFile ? [`source_file: "${entry.sourceFile.replace(/"/g, '\\"')}"`] : []),
+      ...(entry.sourceFile ? [`source_file: "${entry.sourceFile.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`] : []),
       "---",
       "",
       entry.content,
@@ -419,7 +419,6 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
     }
   }
 
-  console.log(`[MemoryStore] Rebuilt ${count} memories from markdown`);
   return count;
 }
 
@@ -465,7 +464,7 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
     accessCount: 0,
     lastAccessedAt: 0,
     verified: false,
-    stale: fields.stale === "true",
+    stale: fields.stale === "true" || fields.stale === "1",
     sourceSession: fields.source_session || undefined,
     sourceFile: fields.source_file || undefined,
   };
@@ -785,7 +784,7 @@ function tokenize(text: string): string[] {
 
 /** Tier weight for sorting */
 function tierWeight(tier: MemoryTier): number {
-  return { critical: 4, high: 3, medium: 2, low: 1 }[tier];
+  return { critical: 4, high: 3, medium: 2, low: 1 }[tier] ?? 0;
 }
 
 /** Extract keyword tags from content */
@@ -935,7 +934,6 @@ export async function enforceMemoryBudget(
     [Date.now(), ...toPrune]
   );
 
-  console.log(`[MemoryStore] Budget enforced: pruned ${toPrune.length} low-quality memories (budget: ${budget})`);
   return toPrune.length;
 }
 

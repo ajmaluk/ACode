@@ -32,7 +32,7 @@ export function basename(p: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
-/** Return the path without its last segment. Returns "." for a bare filename. */
+/** Return the path without its last segment. Returns "." for a bare filename, "" for empty input. */
 export function dirname(p: string): string {
   if (!p) return "";
   const posix = toPosix(p);

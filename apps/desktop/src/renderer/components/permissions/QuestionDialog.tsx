@@ -9,66 +9,78 @@ export function QuestionDialog() {
   const [focusedInput, setFocusedInput] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef(0);
+  const customTextRef = useRef("");
+  const focusedInputRef = useRef(false);
 
   useEffect(() => {
-    if (request) {
-      setSelected(0);
-      setCustomText("");
-      setFocusedInput(false);
+    selectedRef.current = selected;
+  }, [selected]);
+  useEffect(() => {
+    customTextRef.current = customText;
+  }, [customText]);
+  useEffect(() => {
+    focusedInputRef.current = focusedInput;
+  }, [focusedInput]);
+
+  useEffect(() => {
+    if (!request) {
+      selectedRef.current = 0;
+      customTextRef.current = "";
+      focusedInputRef.current = false;
+      return;
     }
-  }, [request]);
-
-  useEffect(() => {
-    if (!request) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         resolve(null);
-      } else if (focusedInput) {
+      } else if (focusedInputRef.current) {
         if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
           e.preventDefault();
-          setFocusedInput(false);
-          setSelected(request.options.length - 1);
+          focusedInputRef.current = false;
+          selectedRef.current = request.options.length - 1;
+          setSelected(selectedRef.current);
           inputRef.current?.blur();
           containerRef.current?.focus();
         } else if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
           e.preventDefault();
-          setFocusedInput(false);
-          setSelected(0);
+          focusedInputRef.current = false;
+          selectedRef.current = 0;
+          setSelected(selectedRef.current);
           inputRef.current?.blur();
           containerRef.current?.focus();
         } else if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
-          if (customText.trim()) {
-            resolve({ selectedLabel: "Custom", customText: customText.trim() });
+          const text = customTextRef.current.trim();
+          if (text) {
+            resolve({ selectedLabel: "Custom", customText: text });
           }
         }
         return;
       } else if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
         e.preventDefault();
-        const max = request.options.length; // last index is the text input
-        setSelected((i) => Math.min(i + 1, max));
-        if (selected + 1 > request.options.length - 1) {
+        const max = request.options.length;
+        selectedRef.current = Math.min(selectedRef.current + 1, max);
+        setSelected(selectedRef.current);
+        if (selectedRef.current > request.options.length - 1) {
+          focusedInputRef.current = true;
           setFocusedInput(true);
           setTimeout(() => inputRef.current?.focus(), 0);
         }
       } else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
         e.preventDefault();
-        setSelected((i) => Math.max(i - 1, 0));
-        if (selected - 1 < 0) {
-          setFocusedInput(false);
-        }
+        selectedRef.current = Math.max(selectedRef.current - 1, 0);
+        setSelected(selectedRef.current);
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        if (selected < request.options.length) {
-          resolve({ selectedLabel: request.options[selected].label });
+        if (selectedRef.current < request.options.length) {
+          resolve({ selectedLabel: request.options[selectedRef.current].label });
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [request, selected, customText, focusedInput]);
+  }, [request, resolve]);
 
   useEffect(() => {
     if (request) containerRef.current?.focus();

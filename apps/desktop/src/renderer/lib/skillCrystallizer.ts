@@ -15,11 +15,12 @@
 
 import { ensureAcodeAPI } from "./acodeAPI";
 import { useSettings } from "../store/useAppStore";
-import { useToasts } from "../components/ui/Toaster";
 import { joinPath } from "@/lib/pathUtils";
 import type { ChatMessage } from "@acode/shared-types";
 
-export async function proposeSkillFromSession(sessionId: string, workspacePath: string, force = false): Promise<void> {
+export type NotifyFn = (toast: { kind: "info" | "success" | "warning" | "error"; title: string; description: string; durationMs?: number; actions?: Array<{ label: string; variant?: "primary" | "secondary" | "danger"; onClick: () => void }> }) => void;
+
+export async function proposeSkillFromSession(sessionId: string, workspacePath: string, force = false, notify: NotifyFn = (t) => { console.warn("[SkillCrystallizer]", t.title, t.description); }): Promise<void> {
   const api = ensureAcodeAPI();
   
   // Resolve active chat session history dynamically
@@ -83,9 +84,7 @@ ${formattedHistory}`;
     const data = JSON.parse(cleaned);
 
     if (data.shouldCrystallize && data.name && data.content) {
-      const pushToast = useToasts.getState().push;
-      
-      pushToast({
+      notify({
         kind: "info",
         title: "Crystallized New Skill",
         description: `Would you like to save '${data.name}' as a project skill?`,
@@ -110,14 +109,14 @@ ${formattedHistory}`;
                 const projectSkills = await loadProjectSkills(workspacePath, api.fs);
                 refreshProjectSkills(projectSkills);
 
-                useToasts.getState().push({
+                notify({
                   kind: "success",
                   title: "Skill Registered",
                   description: `Skill '${data.name}' successfully added to the project registry.`
                 });
               } catch (e) {
                 console.error("[SkillCrystallizer] Failed to save skill:", e);
-                useToasts.getState().push({
+                notify({
                   kind: "error",
                   title: "Save Failed",
                   description: "Could not write skill to disk."
@@ -128,9 +127,9 @@ ${formattedHistory}`;
           {
             label: "Reject",
             variant: "secondary",
-            onClick: () => {
-              console.log(`[SkillCrystallizer] Skill proposal '${data.name}' rejected by user.`);
-            }
+              onClick: () => {
+                console.warn(`[SkillCrystallizer] Skill proposal '${data.name}' rejected by user.`);
+              }
           }
         ]
       });

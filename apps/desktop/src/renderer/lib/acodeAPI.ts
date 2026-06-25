@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS } from "@acode/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
 import { hookBus } from "./hookBus";
+import { loadGenePool, expressGenes, formatGenesForPrompt, reflectOnSession, addGene, saveGenePool, evolveGenes, type Gene } from "./genes";
 
 const STORAGE_KEYS = {
   settings: "acode.settings.v1",
@@ -12,19 +13,35 @@ const activeControllers = new Map<string, AbortController>();
 const sessionStartTimes = new Map<string, number>();
 const streamCallbacks = new Map<string, (event: StreamEvent) => void>();
 const streamCleanups = new Map<string, () => void>();
+const fileWatchers = new Map<string, () => void>();
 const pendingDiffProposals = new Map<string, DiffProposal>();
+export const mcpHttpSessions = new Map<string, string>();
 
 const SETTINGS_CACHE = new Map<string, string>();
 
+/** Clear the settings cache. Used by tests to simulate fresh module state. */
+export function clearSettingsCache() {
+  SETTINGS_CACHE.clear();
+}
+
 function joinPath(...parts: string[]): string {
-  return parts.join("/").replace(/\\+/g, "/").replace(/\/+/g, "/");
+  return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
+}
+
+function dirname(p: string): string {
+  if (!p) return "";
+  const posix = p.replace(/\\/g, "/");
+  const idx = posix.lastIndexOf("/");
+  if (idx < 0) return ".";
+  if (idx === 0) return "/";
+  return posix.slice(0, idx);
 }
 
 export function getRecentFiles(): string[] {
   try {
     const raw = localStorage.getItem("acode.recentFiles.v1");
     return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  } catch (_e) { return []; }
 }
 
 function addRecentFile(path: string) {
@@ -34,11 +51,11 @@ function addRecentFile(path: string) {
 }
 
 function getStoredSettings(): AppSettings {
-  if (SETTINGS_CACHE.has("all")) return JSON.parse(SETTINGS_CACHE.get("all")!);
+  if (SETTINGS_CACHE.has("all")) return { ...DEFAULT_SETTINGS, ...JSON.parse(SETTINGS_CACHE.get("all")!) };
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.settings);
     if (raw) { SETTINGS_CACHE.set("all", raw); return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }; }
-  } catch {}
+  } catch (_e) { /* settings load failed, use defaults */ }
   const defaults = { ...DEFAULT_SETTINGS };
   SETTINGS_CACHE.set("all", JSON.stringify(defaults));
   return defaults;
@@ -51,9 +68,19 @@ function storeSettings(s: AppSettings) {
 
 function getProviderConfig(providerId: string): { baseUrl: string; apiKey: string; apiFormat: string } | null {
   try {
+    // Try individual provider config first (custom providers saved by saveProviders)
     const raw = localStorage.getItem(`acode.provider.${providerId}`);
     if (raw) return JSON.parse(raw);
-  } catch {}
+    // Fall back to reading from the providers array
+    const providersRaw = localStorage.getItem("acode.providers.v1");
+    if (providersRaw) {
+      const providers = JSON.parse(providersRaw);
+      const provider = providers.find((p: any) => p.id === providerId);
+      if (provider) {
+        return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
+      }
+    }
+  } catch (_e) { /* provider config parse failed */ }
   return null;
 }
 
@@ -134,6 +161,38 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDel
 }
 
 /**
+ * CORS-free fetch using Tauri's HTTP plugin (bypasses browser CORS restrictions).
+ * Falls back to browser fetch if the plugin is unavailable.
+ */
+async function corsFetch(url: string, options: RequestInit): Promise<Response> {
+  try {
+    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    const resp = await tauriFetch(url, {
+      method: options.method as string || "GET",
+      headers: options.headers as Record<string, string> || {},
+      body: options.body as string | undefined,
+    });
+    // Wrap Tauri response as a standard Response-like object
+    const respHeaders = new Headers();
+    for (const [k, v] of Object.entries(resp.headers)) respHeaders.set(k, v);
+    return {
+      ok: resp.ok,
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: respHeaders,
+      body: resp.body,
+      text: async () => new TextDecoder().decode(await resp.arrayBuffer()),
+      json: async () => JSON.parse(new TextDecoder().decode(await resp.arrayBuffer())),
+      arrayBuffer: async () => resp.arrayBuffer(),
+      clone: () => new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders }),
+    } as Response;
+  } catch {
+    // Fallback to browser fetch if plugin unavailable
+    return fetch(url, options);
+  }
+}
+
+/**
  * Wraps a fetch call with retry-with-backoff for transient network/5xx errors.
  * Classifies the response into a ProviderError and retries on transient failures.
  * Non-transient errors (auth 401, credit 402/429) are thrown immediately.
@@ -146,10 +205,11 @@ async function fetchWithRetry(
   signal?: AbortSignal
 ): Promise<Response> {
   return retryWithBackoff(async () => {
-    const resp = await fetch(url, { ...options, signal });
+    const resp = await corsFetch(url, { ...options, signal });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
+      if (resp.status === 403) throw new ProviderError("Access forbidden. Check your API key and permissions.", "auth");
       if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
       if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
       throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "provider");
@@ -168,10 +228,11 @@ async function fetchJsonWithRetry(
   baseDelayMs = 1000
 ): Promise<any> {
   return retryWithBackoff(async () => {
-    const resp = await fetch(url, options);
+    const resp = await corsFetch(url, options);
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
+      if (resp.status === 403) throw new ProviderError("Access forbidden. Check your API key and permissions.", "auth");
       if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
       throw new ProviderError(`Failed to summarize: HTTP ${resp.status} - ${text.slice(0, 300)}`, "provider");
     }
@@ -207,7 +268,7 @@ async function* streamOpenAI(
         const delta = json.choices?.[0]?.delta;
         if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
         if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-      } catch {}
+      } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
     }
   }
   // Process any remaining buffered data
@@ -219,7 +280,7 @@ async function* streamOpenAI(
         const delta = json.choices?.[0]?.delta;
         if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
         if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-      } catch {}
+      } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
     }
   }
 }
@@ -259,7 +320,7 @@ async function* streamAnthropic(
         if (json.type === "content_block_delta" && json.delta?.thinking) {
           yield { type: "activity-think", content: json.delta.thinking };
         }
-      } catch {}
+      } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
     }
   }
   // Process any remaining buffered data
@@ -274,7 +335,7 @@ async function* streamAnthropic(
         if (json.type === "content_block_delta" && json.delta?.thinking) {
           yield { type: "activity-think", content: json.delta.thinking };
         }
-      } catch {}
+      } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
     }
   }
 }
@@ -290,16 +351,25 @@ async function* streamChat(
   }
 }
 
-async function readDirRecursive(dirPath: string): Promise<FileNode[]> {
+const JUNK_DIRS = new Set([".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"]);
+const JUNK_FILES = new Set([".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"]);
+
+async function readDirRecursive(dirPath: string, maxDepth: number = 20): Promise<FileNode[]> {
   const { readDir } = await import("@tauri-apps/plugin-fs");
-  const entries = await readDir(dirPath);
+  let entries;
+  try {
+    entries = await readDir(dirPath);
+  } catch {
+    return [];
+  }
   const nodes: FileNode[] = [];
   for (const entry of entries) {
     if (!entry.name) continue;
-    if (entry.name?.startsWith(".")) continue;
+    if (JUNK_FILES.has(entry.name)) continue;
+    if (entry.isDirectory && JUNK_DIRS.has(entry.name)) continue;
     const fullPath = joinPath(dirPath, entry.name!);
     if (entry.isDirectory) {
-      const children = await readDirRecursive(fullPath);
+      const children = maxDepth > 1 ? await readDirRecursive(fullPath, maxDepth - 1) : [];
       nodes.push({ name: entry.name!, path: fullPath, type: "directory", gitStatus: null, children });
     } else {
       nodes.push({ name: entry.name!, path: fullPath, type: "file", gitStatus: null });
@@ -307,6 +377,9 @@ async function readDirRecursive(dirPath: string): Promise<FileNode[]> {
   }
   return nodes.sort((a, b) => {
     if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+    const aDot = a.name.startsWith(".");
+    const bDot = b.name.startsWith(".");
+    if (aDot !== bDot) return aDot ? 1 : -1;
     return a.name.localeCompare(b.name);
   });
 }
@@ -341,9 +414,6 @@ const mockAcodeAPI: AcodeAPI = {
     },
     async listDir(path) {
       if (!path || path === "") {
-        const { open } = await import("@tauri-apps/plugin-dialog");
-        const selected = await open({ directory: true, multiple: false, title: "Open Workspace" });
-        if (selected) return readDirRecursive(selected as string);
         return [];
       }
       return readDirRecursive(path);
@@ -363,11 +433,21 @@ const mockAcodeAPI: AcodeAPI = {
     async deletePath(path) {
       const { remove } = await import("@tauri-apps/plugin-fs");
       await remove(path, { recursive: true });
+      // Close any open tabs for files under this path
+      try {
+        const { useWorkspace } = await import("../store/useAppStore");
+        const { openTabs, closeTab } = useWorkspace.getState();
+        for (const tab of openTabs) {
+          if (tab.path === path || tab.path.startsWith(path + "/") || tab.path.startsWith(path + "\\")) {
+            closeTab(tab.path);
+          }
+        }
+      } catch { /* store not available */ }
     },
     async renamePath(path, newName) {
       const { rename, readFile, writeFile: fsWriteFile, remove: fsRemove } = await import("@tauri-apps/plugin-fs");
-      const dir = path.substring(0, path.lastIndexOf("/"));
-      const newPath = joinPath(dir, newName);
+      const parentDir = dirname(path);
+      const newPath = joinPath(parentDir, newName);
       try {
         await rename(path, newPath);
       } catch {
@@ -375,11 +455,25 @@ const mockAcodeAPI: AcodeAPI = {
         await fsWriteFile(newPath, bytes);
         await fsRemove(path);
       }
+      // Update open tabs to reflect the new path
+      try {
+        const { useWorkspace } = await import("../store/useAppStore");
+        const { openTabs, closeTab, setActiveFile } = useWorkspace.getState();
+        const wasActive = useWorkspace.getState().activeFilePath === path;
+        closeTab(path);
+        if (wasActive) setActiveFile(newPath);
+      } catch { /* store not available */ }
     },
-    async watchPath(_path: string) {
-      // Tauri v2 doesn't expose fs.watch in the JS API yet.
-      // File tree refresh is handled manually via refreshFileTree().
-      // TODO: Implement when @tauri-apps/plugin-fs adds watch support.
+    async watchPath(path: string) {
+      const { watchImmediate } = await import("@tauri-apps/plugin-fs");
+      try {
+        const unwatch = await watchImmediate(path, (_event) => {
+        });
+        // Store the unwatch function so it can be called later
+        fileWatchers.set(path, unwatch);
+      } catch (e) {
+        console.warn("[FileWatch] Failed to watch path:", path, e);
+      }
     },
   },
 
@@ -393,7 +487,14 @@ const mockAcodeAPI: AcodeAPI = {
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
           const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
-          const shellCmd = title ?? (isWindows ? "powershell" : "bash");
+          // title may be a display name like "Terminal - zsh" — extract the shell
+          const extractShell = (t: string): string => {
+            const afterDash = t.includes(" - ") ? t.split(" - ").pop()!.trim() : t.trim();
+            const known = ["zsh", "bash", "fish", "powershell", "cmd", "pwsh"];
+            const lower = afterDash.toLowerCase();
+            return known.includes(lower) ? lower : (isWindows ? "powershell" : "bash");
+          };
+          const shellCmd = title ? extractShell(title) : (isWindows ? "powershell" : "bash");
           const command = Command.create(shellCmd, [], { cwd: cwd ?? undefined });
           const cbs = new Set<(data: string) => void>();
           listeners.set(id, cbs);
@@ -429,7 +530,9 @@ const mockAcodeAPI: AcodeAPI = {
       },
 
       async resize(_id: string, _cols: number, _rows: number) {
-        // Tauri shell plugin doesn't support pty resize; xterm handles display
+        // Tauri shell plugin doesn't support PTY resize — xterm handles display.
+        // Terminal content may wrap incorrectly until this is addressed upstream.
+        console.warn("[Terminal] resize called but PTY resize is not supported by Tauri shell plugin");
       },
 
       async kill(id: string) {
@@ -457,7 +560,7 @@ const mockAcodeAPI: AcodeAPI = {
         sessionId,
         workspacePath: options.workspacePath,
         model: options.model,
-        agentName: "build",
+        agentName: options.mode,
         mode: options.mode,
         timestamp: Date.now(),
       });
@@ -466,6 +569,8 @@ const mockAcodeAPI: AcodeAPI = {
     async sendPrompt(sessionId, prompt, conversationHistory?, agentName?, attachments?) {
       const { settings, providerId, modelId, config } = getActiveProvider();
 
+      const prev = activeControllers.get(sessionId);
+      if (prev) prev.abort();
       const ac = new AbortController();
       activeControllers.set(sessionId, ac);
       const emit = (event: StreamEvent) => { streamCallbacks.get(sessionId)?.(event); };
@@ -512,7 +617,7 @@ const mockAcodeAPI: AcodeAPI = {
             matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockAcodeAPI.fs.readFile });
           }
           activeSkillPrompt = renderSkillForPrompt(matched.skill);
-          const regex = new RegExp(`\\$${matched.skill.name}\\b`, "i");
+          const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
           cleanPrompt = prompt.replace(regex, "").trim();
 
           // Emit activity-skill stream event
@@ -681,7 +786,17 @@ You are equipped with tools to interact with the workspace and operating system.
    <list_dir path="absolute_path"/>
    Lists files and folders inside the directory.
 
-5. Run Command:
+5. Grep File:
+   <grep_file path="absolute_path" pattern="search text" regex="false" max_results="50"/>
+   Searches for a pattern within a single file. Returns matching lines with line numbers.
+   Set regex="true" to use regular expressions.
+
+6. Search Files:
+   <search_files path="workspace_path" pattern="search text" glob="*.ts" regex="false" max_results="100"/>
+   Searches for a pattern across multiple files in a directory tree. Returns matching lines with file paths.
+   Use glob to filter file types (e.g. "*.tsx", "*.py").
+
+7. Run Command:
    <run_command command="shell command"/>
    Executes a shell command in the workspace directory and returns its output.
 
@@ -771,6 +886,13 @@ You are equipped with tools to interact with the workspace and operating system.
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
 `;
 
+        // Load evolved genes for this session
+        const genePool = loadGenePool();
+        const rawHistory = conversationHistory ? [...conversationHistory] : [];
+        const recentMsgs = rawHistory.filter((msg) => msg.role !== "system").slice(-5);
+        const activeGenes = expressGenes(genePool, cleanPrompt, recentMsgs);
+        const genesPrompt = formatGenesForPrompt(activeGenes);
+
         const systemPrompt = (agentName === "plan"
           ? "You are ACode in Plan mode. You are a read-only analysis agent. Explore the codebase, understand the task, and produce a clear, actionable plan. Do NOT edit, write, or delete any files. Do NOT run shell commands that modify files. You may read files and search the codebase. When your plan is complete, write it to .acode/plans/ directory as a markdown file, then end your response with exactly: [PLAN_COMPLETE] — this signals the user to review and approve."
           : agentName === "yolo"
@@ -783,15 +905,20 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             + activeSkillPrompt
             + mcpToolsDocumentation
             + activeFileContext
-            + workspacePinnedBlock;
+            + workspacePinnedBlock
+            + genesPrompt;
 
-        let currentHistory: any[] = conversationHistory ? [...conversationHistory] : [];
+        const currentHistory: any[] = conversationHistory ? [...conversationHistory] : [];
         const filteredHistory = currentHistory.filter((msg) => msg.role !== "system");
         let loopCount = 0;
         const MAX_LOOP = 10;
 
         while (loopCount < MAX_LOOP) {
           loopCount++;
+          if (loopCount >= MAX_LOOP) {
+            emit({ type: "error", error: `Agent loop limit (${MAX_LOOP}) reached. Stopping to prevent infinite loop.` });
+            break;
+          }
 
           const messages: any[] = [
             { role: "system", content: systemPrompt },
@@ -866,10 +993,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, messages, ac.signal, maxTokens);
           let fullContent = "";
           let lastMessageId = "";
-          for (const p of state.pendingToolCalls) {
-            // Clear pending tools from previous runs
-            useChat.setState((s) => ({ pendingToolCalls: s.pendingToolCalls.filter((t) => t.id !== p.id) }));
-          }
 
           for await (const event of stream) {
             if (event.type === "message-delta") { 
@@ -880,28 +1003,49 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           }
 
           // Parse tool calls from the stream output
-          const parsedTools = parseToolCalls(fullContent);
+          const parsedTools = await parseToolCalls(fullContent);
 
           if (parsedTools.length > 0) {
-            // Emit message-end for the thoughts part of this turn
-            emit({ type: "message-end", messageId: lastMessageId || sessionId });
+            // Strip tool XML tags from content for display — only strip the tags
+            // themselves, preserving natural language text around them
+            const displayContent = fullContent
+              .replace(/<read_file[^>]*\/>/g, "")
+              .replace(/<write_file[\s\S]*?<\/write_file>/g, "")
+              .replace(/<edit_file[\s\S]*?<\/edit_file>/g, "")
+              .replace(/<list_dir[^>]*\/>/g, "")
+              .replace(/<grep_file[^>]*\/>/g, "")
+              .replace(/<search_files[^>]*\/>/g, "")
+              .replace(/<run_command[^>]*\/>/g, "")
+              .replace(/<git_status[^>]*\/>/g, "")
+              .replace(/<git_commit[^>]*\/>/g, "")
+              .replace(/<git_log[^>]*\/>/g, "")
+              .replace(/<clipboard_read[^>]*\/>/g, "")
+              .replace(/<clipboard_write[\s\S]*?<\/clipboard_write>/g, "")
+              .replace(/<notify[^>]*\/>/g, "")
+              .replace(/<system_info[^>]*\/>/g, "")
+              .replace(/<open_url[^>]*\/>/g, "")
+              .replace(/<launch_app[^>]*\/>/g, "")
+              .replace(/<reveal_in_finder[^>]*\/>/g, "")
+              .replace(/<memory_save[\s\S]*?<\/memory_save>/g, "")
+              .replace(/<memory_search[^>]*\/>/g, "")
+              .replace(/<memory_delete[^>]*\/>/g, "")
+              .replace(/<memory_stats[^>]*\/>/g, "")
+              .replace(/<memory_maintain[^>]*\/>/g, "")
+              .replace(/<memory_extract[^>]*\/>/g, "")
+              .replace(/<memory_export[^>]*\/>/g, "")
+              .replace(/<memory_import[^>]*\/>/g, "")
+              .replace(/<mcp_[\s\S]*?<\/mcp_[^>]*>/g, "")
+              .replace(/<mcp_[^>]*\/>/g, "")
+              .replace(/\n{3,}/g, "\n\n")
+              .trim();
 
             const assistantTurnMsg = {
               id: lastMessageId || sessionId,
               role: "assistant" as const,
-              content: fullContent,
+              content: displayContent || fullContent,
               timestamp: Date.now()
             };
             currentHistory.push(assistantTurnMsg);
-
-            // Save immediately in store
-            useChat.setState((s) => ({
-              messages: [...s.messages, assistantTurnMsg],
-              sessionMessages: {
-                ...s.sessionMessages,
-                [sessionId]: [...(s.sessionMessages[sessionId] ?? []), assistantTurnMsg]
-              }
-            }));
 
             let executedAny = false;
 
@@ -923,10 +1067,41 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               if (decision === "approved") {
                 const toolStartTime = Date.now();
                 try {
-                  emit({ type: "thinking", messageId: sessionId, content: `Executing tool ${pt.name}...` });
                   const toolResult = await executeTool(pt.name, pt.args, workspacePath || ".", emit);
                   const toolDurationMs = Date.now() - toolStartTime;
                   emit({ type: "tool-result", toolCallId, result: toolResult });
+
+                  // Emit activity events for UI feedback after tool execution
+                  if (pt.name === "read_file" || pt.name === "list_dir") {
+                    emit({
+                      type: "activity-explore",
+                      query: (pt.args.path as string) ?? ".",
+                      kind: pt.name === "read_file" ? "definition" : "files",
+                      matches: [{ path: (pt.args.path as string) ?? "." }],
+                    });
+                  } else if (pt.name === "grep_file" || pt.name === "search_files") {
+                    emit({
+                      type: "activity-explore",
+                      query: (pt.args.pattern as string) ?? "",
+                      kind: "grep",
+                      matches: toolResult.split("\n").filter(Boolean).map((line: string) => ({
+                        path: line.split(":")[0] ?? "",
+                        preview: line,
+                      })),
+                    });
+                  } else if (pt.name === "run_command") {
+                    emit({
+                      type: "activity-bash",
+                      command: pt.args.command as string,
+                      result: toolResult,
+                    });
+                  } else if (pt.name === "write_file" || pt.name === "edit_file") {
+                    emit({
+                      type: "activity-bash",
+                      command: `${pt.name} ${(pt.args.path as string) ?? ""}`,
+                      result: toolResult,
+                    });
+                  }
 
                   // Hook: PostToolUse
                   await hookBus.emit("PostToolUse", {
@@ -946,13 +1121,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                   };
                   currentHistory.push(toolResultMsg);
 
-                  useChat.setState((s) => ({
-                    messages: [...s.messages, toolResultMsg],
-                    sessionMessages: {
-                      ...s.sessionMessages,
-                      [sessionId]: [...(s.sessionMessages[sessionId] ?? []), toolResultMsg]
-                    }
-                  }));
                   executedAny = true;
                 } catch (err) {
                   const errMsg = (err as Error)?.message ?? String(err);
@@ -977,13 +1145,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                   };
                   currentHistory.push(toolResultMsg);
 
-                  useChat.setState((s) => ({
-                    messages: [...s.messages, toolResultMsg],
-                    sessionMessages: {
-                      ...s.sessionMessages,
-                      [sessionId]: [...(s.sessionMessages[sessionId] ?? []), toolResultMsg]
-                    }
-                  }));
                   executedAny = true;
                 }
               } else {
@@ -994,19 +1155,14 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                   timestamp: Date.now()
                 };
                 currentHistory.push(toolResultMsg);
-
-                useChat.setState((s) => ({
-                  messages: [...s.messages, toolResultMsg],
-                  sessionMessages: {
-                    ...s.sessionMessages,
-                    [sessionId]: [...(s.sessionMessages[sessionId] ?? []), toolResultMsg]
-                  }
-                }));
-                executedAny = true;
               }
             }
 
             if (executedAny) {
+              // Persist this turn's content before starting the next LLM turn
+              emit({ type: "message-end", messageId: lastMessageId || sessionId });
+              // Reset streaming state for the next turn
+              useChat.setState({ streamingContent: "", thinkingContent: "" });
               continue; // Run next LLM turn
             }
           }
@@ -1035,14 +1191,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           break;
         }
       } catch (err) {
-        activeControllers.delete(sessionId);
         const startTime = sessionStartTimes.get(sessionId) ?? Date.now();
         sessionStartTimes.delete(sessionId);
         let messageCount = 0;
         try {
           const { useChat } = await import("../store/useAppStore");
           messageCount = useChat.getState().sessionMessages[sessionId]?.length ?? 0;
-        } catch {}
+        } catch (_e) { /* failed to read session message count */ }
 
         if (err instanceof ProviderError) {
           emit({ type: "error", error: err.message });
@@ -1054,23 +1209,22 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             durationMs: Date.now() - startTime,
             timestamp: Date.now(),
           });
-          return;
-        }
-        if ((err as Error)?.name === "AbortError") {
+        } else if ((err as Error)?.name === "AbortError") {
           emit({ type: "message-end", messageId: sessionId });
-          return;
+        } else {
+          emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
+          emit({ type: "message-end", messageId: sessionId });
+          await hookBus.emit("SessionEnd", {
+            sessionId,
+            reason: "error",
+            messageCount,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+          });
         }
-        emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
-        emit({ type: "message-end", messageId: sessionId });
-        await hookBus.emit("SessionEnd", {
-          sessionId,
-          reason: "error",
-          messageCount,
-          durationMs: Date.now() - startTime,
-          timestamp: Date.now(),
-        });
       }
       activeControllers.delete(sessionId);
+      streamCallbacks.delete(sessionId);
 
     },
     async abort(sessionId) {
@@ -1106,13 +1260,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         headers["Authorization"] = `Bearer ${config.apiKey}`;
       }
 
-      const systemPrompt = "You are a context compaction assistant. Summarize the following early conversation history between the user and assistant. Focus on: 1) What has been achieved, 2) Key decisions/plans approved, 3) Current state. Keep it very concise (under 200 words). Do not include any meta-commentary, intros, or outros. Just output the summary directly as markdown bullet points.";
-      const systemMsg = messages.find((m) => m.role === "system")?.content || systemPrompt;
+      const defaultSystemPrompt = "You are a context compaction assistant. Summarize the following early conversation history between the user and assistant. Focus on: 1) What has been achieved, 2) Key decisions/plans approved, 3) Current state. Keep it very concise (under 200 words). Do not include any meta-commentary, intros, or outros. Just output the summary directly as markdown bullet points.";
+      const systemMsg = messages.find((m) => m.role === "system")?.content || defaultSystemPrompt;
       const chatMessages = messages.filter((m) => m.role !== "system");
 
       const body = isAnthropic
         ? { model, system: systemMsg, messages: chatMessages, max_tokens: 1000 }
-        : { model, messages: [{ role: "system", content: systemPrompt }, ...chatMessages], max_tokens: 1000 };
+        : { model, messages: [{ role: "system", content: systemMsg }, ...chatMessages], max_tokens: 1000 };
 
       const json = await fetchJsonWithRetry(url, {
         method: "POST",
@@ -1126,11 +1280,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       }
     },
     async approveDiff(sessionId: string, diffId: string) {
-      // The file is already written by executeTool. This just emits the
-      // file-changed event so the UI updates (diff viewer, file tree).
       const pending = pendingDiffProposals.get(diffId);
       if (pending) {
         pendingDiffProposals.delete(diffId);
+        // Write the file now that the user approved the diff
+        await mockAcodeAPI.fs.writeFile(pending.filePath, pending.newContent);
         const cb = streamCallbacks.get(sessionId);
         if (cb) {
           cb({
@@ -1146,7 +1300,12 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       }
     },
     async rejectDiff(_sessionId: string, diffId: string) {
-      pendingDiffProposals.delete(diffId);
+      const pending = pendingDiffProposals.get(diffId);
+      if (pending) {
+        pendingDiffProposals.delete(diffId);
+        // File was never written (writes only happen on approveDiff), so no action needed.
+        // The diff proposal is cleaned up and the UI will close the diff view.
+      }
     },
     onStreamEvent(sessionId, cb) {
       // Clean up previous listener for this session to prevent leaks
@@ -1173,7 +1332,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const result = await invoke<{ branch: string; modified: string[]; added: string[]; deleted: string[]; untracked: string[]; ahead?: number; behind?: number }>("git_status", { path: repoPath });
         return { ...result, ahead: result.ahead ?? 0, behind: result.behind ?? 0 };
       } catch (err) {
-        throw new Error(`Git status failed: ${(err as Error)?.message ?? String(err)}`);
+        throw new Error(`Git status failed: ${(err as Error)?.message ?? String(err)}`, { cause: err });
       }
     },
     async commit(repoPath, message) {
@@ -1181,7 +1340,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         return await invoke<{ sha: string }>("git_commit", { path: repoPath, message });
       } catch (err) {
-        throw new Error(`Git commit failed: ${(err as Error)?.message ?? "Unknown error"}`);
+        throw new Error(`Git commit failed: ${(err as Error)?.message ?? "Unknown error"}`, { cause: err });
       }
     },
     async log(repoPath, limit = 20) {
@@ -1189,7 +1348,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         return await invoke<{ sha: string; message: string; date: string; author: string }[]>("git_log", { path: repoPath, limit });
       } catch (err) {
-        throw new Error(`Git log failed: ${(err as Error)?.message ?? String(err)}`);
+        throw new Error(`Git log failed: ${(err as Error)?.message ?? String(err)}`, { cause: err });
       }
     },
     async branches(repoPath) {
@@ -1197,7 +1356,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         return await invoke<{ name: string; current: boolean }[]>("git_branches", { path: repoPath });
       } catch (err) {
-        throw new Error(`Git branches failed: ${(err as Error)?.message ?? String(err)}`);
+        throw new Error(`Git branches failed: ${(err as Error)?.message ?? String(err)}`, { cause: err });
       }
     },
     async checkout(repoPath, branch) {
@@ -1205,7 +1364,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("git_checkout", { path: repoPath, branch });
       } catch (err) {
-        throw new Error(`Git checkout failed: ${(err as Error)?.message ?? String(err)}`);
+        throw new Error(`Git checkout failed: ${(err as Error)?.message ?? String(err)}`, { cause: err });
       }
     },
     async createBranch(repoPath, name) {
@@ -1213,7 +1372,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("git_create_branch", { path: repoPath, name });
       } catch (err) {
-        throw new Error(`Git create branch failed: ${(err as Error)?.message ?? String(err)}`);
+        throw new Error(`Git create branch failed: ${(err as Error)?.message ?? String(err)}`, { cause: err });
       }
     },
     async diffFile(repoPath, filePath) {
@@ -1221,7 +1380,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const { invoke } = await import("@tauri-apps/api/core");
         return await invoke<string>("git_diff_file", { path: repoPath, file_path: filePath });
       } catch (err) {
-        throw new Error(`Git diff failed: ${(err as Error)?.message ?? String(err)}`);
+        throw new Error(`Git diff failed: ${(err as Error)?.message ?? String(err)}`, { cause: err });
       }
     },
   },
@@ -1295,6 +1454,29 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       const { invoke } = await import("@tauri-apps/api/core");
       return await invoke<string>("launch_app", { appName, args, cwd });
     },
+    async getEnv(key: string) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string>("get_env", { key });
+    },
+    async getScreenInfo() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const info = await invoke<{ width: number; height: number; scale_factor: number }>("get_screen_info");
+      return { width: info.width, height: info.height, scaleFactor: info.scale_factor };
+    },
+    async listProcesses() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const procs = await invoke<{ pid: number; name: string; cpu_usage: number; memory_kb: number }[]>("list_processes");
+      return procs.map((p) => ({ pid: p.pid, name: p.name, cpuUsage: p.cpu_usage, memoryKb: p.memory_kb }));
+    },
+    async killProcess(pid: number) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("kill_process", { pid });
+    },
+    async getDiskSpace(path: string) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const info = await invoke<{ total_bytes: number; available_bytes: number; used_bytes: number }>("get_disk_space", { path });
+      return { totalBytes: info.total_bytes, availableBytes: info.available_bytes, usedBytes: info.used_bytes };
+    },
   },
 };
 
@@ -1314,7 +1496,7 @@ function parseAttributes(tagStr: string): Record<string, string> {
   return attrs;
 }
 
-function parseToolCalls(text: string): ParsedToolCall[] {
+async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   const toolCalls: ParsedToolCall[] = [];
   
   // 1. read_file
@@ -1351,9 +1533,31 @@ function parseToolCalls(text: string): ParsedToolCall[] {
     toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
   }
 
-  // 5. run_command
-  const runCommandRegex = /<run_command\s+command=["']([^"']+)["']\s*\/>/gi;
+  // 5. grep_file
+  const grepFileRegex = /<grep_file\s+([\s\S]*?)\/?>/gi;
+  while ((match = grepFileRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.path && attrs.pattern) {
+      toolCalls.push({ name: "grep_file", args: { path: attrs.path, pattern: attrs.pattern, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
+    }
+  }
+
+  // 6. search_files
+  const searchFilesRegex = /<search_files\s+([\s\S]*?)\/?>/gi;
+  while ((match = searchFilesRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.pattern) {
+      toolCalls.push({ name: "search_files", args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
+    }
+  }
+
+  // 7. run_command
+  const runCommandRegex = /<run_command\s+command="([^"]*)"\s*\/>/gi;
+  const runCommandRegex2 = /<run_command\s+command='([^']*)'\s*\/>/gi;
   while ((match = runCommandRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "run_command", args: { command: match[1] }, raw: match[0] });
+  }
+  while ((match = runCommandRegex2.exec(text)) !== null) {
     toolCalls.push({ name: "run_command", args: { command: match[1] }, raw: match[0] });
   }
 
@@ -1503,16 +1707,47 @@ function parseToolCalls(text: string): ParsedToolCall[] {
   }
 
   // 24. Generic MCP Tool calls
-  const mcpTagRegex = /<mcp_([a-z0-9-]+)_([a-z0-9_-]+)([\s\S]*?)>/gi;
+  // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
+  // and later split against known MCP server names
+  const mcpTagRegex = /<mcp_([\w-]+(?:_[\w-]+)*)((?:\s+[\s\S]*?)?)(\/?)>/gi;
+  // Hoisted dynamic import to avoid repeating per match
+  let mcpServers: { name: string; enabled: boolean; transport?: string; url?: string; command?: string; args?: string[]; env?: Record<string, string> }[] = [];
+  try {
+    const { useSkillsMcp } = await import("../store/useAppStore");
+    mcpServers = useSkillsMcp.getState().mcpServers;
+  } catch { /* MCP store not available, skip server lookup */ }
   let mcpMatch;
   while ((mcpMatch = mcpTagRegex.exec(text)) !== null) {
     const rawTag = mcpMatch[0];
-    const serverName = mcpMatch[1];
-    const toolName = mcpMatch[2];
-    const bodyOrAttrs = mcpMatch[3];
+    const afterPrefix = mcpMatch[1]; // everything after "mcp_" before attributes/close
+    const bodyOrAttrs = mcpMatch[2] || "";
+    const selfClose = mcpMatch[3] === "/";
+    if (!afterPrefix) continue;
+
+    // Try to find the split point by matching against known server names
+    let serverName = "";
+    let toolName = "";
+    let foundServer = false;
+    for (const srv of mcpServers) {
+      const prefix = srv.name + "_";
+      if (afterPrefix.startsWith(prefix)) {
+        serverName = srv.name;
+        toolName = afterPrefix.slice(prefix.length);
+        foundServer = true;
+        break;
+      }
+    }
+    if (!foundServer) {
+      // Fallback: use first underscore split
+      const firstUnderscore = afterPrefix.indexOf("_");
+      if (firstUnderscore === -1) continue;
+      serverName = afterPrefix.slice(0, firstUnderscore);
+      toolName = afterPrefix.slice(firstUnderscore + 1);
+    }
+    if (!toolName) continue;
     const fullName = `mcp_${serverName}_${toolName}`;
 
-    if (rawTag.endsWith("/>") || rawTag.trim().endsWith("/>")) {
+    if (selfClose || rawTag.endsWith("/>") || rawTag.trim().endsWith("/>")) {
       const args: Record<string, string> = {};
       const attrRegex = /([a-z0-9_-]+)=["']([^"']*)["']/gi;
       let attrMatch;
@@ -1554,10 +1789,17 @@ function parseToolCalls(text: string): ParsedToolCall[] {
 }
 
 function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied"> {
+  const TIMEOUT_MS = 5 * 60 * 1000;
   return new Promise((resolve) => {
     let resolved = false;
     let unsubscribe: (() => void) | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     let useChatRef: any = null;
+
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      unsubscribe?.();
+    };
 
     const check = () => {
       if (resolved || !useChatRef) return;
@@ -1567,13 +1809,13 @@ function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied">
         if (!tc) return;
         if (tc.status === "completed") {
           resolved = true;
-          unsubscribe?.();
+          cleanup();
           resolve("approved");
           return;
         }
         if (tc.status === "failed") {
           resolved = true;
-          unsubscribe?.();
+          cleanup();
           resolve("denied");
           return;
         }
@@ -1582,25 +1824,66 @@ function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied">
       }
     };
 
-    // Import the store and cache the reference
+    timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        // Update the tool call status in the store so the UI doesn't stay stuck
+        if (useChatRef) {
+          try { useChatRef.getState().resolveToolApproval(toolCallId, "denied"); } catch (_e) { /* ignore */ }
+        }
+        resolve("denied");
+      }
+    }, TIMEOUT_MS);
+
     import("../store/useAppStore").then(({ useChat }) => {
       useChatRef = useChat;
-      // Initial check after import
+      // Initial check
       check();
       if (resolved) return;
-      // Subscribe to store changes
+      // Subscribe to store changes — only re-check when pendingToolCalls actually changes
+      let lastToolCalls = useChatRef.getState().pendingToolCalls;
       unsubscribe = useChat.subscribe(() => {
-        if (!resolved) check();
+        if (resolved) return;
+        const current = useChatRef.getState().pendingToolCalls;
+        if (current !== lastToolCalls) {
+          lastToolCalls = current;
+          check();
+        }
       });
+    }).catch((err) => {
+      console.error("Failed to import useAppStore for tool approval:", err);
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        resolve("denied");
+      }
     });
   });
 }
 
 async function executeTool(name: string, args: Record<string, any>, workspacePath: string, emit: (event: StreamEvent) => void): Promise<string> {
   if (name === "read_file") {
-    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const { readFile, stat } = await import("@tauri-apps/plugin-fs");
+    const MAX_READ_SIZE = 1024 * 1024; // 1MB limit for agent reads
+    try {
+      const fileInfo = await stat(args.path);
+      const fileSize = (fileInfo as any).size ?? 0;
+      if (fileSize > MAX_READ_SIZE) {
+        return `[File too large to read: ${fileSize} bytes. Use list_dir or run_command with head/tail to inspect portions.]`;
+      }
+    } catch { /* stat may fail for some fs, proceed with read */ }
     const bytes = await readFile(args.path);
-    return new TextDecoder().decode(bytes);
+    const ext = args.path.split(".").pop()?.toLowerCase() ?? "";
+    const textExts = new Set(["ts", "tsx", "js", "jsx", "json", "md", "mdx", "py", "rs", "css", "html", "yml", "yaml", "toml", "txt", "csv", "xml", "svg", "sh", "bash", "zsh", "fish", "sql", "graphql", "prisma", "env", "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc", "lock", "log", "cfg", "ini", "conf"]);
+    if (textExts.has(ext) || ext === "") {
+      return new TextDecoder().decode(bytes);
+    }
+    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    if (decoded.includes("\0") || (decoded.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
+      return `[Binary file: ${args.path.split("/").pop()} — ${bytes.length} bytes]`;
+    }
+    return decoded;
   }
 
   if (name === "write_file") {
@@ -1612,17 +1895,21 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     } catch { /* new file */ }
     const newContent = args.content;
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
-    const hunks = [{ oldStart: 1, oldLines: oldContent.split("\n").length, newStart: 1, newLines: newContent.split("\n").length, lines: [] }];
+    const oldLines = oldContent.split("\n");
+    const newLinesArr = newContent.split("\n");
+    const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
+    for (const line of oldLines) {
+      diffLines.push({ type: "remove", content: line });
+    }
+    for (const line of newLinesArr) {
+      diffLines.push({ type: "add", content: line });
+    }
+    const hunks = [{ oldStart: 1, oldLines: oldLines.length, newStart: 1, newLines: newLinesArr.length, lines: diffLines }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });
-    await writeFile(args.path, new TextEncoder().encode(newContent));
-    const lines = newContent.split("\n").length;
-    emit({
-      type: "file-changed",
-      change: { path: args.path, action: "modified", additions: lines, deletions: 0 }
-    });
-    return `File written successfully: ${args.path}`;
+    // File is written only when the diff is approved via approveDiff()
+    return `File write proposed: ${args.path} (awaiting approval)`;
   }
 
   if (name === "edit_file") {
@@ -1636,23 +1923,99 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
     const oldLines = args.search.split("\n");
     const newLines = args.replace.split("\n");
-    const hunks = [{ oldStart: 1, oldLines: oldLines.length, newStart: 1, newLines: newLines.length, lines: [] }];
+    const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
+    for (const line of oldLines) {
+      diffLines.push({ type: "remove", content: line });
+    }
+    for (const line of newLines) {
+      diffLines.push({ type: "add", content: line });
+    }
+    const searchIdx = original.indexOf(args.search);
+    const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
+    const hunks = [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });
-    await writeFile(args.path, new TextEncoder().encode(updated));
-    const additions = newLines.length;
-    const deletions = oldLines.length;
-    emit({
-      type: "file-changed",
-      change: { path: args.path, action: "modified", additions, deletions }
-    });
-    return `File edited successfully: ${args.path}`;
+    // File is written only when the diff is approved via approveDiff()
+    return `File edit proposed: ${args.path} (awaiting approval)`;
   }
 
   if (name === "list_dir") {
     const nodes = await mockAcodeAPI.fs.listDir(args.path);
     return JSON.stringify(nodes.map(n => ({ name: n.name, path: n.path, type: n.type })), null, 2);
+  }
+
+  if (name === "grep_file") {
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const bytes = await readFile(args.path);
+    const content = new TextDecoder().decode(bytes);
+    const lines = content.split("\n");
+    const pattern = args.pattern;
+    const isRegex = args.regex === "true";
+    const maxResults = args.max_results ? parseInt(args.max_results, 10) : 50;
+    const matches: { line: number; text: string }[] = [];
+    try {
+      const re = isRegex ? new RegExp(pattern, "i") : null;
+      for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
+        const line = lines[i];
+        if (re ? re.test(line) : line.includes(pattern)) {
+          matches.push({ line: i + 1, text: line.trim() });
+        }
+      }
+    } catch {
+      return "Error: Invalid regex pattern";
+    }
+    if (matches.length === 0) return `No matches found for "${pattern}" in ${args.path}`;
+    return matches.map(m => `${m.line}: ${m.text}`).join("\n");
+  }
+
+  if (name === "search_files") {
+    const { readFile, stat } = await import("@tauri-apps/plugin-fs");
+    const searchPath = args.path || workspacePath;
+    const pattern = args.pattern;
+    const fileGlob = args.glob || "*";
+    const maxResults = args.max_results ? parseInt(args.max_results, 10) : 100;
+    const isRegex = args.regex === "true";
+    const results: { file: string; line: number; text: string }[] = [];
+    let re: RegExp | null = null;
+    try {
+      re = isRegex ? new RegExp(pattern, "i") : null;
+    } catch {
+      return "Error: Invalid regex pattern";
+    }
+    const globRegex = new RegExp(
+      "^" + fileGlob.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]") + "$"
+    );
+    async function searchDir(dir: string, depth: number) {
+      if (depth > 10 || results.length >= maxResults) return;
+      const { readDir: rd } = await import("@tauri-apps/plugin-fs");
+      let entries;
+      try { entries = await rd(dir); } catch { return; }
+      for (const entry of entries) {
+        if (!entry.name || results.length >= maxResults) break;
+        if (JUNK_DIRS.has(entry.name)) continue;
+        const full = joinPath(dir, entry.name!);
+        if (entry.isDirectory) {
+          await searchDir(full, depth + 1);
+        } else {
+          if (!globRegex.test(entry.name)) continue;
+          try {
+            const bytes = await readFile(full);
+            const content = new TextDecoder().decode(bytes);
+            const lines = content.split("\n");
+            for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+              const match = re ? re.test(lines[i]) : lines[i].includes(pattern);
+              if (match) {
+                results.push({ file: full, line: i + 1, text: lines[i].trim().slice(0, 200) });
+              }
+            }
+          } catch { /* skip unreadable files */ }
+        }
+      }
+    }
+    await searchDir(searchPath, 0);
+    if (results.length === 0) return `No matches found for "${pattern}" in ${searchPath}`;
+    return results.map(r => `${r.file}:${r.line}: ${r.text}`).join("\n");
   }
 
   if (name === "run_command") {
@@ -1662,7 +2025,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const commandArgs = isWindows ? ["-Command", args.command] : ["-c", args.command];
     const cmd = Command.create(program, commandArgs, { cwd: workspacePath });
     const output = await cmd.execute();
-    return output.stdout + (output.stderr ? "\n" + output.stderr : "");
+    return (output.stdout + (output.stderr ? "\n" + output.stderr : "")).slice(0, 50000);
   }
 
   if (name === "git_status") {
@@ -1864,12 +2227,31 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name.startsWith("mcp_")) {
-    const parts = name.split("_");
-    const serverName = parts[1];
-    const toolName = parts.slice(2).join("_");
-
+    // Parse "mcp_{serverName}_{toolName}" — server name may contain underscores
+    const afterPrefix = name.slice(4); // remove "mcp_"
     const { useSkillsMcp } = await import("../store/useAppStore");
-    const server = useSkillsMcp.getState().mcpServers.find((m) => m.name === serverName);
+    const mcpServers = useSkillsMcp.getState().mcpServers;
+    let serverName = "";
+    let toolName = "";
+    let foundServer = false;
+    for (const srv of mcpServers) {
+      const prefix = srv.name + "_";
+      if (afterPrefix.startsWith(prefix)) {
+        serverName = srv.name;
+        toolName = afterPrefix.slice(prefix.length);
+        foundServer = true;
+        break;
+      }
+    }
+    if (!foundServer) {
+      // Fallback: use first underscore split
+      const firstUnderscore = afterPrefix.indexOf("_");
+      if (firstUnderscore === -1) throw new Error(`Invalid MCP tool name format: ${name}`);
+      serverName = afterPrefix.slice(0, firstUnderscore);
+      toolName = afterPrefix.slice(firstUnderscore + 1);
+    }
+
+    const server = mcpServers.find((m) => m.name === serverName);
     if (!server) {
       throw new Error(`MCP Server "${serverName}" not found or configured.`);
     }
@@ -1880,9 +2262,34 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     if (server.transport === "http") {
       const url = server.url;
       if (!url) throw new Error("HTTP Endpoint URL is required");
-      const resp = await fetch(url, {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const existingSessionId = mcpHttpSessions.get(serverName);
+      if (existingSessionId) {
+        headers["Mcp-Session-Id"] = existingSessionId;
+      } else {
+        const initResp = await corsFetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ACode", version: "1.0.0" } }, id: 1 }),
+        });
+        if (!initResp.ok) throw new Error(`HTTP ${initResp.status} during MCP initialize`);
+        const initJson = await initResp.json();
+        if (initJson.error) throw new Error(initJson.error.message || JSON.stringify(initJson.error));
+        const sessionId = initResp.headers.get("mcp-session-id");
+        if (sessionId) {
+          headers["Mcp-Session-Id"] = sessionId;
+          mcpHttpSessions.set(serverName, sessionId);
+        }
+        await corsFetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+        });
+      }
+      // tools/call
+      const resp = await corsFetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           jsonrpc: "2.0",
           method: "tools/call",
@@ -1890,7 +2297,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
             name: toolName,
             arguments: args,
           },
-          id: 1,
+          id: 2,
         }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status} calling MCP tool`);
@@ -1907,32 +2314,35 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
         const { Command } = await import("@tauri-apps/plugin-shell");
         const cmd = Command.create(command, server.args ?? [], { env: server.env });
         
+        // eslint-disable-next-line no-async-promise-executor -- needed for sequential async operations in promise
         const resultPromise = new Promise<string>(async (resolve, reject) => {
           let outputBuffer = "";
           let resolved = false;
 
           cmd.stdout.on("data", (data: string) => {
             outputBuffer += data;
-            try {
-              const lines = outputBuffer.split("\n");
-              for (const line of lines) {
-                if (line.trim().startsWith("{")) {
-                  const parsed = JSON.parse(line.trim());
-                  if (parsed.result?.content || parsed.content || parsed.error) {
-                    resolved = true;
-                    if (parsed.error) {
-                      reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
-                    } else {
-                      const content = parsed.result?.content || parsed.content || [];
-                      const text = content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
-                      resolve(text);
-                    }
-                    break;
+            // Try to parse the entire buffer as a single JSON-RPC message
+            // (MCP responses may be multi-line JSON)
+            const trimmed = outputBuffer.trim();
+            if (trimmed.startsWith("{")) {
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed.result?.content || parsed.content || parsed.error) {
+                  resolved = true;
+                  if (parsed.error) {
+                    reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
+                  } else {
+                    const content = parsed.result?.content || parsed.content || [];
+                    const text = content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
+                    resolve(text);
                   }
+                  outputBuffer = "";
+                } else if (parsed.result && !parsed.result.content && !parsed.error) {
+                  outputBuffer = "";
                 }
+              } catch {
+                // Incomplete JSON — wait for more data
               }
-            } catch (e) {
-              // Ignore partial parse
             }
           });
 
@@ -1941,6 +2351,15 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
           });
 
           const child = await cmd.spawn();
+          const initReq = JSON.stringify({
+            jsonrpc: "2.0",
+            method: "initialize",
+            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ACode", version: "1.0.0" } },
+            id: 1,
+          }) + "\n";
+          await child.write(initReq);
+          const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
+          await child.write(initNotif);
           const req = JSON.stringify({
             jsonrpc: "2.0",
             method: "tools/call",

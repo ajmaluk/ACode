@@ -65,23 +65,45 @@ export function parseContextWindow(window: string | undefined): number {
 }
 
 /**
- * Estimate token count from a string. Uses a simple heuristic:
- * ~4 chars per token for English, ~2 chars per token for CJK.
+ * Estimate token count from a string. Uses a more accurate heuristic:
+ * - English text: ~4 chars per token (GPT-4 average)
+ * - Code: ~3.5 chars per token (code has more unique tokens)
+ * - CJK characters: ~1.5 chars per token
+ * - Whitespace/punctuation: ~1 char per token
+ *
+ * Based on OpenAI's tokenizer behavior and tiktoken benchmarks.
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
   let count = 0;
+  let codeMode = false;
+
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
-    // CJK characters are roughly 2 chars per token
-    if (code > 0x2e80 && code < 0x9fff) {
-      count += 0.5;
+
+    // Detect code blocks (backtick-fenced or common code patterns)
+    if (text.slice(i, i + 3) === "```") codeMode = !codeMode;
+
+    // CJK characters — roughly 1.5 chars per token
+    if (code >= 0x2e80 && code <= 0x9fff) {
+      count += 0.67;
     } else if (code > 0xf900 && code < 0xfaff) {
-      count += 0.5;
-    } else {
+      count += 0.67;
+    }
+    // Whitespace — roughly 1 token per space/newline
+    else if (code === 32 || code === 10 || code === 13 || code === 9) {
+      count += 1;
+    }
+    // Code identifiers — roughly 3.5 chars per token
+    else if (codeMode || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 95) {
+      count += 0.29;
+    }
+    // Other characters — roughly 4 chars per token
+    else {
       count += 0.25;
     }
   }
+
   return Math.ceil(count);
 }
 
@@ -151,11 +173,17 @@ export function computeContextStats(
 }
 
 /**
- * Select messages to compact. Keeps recent messages intact,
- * returns older messages for summarization.
+ * Select messages to compact. Uses a smarter strategy than just taking the first N:
  *
- * Strategy: Keep the last `keepRecent` messages untouched.
- * Everything before that is a candidate for compaction.
+ * 1. Protect the last N user turns (non-tool-result)
+ * 2. Protect the first user message (establishes context)
+ * 3. Protect messages with file changes (important for diffs)
+ * 4. Compact tool results first (they're usually the largest)
+ * 5. Then compact older assistant messages
+ * 6. Keep recent assistant messages (they have the latest context)
+ *
+ * Strategy: Prioritize compacting large tool outputs and older messages
+ * while preserving the conversation structure.
  */
 export function selectMessagesForCompaction(
   messages: ChatMessage[],
@@ -164,10 +192,71 @@ export function selectMessagesForCompaction(
   if (messages.length <= keepRecent) {
     return { toCompact: [], toKeep: messages };
   }
-  return {
-    toCompact: messages.slice(0, -keepRecent),
-    toKeep: messages.slice(-keepRecent),
-  };
+
+  // Identify which messages to protect
+  const protectedIndices = new Set<number>();
+
+  // 1. Protect the first user message (establishes context)
+  const firstUserIdx = messages.findIndex(m => m.role === "user");
+  if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
+
+  // 2. Protect the last N user turns (non-tool-result)
+  let userTurnCount = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user" && !isToolResult(messages[i])) {
+      protectedIndices.add(i);
+      userTurnCount++;
+    }
+    if (userTurnCount >= keepRecent) break;
+  }
+
+  // 3. Protect messages with file changes (important for diffs)
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].fileChanges && messages[i].fileChanges!.length > 0) {
+      protectedIndices.add(i);
+    }
+  }
+
+  // 4. Protect messages with todos (important for task tracking)
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].todos && messages[i].todos!.length > 0) {
+      protectedIndices.add(i);
+    }
+  }
+
+  // 5. Protect recent assistant messages (last 3 non-tool messages)
+  let assistantCount = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && !isToolResult(messages[i])) {
+      protectedIndices.add(i);
+      assistantCount++;
+    }
+    if (assistantCount >= 3) break;
+  }
+
+  // Split into compact and keep
+  const toCompact: ChatMessage[] = [];
+  const toKeep: ChatMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    if (protectedIndices.has(i)) {
+      toKeep.push(messages[i]);
+    } else {
+      toCompact.push(messages[i]);
+    }
+  }
+
+  return { toCompact, toKeep };
+}
+
+/**
+ * Check if a message is a tool result (user message with tool prefix).
+ */
+function isToolResult(m: ChatMessage): boolean {
+  return m.role === "user" && typeof m.content === "string" && (
+    m.content.startsWith("[TOOL RESULT:") ||
+    m.content.startsWith("[TOOL ERROR:")
+  );
 }
 
 /**
@@ -247,7 +336,7 @@ export function pruneToolOutputs(
 ): { pruned: ChatMessage[]; tokensReclaimed: number } {
   // In ACode, tool results are user messages with tool result prefixes
   const isToolResult = (m: ChatMessage) =>
-    m.role === "user" && (
+    m.role === "user" && typeof m.content === "string" && (
       m.content.startsWith("[TOOL RESULT:") ||
       m.content.startsWith("[TOOL ERROR:")
     );

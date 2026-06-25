@@ -6,29 +6,48 @@ export function PermissionDialog() {
   const { request, resolve, cancel } = usePermission();
   const [selected, setSelected] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef(selected);
+  const resolveRef = useRef(resolve);
+  const cancelRef = useRef(cancel);
+
+  useEffect(() => { resolveRef.current = resolve; }, [resolve]);
+  useEffect(() => { cancelRef.current = cancel; }, [cancel]);
+
+  const decide = (idx: number) => {
+    if (idx === 0) resolveRef.current("allow");
+    else if (idx === 1) resolveRef.current("always");
+    else resolveRef.current("deny");
+  };
+
+  const options = [
+    { key: "allow",  label: "Allow",  sub: "Allow only this time",              icon: Check },
+    { key: "always", label: "Always allow in this project", sub: "Do not ask again for the same command", icon: Shield },
+    { key: "deny",   label: "Deny",   sub: "Reject it for now",                 icon: X },
+  ];
+  const NUM_OPTIONS = options.length;
 
   useEffect(() => {
-    if (request) setSelected(0);
+    if (request) {
+      setSelected(0);
+      selectedRef.current = 0;
+    }
   }, [request]);
-
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
 
   useEffect(() => {
     if (!request) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        cancel();
+        cancelRef.current();
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelected((i) => Math.min(i + 1, NUM_OPTIONS - 1));
+        selectedRef.current = Math.min(selectedRef.current + 1, NUM_OPTIONS - 1);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelected((i) => Math.max(i - 1, 0));
+        selectedRef.current = Math.max(selectedRef.current - 1, 0);
       } else if (e.key === "Tab") {
         e.preventDefault();
-        setSelected((i) => (i + 1) % NUM_OPTIONS);
+        selectedRef.current = (selectedRef.current + 1) % NUM_OPTIONS;
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         decide(selectedRef.current);
@@ -42,27 +61,14 @@ export function PermissionDialog() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [request]);
+     
+  }, [request, NUM_OPTIONS]);
 
   useEffect(() => {
     if (request) containerRef.current?.focus();
   }, [request]);
 
   if (!request) return null;
-
-  const decide = (idx: number) => {
-    if (idx === 0) resolve("allow");
-    else if (idx === 1) resolve("always");
-    else resolve("deny");
-  };
-
-  const options = [
-    { key: "allow",  label: "Allow",  sub: "Allow only this time",              icon: Check },
-    { key: "always", label: "Always allow in this project", sub: "Do not ask again for the same command", icon: Shield },
-    { key: "deny",   label: "Deny",   sub: "Reject it for now",                 icon: X },
-  ];
-  const NUM_OPTIONS = options.length;
 
   return (
     <div
@@ -120,12 +126,12 @@ export function PermissionDialog() {
                 <button
                   key={opt.key}
                   onClick={() => decide(idx)}
-                  onMouseEnter={() => setSelected(idx)}
-                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-center gap-3 transition-colors ${
+                  onMouseEnter={() => { setSelected(idx); selectedRef.current = idx; }}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-3 transition-colors ${
                     active ? "bg-acode-bg-hover border border-acode-border-primary" : "border border-transparent hover:bg-acode-bg-hover/50"
                   }`}
                 >
-                  <span className="text-xs text-acode-text-muted w-4 text-center">{idx + 1}.</span>
+                  <span className="text-xs text-acode-text-muted w-4 text-center mt-0.5">{idx + 1}.</span>
                   <Icon className={`w-4 h-4 flex-shrink-0 ${opt.key === "deny" ? "text-acode-git-deleted" : opt.key === "always" ? "text-acode-git-added" : "text-acode-accent-primary"}`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-acode-text-primary font-medium">{opt.label}</div>
@@ -144,7 +150,7 @@ export function PermissionDialog() {
             Use Tab / arrow keys to choose, then press Enter to confirm
           </div>
           <button
-            onClick={() => decide(selectedRef.current)}
+            onClick={() => decide(selected)}
             className="px-3 py-1.5 text-xs rounded-md bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity font-medium"
           >
             Confirm {options[selected].label}

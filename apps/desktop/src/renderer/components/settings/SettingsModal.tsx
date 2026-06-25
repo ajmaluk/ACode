@@ -6,10 +6,12 @@ import {
 import { useToasts } from "@/components/ui/Toaster";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { joinPath } from "@/lib/pathUtils";
+import { modKey, shortcut, platform } from "@/lib/platform";
+import { MemoryGraph } from "./MemoryGraph";
 import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
   Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
-  Bot, Zap, ClipboardList, FolderOpen, Shield, FileText, CheckCircle2,
+  Bot, Zap, ClipboardList, FolderOpen, Shield, FileText, CheckCircle2, Network,
 } from "lucide-react";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
@@ -21,6 +23,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: "instructions", label: "Instructions", icon: ClipboardList },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP Servers", icon: Plug },
+  { id: "memory-graph", label: "Memory Graph", icon: Network },
   { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "commands", label: "Commands", icon: Terminal },
   { id: "indexing", label: "Indexing", icon: Database },
@@ -76,6 +79,7 @@ export function SettingsModal() {
             {activeTab === "instructions" && <InstructionsTab />}
             {activeTab === "skills" && <SkillsTab />}
             {activeTab === "mcp" && <McpTab />}
+            {activeTab === "memory-graph" && <MemoryGraphTab />}
             {activeTab === "plugins" && <PluginsTab />}
             {activeTab === "commands" && <CommandsTab />}
             {activeTab === "indexing" && <IndexingTab />}
@@ -272,8 +276,6 @@ function ModelsTab() {
 }
 
 function ProviderDetail({ provider }: { provider: ModelProvider }) {
-  if (provider.type === "custom") return <CustomProviderDetail provider={provider} />;
-
   const { updateProvider, toggleProvider, addModel, removeModel } = useModelProviders();
   const [apiKey, setApiKey] = useState(provider.apiKey || "");
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
@@ -292,6 +294,8 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
     setDirty(false);
   }, [provider.id, provider.apiKey, provider.baseUrl]);
 
+  if (provider.type === "custom") return <CustomProviderDetail provider={provider} />;
+
   const saveProvider = () => {
     updateProvider(provider.id, { apiKey, baseUrl });
     setDirty(false);
@@ -309,18 +313,42 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
       const modelId = connectedModel?.modelId || provider.models[0]?.modelId;
       if (!modelId) { setTestStatus("error"); setTestError("No models configured"); return; }
       const endpoint = baseUrl.replace(/\/+$/, "") + (provider.apiFormat === "anthropic" ? "/v1/messages" : "/chat/completions");
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: provider.apiFormat === "anthropic"
-          ? { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
-          : { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-        body: JSON.stringify(
-          provider.apiFormat === "anthropic"
-            ? { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
-            : { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
-        ),
-        signal: ac.signal,
-      });
+      // Use Tauri HTTP plugin to bypass CORS restrictions
+      let resp: Response;
+      try {
+        const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+        const tauriResp = await tauriFetch(endpoint, {
+          method: "POST",
+          headers: provider.apiFormat === "anthropic"
+            ? { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+            : { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+          body: JSON.stringify(
+            provider.apiFormat === "anthropic"
+              ? { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
+              : { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
+          ),
+        });
+        resp = {
+          ok: tauriResp.ok,
+          status: tauriResp.status,
+          statusText: tauriResp.statusText,
+          text: async () => new TextDecoder().decode(await tauriResp.arrayBuffer()),
+        } as Response;
+      } catch {
+        // Fallback to browser fetch if Tauri HTTP plugin unavailable
+        resp = await fetch(endpoint, {
+          method: "POST",
+          headers: provider.apiFormat === "anthropic"
+            ? { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+            : { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+          body: JSON.stringify(
+            provider.apiFormat === "anthropic"
+              ? { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
+              : { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
+          ),
+          signal: ac.signal,
+        });
+      }
       clearTimeout(timeoutId);
       if (resp.ok) {
         setTestStatus("ok");
@@ -343,11 +371,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
         <div className="flex items-center gap-3">
           <span className="w-8 h-8 rounded-lg bg-acode-bg-active flex items-center justify-center text-sm font-bold text-acode-text-primary">{provider.name[0]}</span>
           <span className="text-lg font-semibold text-acode-text-primary">{provider.name}</span>
-          {provider.enabled ? (
-            <span className="px-2 py-0.5 text-[10px] rounded-full bg-acode-git-added/20 text-acode-git-added font-medium cursor-pointer" onClick={() => toggleProvider(provider.id)}>Enabled</span>
-          ) : (
-            <button className="px-2 py-0.5 text-[10px] rounded-full bg-acode-bg-active text-acode-text-muted font-medium" onClick={() => toggleProvider(provider.id)}>Enable</button>
-          )}
+          <Toggle checked={provider.enabled} onChange={() => toggleProvider(provider.id)} label={`Enable ${provider.name}`} />
         </div>
         {dirty && (
           <button
@@ -405,8 +429,16 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
           <div className="space-y-2">
             {provider.models.map((m) => (
               <div key={m.modelId} className="flex items-center justify-between px-4 py-3 bg-acode-bg-tertiary border border-acode-border-primary rounded-xl">
-                <span className="text-sm text-acode-text-primary">{m.name}</span>
-                <span className="px-2 py-0.5 text-[10px] rounded bg-acode-bg-active text-acode-text-secondary border border-acode-border-primary">{m.contextWindow}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-acode-text-primary">{m.name}</span>
+                  <span className="px-2 py-0.5 text-[10px] rounded bg-acode-bg-active text-acode-text-secondary border border-acode-border-primary">{m.contextWindow}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Toggle checked={m.enabled !== false} onChange={() => {
+                    const updatedModels = provider.models.map(mod => mod.modelId === m.modelId ? { ...mod, enabled: mod.enabled === false ? true : false } : mod);
+                    updateProvider(provider.id, { models: updatedModels });
+                  }} label={`Enable ${m.name}`} />
+                </div>
               </div>
             ))}
           </div>
@@ -453,11 +485,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
               </button>
             </>
           )}
-          {provider.enabled ? (
-            <span className="px-2 py-0.5 text-[10px] rounded-full bg-acode-git-added/20 text-acode-git-added font-medium cursor-pointer" onClick={() => toggleProvider(provider.id)}>Enabled</span>
-          ) : (
-            <button className="px-2 py-0.5 text-[10px] rounded-full bg-acode-bg-active text-acode-text-muted font-medium" onClick={() => toggleProvider(provider.id)}>Enable</button>
-          )}
+          <Toggle checked={provider.enabled} onChange={() => toggleProvider(provider.id)} label={`Enable ${provider.name}`} />
         </div>
         <button className="text-acode-text-muted hover:text-acode-git-deleted transition-colors" onClick={() => removeProvider(provider.id)} title="Delete provider">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" /></svg>
@@ -509,6 +537,10 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
                 <span className="flex-1 text-sm text-acode-text-primary font-mono">{m.name}</span>
                 <span className="px-2 py-0.5 text-[10px] rounded bg-acode-bg-active text-acode-text-secondary border border-acode-border-primary">{m.contextWindow}</span>
                 {m.connected && <span className="px-2 py-0.5 text-[10px] rounded bg-acode-git-added/20 text-acode-git-added">Connected!</span>}
+                <Toggle checked={m.enabled !== false} onChange={() => {
+                  const updatedModels = provider.models.map(mod => mod.modelId === m.modelId ? { ...mod, enabled: mod.enabled === false ? true : false } : mod);
+                  updateProvider(provider.id, { models: updatedModels });
+                }} label={`Enable ${m.name}`} />
                 <button className="text-acode-text-muted hover:text-acode-text-primary transition-colors" title="Copy model ID"
                   onClick={() => { void navigator.clipboard.writeText(m.modelId); }}>
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
@@ -599,7 +631,7 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
           <label className="block text-sm text-acode-text-primary mb-1.5">Model list</label>
           <div className="space-y-2 mb-2">
             {models.map((m, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={m.modelId || `model-${i}`} className="flex items-center gap-2">
                 <input className="input-base flex-1" placeholder="Model name" value={m.name} onChange={(e) => { const n = [...models]; n[i] = { ...n[i], name: e.target.value }; setModels(n); }} />
                 <input className="input-base flex-1" placeholder="Model ID" value={m.modelId} onChange={(e) => { const n = [...models]; n[i] = { ...n[i], modelId: e.target.value }; setModels(n); }} />
                 <input className="input-base w-24" placeholder="Context" value={m.contextWindow} onChange={(e) => { const n = [...models]; n[i] = { ...n[i], contextWindow: e.target.value }; setModels(n); }} />
@@ -676,8 +708,6 @@ function AgentsTab() {
                   </div>
                   <div className="text-xs text-acode-text-muted mt-1">{meta.description}</div>
                   <div className="mt-2 flex items-center gap-3 text-[10px] text-acode-text-muted font-mono">
-                    <span>mode: {agent.mode}</span>
-                    <span>·</span>
                     <span>{agent.permission.length} rules</span>
                   </div>
                 </div>
@@ -1043,7 +1073,39 @@ function McpTab() {
   const [envOpen, setEnvOpen] = useState(false);
   const [envEntries, setEnvEntries] = useState<Array<{ key: string; value: string }>>([]);
   const [jsonText, setJsonText] = useState("");
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const toast = useToasts((s) => s.push);
+
+  const validateJson = (text: string): boolean => {
+    if (!text.trim()) { setJsonError(null); return false; }
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed.name || typeof parsed.name !== "string") { setJsonError("Missing required field: \"name\""); return false; }
+      if (parsed.transport === "http" && !parsed.url) { setJsonError("HTTP transport requires \"url\" field"); return false; }
+      if (parsed.transport !== "http" && !parsed.command) { setJsonError("Stdio transport requires \"command\" field"); return false; }
+      setJsonError(null);
+      return true;
+    } catch (e) {
+      setJsonError(`Invalid JSON: ${(e as Error).message}`);
+      return false;
+    }
+  };
+
+  const JSON_PLACEHOLDER = `{
+  "name": "my-server",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-memory"],
+  "scope": "user"
+}
+
+// HTTP transport example:
+// {
+//   "name": "remote-server",
+//   "transport": "http",
+//   "url": "https://api.example.com/mcp",
+//   "scope": "project"
+// }`;
 
   const reset = () => {
     setName(""); setScope("user"); setTransport("stdio");
@@ -1217,7 +1279,25 @@ function McpTab() {
           </div>
           ) : (
             <div>
-              <textarea className="input-base w-full h-48 font-mono text-xs" placeholder="{ &quot;name&quot;: &quot;my-server&quot;, &quot;transport&quot;: &quot;stdio&quot;, &quot;command&quot;: &quot;npx&quot;, &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-memory&quot;] }" value={jsonText} onChange={(e) => setJsonText(e.target.value)} />
+              <textarea
+                className={`input-base w-full h-56 font-mono text-xs ${jsonError ? "border-acode-git-deleted" : ""}`}
+                placeholder={JSON_PLACEHOLDER}
+                value={jsonText}
+                spellCheck={false}
+                onChange={(e) => { setJsonText(e.target.value); validateJson(e.target.value); }}
+              />
+              {jsonError && (
+                <p className="text-xs text-acode-git-deleted mt-1.5 flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-acode-git-deleted flex-shrink-0" />
+                  {jsonError}
+                </p>
+              )}
+              {jsonText.trim() && !jsonError && (
+                <p className="text-xs text-acode-git-added mt-1.5 flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-acode-git-added flex-shrink-0" />
+                  Valid JSON — ready to add
+                </p>
+              )}
             </div>
           )}
 
@@ -1226,11 +1306,32 @@ function McpTab() {
             {editMode === "form" ? (
               <button onClick={onAdd} className="px-4 py-1.5 text-sm rounded-md bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity font-medium">Add</button>
             ) : (
-              <button onClick={onAddFromJson} className="px-4 py-1.5 text-sm rounded-md bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity font-medium">Add from JSON</button>
+              <button
+                onClick={onAddFromJson}
+                disabled={!jsonText.trim() || !!jsonError}
+                className="px-4 py-1.5 text-sm rounded-md bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Add from JSON
+              </button>
             )}
           </div>
         </>
       )}
+    </>
+  );
+}
+
+// ---- Memory Graph ----------------------------------------------------------
+
+function MemoryGraphTab() {
+  return (
+    <>
+      <h1 className="text-3xl font-bold text-acode-text-primary mb-2">Memory Graph</h1>
+      <p className="text-sm text-acode-text-muted mb-6">
+        Visualize the neural network of memories, agents, skills, and genes.
+        Click nodes to inspect their details and connections.
+      </p>
+      <MemoryGraph />
     </>
   );
 }
@@ -1303,12 +1404,13 @@ function PluginsTab() {
 // ---- Commands ------------------------------------------------------------
 
 function CommandsTab() {
+  const mod = modKey();
   const [commands, setCommands] = useState<{ id: string; name: string; shortcut: string; description: string }[]>([
-    { id: "new-chat", name: "New task", shortcut: "⌘N", description: "Start a new chat session" },
-    { id: "toggle-sidebar", name: "Toggle sidebar", shortcut: "⌘B", description: "Show or hide the sidebar" },
-    { id: "open-settings", name: "Open settings", shortcut: "⌘,", description: "Open the settings panel" },
-    { id: "command-palette", name: "Command palette", shortcut: "⌘K", description: "Open the command palette" },
-    { id: "toggle-panel", name: "Toggle panel", shortcut: "⌘J", description: "Show or hide the right panel" },
+    { id: "new-chat", name: "New task", shortcut: `${mod}N`, description: "Start a new chat session" },
+    { id: "toggle-sidebar", name: "Toggle sidebar", shortcut: `${mod}B`, description: "Show or hide the sidebar" },
+    { id: "open-settings", name: "Open settings", shortcut: `${mod},`, description: "Open the settings panel" },
+    { id: "command-palette", name: "Command palette", shortcut: `${mod}K`, description: "Open the command palette" },
+    { id: "toggle-panel", name: "Toggle panel", shortcut: `${mod}J`, description: "Show or hide the right panel" },
   ]);
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -1316,18 +1418,19 @@ function CommandsTab() {
     if (!editing) return;
     const handler = (e: KeyboardEvent) => {
       if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) {
-        return; // Don't prevent defaults or capture modifier-only events
+        return;
       }
       e.preventDefault();
       e.stopPropagation();
       const parts: string[] = [];
-      if (e.metaKey || e.ctrlKey) parts.push("⌘");
-      if (e.altKey) parts.push("⌥");
-      if (e.shiftKey) parts.push("⇧");
+      if (e.metaKey || e.ctrlKey) parts.push(modKey());
+      if (e.altKey) parts.push(platform() === "mac" ? "⌥" : "Alt");
+      if (e.shiftKey) parts.push(platform() === "mac" ? "⇧" : "Shift");
       const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
       parts.push(key);
-      setCommands((prev) => prev.map((c) => c.id === editing ? { ...c, shortcut: parts.join("") } : c));
+      setCommands((prev) => prev.map((c) => c.id === editing ? { ...c, shortcut: parts.join(platform() === "mac" ? "" : " ") } : c));
       setEditing(null);
+      localStorage.setItem("acode.commands.shortcuts", JSON.stringify(commands.map((c) => ({ id: c.id, shortcut: c.shortcut }))));
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
@@ -1390,13 +1493,13 @@ function IndexingTab() {
       <Card title="Code indexing" description="Build a searchable index of your workspace so the agent can find files and symbols quickly.">
         <div className="flex items-center justify-between">
           <span className="text-sm text-acode-text-secondary">Enable indexing</span>
-          <Toggle checked={indexingEnabled} onChange={() => setIndexingEnabled(!indexingEnabled)} label="Enable indexing" />
+          <Toggle checked={indexingEnabled} onChange={() => { const next = !indexingEnabled; setIndexingEnabled(next); void update("indexingEnabled", next); }} label="Enable indexing" />
         </div>
       </Card>
       <Card title="Auto reindex" description="Automatically reindex files when they change.">
         <div className="flex items-center justify-between">
           <span className="text-sm text-acode-text-secondary">Watch for file changes</span>
-          <Toggle checked={autoIndex} onChange={() => setAutoIndex(!autoIndex)} label="Watch for file changes and auto reindex" />
+          <Toggle checked={autoIndex} onChange={() => { const next = !autoIndex; setAutoIndex(next); void update("autoIndex", next); }} label="Watch for file changes and auto reindex" />
         </div>
       </Card>
       <Card title="Max file size" description="Skip files larger than this size when indexing (in MB).">
@@ -1737,10 +1840,11 @@ async function loadInstructions(api: ReturnType<typeof ensureAcodeAPI>, workspac
 
 function OnboardTab() {
   const [step, setStep] = useState(0);
+  const mod = modKey();
   const steps = [
     { title: "Welcome to ACode", body: "An AI-native IDE that reads, writes, and runs code alongside you. Built on the same foundation as Cursor and Windsurf." },
     { title: "Powered by your favorite models", body: "Switch between Claude, Gemini, or any model provider. Configure in Settings → Models." },
-    { title: "Keyboard-first", body: "Press ⌘K to open the command palette. ⌘P to quick-open files. ? anywhere for the full cheatsheet." },
+    { title: "Keyboard-first", body: `Press ${mod}K to open the command palette. ${mod}P to quick-open files. ? anywhere for the full cheatsheet.` },
     { title: "The agent works for you", body: "Ask the agent to refactor, test, or document code. Every edit goes through a diff viewer for your explicit approval." },
   ];
   const current = steps[step];

@@ -24,6 +24,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { joinPath } from "@/lib/pathUtils";
 
 let dbInstance: Database | null = null;
+let currentWorkspacePath: string | null = null;
 
 // ─── Schema ──────────────────────────────────────────────────
 
@@ -69,9 +70,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  * This file should be gitignored — it's a local cache.
  */
 export async function initDatabase(workspacePath: string): Promise<Database> {
-  if (dbInstance) return dbInstance;
+  if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
+  // Close existing connection before switching workspaces
+  if (dbInstance) {
+    await closeDatabase();
+  }
 
-  const dbPath = `sqlite:${joinPath(workspacePath, ".acode", "project.db")}`;
+  // Ensure absolute path with leading slash for Tauri v2 SQL plugin
+  const absPath = workspacePath.startsWith("/") ? workspacePath : `/${workspacePath}`;
+  const dbPath = `sqlite:${absPath}/.acode/project.db`;
 
   const db = await Database.load(dbPath);
 
@@ -108,6 +115,7 @@ export async function initDatabase(workspacePath: string): Promise<Database> {
   await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`);
 
   dbInstance = db;
+  currentWorkspacePath = workspacePath;
   return db;
 }
 

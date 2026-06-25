@@ -3,48 +3,52 @@ import { useWorkspace, useSettings, useSkillsMcp } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
 import { Sparkles, FolderOpen, Zap, Code2, Brain, ArrowRight, X } from "lucide-react";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { modKey } from "@/lib/platform";
 
-const STEPS = [
-  {
-    icon: Sparkles,
-    title: "Welcome to ACode",
-    body: "An AI-native IDE that reads, writes, and runs code alongside you. Built on the same foundation as Cursor and Windsurf.",
-    cta: "Get started",
-  },
-  {
-    icon: Brain,
-    title: "Powered by your favorite models",
-    body: "Add a model provider in Settings → Models to start chatting. Supports any OpenAI-compatible API.",
-    cta: "Configure later",
-  },
-  {
-    icon: Code2,
-    title: "A keyboard-first experience",
-    body: "Press ⌘K to open the command palette. Use ⌘P to quick-open files. Press ? anywhere for the full cheatsheet.",
-    cta: "Got it",
-  },
-  {
-    icon: Zap,
-    title: "The agent works for you",
-    body: "Ask the agent to refactor, test, or document code. Every edit goes through a diff viewer for your explicit approval before touching disk.",
-    cta: "Show me",
-  },
-];
+function getSteps() {
+  const mod = modKey();
+  return [
+    {
+      icon: Sparkles,
+      title: "Welcome to ACode",
+      body: "An AI-native IDE that reads, writes, and runs code alongside you. Built on the same foundation as Cursor and Windsurf.",
+      cta: "Get started",
+    },
+    {
+      icon: Brain,
+      title: "Powered by your favorite models",
+      body: "Add a model provider in Settings → Models to start chatting. Supports any OpenAI-compatible API.",
+      cta: "Configure later",
+    },
+    {
+      icon: Code2,
+      title: "A keyboard-first experience",
+      body: `Press ${mod}K to open the command palette. Use ${mod}P to quick-open files. Press ? anywhere for the full cheatsheet.`,
+      cta: "Got it",
+    },
+    {
+      icon: Zap,
+      title: "The agent works for you",
+      body: "Ask the agent to refactor, test, or document code. Every edit goes through a diff viewer for your explicit approval before touching disk.",
+      cta: "Show me",
+    },
+  ];
+}
 
 const STORAGE_KEY = "acode.onboarding.done.v1";
 
 export function WelcomeScreen() {
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
-  const { loadSample } = useWorkspace();
+  const { loadWorkspace } = useWorkspace();
   const { settings, update } = useSettings();
   const { skills, mcpServers } = useSkillsMcp();
   const toast = useToasts((s) => s.push);
+  const steps = getSteps();
 
   useEffect(() => {
     const done = window.localStorage.getItem(STORAGE_KEY);
     if (!done) {
-      // Defer slightly so the app doesn't flash the welcome on top of the empty state
       const t = setTimeout(() => setVisible(true), 600);
       return () => clearTimeout(t);
     }
@@ -56,19 +60,19 @@ export function WelcomeScreen() {
   };
 
   const next = async () => {
-    if (step < STEPS.length - 1) {
+    if (step < steps.length - 1) {
       setStep((s) => s + 1);
     } else {
-      await loadSample();
-      toast({ kind: "success", title: "Workspace ready", description: "acode-sample is loaded — explore away." });
+      await loadWorkspace();
+      toast({ kind: "success", title: "Workspace ready", description: "Workspace loaded — explore away." });
       close();
     }
   };
 
   if (!visible) return null;
-  const current = STEPS[step];
+  const current = steps[step];
   const Icon = current.icon;
-  const isLast = step === STEPS.length - 1;
+  const isLast = step === steps.length - 1;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-8 animate-fade-in">
@@ -104,7 +108,7 @@ export function WelcomeScreen() {
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">
-              {STEPS.map((_, i) => (
+              {steps.map((_, i) => (
                 <div
                   key={i}
                   className={`h-1 rounded-full transition-all ${
@@ -127,7 +131,7 @@ export function WelcomeScreen() {
                 {isLast ? (
                   <>
                     <FolderOpen className="w-3.5 h-3.5" />
-                    Open sample workspace
+                    Open workspace
                   </>
                 ) : (
                   <>

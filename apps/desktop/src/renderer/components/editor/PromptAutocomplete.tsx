@@ -160,10 +160,14 @@ export function PromptAutocomplete({
   const [caret, setCaret] = useState(0);
   const [activeIdx, setActiveIdx] = useState(0);
   const activeIdxRef = useRef(0);
-  activeIdxRef.current = activeIdx;
+  const keyHandlerRefInternal = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
+
+  useEffect(() => {
+    activeIdxRef.current = activeIdx;
+  }, [activeIdx]);
 
   // Keep the caret in sync with the textarea. Mouse / arrow / select events
-  // all move the caret, so we listen to them all.
+  // all move the caret, so we listen for them all.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -214,17 +218,19 @@ export function PromptAutocomplete({
       .map((s) => ({ kind: "related" as const, id: s.id, title: s.title, status: s.status }));
   }, [trigger, fileTree, chatSessions]);
 
-  useEffect(() => { setActiveIdx(0); }, [options.length, trigger?.type, trigger?.query]);
+  useEffect(() => {
+    setActiveIdx(0);
+  }, [options.length, trigger?.type, trigger?.query]);
 
   const accept = (idx: number) => {
     if (!trigger) return;
     const opt = options[idx];
     if (!opt) return;
-    let insert = "";
-    if (opt.kind === "file")         insert = `@${opt.path} `;
-    else if (opt.kind === "skill")   insert = `$${opt.name} `;
-    else if (opt.kind === "related") insert = `#${opt.title} `;
-    else /* command */               insert = opt.insert;
+    const insert =
+      opt.kind === "file"    ? `@${opt.path} ` :
+      opt.kind === "skill"   ? `$${opt.name} ` :
+      opt.kind === "related" ? `#${opt.title} ` :
+                               opt.insert;
     const before = value.slice(0, trigger.start);
     const after = value.slice(trigger.start + 1 + trigger.query.length);
     const next = before + insert + after;
@@ -272,7 +278,9 @@ export function PromptAutocomplete({
   };
 
   // Publish the handler so the parent can call it from its textarea onKeyDown.
-  if (keyHandlerRef) keyHandlerRef.current = handleKeyDown;
+  useEffect(() => {
+    if (keyHandlerRef) keyHandlerRef.current = handleKeyDown;
+  }, [keyHandlerRef, handleKeyDown]);
 
   if (!trigger || options.length === 0) return null;
 

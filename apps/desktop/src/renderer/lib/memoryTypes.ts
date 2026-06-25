@@ -69,8 +69,8 @@ export interface CheckpointData {
 export const CTX = {
   COMPACTION_BUFFER:   20_000,  // safety headroom before triggering compaction
   OUTPUT_RESERVE:      32_000,  // tokens to reserve for model output
-  PRUNE_PROTECT:       40_000,  // min tool output before pruning starts
-  PRUNE_MINIMUM:       20_000,  // min tokens to reclaim, else skip prune
+  PRUNE_PROTECT:       10_000,  // min tool output before pruning starts
+  PRUNE_MINIMUM:        5_000,  // min tokens to reclaim, else skip prune
   TURN_PROTECT:             2,  // never prune the last N user turns
   REBUILD_BUDGET:      65_000,  // MiMo: total injected content on rebuild
   CHECKPOINT_TRIGGERS: [0.20, 0.45, 0.70] as const,

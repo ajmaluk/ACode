@@ -42,7 +42,7 @@ export function App() {
         );
       }
     });
-  }, []);
+  }, [mcpServers, connectMcpServer]);
 
   // Apply the theme to the document root whenever the effective theme changes.
   useEffect(() => {
@@ -117,6 +117,11 @@ export function App() {
         useUI.getState().toggleSidebar();
         return;
       }
+      if (mod && e.key.toLowerCase() === "n" && !isTyping(e.target)) {
+        e.preventDefault();
+        useChat.getState().newChat();
+        return;
+      }
       if (mod && e.key === "\\" && !isTyping(e.target)) {
         e.preventDefault();
         useUI.getState().toggleRightPanel();
@@ -147,6 +152,7 @@ export function App() {
       <ContextMenuProvider>
         <div className="flex flex-col h-full w-full bg-acode-bg-primary text-acode-text-primary">
           <SettingsModal />
+          <CommandPalette />
           <PermissionDialog />
           <QuestionDialog />
           <ShortcutsCheatsheet />

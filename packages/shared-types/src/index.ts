@@ -403,6 +403,11 @@ export interface AcodeAPI {
     getWorkingDir(): Promise<string>;
     openWithSystemHandler(pathOrUrl: string): Promise<void>;
     launchApp(appName: string, args?: string[], cwd?: string): Promise<string>;
+    getEnv(key: string): Promise<string>;
+    getScreenInfo(): Promise<{ width: number; height: number; scaleFactor: number }>;
+    listProcesses(): Promise<{ pid: number; name: string; cpuUsage: number; memoryKb: number }[]>;
+    killProcess(pid: number): Promise<void>;
+    getDiskSpace(path: string): Promise<{ totalBytes: number; availableBytes: number; usedBytes: number }>;
   };
 }
 

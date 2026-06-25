@@ -1,53 +1,60 @@
 import { useShortcuts } from "@/store/useAppStore";
 import { useEffect } from "react";
 import { X, Keyboard } from "lucide-react";
+import { modKey } from "@/lib/platform";
 
-const SECTIONS = [
-  {
-    title: "Workspace",
-    shortcuts: [
-      { keys: ["⌘", "K"], desc: "Open command palette" },
-      { keys: ["⌘", "P"], desc: "Quick open file" },
-      { keys: ["⌘", "⇧", "F"], desc: "Search across project" },
-      { keys: ["⌘", "O"], desc: "Open folder" },
-      { keys: ["⌘", "S"], desc: "Save current file" },
-    ],
-  },
-  {
-    title: "Editor",
-    shortcuts: [
-      { keys: ["⌘", "W"], desc: "Close current tab" },
-      { keys: ["⌘", "B"], desc: "Toggle sidebar" },
-      { keys: ["⌘", "J"], desc: "Toggle terminal" },
-      { keys: ["⌘", "/"], desc: "Toggle comment" },
-      { keys: ["⌥", "↑/↓"], desc: "Move line up/down" },
-    ],
-  },
-  {
-    title: "Agent",
-    shortcuts: [
-      { keys: ["⌘", "N"], desc: "New task" },
-      { keys: ["⌘", "⇧", "L"], desc: "Focus chat" },
-      { keys: ["Esc"], desc: "Abort current run" },
-      { keys: ["@"], desc: "Mention a file" },
-      { keys: ["/"], desc: "Slash command" },
-      { keys: ["$"], desc: "Invoke a skill" },
-    ],
-  },
-  {
-    title: "Navigation",
-    shortcuts: [
-      { keys: ["⌘", "⇧", "O"], desc: "Go to symbol" },
-      { keys: ["⌘", "T"], desc: "Reopen closed tab" },
-      { keys: ["⌃", "`"], desc: "Toggle terminal" },
-      { keys: ["⌘", ","], desc: "Open settings" },
-      { keys: ["?"], desc: "Show this cheatsheet" },
-    ],
-  },
-];
+function getSections() {
+  const mod = modKey();
+  const alt = modKey() === "⌘" ? "⌥" : "Alt";
+  const shift = modKey() === "⌘" ? "⇧" : "Shift";
+  return [
+    {
+      title: "Workspace",
+      shortcuts: [
+        { keys: [mod, "K"], desc: "Open command palette" },
+        { keys: [mod, "P"], desc: "Quick open file" },
+        { keys: [mod, shift, "F"], desc: "Search across project" },
+        { keys: [mod, "O"], desc: "Open folder" },
+        { keys: [mod, "S"], desc: "Save current file" },
+      ],
+    },
+    {
+      title: "Editor",
+      shortcuts: [
+        { keys: [mod, "W"], desc: "Close current tab" },
+        { keys: [mod, "B"], desc: "Toggle sidebar" },
+        { keys: [mod, "J"], desc: "Toggle terminal" },
+        { keys: [mod, "/"], desc: "Toggle comment" },
+        { keys: [alt, shift, "↑/↓"], desc: "Move line up/down" },
+      ],
+    },
+    {
+      title: "Agent",
+      shortcuts: [
+        { keys: [mod, "N"], desc: "New task" },
+        { keys: [mod, shift, "L"], desc: "Focus chat" },
+        { keys: ["Esc"], desc: "Abort current run" },
+        { keys: ["@"], desc: "Mention a file" },
+        { keys: ["/"], desc: "Slash command" },
+        { keys: ["$"], desc: "Invoke a skill" },
+      ],
+    },
+    {
+      title: "Navigation",
+      shortcuts: [
+        { keys: [mod, shift, "O"], desc: "Go to symbol" },
+        { keys: [mod, "T"], desc: "Reopen closed tab" },
+        { keys: [mod, "`"], desc: "Toggle terminal" },
+        { keys: [mod, ","], desc: "Open settings" },
+        { keys: ["?"], desc: "Show this cheatsheet" },
+      ],
+    },
+  ];
+}
 
 export function ShortcutsCheatsheet() {
   const { open, setOpen } = useShortcuts();
+  const sections = getSections();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
@@ -74,7 +81,7 @@ export function ShortcutsCheatsheet() {
           </button>
         </header>
         <div className="grid grid-cols-2 gap-6 p-6 overflow-y-auto scrollbar-thin">
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <section key={s.title}>
               <h3 className="text-[11px] uppercase tracking-wider text-acode-text-muted mb-2">
                 {s.title}

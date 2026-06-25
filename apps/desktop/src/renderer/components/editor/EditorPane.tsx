@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, getPrimaryAgent } from "@/store/useAppStore";
 import type { PrimaryAgentName } from "@acode/shared-types";
 import { CodeView } from "@/components/editor/Editor";
@@ -6,18 +6,36 @@ import { Breadcrumb } from "@/components/editor/Breadcrumb";
 import { TopNav } from "@/components/editor/TopNav";
 import {
   X, FileCode, FilePlus, Circle, MoreHorizontal, Columns, ArrowUp,
-  ChevronDown, ChevronUp, Shield, Loader2, Sparkles,
-  Copy, FileText, GitBranch, Clock, Plus,
-  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info,
+  ChevronDown, ChevronUp, ChevronRight, Shield, Loader2, Sparkles,
+  FileText, GitBranch, Clock,
+  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
+import { modKey } from "@/lib/platform";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "highlight.js";
+
+const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: any; openFile: (path: string) => Promise<void> }) {
+  const toast = useToast();
+  const mod = modKey();
+  const firstFile = useMemo(() => findFirstFile(fileTree), [fileTree]);
+  const handleClick = useCallback(async () => { if (firstFile) { await openFile(firstFile); toast.info("Opened file", basename(firstFile)); } }, [firstFile, openFile, toast]);
+  return (
+    <button
+      className={`px-3 h-full transition-colors ${firstFile ? "text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover" : "text-acode-text-muted/40 cursor-not-allowed"}`}
+      onClick={handleClick}
+      disabled={!firstFile}
+      title={firstFile ? `Open file (${mod}P)` : "No files in workspace"}
+    >
+      <FilePlus className="w-3.5 h-3.5" />
+    </button>
+  );
+});
 
 // Map primary agent → UI-friendly label and icon. Mirrors ACode's
 // primary agent presentation.
@@ -31,6 +49,7 @@ export function EditorPane() {
   const { openTabs, activeFilePath, setActiveFile, closeTab, updateTabContent, markSaved, fileTree, openFile } = useWorkspace();
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath) ?? null;
+  const mod = modKey();
 
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
@@ -80,14 +99,7 @@ export function EditorPane() {
               </div>
             );
           })}
-          <button
-            className={`px-3 h-full transition-colors ${findFirstFile(fileTree) ? "text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover" : "text-acode-text-muted/40 cursor-not-allowed"}`}
-            onClick={async () => { const first = findFirstFile(fileTree); if (first) { await openFile(first); toast.info("Opened file", basename(first)); } }}
-            disabled={!findFirstFile(fileTree)}
-            title={findFirstFile(fileTree) ? "Open file (⌘P)" : "No files in workspace"}
-          >
-            <FilePlus className="w-3.5 h-3.5" />
-          </button>
+          <MemoizedOpenFileButton fileTree={fileTree} openFile={openFile} />
           <div className="flex-1" />
           <div className="flex items-center gap-0.5 pr-1">
             <button className="px-2 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors" title="Split editor" onClick={() => toast.info("Split", "Coming soon")}>
@@ -115,6 +127,7 @@ function EditorStatusBar() {
   const { openTabs, activeFilePath, markSaved } = useWorkspace();
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath);
+  const mod = modKey();
   if (!activeTab) return null;
   const language = activeTab.path.split(".").pop()?.toLowerCase() ?? "text";
   const cursor = activeTab.cursor;
@@ -151,7 +164,7 @@ function EditorStatusBar() {
               }
             }}
             className="flex items-center gap-1 text-acode-text-secondary hover:text-acode-text-primary transition-colors"
-            title="Save (⌘S)"
+            title={`Save (${mod}S)`}
           >
             <Circle className="w-2 h-2 fill-current text-acode-accent-primary" />
             <span>Unsaved</span>
@@ -170,45 +183,7 @@ function EditorStatusBar() {
   );
 }
 
-function SidebarToggleButton() {
-  const { sidebarOpen, toggleSidebar } = useUI();
-  return (
-    <button
-      className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
-        sidebarOpen
-          ? "text-acode-text-secondary hover:bg-acode-bg-hover"
-          : "text-acode-accent-primary bg-acode-accent-subtle hover:bg-acode-bg-hover"
-      }`}
-      title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
-      onClick={toggleSidebar}
-    >
-      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M9 4v16" />
-      </svg>
-    </button>
-  );
-}
-
-function RightPanelToggleButton() {
-  const { rightPanelOpen, toggleRightPanel } = useUI();
-  return (
-    <button
-      className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
-        rightPanelOpen
-          ? "text-acode-text-secondary hover:bg-acode-bg-hover"
-          : "text-acode-accent-primary bg-acode-accent-subtle hover:bg-acode-bg-hover"
-      }`}
-      title={rightPanelOpen ? "Hide right panel (⌘\\)" : "Show right panel (⌘\\)"}
-      onClick={toggleRightPanel}
-    >
-      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M15 4v16" />
-      </svg>
-    </button>
-  );
-}
+// Removed dead SidebarToggleButton and RightPanelToggleButton components
 
 function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions, onConfirm, onCancel }: {
   restoredVersionId: string;
@@ -258,6 +233,7 @@ function ChatView() {
   const toast = useToast();
   const activeAgent = getPrimaryAgent(activeAgentName);
   const agentInfo = AGENT_DISPLAY[activeAgentName];
+  const mod = modKey();
   const AgentIcon = agentInfo.icon;
   const scrollRef = useRef<HTMLDivElement>(null);
   const mainTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -273,6 +249,7 @@ function ChatView() {
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
   const [showAgentDropdown, setShowAgentDropdown] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [hoveredProvider, setHoveredProvider] = useState<string | null>(null);
   const [showFollowupAgentDropdown, setShowFollowupAgentDropdown] = useState(false);
   const [showFollowupModelDropdown, setShowFollowupModelDropdown] = useState(false);
   const [inputExpanded, setInputExpanded] = useState(false);
@@ -288,8 +265,6 @@ function ChatView() {
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
   const allModels = getAllModels();
   const currentModel = allModels.find((m) => m.model.modelId === selectedModelId);
-
-  const hasMessages = messages.length > 0;
 
   // Track whether user has scrolled up
   useEffect(() => {
@@ -310,17 +285,24 @@ function ChatView() {
     }
   }, [messages, streamingContent, thinkingContent]);
 
-  const hasMessagesRef = useRef(hasMessages);
-  hasMessagesRef.current = hasMessages;
-
-  // Auto-focus the chat input on mount
+  const hasMessages = messages.length > 0;
+  const hasMessagesRef = useRef(false);
   useEffect(() => {
+    hasMessagesRef.current = messages.length > 0;
+  }, [messages.length]);
+
+  // Auto-focus the chat input on mount and when switching between empty/non-empty
+  const prevMsgCountRef = useRef(messages.length);
+  useEffect(() => {
+    const prevCount = prevMsgCountRef.current;
+    const justEmptied = prevCount > 0 && messages.length === 0;
+    prevMsgCountRef.current = messages.length;
     const t = setTimeout(() => {
-      if (hasMessagesRef.current) followupTextareaRef.current?.focus();
-      else mainTextareaRef.current?.focus();
+      if (justEmptied || messages.length === 0) mainTextareaRef.current?.focus();
+      else if (messages.length > 0) followupTextareaRef.current?.focus();
     }, 200);
     return () => clearTimeout(t);
-  }, []);
+  }, [messages.length]);
 
   // Click-outside to close dropdowns
   useEffect(() => {
@@ -367,26 +349,26 @@ function ChatView() {
   /init       - Scans workspace & creates/bootstraps ACODE.md
 
 Keyboard Shortcuts:
-  ⌘K          - Open command palette
-  ⌘B          - Toggle sidebar panel
-  ⌘\\          - Toggle right panel
-  ⌘N          - Start new task/chat
-  ⌘,          - Open settings panel
-  ⌘[ / ⌘]     - Navigate task history backward/forward
+  ${mod}K          - Open command palette
+  ${mod}B          - Toggle sidebar panel
+  ${mod}\\          - Toggle right panel
+  ${mod}N          - Start new task/chat
+  ${mod},          - Open settings panel
+  ${mod}[ / ${mod}]     - Navigate task history backward/forward
   ?           - Show shortcuts cheatsheet (when not typing)`;
       chat.injectSystemMessage(helpText);
       setValue("");
       return;
     }
 
-    if (trimmed === "/compact") {
+            if (trimmed === "/compact") {
       const sessionId = chat.activeSessionId;
       if (sessionId) {
         toast.info("Compacting history...");
         chat.compactSessionHistory(sessionId).then(() => {
           chat.injectSystemMessage("Conversation history compacted successfully. Selected messages have been compressed to free up context window space.");
-        }).catch((err: any) => {
-          chat.injectSystemMessage(`Compaction failed: ${err.message || err}`);
+        }).catch((err: unknown) => {
+          chat.injectSystemMessage(`Compaction failed: ${(err as Error).message || String(err)}`);
         });
       } else {
         toast.warning("No active chat session to compact.");
@@ -402,8 +384,8 @@ Keyboard Shortcuts:
         import("@/lib/dreamAgent").then(({ runDreamCycle }) => {
           runDreamCycle(workspacePath).then((report) => {
             chat.injectSystemMessage(`### 🌙 Dream Cycle Report\nConsolidation cycle completed:\n- **Purged**: ${report.purgedCount} memories\n- **Validated**: ${report.validatedCount} file references\n- **Merged & Deduplicated**: ${report.deduplicatedCount} memories\n- **Adjusted relative dates**: ${report.dateAdjustedCount} memories`);
-          }).catch((err: any) => {
-            chat.injectSystemMessage(`Dream cycle failed: ${err.message || err}`);
+          }).catch((err: unknown) => {
+            chat.injectSystemMessage(`Dream cycle failed: ${(err as Error).message || String(err)}`);
           });
         });
       } else {
@@ -903,20 +885,41 @@ Add your project's common commands here so ACode knows how to build:
                         <ChevronDown className="w-3 h-3" />
                       </button>
                       {showModelDropdown && (
-                        <div className="absolute bottom-full right-0 mb-1 w-64 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden max-h-80 overflow-y-auto">
-                          {providers.filter((p) => p.enabled).map((p) => (
-                            <div key={p.id}>
-                              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-acode-text-muted border-b border-acode-border-primary">{p.name}</div>
-                              {p.models.map((m) => (
-                                <button key={m.modelId}
-                                  className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-acode-bg-hover transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover" : ""}`}
-                                  onClick={() => { setSelectedModel(m.modelId); setShowModelDropdown(false); }}>
-                                  <span className="flex-1 truncate text-acode-text-primary">{m.name}</span>
-                                  {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
-                                </button>
-                              ))}
-                            </div>
-                          ))}
+                        <div className="absolute bottom-full right-0 mb-1 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
+                          <div className="max-h-80 overflow-y-auto">
+                            {providers.filter((p) => p.enabled).map((p) => {
+                              const enabledModels = p.models.filter((m) => (m as any).enabled !== false);
+                              if (enabledModels.length === 0) return null;
+                              const hasActiveModel = enabledModels.some((m) => m.modelId === selectedModelId);
+                              return (
+                                <div key={p.id} className="relative"
+                                  onMouseEnter={() => setHoveredProvider(p.id)}
+                                  onMouseLeave={() => setHoveredProvider(null)}>
+                                  <div className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors ${hasActiveModel ? "text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}>
+                                    <span className="text-sm">{p.name}</span>
+                                    <div className="flex items-center gap-1">
+                                      {hasActiveModel && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
+                                      <ChevronRight className="w-3 h-3 text-acode-text-muted" />
+                                    </div>
+                                  </div>
+                                  {hoveredProvider === p.id && (
+                                    <div className="absolute left-full top-0 ml-0 w-48 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
+                                      <div className="max-h-64 overflow-y-auto">
+                                        {enabledModels.map((m) => (
+                                          <button key={m.modelId}
+                                            className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}
+                                            onClick={() => { setSelectedModel(m.modelId); setShowModelDropdown(false); }}>
+                                            <span className="flex-1 truncate">{m.name}</span>
+                                            {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
                           <div className="border-t border-acode-border-primary">
                             <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
                               onClick={() => { useSettingsView.getState().open("models"); setShowModelDropdown(false); }}>
@@ -967,7 +970,6 @@ Add your project's common commands here so ACode knows how to build:
                 </span>
                 <span className="text-acode-text-muted/40">·</span>
                 <span className="flex items-center gap-1">
-                  <Clock className="w-3 h-3" />
                   {formatTime(messages[0].timestamp)}
                 </span>
                 <span className="ml-auto flex items-center gap-1">
@@ -1135,7 +1137,7 @@ Add your project's common commands here so ACode knows how to build:
                       {providers.filter((p) => p.enabled).map((p) => (
                         <div key={p.id}>
                           <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-acode-text-muted border-b border-acode-border-primary">{p.name}</div>
-                          {p.models.map((m) => (
+                          {p.models.filter((m) => m.enabled !== false).map((m) => (
                             <button key={m.modelId}
                               className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-acode-bg-hover transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover" : ""}`}
                               onClick={() => { setSelectedModel(m.modelId); setShowFollowupModelDropdown(false); }}>
@@ -1212,7 +1214,9 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
   const { settings } = useSettings();
   const segments = splitCodeFences(message.content);
   const activeAgentName = useAgents((s) => s.activeAgentName);
-  const pendingActivities = useChat((s) => s.pendingActivities);
+  // For settled messages, activities come from message.activities (no store subscription needed).
+  // For the streaming message, subscribe to pendingActivities.
+  const pendingActivities = useChat((s) => pending ? s.pendingActivities : []);
   const activities = message.activities ?? (pending ? pendingActivities : []);
 
   // System message: styled notification box
@@ -1228,12 +1232,17 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
     );
   }
 
-  // User message: minimal — just the text, right-aligned, no bubble.
+  // User message: right-aligned with subtle background
   if (message.role === "user") {
+    // Skip empty user messages (e.g. tool result placeholders that leaked through)
+    if (!message.content && !message.attachments?.length) return null;
     return (
-      <div className="py-3 animate-fade-in">
+      <div className="py-2 animate-fade-in">
         <div className="flex justify-end">
-          <div className="max-w-[80%] text-right">
+          <div className="max-w-[80%]">
+            <div className="flex items-center gap-1.5 mb-1 justify-end">
+              <span className="text-[10px] text-acode-text-muted font-medium uppercase tracking-wider">You</span>
+            </div>
             {message.attachments && message.attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-2 justify-end">
                 {message.attachments.map((att) => (
@@ -1250,13 +1259,10 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
                 ))}
               </div>
             )}
-            <p className="text-[13px] text-acode-text-primary leading-relaxed whitespace-pre-wrap break-words">
-              {message.content}
-            </p>
-            <div className="flex items-center justify-end gap-2 mt-1">
-              <span className="text-[10px] text-acode-text-muted flex items-center gap-1">
-                <Clock className="w-2.5 h-2.5" />{formatTime(message.timestamp)}
-              </span>
+            <div className="bg-acode-bg-secondary border border-acode-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 text-right">
+              <p className="text-[13px] text-acode-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
+                {message.content}
+              </p>
             </div>
           </div>
         </div>
@@ -1264,18 +1270,38 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
     );
   }
 
-  // Assistant message: direct text, no card bubble, no avatar.
-  // Activity blocks (read / explore / skill / bash / plan) and tool calls
-  // render as inline single rows that expand on click.
+  // Assistant message: left-aligned with subtle accent
+  // Skip empty assistant messages (no content, no activities, no tool calls)
+  const hasContent = !!(message.content || pending);
+  const hasActivities = activities.length > 0;
+  const hasToolCalls = !!(message.toolCalls && message.toolCalls.length > 0);
+  const hasTodos = !!(message.todos && message.todos.length > 0);
+  const hasFileChanges = !!(message.fileChanges && message.fileChanges.length > 0);
+  const hasThinking = !!(message.thinking);
+  if (!hasContent && !hasActivities && !hasToolCalls && !hasTodos && !hasFileChanges && !hasThinking) {
+    return null;
+  }
+
   return (
-    <div className="py-3 animate-fade-in">
+    <div className="py-2 animate-fade-in">
+      {/* Assistant label */}
+      {!pending && (
+        <div className="flex items-center gap-1.5 mb-1">
+          <div className="w-1.5 h-1.5 rounded-full bg-acode-accent-primary" />
+          <span className="text-[10px] text-acode-text-muted font-medium uppercase tracking-wider">Assistant</span>
+          {activeAgentName && (
+            <span className="text-[9px] text-acode-text-muted/60 ml-1">({activeAgentName})</span>
+          )}
+        </div>
+      )}
+
       {/* Thinking block — model's reasoning, collapsed by default */}
       {!pending && message.thinking && (
         <ThinkingBlock content={message.thinking} />
       )}
 
       {/* Activity blocks (explore / read / skill / bash / plan) */}
-      {activities.length > 0 && (
+      {hasActivities && (
         <div className="my-0.5">
           {activities.map((activity, idx) => {
             const ak = activity.type + "-" + idx;
@@ -1294,13 +1320,16 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
             if (activity.type === "plan") {
               return <PlanBlock key={ak} plan={activity.plan} />;
             }
+            if (activity.type === "think") {
+              return <ThinkingBlock key={ak} content={activity.content} />;
+            }
             return null;
           })}
         </div>
       )}
 
-      {/* Main assistant message — direct text, no bubble */}
-      {(message.content || pending) && (
+      {/* Main assistant message — rendered with markdown */}
+      {hasContent && (
         <div className="text-[13px] text-acode-text-primary leading-relaxed my-0.5">
           {segments.filter((seg) => seg.type !== "text" || seg.content.trim()).map((seg, idx) =>
             seg.type === "code"
@@ -1314,34 +1343,24 @@ function ChatMessage({ message, pending }: { message: import("@acode/shared-type
       )}
 
       {/* Tool calls from this AI turn — read_file, edit_file, shell, etc. */}
-      {!pending && message.toolCalls && message.toolCalls.length > 0 && (
-        <ToolCallsList toolCalls={message.toolCalls} />
+      {!pending && hasToolCalls && (
+        <ToolCallsList toolCalls={message.toolCalls!} />
       )}
 
       {/* Todo checklist */}
-      {!pending && message.todos && message.todos.length > 0 && (
-        <TodoBlock todos={message.todos} />
+      {!pending && hasTodos && (
+        <TodoBlock todos={message.todos!} />
       )}
 
       {/* Changes card — shows file modifications from this AI turn */}
-      {!pending && message.fileChanges && message.fileChanges.length > 0 && (
-        <ChangesCard changes={message.fileChanges} />
+      {!pending && hasFileChanges && (
+        <ChangesCard changes={message.fileChanges!} />
       )}
 
       {/* Message meta footer — only when the message is settled. */}
       {!pending && (
-        <div className="flex items-center gap-3 mt-1.5 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity">
-          <span className="text-[10px] text-acode-text-muted flex items-center gap-1">
-            <Clock className="w-2.5 h-2.5" />{formatTime(message.timestamp)}
-          </span>
-          {gitStatus && (
-            <span className="text-[10px] text-acode-text-muted flex items-center gap-1">
-              <GitBranch className="w-2.5 h-2.5" />{gitStatus.branch}
-            </span>
-          )}
-          <span className="text-[10px] text-acode-text-muted font-medium">{activeAgentName}</span>
-          <span className="text-[10px] text-acode-text-muted">·</span>
-          <span className="text-[10px] text-acode-text-muted">{settings.selectedModel}</span>
+        <div className="flex items-center gap-2 mt-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <span className="text-[10px] text-acode-text-muted">{activeAgentName}</span>
           <div className="ml-auto flex items-center gap-0.5">
             <button
               className="p-1 rounded hover:bg-acode-bg-hover text-acode-text-muted hover:text-acode-text-primary transition-colors"
@@ -1436,9 +1455,23 @@ function MarkdownContent({ content }: { content: string }) {
         a: ({ href, children }) => (
           <a
             href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-acode-accent-primary hover:underline"
+            onClick={(e) => {
+              if (!href) return;
+              // Only intercept http/https links; let other links (e.g. file://, #) behave normally
+              try {
+                const parsed = new URL(href);
+                if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+                  e.preventDefault();
+                  const ui = useUI.getState();
+                  ui.addBrowserTab({ url: href });
+                  ui.setRightPanelTab("browser");
+                  if (!ui.rightPanelOpen) ui.setRightPanelOpen(true);
+                }
+              } catch {
+                // Invalid URL — let the browser handle it normally
+              }
+            }}
+            className="text-acode-accent-primary hover:underline cursor-pointer"
           >{children}</a>
         ),
         ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
@@ -1477,20 +1510,27 @@ function CodeBlock({ language, content }: { language: string; content: string })
   const isLong = lines.length > 30;
 
   const highlighted = useMemo(() => {
+    const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     if (language && hljs.getLanguage(language)) {
-      try { return hljs.highlight(content, { language }).value; } catch { /* fall through */ }
+      try { return hljs.highlight(content, { language }).value; } catch { return escapeHtml(content); }
     }
-    try { return hljs.highlightAuto(content).value; } catch { return content; }
+    try { return hljs.highlightAuto(content).value; } catch { return escapeHtml(content); }
   }, [content, language]);
 
-  const handleApply = () => {
+  const handleApply = useCallback(() => {
     if (!activeFilePath) {
       toast.info("No active file open in the editor");
       return;
     }
+    const { openTabs } = useWorkspace.getState();
+    const currentTab = openTabs.find((t) => t.path === activeFilePath);
+    const hasExistingContent = currentTab && currentTab.content.trim().length > 0;
+    if (hasExistingContent) {
+      if (!window.confirm(`Overwrite entire content of ${basename(activeFilePath)}? This cannot be undone.`)) return;
+    }
     updateTabContent(activeFilePath, content);
     toast.success("Applied to editor");
-  };
+  }, [activeFilePath, content, updateTabContent, toast]);
 
   return (
     <div className="my-2 bg-acode-bg-primary border border-acode-border-primary rounded-lg overflow-hidden">

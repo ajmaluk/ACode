@@ -39,7 +39,7 @@ import type {
   TodoItem,
   ToolCall,
 } from "@acode/shared-types";
-import { useChat, useDiffView, BUNDLED_SKILLS } from "@/store/useAppStore";
+import { useChat, useDiffView, useWorkspace, BUNDLED_SKILLS } from "@/store/useAppStore";
 import { basename, dirname } from "@/lib/pathUtils";
 
 // ============================================================================
@@ -154,7 +154,10 @@ export function ExploreBlock({ result }: { result: ExploreResult }) {
         {result.matches.map((m, idx) => (
           <li
             key={idx}
-            className="flex items-center gap-2 hover:opacity-100 opacity-90 font-mono text-[11px]"
+            className="flex items-center gap-2 hover:opacity-100 opacity-90 font-mono text-[11px] cursor-pointer hover:bg-acode-bg-hover rounded px-1 py-0.5 transition-colors"
+            onClick={() => {
+              useWorkspace.getState().openFile(m.path);
+            }}
           >
             {result.kind === "grep" || result.kind === "symbols" ? (
               <Search className="w-3 h-3 flex-shrink-0" />
@@ -213,12 +216,15 @@ export function ReadBlock({ path, content, lineRange }: { path: string; content:
 // SkillBlock — $skill invocation
 // ============================================================================
 
-export function SkillBlock({ name, args, content, status = "completed" }: { name: string; args?: string; content?: string; status?: "running" | "completed" | "failed" }) {
+export function SkillBlock({ name, args, content, status }: { name: string; args?: string; content?: string; status?: "running" | "completed" | "failed" }) {
   const skill = BUNDLED_SKILLS.find((s: SkillInfo) => s.name === name);
+  const statusIcon = status === "running" ? <span className="w-1.5 h-1.5 rounded-full bg-acode-accent-primary animate-pulse" />
+    : status === "failed" ? <span className="w-1.5 h-1.5 rounded-full bg-acode-git-deleted" />
+    : null;
   return (
     <ActivityRow
       label={<>Invoked <span className="font-mono">${name}</span>{args ? <span className="opacity-70 ml-1.5 font-mono">{args}</span> : null}</>}
-      trailing={skill ? <span className="text-[10px] italic opacity-70 truncate max-w-[200px]">{skill.description}</span> : null}
+      trailing={<>{statusIcon}{skill ? <span className="text-[10px] italic opacity-70 truncate max-w-[200px]">{skill.description}</span> : null}</>}
     >
       {content && (
         <pre className="font-mono text-[11px] bg-acode-bg-secondary/30 rounded-md p-2 max-h-60 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
@@ -279,13 +285,41 @@ const TOOL_META: Record<string, { icon: React.ElementType; label: string; color:
   edit: { icon: Code2, label: "Edited", color: "text-acode-text-muted" },
   write_file: { icon: FilePlus, label: "Wrote", color: "text-acode-text-muted" },
   write: { icon: FilePlus, label: "Wrote", color: "text-acode-text-muted" },
+  create_file: { icon: FilePlus, label: "Created", color: "text-acode-text-muted" },
   bash: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
   shell: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
+  execute: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
   run_command: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
   file_search: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
+  search_files: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
   grep: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
+  grep_file: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
+  list_dir: { icon: FileText, label: "Listed", color: "text-acode-text-muted" },
   webfetch: { icon: Code2, label: "Fetched", color: "text-acode-text-muted" },
   websearch: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
+  git_status: { icon: Code2, label: "Git Status", color: "text-acode-text-muted" },
+  git_commit: { icon: Code2, label: "Git Commit", color: "text-acode-text-muted" },
+  git_log: { icon: Code2, label: "Git Log", color: "text-acode-text-muted" },
+  clipboard_read: { icon: FileText, label: "Clipboard", color: "text-acode-text-muted" },
+  clipboard_write: { icon: FileText, label: "Clipboard", color: "text-acode-text-muted" },
+  notify: { icon: Shield, label: "Notify", color: "text-acode-text-muted" },
+  system_info: { icon: Code2, label: "System Info", color: "text-acode-text-muted" },
+  open_url: { icon: Code2, label: "Open URL", color: "text-acode-text-muted" },
+  launch_app: { icon: Terminal, label: "Launched", color: "text-acode-text-muted" },
+  reveal_in_finder: { icon: FileText, label: "Revealed", color: "text-acode-text-muted" },
+  memory_save: { icon: Shield, label: "Memory Save", color: "text-acode-text-muted" },
+  memory_search: { icon: Search, label: "Memory Search", color: "text-acode-text-muted" },
+  memory_delete: { icon: X, label: "Memory Delete", color: "text-acode-text-muted" },
+  memory_stats: { icon: Code2, label: "Memory Stats", color: "text-acode-text-muted" },
+  memory_maintain: { icon: Shield, label: "Memory Maintain", color: "text-acode-text-muted" },
+  memory_extract: { icon: Code2, label: "Memory Extract", color: "text-acode-text-muted" },
+  memory_export: { icon: Code2, label: "Memory Export", color: "text-acode-text-muted" },
+  memory_import: { icon: Code2, label: "Memory Import", color: "text-acode-text-muted" },
+  get_env: { icon: Code2, label: "Get Env", color: "text-acode-text-muted" },
+  get_screen_info: { icon: Code2, label: "Screen Info", color: "text-acode-text-muted" },
+  list_processes: { icon: Terminal, label: "Processes", color: "text-acode-text-muted" },
+  kill_process: { icon: X, label: "Kill Process", color: "text-acode-text-muted" },
+  get_disk_space: { icon: Code2, label: "Disk Space", color: "text-acode-text-muted" },
 };
 
 function getToolMeta(name: string) {
@@ -307,7 +341,6 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
   const [open, setOpen] = useState(false);
   const { resolveToolApproval } = useChat();
   const openDiff = useDiffView((s) => s.openFile);
-  const setDiff = useDiffView((s) => s.setOpen);
   const needsApproval = toolCall.status === "awaiting-approval";
 
   const meta = getToolMeta(toolCall.name);
@@ -319,6 +352,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
     if (typeof toolCall.args.pattern === "string") return toolCall.args.pattern;
     if (typeof toolCall.args.skill === "string") return toolCall.args.skill;
     if (typeof toolCall.args.url === "string") return toolCall.args.url;
+    if (typeof toolCall.args.dir === "string") return toolCall.args.dir;
     return "";
   })();
 
@@ -355,13 +389,13 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
                 className="text-acode-accent-primary hover:underline"
                 onClick={(e) => {
                   e.stopPropagation();
+                  const isWrite = toolCall.name === "write_file" || toolCall.name === "write";
                   openDiff({
                     path: toolCall.args.path as string,
-                    action: "modified",
-                    additions: 1,
-                    deletions: 0,
+                    action: isWrite ? "created" : "modified",
+                    additions: toolCall.diff?.hunks.reduce((n, h) => n + h.newLines, 0) ?? 0,
+                    deletions: toolCall.diff?.hunks.reduce((n, h) => n + h.oldLines, 0) ?? 0,
                   });
-                  setDiff(true);
                 }}
               >
                 Open diff
@@ -413,7 +447,6 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
 
 export function ChangesCard({ changes }: { changes: FileChange[] }) {
   const openDiff = useDiffView((s) => s.openFile);
-  const setDiff = useDiffView((s) => s.setOpen);
   const totalAdded = changes.reduce((s, c) => s + c.additions, 0);
   const totalRemoved = changes.reduce((s, c) => s + c.deletions, 0);
 
@@ -430,7 +463,7 @@ export function ChangesCard({ changes }: { changes: FileChange[] }) {
       <ul className="space-y-0.5 max-h-80 overflow-y-auto scrollbar-thin">
         {changes.map((c) => (
           <li key={c.path}>
-            <FileChangeRow change={c} onOpenDiff={() => { openDiff(c); setDiff(true); }} />
+            <FileChangeRow change={c} onOpenDiff={() => { openDiff(c); }} />
           </li>
         ))}
       </ul>

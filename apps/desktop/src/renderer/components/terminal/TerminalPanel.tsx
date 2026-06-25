@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { useTerminal, useWorkspace } from "@/store/useAppStore";
-import { Plus, X, Trash2, ChevronDown, Bot, Wifi } from "lucide-react";
+import { useTerminal, useWorkspace, useChat } from "@/store/useAppStore";
+import { Plus, X, Trash2, Bot, Wifi } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
 
@@ -48,9 +48,9 @@ Type ${ANSI.bold}help${ANSI.reset} to see available commands. Try ${ANSI.bold}ls
 export function TerminalPanel() {
   const { tabs, activeTabId, addTab, closeTab, setActiveTab } = useTerminal();
   const { activeWorkspaceId, workspaces } = useWorkspace();
+  const isStreaming = useChat((s) => s.isStreaming);
   const containerRef = useRef<HTMLDivElement>(null);
   const procIdsRef = useRef<Map<string, string>>(new Map());
-  const [agentTyping] = useState(false);
 
   const terminalsRef = useRef<Map<string, Terminal>>(new Map());
   const fitAddonsRef = useRef<Map<string, FitAddon>>(new Map());
@@ -226,7 +226,7 @@ export function TerminalPanel() {
         <div className="flex-1" />
 
         <div className="flex items-center gap-1.5 px-3 text-[10px] text-acode-text-muted">
-          {agentTyping ? (
+          {isStreaming ? (
             <>
               <Bot className="w-3 h-3 text-acode-accent-primary animate-pulse-soft" />
               <span>agent running</span>
@@ -241,22 +241,17 @@ export function TerminalPanel() {
 
         <button
           className="px-3 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+          title="Clear (Ctrl+L)"
           onClick={() => {
-            if (activeTabId) {
-              const term = terminalsRef.current.get(activeTabId);
-              term?.clear();
-              term?.write(ANSI.prompt);
+            if (!activeTabId) return;
+            const term = terminalsRef.current.get(activeTabId);
+            if (term) {
+              term.clear();
+              term.write(ANSI.prompt);
             }
           }}
-          title="Clear (Ctrl+L)"
         >
           <Trash2 className="w-3.5 h-3.5" />
-        </button>
-        <button
-          className="px-3 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
-          title="Toggle output"
-        >
-          <ChevronDown className="w-3.5 h-3.5" />
         </button>
       </div>
 

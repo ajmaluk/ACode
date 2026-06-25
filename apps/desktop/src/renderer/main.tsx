@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { ensureAcodeAPI } from "./lib/acodeAPI";
 import { registerHookListeners } from "./lib/hookListeners";
 import "./index.css";
@@ -21,7 +22,9 @@ if (!rootEl) {
 } else {
   createRoot(rootEl).render(
     <StrictMode>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </StrictMode>
   );
 }
