@@ -61,7 +61,7 @@ export function TerminalPanel() {
     activeTabIdRef.current = activeTabId;
   }, [activeTabId]);
 
-  const cwd = workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? process.cwd();
+  const cwd = workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ".";
 
   const initializeTerminal = useCallback((tabId: string, element: HTMLDivElement) => {
     if (terminalsRef.current.has(tabId)) {

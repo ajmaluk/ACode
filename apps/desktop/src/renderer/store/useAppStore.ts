@@ -2211,7 +2211,7 @@ type TerminalState = {
 };
 
 export const useTerminal = create<TerminalState>((set) => ({
-  tabs: [{ id: "t-1", title: "zsh", cwd: process.cwd() }],
+  tabs: [{ id: "t-1", title: "zsh", cwd: "." }],
   activeTabId: "t-1",
   output: {},
   addTab(cwd) {

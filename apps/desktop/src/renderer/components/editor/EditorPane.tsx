@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import ReactDOM from "react-dom";
 import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, getPrimaryAgent } from "@/store/useAppStore";
 import type { PrimaryAgentName } from "@acode/shared-types";
 import { CodeView } from "@/components/editor/Editor";
@@ -250,9 +251,15 @@ function ChatView() {
   const [showAgentDropdown, setShowAgentDropdown] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [hoveredProvider, setHoveredProvider] = useState<string | null>(null);
+  const providerHoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showFollowupAgentDropdown, setShowFollowupAgentDropdown] = useState(false);
   const [showFollowupModelDropdown, setShowFollowupModelDropdown] = useState(false);
   const [inputExpanded, setInputExpanded] = useState(false);
+
+  // Cleanup provider hover timeout on unmount
+  useEffect(() => {
+    return () => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); };
+  }, []);
 
   // Refs for click-outside detection
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -261,6 +268,7 @@ function ChatView() {
   const modelRef = useRef<HTMLDivElement>(null);
   const followupAgentRef = useRef<HTMLDivElement>(null);
   const followupModelRef = useRef<HTMLDivElement>(null);
+  const providerRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
   const allModels = getAllModels();
@@ -681,7 +689,7 @@ Add your project's common commands here so ACode knows how to build:
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {!hasMessages ? (
-          <div className="relative h-full flex flex-col items-center justify-center px-8 -mt-10 overflow-hidden">
+          <div className="relative h-full flex flex-col items-center justify-center px-8 -mt-10">
             {/* Large background A watermark — low opacity, behind everything */}
             <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center select-none">
               <span
@@ -885,16 +893,17 @@ Add your project's common commands here so ACode knows how to build:
                         <ChevronDown className="w-3 h-3" />
                       </button>
                       {showModelDropdown && (
-                        <div className="absolute bottom-full right-0 mb-1 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
+                        <div className="absolute bottom-full right-0 mb-1 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 min-w-[220px]" data-dropdown-body>
                           <div className="max-h-80 overflow-y-auto">
                             {providers.filter((p) => p.enabled).map((p) => {
                               const enabledModels = p.models.filter((m) => (m as any).enabled !== false);
                               if (enabledModels.length === 0) return null;
                               const hasActiveModel = enabledModels.some((m) => m.modelId === selectedModelId);
                               return (
-                                <div key={p.id} className="relative"
-                                  onMouseEnter={() => setHoveredProvider(p.id)}
-                                  onMouseLeave={() => setHoveredProvider(null)}>
+                                <div key={p.id}
+                                  ref={(el) => { providerRowRefs.current[p.id] = el; }}
+                                  onMouseEnter={() => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); setHoveredProvider(p.id); }}
+                                  onMouseLeave={() => { providerHoverTimeout.current = setTimeout(() => setHoveredProvider(null), 200); }}>
                                   <div className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors ${hasActiveModel ? "text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}>
                                     <span className="text-sm">{p.name}</span>
                                     <div className="flex items-center gap-1">
@@ -902,20 +911,6 @@ Add your project's common commands here so ACode knows how to build:
                                       <ChevronRight className="w-3 h-3 text-acode-text-muted" />
                                     </div>
                                   </div>
-                                  {hoveredProvider === p.id && (
-                                    <div className="absolute left-full top-0 ml-0 w-48 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
-                                      <div className="max-h-64 overflow-y-auto">
-                                        {enabledModels.map((m) => (
-                                          <button key={m.modelId}
-                                            className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}
-                                            onClick={() => { setSelectedModel(m.modelId); setShowModelDropdown(false); }}>
-                                            <span className="flex-1 truncate">{m.name}</span>
-                                            {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
                                 </div>
                               );
                             })}
@@ -929,6 +924,36 @@ Add your project's common commands here so ACode knows how to build:
                           </div>
                         </div>
                       )}
+                      {/* Sub-dropdown rendered OUTSIDE the scrollable container via portal-like approach */}
+                      {showModelDropdown && hoveredProvider && (() => {
+                        const p = providers.find((pr) => pr.id === hoveredProvider);
+                        if (!p) return null;
+                        const enabledModels = p.models.filter((m) => (m as any).enabled !== false);
+                        const rowEl = providerRowRefs.current[hoveredProvider];
+                        const dropdownEl = modelRef.current?.querySelector('[data-dropdown-body]');
+                        if (!rowEl || !dropdownEl) return null;
+                        const rowRect = rowEl.getBoundingClientRect();
+                        const dropRect = dropdownEl.getBoundingClientRect();
+                        const topOffset = rowRect.top - dropRect.top;
+                        return ReactDOM.createPortal(
+                          <div className="fixed w-56 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-[100]"
+                            style={{ left: dropRect.right + 2, top: dropRect.top + topOffset }}
+                            onMouseEnter={() => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); }}
+                            onMouseLeave={() => { providerHoverTimeout.current = setTimeout(() => setHoveredProvider(null), 200); }}>
+                            <div className="max-h-64 overflow-y-auto">
+                              {enabledModels.map((m) => (
+                                <button key={m.modelId}
+                                  className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}
+                                  onClick={() => { setSelectedModel(m.modelId); setShowModelDropdown(false); }}>
+                                  <span className="flex-1 truncate">{m.name}</span>
+                                  {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
+                                </button>
+                              ))}
+                            </div>
+                          </div>,
+                          document.body
+                        );
+                      })()}
                     </div>
                     <button
                       className="w-8 h-8 flex items-center justify-center rounded-lg bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
