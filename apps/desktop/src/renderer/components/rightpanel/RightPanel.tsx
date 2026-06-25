@@ -35,13 +35,26 @@ export function RightPanel() {
   useEffect(() => { void refresh(); }, [refresh]);
 
   // Unified tab-switching + panel-opening effect with priority: terminal > diff > browser > git
+  // Note: `tab` is NOT in deps — it's read from the store snapshot via `useUI.getState()`
+  // to avoid the infinite loop caused by setTab() re-triggering this effect.
   useEffect(() => {
-    if (tab === "terminal") return; // Keep terminal open if explicitly selected
+    const currentTab = useUI.getState().rightPanelTab;
+    if (currentTab === "terminal") return;
     const needsOpen = !useUI.getState().rightPanelOpen;
-    if (diffOpen && diffCurrent) { setTab("diff"); if (needsOpen) useUI.getState().setRightPanelOpen(true); return; }
-    if (activeBrowserTabId && browserTabs.length > 0) { setTab("browser"); if (needsOpen) useUI.getState().setRightPanelOpen(true); return; }
-    if (activeWorkspaceId) setTab("git");
-    else setTab("browser");
+    if (diffOpen && diffCurrent) {
+      if (currentTab !== "diff") setTab("diff");
+      if (needsOpen) useUI.getState().setRightPanelOpen(true);
+      return;
+    }
+    if (activeBrowserTabId && browserTabs.length > 0) {
+      if (currentTab !== "browser") setTab("browser");
+      if (needsOpen) useUI.getState().setRightPanelOpen(true);
+      return;
+    }
+    // Only set a default tab if current isn't one of the main tabs
+    if (currentTab !== "git" && currentTab !== "browser" && currentTab !== "diff" && currentTab !== "review" && currentTab !== "progress") {
+      setTab(activeWorkspaceId ? "git" : "browser");
+    }
   }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab]);
 
   return (
@@ -756,14 +769,16 @@ function BrowserTab() {
               title={activeTab.title}
               className="w-full h-full border-0 bg-white"
               sandbox="allow-same-origin allow-scripts allow-popups"
-              onLoad={() => {
-                if (activeTab.loading) {
-                  useUI.setState((s) => ({
-                    browserTabs: s.browserTabs.map((t) =>
-                      t.id === activeTab.id ? { ...t, loading: false } : t
-                    ),
-                  }));
-                }
+              onLoad={(e) => {
+                const currentTab = useUI.getState().browserTabs.find((t) => t.id === activeTab.id);
+                if (!currentTab || !currentTab.loading) return;
+                const iframe = e.target as HTMLIFrameElement;
+                let pageTitle = currentTab.title;
+                try { pageTitle = iframe.contentDocument?.title || pageTitle; } catch { /* cross-origin */ }
+                useUI.getState().updateBrowserTab(currentTab.id, {
+                  loading: false,
+                  ...(pageTitle !== currentTab.title ? { title: pageTitle } : {}),
+                });
               }}
             />
             {activeTab.loading && (

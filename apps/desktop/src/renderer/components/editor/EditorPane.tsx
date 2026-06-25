@@ -316,6 +316,8 @@ function ChatView() {
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
+      // Skip if click is inside a portal-rendered model sub-dropdown
+      if ((target as HTMLElement)?.closest?.("[data-model-subdropdown]")) return;
       if (workspaceRef.current && !workspaceRef.current.contains(target)) setShowWorkspaceDropdown(false);
       if (branchRef.current && !branchRef.current.contains(target)) setShowBranchDropdown(false);
       if (agentRef.current && !agentRef.current.contains(target)) setShowAgentDropdown(false);
@@ -938,6 +940,7 @@ Add your project's common commands here so ACode knows how to build:
                         return ReactDOM.createPortal(
                           <div className="fixed w-56 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-[100]"
                             style={{ left: dropRect.right + 2, top: dropRect.top + topOffset }}
+                            data-model-subdropdown
                             onMouseEnter={() => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); }}
                             onMouseLeave={() => { providerHoverTimeout.current = setTimeout(() => setHoveredProvider(null), 200); }}>
                             <div className="max-h-64 overflow-y-auto">
@@ -1003,7 +1006,7 @@ Add your project's common commands here so ACode knows how to build:
                 </span>
               </div>
             )}
-            {messages.map((m) => <ChatMessage key={m.id} message={m} />)}
+            {messages.map((m) => <ChatMessage key={m.id} message={m} activeAgentName={activeAgentName} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-acode-accent-subtle border border-acode-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1040,6 +1043,7 @@ Add your project's common commands here so ACode knows how to build:
                   ...(thinkingContent ? { thinking: thinkingContent } : {}),
                 }}
                 pending
+                activeAgentName={activeAgentName}
               />
             )}
             {isStreaming && !streamingContent && (
@@ -1233,15 +1237,14 @@ function RunningToolsSection({ toolCalls }: { toolCalls: import("@acode/shared-t
   );
 }
 
-function ChatMessage({ message, pending }: { message: import("@acode/shared-types").ChatMessage; pending?: boolean }) {
+const EMPTY_ACTIVITIES: never[] = [];
+
+function ChatMessage({ message, pending, activeAgentName }: { message: import("@acode/shared-types").ChatMessage; pending?: boolean; activeAgentName?: string }) {
   const toast = useToast();
-  const { status: gitStatus } = useGit();
-  const { settings } = useSettings();
   const segments = splitCodeFences(message.content);
-  const activeAgentName = useAgents((s) => s.activeAgentName);
   // For settled messages, activities come from message.activities (no store subscription needed).
   // For the streaming message, subscribe to pendingActivities.
-  const pendingActivities = useChat((s) => pending ? s.pendingActivities : []);
+  const pendingActivities = useChat((s) => pending ? s.pendingActivities : EMPTY_ACTIVITIES);
   const activities = message.activities ?? (pending ? pendingActivities : []);
 
   // System message: styled notification box

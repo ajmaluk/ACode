@@ -120,6 +120,13 @@ export async function initDatabase(workspacePath: string): Promise<Database> {
 }
 
 /**
+ * Check if the database is initialized and ready.
+ */
+export function isDatabaseReady(): boolean {
+  return dbInstance !== null;
+}
+
+/**
  * Get the current database instance.
  * Throws if not initialized.
  */

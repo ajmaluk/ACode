@@ -42,7 +42,7 @@ export function dirname(p: string): string {
   return posix.slice(0, idx);
 }
 
-/** Join segments with a forward slash. Ignores empty segments. */
+/** Join segments with a forward slash. Ignores empty segments. Preserves leading `/` for absolute paths. */
 export function joinPath(...segments: string[]): string {
   const parts: string[] = [];
   for (const s of segments) {
@@ -51,7 +51,11 @@ export function joinPath(...segments: string[]): string {
       if (piece.length > 0) parts.push(piece);
     }
   }
-  return parts.join("/");
+  // Preserve leading "/" if the original first non-empty segment was absolute
+  const firstSegment = segments.find((s) => s && s.length > 0) ?? "";
+  const leadingSlash = toPosix(firstSegment).startsWith("/");
+  const joined = parts.join("/");
+  return leadingSlash ? "/" + joined : joined;
 }
 
 /**

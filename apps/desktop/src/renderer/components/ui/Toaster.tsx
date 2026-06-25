@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { CheckCircle2, XCircle, AlertTriangle, Info, X } from "lucide-react";
 
 export type ToastKind = "info" | "success" | "warning" | "error";
@@ -140,12 +140,12 @@ export function Toaster() {
 
 export function useToast() {
   const push = useToasts((s) => s.push);
-  return {
+  return useMemo(() => ({
     info: (title: string, description?: string) => push({ kind: "info", title, description }),
     success: (title: string, description?: string) => push({ kind: "success", title, description }),
     warning: (title: string, description?: string) => push({ kind: "warning", title, description }),
     error: (title: string, description?: string) => push({ kind: "error", title, description }),
-  };
+  }), [push]);
 }
 
 // Add to globals via a small util — keeps the keyframes in sync

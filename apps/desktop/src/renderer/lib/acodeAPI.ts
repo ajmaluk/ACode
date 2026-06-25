@@ -116,22 +116,29 @@ export function getActiveProvider(requireModel = true): {
 }
 
 function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining: string } {
-  const lines = buffer.split("\n");
+  // Normalize CRLF to LF (some proxies/CDNs send CRLF)
+  const normalized = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
   const parsed: { data: string }[] = [];
   let currentData = "";
   let lastCompleteIdx = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith("data:")) {
+    if (line === "") {
+      // Empty line = event boundary
+      if (currentData) {
+        if (currentData !== "[DONE]") parsed.push({ data: currentData });
+        currentData = "";
+      }
+      lastCompleteIdx = i + 1;
+    } else if (line.startsWith(":")) {
+      // SSE comment line — skip (e.g. heartbeat)
+      lastCompleteIdx = i + 1;
+    } else if (line.startsWith("data:")) {
       const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
       currentData += (currentData ? "\n" : "") + dataContent;
-    } else if (line === "" && currentData) {
-      if (currentData !== "[DONE]") parsed.push({ data: currentData });
-      currentData = "";
-      lastCompleteIdx = i + 1;
-    } else if (line === "" && !currentData) {
-      lastCompleteIdx = i + 1;
     }
+    // Other fields (event:, id:, retry:) are silently ignored per SSE spec
   }
   const remaining = lines.slice(lastCompleteIdx).join("\n");
   return { parsed, remaining };
@@ -690,23 +697,26 @@ const mockAcodeAPI: AcodeAPI = {
         let sqliteMemoriesBlock = "";
         if (workspacePath) {
           try {
-            const { searchMemories, getCriticalMemories } = await import("./memoryStore");
-            const critical = await getCriticalMemories(5);
-            const queryText = cleanPrompt || prompt;
-            const relevant = queryText ? await searchMemories(queryText, { limit: 5 }).catch(() => []) : [];
+            const { isDatabaseReady } = await import("./database");
+            if (isDatabaseReady()) {
+              const { searchMemories, getCriticalMemories } = await import("./memoryStore");
+              const critical = await getCriticalMemories(5);
+              const queryText = cleanPrompt || prompt;
+              const relevant = queryText ? await searchMemories(queryText, { limit: 5 }).catch(() => []) : [];
 
-            // Deduplicate relevant memories that are already in critical
-            const criticalIds = new Set(critical.map((m) => m.id));
-            const uniqueRelevant = relevant.filter((m) => !criticalIds.has(m.id));
+              // Deduplicate relevant memories that are already in critical
+              const criticalIds = new Set(critical.map((m) => m.id));
+              const uniqueRelevant = relevant.filter((m) => !criticalIds.has(m.id));
 
-            const allInjected = [...critical, ...uniqueRelevant];
-            if (allInjected.length > 0) {
-              sqliteMemoriesBlock = `\n\n=== RETRIEVED WORKSPACE MEMORIES ===\nThese are relevant memories retrieved from the persistent workspace memory store. Keep them in mind during the session:\n`;
-              for (const mem of allInjected) {
-                const tierIcon = { critical: "🔴", high: "🟡", medium: "🔵", low: "⚪" }[mem.tier];
-                sqliteMemoriesBlock += `\n- ${tierIcon} [${mem.category}] ${mem.summary} (tags: ${mem.tags.join(", ")})\n  ${mem.content.split("\n").join("\n  ")}\n`;
+              const allInjected = [...critical, ...uniqueRelevant];
+              if (allInjected.length > 0) {
+                sqliteMemoriesBlock = `\n\n=== RETRIEVED WORKSPACE MEMORIES ===\nThese are relevant memories retrieved from the persistent workspace memory store. Keep them in mind during the session:\n`;
+                for (const mem of allInjected) {
+                  const tierIcon = { critical: "🔴", high: "🟡", medium: "🔵", low: "⚪" }[mem.tier];
+                  sqliteMemoriesBlock += `\n- ${tierIcon} [${mem.category}] ${mem.summary} (tags: ${mem.tags.join(", ")})\n  ${mem.content.split("\n").join("\n  ")}\n`;
+                }
+                sqliteMemoriesBlock += `====================================`;
               }
-              sqliteMemoriesBlock += `====================================`;
             }
           } catch (e) {
             console.warn("Failed to retrieve memories for prompt injection:", e);

@@ -206,7 +206,7 @@ async function searchMemoriesFallback(
   const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
 
   let sql = `SELECT * FROM memories WHERE (content LIKE ? OR summary LIKE ? OR tags LIKE ?)`;
-  const likePattern = `%${query}%`;
+  const likePattern = `%${query.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
   const params: (string | number)[] = [likePattern, likePattern, likePattern];
 
   if (category) {
@@ -410,7 +410,7 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
           `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)`,
           [parsed.id, parsed.category, parsed.tier, parsed.content, parsed.summary, JSON.stringify(parsed.tags),
-           parsed.sourceSession ?? null, parsed.sourceFile ?? (parsed.sourceFile || filePath), parsed.createdAt, parsed.updatedAt, parsed.stale ? 1 : 0]
+           parsed.sourceSession ?? null, parsed.sourceFile || filePath, parsed.createdAt, parsed.updatedAt, parsed.stale ? 1 : 0]
         );
       }
       count++;
