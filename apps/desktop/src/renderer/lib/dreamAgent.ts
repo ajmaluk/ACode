@@ -24,7 +24,7 @@ import {
   jaccardSimilarity
 } from "./memoryStore";
 import { getDb } from "./database";
-import { ensureDalamAPI } from "./dalamAPI";
+import { createDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
 
@@ -39,7 +39,7 @@ export interface DreamReport {
  * Runs a full memory dream consolidation cycle using the active LLM.
  */
 export async function runDreamCycle(workspacePath: string): Promise<DreamReport> {
-  const api = ensureDalamAPI();
+  const api = createDalamAPI();
   const model = useSettings.getState().settings.selectedModel;
 
   if (!model) {
@@ -335,7 +335,7 @@ function calculateTokenSimilarity(textA: string, textB: string): number {
  */
 export async function executeWorkspaceDreamOptimization(workspacePath: string): Promise<void> {
   const skillsPath = joinPath(workspacePath, ".dalam/skills");
-  const api = ensureDalamAPI();
+  const api = createDalamAPI();
   
   try {
     const { readDir, readFile, writeFile, remove } = await import("@tauri-apps/plugin-fs");

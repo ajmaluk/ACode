@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useWorkspace, useSettings, useSkillsMcp } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
 import { Sparkles, FolderOpen, Zap, Code2, Brain, ArrowRight, X } from "lucide-react";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 import { modKey } from "@/lib/platform";
 
 function getSteps() {

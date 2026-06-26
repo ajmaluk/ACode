@@ -2,13 +2,12 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
-import { ensureDalamAPI } from "./lib/dalamAPI";
+import { createDalamAPI } from "./lib/dalamAPI";
 import { registerHookListeners } from "./lib/hookListeners";
 import "./index.css";
 
-// Initialize the API bridge (real in Electron, mock in browser)
 try {
-  ensureDalamAPI();
+  createDalamAPI();
 } catch (err) {
   console.error("Failed to initialize Dalam API:", err);
 }

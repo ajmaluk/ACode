@@ -93,7 +93,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
         (w) => w.id === useWorkspace.getState().activeWorkspaceId
       );
       if (workspace) {
-        const api = (await import("./dalamAPI")).ensureDalamAPI();
+        const api = (await import("./dalamAPI")).createDalamAPI();
         const summaryPath = `${workspace.path}/.dalam/session-history.json`;
         const { exists } = await import("@tauri-apps/plugin-fs");
 

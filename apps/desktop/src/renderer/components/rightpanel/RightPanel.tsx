@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useGit, useChat, useWorkspace, useDiffView, useUI, useTerminal } from "@/store/useAppStore";
 import type { GitStatus } from "@dalam/shared-types";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 import { computeDiff } from "@/lib/diff";
 import { useToast } from "@/components/ui/Toaster";
 import { TerminalPanel } from "../terminal/TerminalPanel";
@@ -147,7 +147,7 @@ function DiffTab() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     void (async () => {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       try {
         // Modified content: always read the current file
         const currentContent = await api.fs.readFile(current.path);
@@ -539,7 +539,7 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
   const handleCommit = useCallback(async () => {
     if (!commitMsg.trim()) { toast.error("Empty", "Commit message is required"); return; }
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       const wsPath = useWorkspace.getState().workspaces.find(
         (w) => w.id === useWorkspace.getState().activeWorkspaceId
       )?.path ?? ".";

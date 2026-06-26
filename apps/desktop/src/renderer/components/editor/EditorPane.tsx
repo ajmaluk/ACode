@@ -12,7 +12,7 @@ import {
   FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy, Code2,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
@@ -315,7 +315,7 @@ export function EditorPane() {
         const tab = openTabs.find((t) => t.path === activeFilePath);
         if (!tab) return;
         try {
-          const api = ensureDalamAPI();
+          const api = createDalamAPI();
           await api.fs.writeFile(tab.path, tab.content);
           markSaved(tab.path);
           toast.success("File saved", tab.name);
@@ -412,7 +412,7 @@ function EditorStatusBar() {
           <button
             onClick={async () => {
               try {
-                const api = ensureDalamAPI();
+                const api = createDalamAPI();
                 await api.fs.writeFile(activeTab.path, activeTab.content);
                 markSaved(activeTab.path);
               } catch (err) {
@@ -789,7 +789,7 @@ Keyboard Shortcuts:
       void (async () => {
         try {
           toast.info("Scanning workspace...");
-          const api = ensureDalamAPI();
+          const api = createDalamAPI();
           const files = fileTree; 
           const filesText = files.length > 0 
             ? files.map(f => `  - \`${f.name}\` (${f.type})`).join("\n")

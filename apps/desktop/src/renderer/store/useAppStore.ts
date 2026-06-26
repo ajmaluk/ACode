@@ -23,7 +23,7 @@ import type {
   Workspace,
 } from "@dalam/shared-types";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection, type PermissionKey } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
@@ -178,7 +178,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   settings: { ...DEFAULT_SETTINGS },
   loaded: false,
   async load() {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     try {
       const all = await api.settings.getAll();
       set({ settings: all, loaded: true });
@@ -191,12 +191,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
     }
   },
   async update(key, value) {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     await api.settings.set(key, value as never);
     set((s) => ({ settings: { ...s.settings, [key]: value } }));
   },
   async updateSettings(updates) {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     for (const [key, value] of Object.entries(updates)) {
       await api.settings.set(key as keyof AppSettings, value as never);
     }
@@ -331,7 +331,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   loading: false,
 
   async openWorkspace() {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     set({ loading: true });
     try {
       const path = await api.system.openDirectoryPicker();
@@ -365,7 +365,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async loadWorkspace() {
     set({ loading: true });
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       const path = await api.system.openDirectoryPicker();
       if (!path) { set({ loading: false }); return; }
       await initWorkspaceMemory(api, path);
@@ -412,7 +412,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return;
     }
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       // Check if path is a directory — don't try to open directories as files
       const { stat } = await import("@tauri-apps/plugin-fs");
       try {
@@ -480,7 +480,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const ws = workspaces.find((w) => w.id === activeWorkspaceId);
     if (!ws) return;
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       const tree = await api.fs.listDir(ws.path);
       set({ fileTree: tree });
     } catch (err) {
@@ -490,7 +490,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async createFile(parentPath, name) {
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       await api.fs.createFile(parentPath, name);
       await get().refreshFileTree();
     } catch (err) {
@@ -500,7 +500,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async createDirectory(parentPath, name) {
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       await api.fs.createDirectory(parentPath, name);
       await get().refreshFileTree();
     } catch (err) {
@@ -510,7 +510,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async deletePath(path) {
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       await api.fs.deletePath(path);
       set((s) => {
         const tabs = s.openTabs.filter((t) => t.path !== path);
@@ -525,7 +525,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async renamePath(path, newName) {
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       const oldTabs = get().openTabs.filter((t) => t.path === path);
       await api.fs.renamePath(path, newName);
       if (oldTabs.length > 0) {
@@ -556,7 +556,7 @@ export const useGit = create<GitState>((set) => ({
   status: null,
   loading: false,
   async refresh() {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     set({ loading: true });
     try {
       const status = await api.git.status(".");
@@ -726,7 +726,7 @@ export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
 }
 
 async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
-  const api = ensureDalamAPI();
+  const api = createDalamAPI();
   const dotDalam = joinPath(workspacePath, ".dalam");
   const sessionsPath = joinPath(dotDalam, "sessions.json");
   const configPath = joinPath(dotDalam, "config.json");
@@ -927,7 +927,7 @@ async function _doSaveWorkspaceData() {
   const ws = useWorkspace.getState().workspaces.find((w) => w.id === activeWorkspaceId);
   if (!ws) return;
 
-  const api = ensureDalamAPI();
+  const api = createDalamAPI();
   const dotDalam = joinPath(ws.path, ".dalam");
   const sessionsPath = joinPath(dotDalam, "sessions.json");
   const configPath = joinPath(dotDalam, "config.json");
@@ -1204,7 +1204,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async startSession(workspacePath, mode) {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     if (workspacePath) {
       await initWorkspaceMemory(api, workspacePath);
     }
@@ -1269,7 +1269,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async abort(sessionId) {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
@@ -1333,7 +1333,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if (!session) return;
     }
     const { messages } = get();
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
 
     const { pendingAttachments } = get();
     const userMsg: ChatMessage = {
@@ -1517,7 +1517,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "message-end": {
         const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
-        const api = ensureDalamAPI();
+        const api = createDalamAPI();
 
         // Clear safety timeout if it exists
         const existingTimer = get()._safetyTimer;
@@ -2061,7 +2061,7 @@ export const useChat = create<ChatState>((set, get) => ({
   removeSession(id) {
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     void get().abort(id).catch(() => {});
     api.agent.cleanupStream(id);
     set((s) => {
@@ -2275,7 +2275,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const { toCompact } = selectMessagesForCompaction(activeMessages, 6);
       if (toCompact.length === 0) return;
 
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       const previousSummary = compactionSummaries[sessionId];
 
       // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
@@ -2301,7 +2301,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async resolveToolApproval(toolCallId, decision, result) {
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     const sessionId = get().activeSessionId;
     const tool = get().pendingToolCalls.find((tc) => tc.id === toolCallId);
     if (decision === "approved" && sessionId && tool?.diffId) {
@@ -3262,7 +3262,7 @@ async function persistAlwaysAllowedToDisk(data: Record<string, true>) {
     const ws = useWorkspace.getState();
     const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
     if (!activeWs) return;
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     const dotDalam = joinPath(activeWs.path, ".dalam");
     if (!(await exists(dotDalam))) await mkdir(dotDalam);
@@ -3283,7 +3283,7 @@ async function loadAlwaysAllowedFromDisk(): Promise<Record<string, true>> {
     const ws = useWorkspace.getState();
     const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
     if (!activeWs) return {};
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     const { exists } = await import("@tauri-apps/plugin-fs");
     const configPath = joinPath(activeWs.path, ".dalam", "config.json");
     if (await exists(configPath)) {

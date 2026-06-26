@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents, useTerminal } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
 import { modKey } from "@/lib/platform";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 import {
   ChevronLeft, ChevronRight, Plus, PanelLeft, PanelRight,
   FolderOpen, Code2, Sparkles, TerminalSquare, FolderTree, Settings,
@@ -72,7 +72,7 @@ export function TopNav() {
     const path = activeWorkspace?.path;
     if (!path) return;
     try {
-      const api = ensureDalamAPI();
+      const api = createDalamAPI();
       if (app === "finder") {
         await api.system.revealInFinder(path);
       } else if (app === "terminal") {

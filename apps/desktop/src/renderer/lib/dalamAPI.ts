@@ -398,11 +398,11 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
   });
 }
 
-export function ensureDalamAPI(): DalamAPI {
-  return mockDalamAPI;
+export function createDalamAPI(): DalamAPI {
+  return dalamAPI;
 }
 
-const mockDalamAPI: DalamAPI = {
+const dalamAPI: DalamAPI = {
   fs: {
     async readFile(path) {
       const { readFile } = await import("@tauri-apps/plugin-fs");
@@ -608,7 +608,7 @@ const mockDalamAPI: DalamAPI = {
         let activeSkillPrompt = "";
         if (matched) {
           if (!matched.skill.content) {
-            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockDalamAPI.fs.readFile });
+            matched.skill.content = await loadSkillContent(matched.skill, { readFile: dalamAPI.fs.readFile });
           }
           activeSkillPrompt = renderSkillForPrompt(matched.skill);
         }
@@ -658,7 +658,7 @@ const mockDalamAPI: DalamAPI = {
             const { exists } = await import("@tauri-apps/plugin-fs");
             const memoryPath = joinPath(workspacePath, ".dalam/memory.json");
             if (await exists(memoryPath)) {
-              const memoryContent = await mockDalamAPI.fs.readFile(memoryPath);
+              const memoryContent = await dalamAPI.fs.readFile(memoryPath);
               const memoryObj = JSON.parse(memoryContent);
               workspaceMemoryBlock = `\n\n=== PERSISTENT WORKSPACE MEMORY ===\nDalam maintains a persistent memory file for this workspace at \`.dalam/memory.json\`. You can modify this file using your edit/write file tools to remember key rules, paths, build commands, or context for future turns.\n\nCurrent Contents:\n- Project Overview: ${memoryObj.projectOverview || "Not specified."}\n- Key Files/Directories: ${JSON.stringify(memoryObj.keyFiles || [])}\n- Build/Test Commands: ${JSON.stringify(memoryObj.buildCommands || [])}\n- Learned Rules:\n${(memoryObj.learnedRules || []).map((r: string) => `  * ${r}`).join("\n")}\n===================================`;
             }
@@ -697,7 +697,7 @@ const mockDalamAPI: DalamAPI = {
             const { exists } = await import("@tauri-apps/plugin-fs");
             const contextPath = joinPath(workspacePath, ".dalam/context.json");
             if (await exists(contextPath)) {
-              const contextContent = await mockDalamAPI.fs.readFile(contextPath);
+              const contextContent = await dalamAPI.fs.readFile(contextPath);
               const contextObj = JSON.parse(contextContent);
               if (contextObj.pinnedFiles && contextObj.pinnedFiles.length > 0) {
                 let pinnedBlock = "\n\n=== PINNED FILES ===\nThe following files are pinned in your context. You should keep their contents in mind:\n";
@@ -705,7 +705,7 @@ const mockDalamAPI: DalamAPI = {
                   try {
                     const fullPath = joinPath(workspacePath, filePath);
                     if (await exists(fullPath)) {
-                      const fileContent = await mockDalamAPI.fs.readFile(fullPath);
+                      const fileContent = await dalamAPI.fs.readFile(fullPath);
                       pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${fileContent}\n`;
                     }
                   } catch (e) { console.warn(`Failed to read pinned file ${filePath}:`, e); }
@@ -723,7 +723,7 @@ const mockDalamAPI: DalamAPI = {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
             const instructions = await loadInstructions(workspacePath, {
-              readFile: mockDalamAPI.fs.readFile,
+              readFile: dalamAPI.fs.readFile,
               exists: async (p: string) => exists(p),
               getHomeDir: async () => {
                 const { homeDir } = await import("@tauri-apps/api/path");
@@ -919,7 +919,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         let cleanPrompt = prompt;
         if (matched) {
           if (!matched.skill.content) {
-            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockDalamAPI.fs.readFile });
+            matched.skill.content = await loadSkillContent(matched.skill, { readFile: dalamAPI.fs.readFile });
           }
           const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
           cleanPrompt = prompt.replace(regex, "").trim();
@@ -1261,7 +1261,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       if (pending) {
         pendingDiffProposals.delete(diffId);
         // Write the file now that the user approved the diff
-        await mockDalamAPI.fs.writeFile(pending.filePath, pending.newContent);
+        await dalamAPI.fs.writeFile(pending.filePath, pending.newContent);
         const cb = streamCallbacks.get(sessionId);
         if (cb) {
           cb({
@@ -1956,7 +1956,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "list_dir") {
-    const nodes = await mockDalamAPI.fs.listDir(args.path);
+    const nodes = await dalamAPI.fs.listDir(args.path);
     return JSON.stringify(nodes.map(n => ({ name: n.name, path: n.path, type: n.type })), null, 2);
   }
 
@@ -2088,52 +2088,52 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "git_status") {
-    const status = await mockDalamAPI.git.status(workspacePath);
+    const status = await dalamAPI.git.status(workspacePath);
     return JSON.stringify(status, null, 2);
   }
 
   if (name === "git_commit") {
-    const result = await mockDalamAPI.git.commit(workspacePath, args.message);
+    const result = await dalamAPI.git.commit(workspacePath, args.message);
     return `Committed successfully. SHA: ${result.sha}`;
   }
 
   if (name === "git_log") {
-    const log = await mockDalamAPI.git.log(workspacePath, 10);
+    const log = await dalamAPI.git.log(workspacePath, 10);
     return JSON.stringify(log, null, 2);
   }
 
   if (name === "clipboard_read") {
-    return await mockDalamAPI.system.clipboardReadText();
+    return await dalamAPI.system.clipboardReadText();
   }
 
   if (name === "clipboard_write") {
-    await mockDalamAPI.system.clipboardWriteText(args.text);
+    await dalamAPI.system.clipboardWriteText(args.text);
     return "Clipboard written successfully.";
   }
 
   if (name === "notify") {
-    await mockDalamAPI.system.notify({ title: args.title, body: args.body });
+    await dalamAPI.system.notify({ title: args.title, body: args.body });
     return `Notification sent: ${args.title}`;
   }
 
   if (name === "system_info") {
-    const info = await mockDalamAPI.system.getSystemInfo();
+    const info = await dalamAPI.system.getSystemInfo();
     return JSON.stringify(info, null, 2);
   }
 
   if (name === "open_url") {
-    await mockDalamAPI.system.openLink(args.url);
+    await dalamAPI.system.openLink(args.url);
     return `Opened URL: ${args.url}`;
   }
 
   if (name === "launch_app") {
     const appArgs = args.args ? args.args.split(/\s+/).filter(Boolean) : undefined;
-    const result = await mockDalamAPI.system.launchApp(args.name, appArgs, args.cwd || workspacePath);
+    const result = await dalamAPI.system.launchApp(args.name, appArgs, args.cwd || workspacePath);
     return result || `Launched app: ${args.name}`;
   }
 
   if (name === "reveal_in_finder") {
-    await mockDalamAPI.system.revealInFinder(args.path);
+    await dalamAPI.system.revealInFinder(args.path);
     return `Revealed in Finder: ${args.path}`;
   }
 

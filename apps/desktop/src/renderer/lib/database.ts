@@ -20,8 +20,6 @@
  * ============================================================
  */
 
-import { joinPath } from "@/lib/pathUtils"; // eslint-disable-line @typescript-eslint/no-unused-vars
-
 let dbInstance: any = null;
 let currentWorkspacePath: string | null = null;
 let dbLoadingPromise: Promise<any> | null = null;
@@ -178,7 +176,7 @@ export function isDatabaseReady(): boolean {
 
 /**
  * Get the current database instance.
- * Returns null if not initialized (instead of throwing).
+ * Throws if not initialized.
  */
 export function getDb(): any {
   if (!dbInstance) {

@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTerminal, useWorkspace, useChat } from "@/store/useAppStore";
 import { Plus, X, Trash2, Bot, Wifi } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 
 const DALAM_TERM_THEME = {
   background: "#0d0d0d",
@@ -91,7 +91,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
       fit.fit();
     }, 50);
 
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     let isCleanedUp = false;
     let unsubData: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;

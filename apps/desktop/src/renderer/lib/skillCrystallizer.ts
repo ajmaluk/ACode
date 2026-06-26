@@ -13,7 +13,7 @@
  * ============================================================
  */
 
-import { ensureDalamAPI } from "./dalamAPI";
+import { createDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
 import type { ChatMessage } from "@dalam/shared-types";
@@ -21,7 +21,7 @@ import type { ChatMessage } from "@dalam/shared-types";
 export type NotifyFn = (toast: { kind: "info" | "success" | "warning" | "error"; title: string; description: string; durationMs?: number; actions?: Array<{ label: string; variant?: "primary" | "secondary" | "danger"; onClick: () => void }> }) => void;
 
 export async function proposeSkillFromSession(sessionId: string, workspacePath: string, force = false, notify: NotifyFn = (t) => { console.warn("[SkillCrystallizer]", t.title, t.description); }): Promise<void> {
-  const api = ensureDalamAPI();
+  const api = createDalamAPI();
   
   // Resolve active chat session history dynamically
   const { useChat } = await import("../store/useAppStore");

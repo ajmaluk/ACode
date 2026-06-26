@@ -4,7 +4,7 @@ import {
   type SettingsTab, type ModelProvider, type PrimaryAgentName, type AgentInfo, type PermissionRule, type PermissionAction,
 } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
-import { ensureDalamAPI } from "@/lib/dalamAPI";
+import { createDalamAPI } from "@/lib/dalamAPI";
 import { joinPath } from "@/lib/pathUtils";
 import { modKey, shortcut, platform } from "@/lib/platform";
 import { MemoryGraph } from "./MemoryGraph";
@@ -1541,7 +1541,7 @@ function InstructionsTab() {
 
   useEffect(() => {
     if (!activeWorkspace) return;
-    const api = ensureDalamAPI();
+    const api = createDalamAPI();
     loadInstructions(api, activeWorkspace.path).then(setLayers).finally(() => setLoading(false));
   }, [activeWorkspace?.id]);
 
@@ -1573,7 +1573,7 @@ function InstructionsTab() {
             className="px-4 py-2 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-lg transition-colors"
             onClick={async () => {
               try {
-                const api = ensureDalamAPI();
+                const api = createDalamAPI();
                 const dalamDir = joinPath(activeWorkspace.path, ".dalam");
                 const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
                 if (!(await exists(dalamDir))) await mkdir(dalamDir);
@@ -1672,7 +1672,7 @@ function InstructionsTab() {
                               onClick={async () => {
                                 setSaving(true);
                                 try {
-                                  const api = ensureDalamAPI();
+                                  const api = createDalamAPI();
                                   await api.fs.writeFile(layer.path, editContent);
                                   toast({ kind: "success", title: `${layer.label} saved` });
                                   setEditingLayer(null);
@@ -1712,7 +1712,7 @@ function InstructionsTab() {
                             <button
                               onClick={async () => {
                                 try {
-                                  const api = ensureDalamAPI();
+                                  const api = createDalamAPI();
                                   const dir = layer.path.substring(0, layer.path.lastIndexOf("/"));
                                   const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
                                   if (!(await exists(dir))) await mkdir(dir);
@@ -1762,7 +1762,7 @@ function InstructionsTab() {
   );
 }
 
-async function loadInstructions(api: ReturnType<typeof ensureDalamAPI>, workspacePath: string): Promise<LayerInfo[]> {
+async function loadInstructions(api: ReturnType<typeof createDalamAPI>, workspacePath: string): Promise<LayerInfo[]> {
   const { exists, readTextFile } = await import("@tauri-apps/plugin-fs");
   const { homeDir: getHomeDir } = await import("@tauri-apps/api/path");
   const homeDir = await getHomeDir().catch(() => "");
