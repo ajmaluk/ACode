@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ACODE DREAM AGENT — Memory Consolidation & Deduplication
+ * DALAM DREAM AGENT — Memory Consolidation & Deduplication
  * ============================================================
  *
  * Runs asynchronously during idle times or workspace startup.
@@ -24,7 +24,7 @@ import {
   jaccardSimilarity
 } from "./memoryStore";
 import { getDb } from "./database";
-import { ensureAcodeAPI } from "./acodeAPI";
+import { ensureDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
 
@@ -39,7 +39,7 @@ export interface DreamReport {
  * Runs a full memory dream consolidation cycle using the active LLM.
  */
 export async function runDreamCycle(workspacePath: string): Promise<DreamReport> {
-  const api = ensureAcodeAPI();
+  const api = ensureDalamAPI();
   const model = useSettings.getState().settings.selectedModel;
 
   if (!model) {
@@ -283,7 +283,7 @@ export function cancelAllDreamCycles(): void {
  * Returns a cancel function that can be used to abort the deferred dream cycle.
  */
 export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
-  const lastDreamStr = localStorage.getItem(`acode.lastDreamTime.${workspacePath}`);
+  const lastDreamStr = localStorage.getItem(`dalam.lastDreamTime.${workspacePath}`);
   const now = Date.now();
   if (lastDreamStr) {
     const lastDream = parseInt(lastDreamStr, 10);
@@ -301,7 +301,7 @@ export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
     activeDreamTimeouts.delete(workspacePath);
     runDreamCycle(workspacePath)
       .then(() => {
-        localStorage.setItem(`acode.lastDreamTime.${workspacePath}`, Date.now().toString());
+        localStorage.setItem(`dalam.lastDreamTime.${workspacePath}`, Date.now().toString());
       })
       .catch(err => {
         console.error("[DreamAgent] Background dream cycle failed:", err);
@@ -320,8 +320,8 @@ export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
  * Computes token-level intersection sets to catch surface-level duplicate structures.
  */
 function calculateTokenSimilarity(textA: string, textB: string): number {
-  const tokensA = new Set(textA.toLowerCase().split(/[\s,.\-\/:\(\)]+/));
-  const tokensB = new Set(textB.toLowerCase().split(/[\s,.\-\/:\(\)]+/));
+  const tokensA = new Set(textA.toLowerCase().split(/[\s,.\-/:()]+/));
+  const tokensB = new Set(textB.toLowerCase().split(/[\s,.\-/:()]+/));
 
   const intersection = new Set([...tokensA].filter(x => tokensB.has(x)));
   const union = new Set([...tokensA, ...tokensB]);
@@ -334,8 +334,8 @@ function calculateTokenSimilarity(textA: string, textB: string): number {
  * and refactors them into a consolidated skill using background LLM runs.
  */
 export async function executeWorkspaceDreamOptimization(workspacePath: string): Promise<void> {
-  const skillsPath = joinPath(workspacePath, ".acode/skills");
-  const api = ensureAcodeAPI();
+  const skillsPath = joinPath(workspacePath, ".dalam/skills");
+  const api = ensureDalamAPI();
   
   try {
     const { readDir, readFile, writeFile, remove } = await import("@tauri-apps/plugin-fs");
@@ -406,7 +406,7 @@ Generate an elegant unified version. Output the result in clean markdown with ap
         }
       }
     }
-  } catch (emptyOrMissingDirErr) {
+  } catch {
     // Graceful exit for cold workspaces containing zero initialized skill states
   }
 }

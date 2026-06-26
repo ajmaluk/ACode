@@ -87,7 +87,7 @@ export function joinPath(...segments: string[]): string {
   const leadingSlash = firstPosix.startsWith("/") || hasDriveLetter(firstPosix);
 
   const joined = parts.join("/");
-  let result = leadingSlash ? "/" + joined : joined;
+  const result = leadingSlash ? "/" + joined : joined;
 
   // Resolve . and .. segments
   const pathParts = result.split("/");

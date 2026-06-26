@@ -1,17 +1,17 @@
 /**
- * ACode Instructions system — 4-layer hierarchy.
+ * Dalam Instructions system — 4-layer hierarchy.
  *
  * Instructions are loaded from multiple locations, merged in priority order
  * (lowest to highest):
  *
- *   1. Global   — <homeDir>/.acode/ACODE.md (user-level, all projects)
- *   2. Project  — <workspace>/ACODE.md (project root, checked in)
- *   3. Local    — <workspace>/.acode/local/ACODE.md (user-specific, gitignored)
+ *   1. Global   — <homeDir>/.dalam/DALAM.md (user-level, all projects)
+ *   2. Project  — <workspace>/DALAM.md (project root, checked in)
+ *   3. Local    — <workspace>/.dalam/local/DALAM.md (user-specific, gitignored)
  *   4. Path-scoped — Inline @path: <glob> blocks within any layer
  *
- * Legacy fallback (backwards compat): .cursorrules, .agentrules, .acode/rules.md
+ * Legacy fallback (backwards compat): .cursorrules, .agentrules, .dalam/rules.md
  *
- * Path-scoped rules use this syntax inside any ACODE.md:
+ * Path-scoped rules use this syntax inside any DALAM.md:
  *
  *   @path: src/components/<name>.tsx
  *   - Use functional components with hooks
@@ -132,11 +132,11 @@ export async function loadInstructions(
     local: "",
   };
 
-  // --- Layer 1: Global (~/.acode/ACODE.md) ---
+  // --- Layer 1: Global (~/.dalam/DALAM.md) ---
   if (fsAdapter.getHomeDir) {
     try {
       const homeDir = await fsAdapter.getHomeDir();
-      const globalPath = joinPath(homeDir, ".acode", "ACODE.md");
+      const globalPath = joinPath(homeDir, ".dalam", "DALAM.md");
       if (await fsAdapter.exists(globalPath)) {
         layers.global = await fsAdapter.readFile(globalPath);
         loadedPaths.push(globalPath);
@@ -146,36 +146,36 @@ export async function loadInstructions(
     }
   }
 
-  // --- Layer 2: Org ({workspace}/.acode/org/ACODE.md) ---
+  // --- Layer 2: Org ({workspace}/.dalam/org/DALAM.md) ---
   try {
-    const orgPath = joinPath(workspacePath, ".acode", "org", "ACODE.md");
+    const orgPath = joinPath(workspacePath, ".dalam", "org", "DALAM.md");
     if (await fsAdapter.exists(orgPath)) {
       layers.org = await fsAdapter.readFile(orgPath);
       loadedPaths.push(orgPath);
     }
   } catch {
-    // Not an error if org ACODE.md doesn't exist
+    // Not an error if org DALAM.md doesn't exist
   }
 
-  // --- Layer 3: Project ({workspace}/ACODE.md) ---
+  // --- Layer 3: Project ({workspace}/DALAM.md) ---
   try {
-    const projectPath = joinPath(workspacePath, "ACODE.md");
+    const projectPath = joinPath(workspacePath, "DALAM.md");
     if (await fsAdapter.exists(projectPath)) {
       layers.project = await fsAdapter.readFile(projectPath);
       loadedPaths.push(projectPath);
     }
   } catch {
-    // Not an error if project ACODE.md doesn't exist
+    // Not an error if project DALAM.md doesn't exist
   }
 
   // --- Layer 3b: Legacy fallback ---
-  // If no project ACODE.md, check legacy rule files for backwards compat
+  // If no project DALAM.md, check legacy rule files for backwards compat
   if (!layers.project) {
     try {
       const legacyPaths = [
         joinPath(workspacePath, ".cursorrules"),
         joinPath(workspacePath, ".agentrules"),
-        joinPath(workspacePath, ".acode", "rules.md"),
+        joinPath(workspacePath, ".dalam", "rules.md"),
       ];
       for (const legacyPath of legacyPaths) {
         if (await fsAdapter.exists(legacyPath)) {
@@ -189,9 +189,9 @@ export async function loadInstructions(
     }
   }
 
-  // --- Layer 4: Local ({workspace}/.acode/local/ACODE.md) ---
+  // --- Layer 4: Local ({workspace}/.dalam/local/DALAM.md) ---
   try {
-    const localPath = joinPath(workspacePath, ".acode", "local", "ACODE.md");
+    const localPath = joinPath(workspacePath, ".dalam", "local", "DALAM.md");
     if (await fsAdapter.exists(localPath)) {
       layers.local = await fsAdapter.readFile(localPath);
       loadedPaths.push(localPath);

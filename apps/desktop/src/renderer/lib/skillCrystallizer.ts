@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ACODE SKILL CRYSTALLIZER — Self-Evolving Skill Creation
+ * DALAM SKILL CRYSTALLIZER — Self-Evolving Skill Creation
  * ============================================================
  *
  * Reflects on chat session histories at SessionEnd.
@@ -13,15 +13,15 @@
  * ============================================================
  */
 
-import { ensureAcodeAPI } from "./acodeAPI";
+import { ensureDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
-import type { ChatMessage } from "@acode/shared-types";
+import type { ChatMessage } from "@dalam/shared-types";
 
 export type NotifyFn = (toast: { kind: "info" | "success" | "warning" | "error"; title: string; description: string; durationMs?: number; actions?: Array<{ label: string; variant?: "primary" | "secondary" | "danger"; onClick: () => void }> }) => void;
 
 export async function proposeSkillFromSession(sessionId: string, workspacePath: string, force = false, notify: NotifyFn = (t) => { console.warn("[SkillCrystallizer]", t.title, t.description); }): Promise<void> {
-  const api = ensureAcodeAPI();
+  const api = ensureDalamAPI();
   
   // Resolve active chat session history dynamically
   const { useChat } = await import("../store/useAppStore");
@@ -96,7 +96,7 @@ ${formattedHistory}`;
             onClick: async () => {
               try {
                 const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-                const skillsDir = joinPath(workspacePath, `.acode/skills/${data.name}`);
+                const skillsDir = joinPath(workspacePath, `.dalam/skills/${data.name}`);
                 if (!(await exists(skillsDir))) {
                   await mkdir(skillsDir, { recursive: true });
                 }

@@ -11,7 +11,7 @@ export function TitleBar() {
   const { open: openSettings } = useSettingsView();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const { status: gitStatus } = useGit();
-  const { activeAgentName, setActiveAgent } = useAgents();
+  const { activeAgentName } = useAgents();
   const { session, isStreaming, chatSessions, activeSessionId, goBackChat, goForwardChat } = useChat();
   const { settings, update: updateSetting } = useSettings();
   const active = workspaces.find((w) => w.id === activeWorkspaceId);
@@ -21,7 +21,7 @@ export function TitleBar() {
   const sessionStatus = session?.status ?? "idle";
 
   return (
-    <header className="titlebar h-10 flex items-center bg-acode-bg-secondary border-b border-acode-border-primary flex-shrink-0 select-none px-2">
+    <header className="titlebar h-10 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary flex-shrink-0 select-none px-2">
       <div className="flex items-center gap-1.5 pl-1 pr-3 no-drag">
         <div className="w-3 h-3 rounded-full bg-[#ff5f57] shadow-sm" />
         <div className="w-3 h-3 rounded-full bg-[#febc2e] shadow-sm" />
@@ -38,29 +38,29 @@ export function TitleBar() {
       <div className="flex-1 min-w-0 drag flex items-center justify-center gap-2">
         {activeSession ? (
           <>
-            <span className="text-sm text-acode-text-primary truncate max-w-[400px]">
+            <span className="text-sm text-dalam-text-primary truncate max-w-[400px]">
               {activeSession.title}
             </span>
             {active && (
-              <span className="px-2 py-0.5 text-[10px] rounded-md bg-acode-bg-active text-acode-text-secondary border border-acode-border-primary flex-shrink-0 flex items-center gap-1">
+              <span className="px-2 py-0.5 text-[10px] rounded-md bg-dalam-bg-active text-dalam-text-secondary border border-dalam-border-primary flex-shrink-0 flex items-center gap-1">
                 <span>📁</span>
                 {active.name}
               </span>
             )}
             {gitStatus && (
-              <span className="px-2 py-0.5 text-[10px] rounded-md bg-acode-bg-active text-acode-text-secondary border border-acode-border-primary flex-shrink-0 flex items-center gap-1 no-drag cursor-pointer">
+              <span className="px-2 py-0.5 text-[10px] rounded-md bg-dalam-bg-active text-dalam-text-secondary border border-dalam-border-primary flex-shrink-0 flex items-center gap-1 no-drag cursor-pointer">
                 <span>🔀</span>
                 {gitStatus.branch}
                 <ChevronDown className="w-2.5 h-2.5" />
               </span>
             )}
-            <button className="no-drag text-acode-text-muted hover:text-acode-text-primary transition-colors" title="More actions">
+            <button className="no-drag text-dalam-text-muted hover:text-dalam-text-primary transition-colors" title="More actions">
               <MoreHorizontal className="w-4 h-4" />
             </button>
           </>
         ) : (
-          <span className="text-sm text-acode-text-primary truncate">
-            {active?.name || "ACode"}
+          <span className="text-sm text-dalam-text-primary truncate">
+            {active?.name || "Dalam"}
           </span>
         )}
       </div>
@@ -70,15 +70,15 @@ export function TitleBar() {
         <div className="relative group">
           <button
             onClick={() => useSettingsView.getState().open("agents")}
-            className="flex items-center gap-1.5 px-2 h-7 text-xs text-acode-text-secondary hover:text-acode-text-primary bg-acode-bg-active hover:bg-acode-bg-tertiary rounded-md border border-acode-border-primary transition-colors"
+            className="flex items-center gap-1.5 px-2 h-7 text-xs text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-md border border-dalam-border-primary transition-colors"
             title="Active agent (click to change)"
           >
             <span className="relative">
               <AgentIcon className={`w-3.5 h-3.5 ${agentMeta.color}`} />
-              <span className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-acode-bg-active ${
-                sessionStatus === "running" ? "bg-acode-accent-primary animate-pulse" :
-                sessionStatus === "aborted" || sessionStatus === "error" ? "bg-acode-git-deleted" :
-                "bg-acode-git-added"
+              <span className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-dalam-bg-active ${
+                sessionStatus === "running" ? "bg-dalam-accent-primary animate-pulse" :
+                sessionStatus === "aborted" || sessionStatus === "error" ? "bg-dalam-git-deleted" :
+                "bg-dalam-git-added"
               }`} />
             </span>
             <span>{agentMeta.label}</span>
@@ -86,7 +86,7 @@ export function TitleBar() {
         </div>
         {/* Streaming indicator */}
         {isStreaming && (
-          <div className="flex items-center gap-1 px-2 h-7 text-[10px] text-acode-accent-primary bg-acode-accent-subtle rounded-md border border-acode-border-primary">
+          <div className="flex items-center gap-1 px-2 h-7 text-[10px] text-dalam-accent-primary bg-dalam-accent-subtle rounded-md border border-dalam-border-primary">
             <Loader2 className="w-3 h-3 animate-spin" />
             <span>streaming</span>
           </div>

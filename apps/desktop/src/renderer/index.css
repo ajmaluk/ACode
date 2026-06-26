@@ -5,7 +5,7 @@
 @tailwind utilities;
 
 /* ============================================================================
-   ACode theme tokens
+   Dalam theme tokens
    Every color in the app is driven by a CSS variable, so switching from
    dark → light → system is a single attribute flip.
    ============================================================================ */
@@ -13,102 +13,102 @@
 :root,
 [data-theme="dark"] {
   /* Surfaces (soft gray — matching Z Code aesthetic) */
-  --acode-bg-primary: #1e1e1e;
-  --acode-bg-secondary: #252526;
-  --acode-bg-tertiary: #2d2d2d;
-  --acode-bg-hover: #383838;
-  --acode-bg-active: #444444;
-  --acode-bg-overlay: rgba(30, 30, 30, 0.88);
-  --acode-bg-input: #1a1a1a;
+  --dalam-bg-primary: #1e1e1e;
+  --dalam-bg-secondary: #252526;
+  --dalam-bg-tertiary: #2d2d2d;
+  --dalam-bg-hover: #383838;
+  --dalam-bg-active: #444444;
+  --dalam-bg-overlay: rgba(30, 30, 30, 0.88);
+  --dalam-bg-input: #1a1a1a;
 
   /* Borders */
-  --acode-border-primary: #3c3c3c;
-  --acode-border-secondary: #4a4a4a;
-  --acode-border-focus: #4f8ef7;
+  --dalam-border-primary: #3c3c3c;
+  --dalam-border-secondary: #4a4a4a;
+  --dalam-border-focus: #4f8ef7;
 
   /* Text */
-  --acode-text-primary: #ededed;
-  --acode-text-secondary: #a8a8a8;
-  --acode-text-muted: #6e6e6e;
-  --acode-text-disabled: #4a4a4a;
-  --acode-text-inverse: #0d0d0d;
+  --dalam-text-primary: #ededed;
+  --dalam-text-secondary: #a8a8a8;
+  --dalam-text-muted: #6e6e6e;
+  --dalam-text-disabled: #4a4a4a;
+  --dalam-text-inverse: #0d0d0d;
 
   /* Brand / accent */
-  --acode-accent-primary: #4f8ef7;
-  --acode-accent-hover: #3a7de4;
-  --acode-accent-subtle: rgba(79, 142, 247, 0.12);
-  --acode-accent-text: #ffffff;
+  --dalam-accent-primary: #4f8ef7;
+  --dalam-accent-hover: #3a7de4;
+  --dalam-accent-subtle: rgba(79, 142, 247, 0.12);
+  --dalam-accent-text: #ffffff;
 
   /* Git status */
-  --acode-git-modified: #e2c08d;
-  --acode-git-added: #73c991;
-  --acode-git-deleted: #f06c6c;
-  --acode-git-untracked: #73c991;
-  --acode-git-modified-bg: rgba(226, 192, 141, 0.12);
-  --acode-git-added-bg: rgba(115, 201, 145, 0.12);
-  --acode-git-deleted-bg: rgba(240, 108, 108, 0.12);
+  --dalam-git-modified: #e2c08d;
+  --dalam-git-added: #73c991;
+  --dalam-git-deleted: #f06c6c;
+  --dalam-git-untracked: #73c991;
+  --dalam-git-modified-bg: rgba(226, 192, 141, 0.12);
+  --dalam-git-added-bg: rgba(115, 201, 145, 0.12);
+  --dalam-git-deleted-bg: rgba(240, 108, 108, 0.12);
 
   /* Shadows / scrims */
-  --acode-shadow: rgba(0, 0, 0, 0.5);
-  --acode-shadow-lg: rgba(0, 0, 0, 0.6);
+  --dalam-shadow: rgba(0, 0, 0, 0.5);
+  --dalam-shadow-lg: rgba(0, 0, 0, 0.6);
 
   /* Special */
-  --acode-code-line: #ffffff10;
-  --acode-traffic-red: #ff5f57;
-  --acode-traffic-yellow: #febc2e;
-  --acode-traffic-green: #28c840;
-  --acode-glow: rgba(79, 142, 247, 0.18);
+  --dalam-code-line: #ffffff10;
+  --dalam-traffic-red: #ff5f57;
+  --dalam-traffic-yellow: #febc2e;
+  --dalam-traffic-green: #28c840;
+  --dalam-glow: rgba(79, 142, 247, 0.18);
 
   color-scheme: dark;
 }
 
 [data-theme="light"] {
   /* Surfaces (clean white — matching Z Code) */
-  --acode-bg-primary: #ffffff;
-  --acode-bg-secondary: #f8f8f8;
-  --acode-bg-tertiary: #f0f0f0;
-  --acode-bg-hover: #e8e8e8;
-  --acode-bg-active: #e0e0e0;
-  --acode-bg-overlay: rgba(255, 255, 255, 0.92);
-  --acode-bg-input: #ffffff;
+  --dalam-bg-primary: #ffffff;
+  --dalam-bg-secondary: #f8f8f8;
+  --dalam-bg-tertiary: #f0f0f0;
+  --dalam-bg-hover: #e8e8e8;
+  --dalam-bg-active: #e0e0e0;
+  --dalam-bg-overlay: rgba(255, 255, 255, 0.92);
+  --dalam-bg-input: #ffffff;
 
   /* Borders */
-  --acode-border-primary: #e0e0e0;
-  --acode-border-secondary: #d0d0d0;
-  --acode-border-focus: #2563eb;
+  --dalam-border-primary: #e0e0e0;
+  --dalam-border-secondary: #d0d0d0;
+  --dalam-border-focus: #2563eb;
 
   /* Text */
-  --acode-text-primary: #1a1a1a;
-  --acode-text-secondary: #4a4a4a;
-  --acode-text-muted: #7a7a7a;
-  --acode-text-disabled: #b0b0b0;
-  --acode-text-inverse: #ffffff;
+  --dalam-text-primary: #1a1a1a;
+  --dalam-text-secondary: #4a4a4a;
+  --dalam-text-muted: #7a7a7a;
+  --dalam-text-disabled: #b0b0b0;
+  --dalam-text-inverse: #ffffff;
 
   /* Brand / accent */
-  --acode-accent-primary: #2563eb;
-  --acode-accent-hover: #1d4ed8;
-  --acode-accent-subtle: rgba(37, 99, 235, 0.08);
-  --acode-accent-text: #ffffff;
+  --dalam-accent-primary: #2563eb;
+  --dalam-accent-hover: #1d4ed8;
+  --dalam-accent-subtle: rgba(37, 99, 235, 0.08);
+  --dalam-accent-text: #ffffff;
 
   /* Git status */
-  --acode-git-modified: #b58800;
-  --acode-git-added: #1a7f37;
-  --acode-git-deleted: #cf222e;
-  --acode-git-untracked: #1a7f37;
-  --acode-git-modified-bg: rgba(181, 136, 0, 0.12);
-  --acode-git-added-bg: rgba(26, 127, 55, 0.10);
-  --acode-git-deleted-bg: rgba(207, 34, 46, 0.10);
+  --dalam-git-modified: #b58800;
+  --dalam-git-added: #1a7f37;
+  --dalam-git-deleted: #cf222e;
+  --dalam-git-untracked: #1a7f37;
+  --dalam-git-modified-bg: rgba(181, 136, 0, 0.12);
+  --dalam-git-added-bg: rgba(26, 127, 55, 0.10);
+  --dalam-git-deleted-bg: rgba(207, 34, 46, 0.10);
 
   /* Shadows / scrims */
-  --acode-shadow: rgba(15, 23, 42, 0.08);
-  --acode-shadow-lg: rgba(15, 23, 42, 0.12);
+  --dalam-shadow: rgba(15, 23, 42, 0.08);
+  --dalam-shadow-lg: rgba(15, 23, 42, 0.12);
 
   /* Special */
-  --acode-code-line: #1a1a1a10;
-  --acode-traffic-red: #ff5f57;
-  --acode-traffic-yellow: #febc2e;
-  --acode-traffic-green: #28c840;
-  --acode-glow: rgba(37, 99, 235, 0.10);
+  --dalam-code-line: #1a1a1a10;
+  --dalam-traffic-red: #ff5f57;
+  --dalam-traffic-yellow: #febc2e;
+  --dalam-traffic-green: #28c840;
+  --dalam-glow: rgba(37, 99, 235, 0.10);
 
   color-scheme: light;
 }
@@ -125,8 +125,8 @@
   }
 
   body {
-    background-color: var(--acode-bg-primary);
-    color: var(--acode-text-primary);
+    background-color: var(--dalam-bg-primary);
+    color: var(--dalam-text-primary);
     font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-feature-settings: "cv11", "ss01", "cv02";
     -webkit-font-smoothing: antialiased;
@@ -140,25 +140,25 @@
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    background: var(--acode-bg-hover);
+    background: var(--dalam-bg-hover);
     border-radius: 6px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--acode-border-secondary);
+    background: var(--dalam-border-secondary);
     background-clip: padding-box;
     border: 2px solid transparent;
   }
   ::-webkit-scrollbar-corner { background: transparent; }
 
   ::selection {
-    background: var(--acode-accent-subtle);
+    background: var(--dalam-accent-subtle);
     color: inherit;
   }
 
   :focus-visible {
-    outline: 2px solid var(--acode-accent-primary);
+    outline: 2px solid var(--dalam-accent-primary);
     outline-offset: 1px;
     border-radius: 4px;
   }
@@ -177,7 +177,7 @@
   }
 
   .glass {
-    background: var(--acode-bg-overlay);
+    background: var(--dalam-bg-overlay);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
   }
@@ -190,7 +190,7 @@
   .panel-resizer[data-panel-resize-handle-enabled] { background: transparent; }
   .panel-resizer:hover,
   .panel-resizer[data-resize-handle-active] {
-    background: var(--acode-accent-primary);
+    background: var(--dalam-accent-primary);
   }
   .panel-resizer.horizontal::after {
     content: ""; position: absolute; inset: 0 -3px;
@@ -200,7 +200,7 @@
   }
 
   .skeleton {
-    background: var(--acode-bg-tertiary);
+    background: var(--dalam-bg-tertiary);
     border-radius: 0.375rem;
     animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
@@ -208,33 +208,33 @@
   .btn-icon {
     padding: 0.375rem;
     border-radius: 0.375rem;
-    color: var(--acode-text-secondary);
+    color: var(--dalam-text-secondary);
     transition: color 120ms ease, background-color 120ms ease, transform 80ms ease;
   }
   .btn-icon:hover {
-    color: var(--acode-text-primary);
-    background-color: var(--acode-bg-hover);
+    color: var(--dalam-text-primary);
+    background-color: var(--dalam-bg-hover);
   }
   .btn-icon:active { transform: scale(0.95); }
   .btn-icon.active {
-    background-color: var(--acode-bg-active);
-    color: var(--acode-text-primary);
+    background-color: var(--dalam-bg-active);
+    color: var(--dalam-text-primary);
   }
 
   .input-base {
-    background: var(--acode-bg-input);
-    border: 1px solid var(--acode-border-primary);
+    background: var(--dalam-bg-input);
+    border: 1px solid var(--dalam-border-primary);
     border-radius: 0.375rem;
     padding: 0.375rem 0.75rem;
     font-size: 0.875rem;
-    color: var(--acode-text-primary);
+    color: var(--dalam-text-primary);
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
-  .input-base::placeholder { color: var(--acode-text-muted); }
+  .input-base::placeholder { color: var(--dalam-text-muted); }
   .input-base:focus {
     outline: none;
-    border-color: var(--acode-accent-primary);
-    box-shadow: 0 0 0 1px var(--acode-accent-primary);
+    border-color: var(--dalam-accent-primary);
+    box-shadow: 0 0 0 1px var(--dalam-accent-primary);
   }
 
   .chip {
@@ -242,9 +242,9 @@
     padding: 0.125rem 0.375rem;
     border-radius: 0.25rem;
     font-size: 0.625rem; font-weight: 500;
-    background: var(--acode-bg-tertiary);
-    color: var(--acode-text-secondary);
-    border: 1px solid var(--acode-border-primary);
+    background: var(--dalam-bg-tertiary);
+    color: var(--dalam-text-secondary);
+    border: 1px solid var(--dalam-border-primary);
   }
 
   .menu-item {
@@ -252,15 +252,15 @@
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.875rem;
-    color: var(--acode-text-primary);
+    color: var(--dalam-text-primary);
     cursor: pointer;
     transition: background-color 120ms ease;
   }
-  .menu-item:hover { background: var(--acode-bg-hover); }
+  .menu-item:hover { background: var(--dalam-bg-hover); }
 
   .surface {
-    background: var(--acode-bg-secondary);
-    border: 1px solid var(--acode-border-primary);
+    background: var(--dalam-bg-secondary);
+    border: 1px solid var(--dalam-border-primary);
     border-radius: 0.5rem;
   }
 
@@ -282,46 +282,46 @@
   .scrollbar-thin { scrollbar-width: thin; }
   .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
   .text-balance { text-wrap: balance; }
-  .ring-subtle { box-shadow: 0 0 0 1px var(--acode-accent-subtle); }
+  .ring-subtle { box-shadow: 0 0 0 1px var(--dalam-accent-subtle); }
 }
 
 @layer utilities {
-  .bg-acode-bg-primary { background-color: var(--acode-bg-primary); }
-  .bg-acode-bg-secondary { background-color: var(--acode-bg-secondary); }
-  .bg-acode-bg-tertiary { background-color: var(--acode-bg-tertiary); }
-  .bg-acode-bg-hover { background-color: var(--acode-bg-hover); }
-  .bg-acode-bg-active { background-color: var(--acode-bg-active); }
-  .bg-acode-bg-overlay { background-color: var(--acode-bg-overlay); }
-  .bg-acode-bg-input { background-color: var(--acode-bg-input); }
-  .bg-acode-accent-primary { background-color: var(--acode-accent-primary); }
-  .bg-acode-accent-hover { background-color: var(--acode-accent-hover); }
-  .bg-acode-accent-subtle { background-color: var(--acode-accent-subtle); }
-  .text-acode-text-primary { color: var(--acode-text-primary); }
-  .text-acode-text-secondary { color: var(--acode-text-secondary); }
-  .text-acode-text-muted { color: var(--acode-text-muted); }
-  .text-acode-text-disabled { color: var(--acode-text-disabled); }
-  .text-acode-accent-primary { color: var(--acode-accent-primary); }
-  .text-acode-accent-hover { color: var(--acode-accent-hover); }
-  .text-acode-git-added { color: var(--acode-git-added); }
-  .text-acode-git-deleted { color: var(--acode-git-deleted); }
-  .text-acode-git-modified { color: var(--acode-git-modified); }
-  .text-acode-git-untracked { color: var(--acode-git-untracked); }
-  .border-acode-border-primary { border-color: var(--acode-border-primary); }
-  .border-acode-border-secondary { border-color: var(--acode-border-secondary); }
-  .border-acode-border-focus { border-color: var(--acode-border-focus); }
-  .border-acode-accent-primary { border-color: var(--acode-accent-primary); }
-  .bg-acode-git-added { background-color: var(--acode-git-added-bg); }
-  .bg-acode-git-deleted { background-color: var(--acode-git-deleted-bg); }
-  .bg-acode-git-modified { background-color: var(--acode-git-modified-bg); }
+  .bg-dalam-bg-primary { background-color: var(--dalam-bg-primary); }
+  .bg-dalam-bg-secondary { background-color: var(--dalam-bg-secondary); }
+  .bg-dalam-bg-tertiary { background-color: var(--dalam-bg-tertiary); }
+  .bg-dalam-bg-hover { background-color: var(--dalam-bg-hover); }
+  .bg-dalam-bg-active { background-color: var(--dalam-bg-active); }
+  .bg-dalam-bg-overlay { background-color: var(--dalam-bg-overlay); }
+  .bg-dalam-bg-input { background-color: var(--dalam-bg-input); }
+  .bg-dalam-accent-primary { background-color: var(--dalam-accent-primary); }
+  .bg-dalam-accent-hover { background-color: var(--dalam-accent-hover); }
+  .bg-dalam-accent-subtle { background-color: var(--dalam-accent-subtle); }
+  .text-dalam-text-primary { color: var(--dalam-text-primary); }
+  .text-dalam-text-secondary { color: var(--dalam-text-secondary); }
+  .text-dalam-text-muted { color: var(--dalam-text-muted); }
+  .text-dalam-text-disabled { color: var(--dalam-text-disabled); }
+  .text-dalam-accent-primary { color: var(--dalam-accent-primary); }
+  .text-dalam-accent-hover { color: var(--dalam-accent-hover); }
+  .text-dalam-git-added { color: var(--dalam-git-added); }
+  .text-dalam-git-deleted { color: var(--dalam-git-deleted); }
+  .text-dalam-git-modified { color: var(--dalam-git-modified); }
+  .text-dalam-git-untracked { color: var(--dalam-git-untracked); }
+  .border-dalam-border-primary { border-color: var(--dalam-border-primary); }
+  .border-dalam-border-secondary { border-color: var(--dalam-border-secondary); }
+  .border-dalam-border-focus { border-color: var(--dalam-border-focus); }
+  .border-dalam-accent-primary { border-color: var(--dalam-accent-primary); }
+  .bg-dalam-git-added { background-color: var(--dalam-git-added-bg); }
+  .bg-dalam-git-deleted { background-color: var(--dalam-git-deleted-bg); }
+  .bg-dalam-git-modified { background-color: var(--dalam-git-modified-bg); }
 }
 
 /* Color-mix helpers for opacity variants */
-.text-acode-text-muted\/30 { color: color-mix(in srgb, var(--acode-text-muted) 30%, transparent); }
-.text-acode-text-muted\/40 { color: color-mix(in srgb, var(--acode-text-muted) 40%, transparent); }
-.text-acode-text-muted\/50 { color: color-mix(in srgb, var(--acode-text-muted) 50%, transparent); }
-.text-acode-text-muted\/60 { color: color-mix(in srgb, var(--acode-text-muted) 60%, transparent); }
-.border-acode-border-primary\/30 { border-color: color-mix(in srgb, var(--acode-border-primary) 30%, transparent); }
-.text-acode-text-primary\/50 { color: color-mix(in srgb, var(--acode-text-primary) 50%, transparent); }
+.text-dalam-text-muted\/30 { color: color-mix(in srgb, var(--dalam-text-muted) 30%, transparent); }
+.text-dalam-text-muted\/40 { color: color-mix(in srgb, var(--dalam-text-muted) 40%, transparent); }
+.text-dalam-text-muted\/50 { color: color-mix(in srgb, var(--dalam-text-muted) 50%, transparent); }
+.text-dalam-text-muted\/60 { color: color-mix(in srgb, var(--dalam-text-muted) 60%, transparent); }
+.border-dalam-border-primary\/30 { border-color: color-mix(in srgb, var(--dalam-border-primary) 30%, transparent); }
+.text-dalam-text-primary\/50 { color: color-mix(in srgb, var(--dalam-text-primary) 50%, transparent); }
 .bg-black\/60 { background-color: rgba(0, 0, 0, 0.6); }
 [data-theme="light"] .bg-black\/60 { background-color: rgba(15, 23, 42, 0.4); }
 .bg-black\/55 { background-color: rgba(0, 0, 0, 0.55); }
@@ -346,21 +346,21 @@
 [data-theme="light"] .text-yellow-300 { color: #a16207; }
 [data-theme="light"] .text-slate-300 { color: #475569; }
 [data-theme="light"] .bg-amber-400\/10 { background-color: rgba(180, 83, 9, 0.10); }
-[data-theme="light"] .text-acode-git-modified { color: #b58800; }
-[data-theme="light"] .text-acode-git-added { color: #1a7f37; }
-[data-theme="light"] .text-acode-git-deleted { color: #cf222e; }
+[data-theme="light"] .text-dalam-git-modified { color: #b58800; }
+[data-theme="light"] .text-dalam-git-added { color: #1a7f37; }
+[data-theme="light"] .text-dalam-git-deleted { color: #cf222e; }
 
 /* Monaco editor background fix for light theme */
 [data-theme="light"] .monaco-editor,
 [data-theme="light"] .monaco-editor .overflow-guard {
-  background-color: var(--acode-bg-primary) !important;
+  background-color: var(--dalam-bg-primary) !important;
 }
 
 /* xterm overrides */
 .xterm-viewport { background-color: transparent !important; }
 .xterm .xterm-screen { padding: 4px 8px; }
 .xterm .xterm-cursor-layer .xterm-cursor {
-  box-shadow: 0 0 0 1px var(--acode-accent-subtle);
+  box-shadow: 0 0 0 1px var(--dalam-accent-subtle);
 }
 
 button, [role="button"], a {
@@ -370,57 +370,57 @@ button, [role="button"], a {
 kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
 
 /* Markdown prose styles for chat */
-.prose-acode { color: var(--acode-text-primary); }
-.prose-acode p { margin: 0.5em 0; }
-.prose-acode p:first-child { margin-top: 0; }
-.prose-acode p:last-child { margin-bottom: 0; }
-.prose-acode strong { font-weight: 600; color: var(--acode-text-primary); }
-.prose-acode em { font-style: italic; }
-.prose-acode a { color: var(--acode-accent-primary); text-decoration: none; }
-.prose-acode a:hover { text-decoration: underline; }
-.prose-acode ul, .prose-acode ol { padding-left: 1.5em; margin: 0.5em 0; }
-.prose-acode li { margin: 0.15em 0; }
-.prose-acode h1 { font-size: 1.125rem; font-weight: 700; margin: 0.75em 0 0.25em; }
-.prose-acode h2 { font-size: 1rem; font-weight: 700; margin: 0.75em 0 0.25em; }
-.prose-acode h3 { font-size: 0.875rem; font-weight: 700; margin: 0.5em 0 0.25em; }
-.prose-acode code {
+.prose-dalam { color: var(--dalam-text-primary); }
+.prose-dalam p { margin: 0.5em 0; }
+.prose-dalam p:first-child { margin-top: 0; }
+.prose-dalam p:last-child { margin-bottom: 0; }
+.prose-dalam strong { font-weight: 600; color: var(--dalam-text-primary); }
+.prose-dalam em { font-style: italic; }
+.prose-dalam a { color: var(--dalam-accent-primary); text-decoration: none; }
+.prose-dalam a:hover { text-decoration: underline; }
+.prose-dalam ul, .prose-dalam ol { padding-left: 1.5em; margin: 0.5em 0; }
+.prose-dalam li { margin: 0.15em 0; }
+.prose-dalam h1 { font-size: 1.125rem; font-weight: 700; margin: 0.75em 0 0.25em; }
+.prose-dalam h2 { font-size: 1rem; font-weight: 700; margin: 0.75em 0 0.25em; }
+.prose-dalam h3 { font-size: 0.875rem; font-weight: 700; margin: 0.5em 0 0.25em; }
+.prose-dalam code {
   font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
   font-size: 0.8em;
-  background: var(--acode-bg-tertiary);
+  background: var(--dalam-bg-tertiary);
   padding: 0.15em 0.35em;
   border-radius: 0.25rem;
-  color: var(--acode-accent-primary);
+  color: var(--dalam-accent-primary);
 }
-.prose-acode pre code {
+.prose-dalam pre code {
   background: none;
   padding: 0;
   border-radius: 0;
   color: inherit;
   font-size: 1em;
 }
-.prose-acode blockquote {
-  border-left: 3px solid var(--acode-accent-primary);
+.prose-dalam blockquote {
+  border-left: 3px solid var(--dalam-accent-primary);
   padding-left: 0.75em;
   margin: 0.5em 0;
-  color: var(--acode-text-muted);
+  color: var(--dalam-text-muted);
   font-style: italic;
 }
-.prose-acode hr {
+.prose-dalam hr {
   border: none;
-  border-top: 1px solid var(--acode-border-primary);
+  border-top: 1px solid var(--dalam-border-primary);
   margin: 0.75em 0;
 }
-.prose-acode table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
-.prose-acode th, .prose-acode td {
-  border: 1px solid var(--acode-border-primary);
+.prose-dalam table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+.prose-dalam th, .prose-dalam td {
+  border: 1px solid var(--dalam-border-primary);
   padding: 0.35em 0.65em;
   text-align: left;
   font-size: 0.8em;
 }
-.prose-acode th { font-weight: 600; background: var(--acode-bg-tertiary); }
-.prose-acode img { max-width: 100%; border-radius: 0.375rem; margin: 0.5em 0; }
-.prose-acode del { text-decoration: line-through; opacity: 0.7; }
-.prose-acode input[type="checkbox"] { margin-right: 0.35em; accent-color: var(--acode-accent-primary); }
+.prose-dalam th { font-weight: 600; background: var(--dalam-bg-tertiary); }
+.prose-dalam img { max-width: 100%; border-radius: 0.375rem; margin: 0.5em 0; }
+.prose-dalam del { text-decoration: line-through; opacity: 0.7; }
+.prose-dalam input[type="checkbox"] { margin-right: 0.35em; accent-color: var(--dalam-accent-primary); }
 
 /* ============================================================================
    Thinking / Streaming animations
@@ -462,7 +462,7 @@ kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
   display: inline-block;
   width: 3px;
   height: 100%;
-  background: var(--acode-accent-primary);
+  background: var(--dalam-accent-primary);
   border-radius: 2px;
   animation: thinking-wave 1.2s ease-in-out infinite;
 }
@@ -477,7 +477,7 @@ kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
 }
 
 .animate-shimmer {
-  background: linear-gradient(90deg, transparent 30%, var(--acode-accent-subtle) 50%, transparent 70%);
+  background: linear-gradient(90deg, transparent 30%, var(--dalam-accent-subtle) 50%, transparent 70%);
   background-size: 200% 100%;
   animation: shimmer 2s ease-in-out infinite;
 }

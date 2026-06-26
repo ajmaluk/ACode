@@ -29,7 +29,7 @@ import {
   type Gene,
   type GenePool,
 } from "./genes";
-import type { ChatMessage } from "@acode/shared-types";
+import type { ChatMessage } from "@dalam/shared-types";
 
 function makeMsg(role: "user" | "assistant", content: string): ChatMessage {
   return { id: `m-${Math.random()}`, role, content, timestamp: Date.now() };

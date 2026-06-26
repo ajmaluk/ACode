@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
-import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, getPrimaryAgent } from "@/store/useAppStore";
-import type { PrimaryAgentName, FileNode } from "@acode/shared-types";
+import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, getPrimaryAgent, type ModelProvider } from "@/store/useAppStore";
+import type { PrimaryAgentName, FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
 import { TopNav } from "@/components/editor/TopNav";
@@ -12,7 +12,7 @@ import {
   FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy, Code2,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
-import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { ensureDalamAPI } from "@/lib/dalamAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
@@ -36,7 +36,7 @@ function WorkingTimer({ startTime }: { startTime: number }) {
   const seconds = elapsed % 60;
   const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
   return (
-    <span className="text-[12px] text-acode-text-muted/60 tabular-nums">
+    <span className="text-[12px] text-dalam-text-muted/60 tabular-nums">
       Working for {timeStr}
     </span>
   );
@@ -69,34 +69,34 @@ function InlineActivityRow({
         onClick={() => hasDetail && setOpen((o) => !o)}
         className={`group flex items-center gap-1.5 text-left text-[12px] leading-relaxed w-full opacity-70 hover:opacity-100 transition-opacity ${
           hasDetail ? "cursor-pointer" : "cursor-default"
-        } text-acode-text-secondary`}
+        } text-dalam-text-secondary`}
       >
         {status === "running" ? (
-          <Loader2 className="w-3 h-3 text-acode-accent-primary animate-spin flex-shrink-0" />
+          <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0" />
         ) : status === "completed" ? (
-          <Check className="w-3 h-3 text-acode-git-added flex-shrink-0" />
+          <Check className="w-3 h-3 text-dalam-git-added flex-shrink-0" />
         ) : status === "failed" ? (
-          <X className="w-3 h-3 text-acode-git-deleted flex-shrink-0" />
+          <X className="w-3 h-3 text-dalam-git-deleted flex-shrink-0" />
         ) : (
           icon
         )}
         <span className="opacity-80">{label}</span>
         {target && (
-          <span className="font-mono text-[11px] text-acode-text-muted/60 truncate max-w-[400px]">
+          <span className="font-mono text-[11px] text-dalam-text-muted/60 truncate max-w-[400px]">
             {target}
           </span>
         )}
         {duration && (
-          <span className="text-[10px] text-acode-text-muted/50 tabular-nums ml-auto">{duration}</span>
+          <span className="text-[10px] text-dalam-text-muted/50 tabular-nums ml-auto">{duration}</span>
         )}
         {hasDetail && (
           <ChevronDown
-            className={`w-2.5 h-2.5 text-acode-text-muted/50 transition-transform flex-shrink-0 ml-1 ${open ? "" : "-rotate-90"}`}
+            className={`w-2.5 h-2.5 text-dalam-text-muted/50 transition-transform flex-shrink-0 ml-1 ${open ? "" : "-rotate-90"}`}
           />
         )}
       </button>
       {hasDetail && open && (
-        <div className="ml-5 mt-0.5 pl-2 border-l border-acode-border-primary/40 text-[11px] text-acode-text-secondary/70 leading-relaxed max-h-60 overflow-y-auto scrollbar-thin">
+        <div className="ml-5 mt-0.5 pl-2 border-l border-dalam-border-primary/40 text-[11px] text-dalam-text-secondary/70 leading-relaxed max-h-60 overflow-y-auto scrollbar-thin">
           {children}
         </div>
       )}
@@ -113,8 +113,8 @@ function StreamingActivityPanel({
   thinkingContent,
   sessionStartTime,
 }: {
-  activities: import("@acode/shared-types").PendingActivity[];
-  toolCalls: import("@acode/shared-types").ToolCall[];
+  activities: import("@dalam/shared-types").PendingActivity[];
+  toolCalls: import("@dalam/shared-types").ToolCall[];
   thinkingContent: string;
   sessionStartTime: number;
 }) {
@@ -165,7 +165,7 @@ function StreamingActivityPanel({
                 status={status}
               >
                 {tc.result && (
-                  <pre className="font-mono text-[10px] bg-acode-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                  <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
                     {tc.result.slice(0, 2000)}
                   </pre>
                 )}
@@ -212,7 +212,7 @@ function StreamingActivityPanel({
                   target={`$ ${activity.command}`}
                   status="completed"
                 >
-                  <pre className="font-mono text-[10px] bg-acode-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                  <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
                     {activity.result.slice(0, 2000)}
                   </pre>
                 </InlineActivityRow>
@@ -283,7 +283,7 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
   const handleClick = useCallback(async () => { if (firstFile) { await openFile(firstFile); toast.info("Opened file", basename(firstFile)); } }, [firstFile, openFile, toast]);
   return (
     <button
-      className={`px-3 h-full transition-colors ${firstFile ? "text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover" : "text-acode-text-muted/40 cursor-not-allowed"}`}
+      className={`px-3 h-full transition-colors ${firstFile ? "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover" : "text-dalam-text-muted/40 cursor-not-allowed"}`}
       onClick={handleClick}
       disabled={!firstFile}
       title={firstFile ? `Open file (${mod}P)` : "No files in workspace"}
@@ -293,7 +293,7 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
   );
 });
 
-// Map primary agent → UI-friendly label and icon. Mirrors ACode's
+// Map primary agent → UI-friendly label and icon. Mirrors Dalam's
 // primary agent presentation.
 const AGENT_DISPLAY: Record<PrimaryAgentName, { label: string; description: string; icon: React.ElementType; color: string; short: string }> = {
   build: { label: "Build", short: "build", description: "Executes tools based on configured permissions. Asks before each operation.", icon: Zap, color: "text-amber-400" },
@@ -315,7 +315,7 @@ export function EditorPane() {
         const tab = openTabs.find((t) => t.path === activeFilePath);
         if (!tab) return;
         try {
-          const api = ensureAcodeAPI();
+          const api = ensureDalamAPI();
           await api.fs.writeFile(tab.path, tab.content);
           markSaved(tab.path);
           toast.success("File saved", tab.name);
@@ -330,26 +330,26 @@ export function EditorPane() {
 
   if (openTabs.length > 0) {
     return (
-      <div className="h-full flex flex-col bg-acode-bg-primary">
-        <div className="h-9 flex items-center bg-acode-bg-secondary border-b border-acode-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
+      <div className="h-full flex flex-col bg-dalam-bg-primary">
+        <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
           {openTabs.map((t) => {
             const active = t.path === activeFilePath;
             return (
               <div key={t.path}
-                className={`group flex items-center gap-1.5 px-3 h-full border-r border-acode-border-primary cursor-pointer transition-colors ${active ? "bg-acode-bg-primary text-acode-text-primary" : "bg-acode-bg-secondary text-acode-text-secondary hover:bg-acode-bg-hover"}`}
+                className={`group flex items-center gap-1.5 px-3 h-full border-r border-dalam-border-primary cursor-pointer transition-colors ${active ? "bg-dalam-bg-primary text-dalam-text-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
                 onClick={() => setActiveFile(t.path)}
                 onAuxClick={(e) => { if (e.button === 1) closeTab(t.path); }}
                 title={`${t.path}${t.dirty ? " (unsaved)" : ""}`}>
                 <FileCode className="w-3.5 h-3.5 flex-shrink-0" />
                 <span className="text-xs whitespace-nowrap">{t.name}</span>
                 <button
-                  className={`ml-1 rounded p-0.5 ${active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100"} hover:bg-acode-bg-active transition-opacity`}
+                  className={`ml-1 rounded p-0.5 ${active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100"} hover:bg-dalam-bg-active transition-opacity`}
                   onClick={(e) => { e.stopPropagation(); closeTab(t.path); }}
                   title={t.dirty ? "Close (unsaved)" : "Close"}
                   aria-label={`Close ${t.name}`}
                 >
                   {t.dirty
-                    ? <Circle className="w-2.5 h-2.5 fill-current text-acode-accent-primary" />
+                    ? <Circle className="w-2.5 h-2.5 fill-current text-dalam-accent-primary" />
                     : <X className="w-3 h-3" />}
                 </button>
               </div>
@@ -358,10 +358,10 @@ export function EditorPane() {
           <MemoizedOpenFileButton fileTree={fileTree} openFile={openFile} />
           <div className="flex-1" />
           <div className="flex items-center gap-0.5 pr-1">
-            <button className="px-2 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors" title="Split editor" onClick={() => toast.info("Split", "Coming soon")}>
+            <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="Split editor" onClick={() => toast.info("Split", "Coming soon")}>
               <Columns className="w-3.5 h-3.5" />
             </button>
-            <button className="px-2 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors" title="More actions" onClick={() => toast.info("More", "Coming soon")}>
+            <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="More actions" onClick={() => toast.info("More", "Coming soon")}>
               <MoreHorizontal className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -388,13 +388,13 @@ function EditorStatusBar() {
   const language = activeTab.path.split(".").pop()?.toLowerCase() ?? "text";
   const cursor = activeTab.cursor;
   return (
-    <div className="h-6 flex items-center justify-between bg-acode-bg-tertiary border-t border-acode-border-primary px-3 text-[11px] text-acode-text-muted flex-shrink-0 select-none">
+    <div className="h-6 flex items-center justify-between bg-dalam-bg-tertiary border-t border-dalam-border-primary px-3 text-[11px] text-dalam-text-muted flex-shrink-0 select-none">
       <div className="flex items-center gap-3 min-w-0 overflow-hidden">
         <span className="flex items-center gap-1.5 flex-shrink-0">
           <FileCode className="w-3 h-3" />
           {activeTab.name}
         </span>
-        <span className="px-1.5 py-0.5 rounded bg-acode-bg-active text-acode-text-secondary uppercase tracking-wider text-[10px] flex-shrink-0">{language}</span>
+        <span className="px-1.5 py-0.5 rounded bg-dalam-bg-active text-dalam-text-secondary uppercase tracking-wider text-[10px] flex-shrink-0">{language}</span>
         {cursor && (
           <span className="flex items-center gap-1 flex-shrink-0">
             <span>Ln {cursor.line}, Col {cursor.column}</span>
@@ -412,26 +412,26 @@ function EditorStatusBar() {
           <button
             onClick={async () => {
               try {
-                const api = ensureAcodeAPI();
+                const api = ensureDalamAPI();
                 await api.fs.writeFile(activeTab.path, activeTab.content);
                 markSaved(activeTab.path);
               } catch (err) {
                 toast.error("Save failed", (err as Error)?.message ?? "Unknown error");
               }
             }}
-            className="flex items-center gap-1 text-acode-text-secondary hover:text-acode-text-primary transition-colors"
+            className="flex items-center gap-1 text-dalam-text-secondary hover:text-dalam-text-primary transition-colors"
             title={`Save (${mod}S)`}
           >
-            <Circle className="w-2 h-2 fill-current text-acode-accent-primary" />
+            <Circle className="w-2 h-2 fill-current text-dalam-accent-primary" />
             <span>Unsaved</span>
           </button>
         ) : (
-          <span className="flex items-center gap-1 text-acode-text-muted">
+          <span className="flex items-center gap-1 text-dalam-text-muted">
             <Check className="w-3 h-3" />
             Saved
           </span>
         )}
-        <span className="flex items-center gap-1 flex-shrink-0 text-acode-text-muted">
+        <span className="flex items-center gap-1 flex-shrink-0 text-dalam-text-muted">
           <span>Font {settings.codeFontSize}px</span>
         </span>
       </div>
@@ -444,7 +444,7 @@ function EditorStatusBar() {
 function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions, onConfirm, onCancel }: {
   restoredVersionId: string;
   activeSessionId: string;
-  sessionVersions: Record<string, import("@acode/shared-types").ChatVersion[]>;
+  sessionVersions: Record<string, import("@dalam/shared-types").ChatVersion[]>;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -452,15 +452,15 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
   const ver = versions.find((v) => v.id === restoredVersionId);
   if (!ver) return null;
   return (
-    <div className="border-t border-acode-border-primary px-3 pt-1.5 pb-0 flex-shrink-0 bg-acode-bg-primary">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-acode-accent-subtle/40 border border-acode-accent-primary/20 rounded-lg text-xs">
-        <History className="w-3.5 h-3.5 text-acode-accent-primary flex-shrink-0" />
+    <div className="border-t border-dalam-border-primary px-3 pt-1.5 pb-0 flex-shrink-0 bg-dalam-bg-primary">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-dalam-accent-subtle/40 border border-dalam-accent-primary/20 rounded-lg text-xs">
+        <History className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
         <div className="flex-1 min-w-0">
-          <span className="text-acode-text-primary font-medium truncate">{ver.label}</span>
-          <span className="text-acode-text-muted ml-1.5">· {ver.messages.length} message{ver.messages.length !== 1 ? "s" : ""}</span>
+          <span className="text-dalam-text-primary font-medium truncate">{ver.label}</span>
+          <span className="text-dalam-text-muted ml-1.5">· {ver.messages.length} message{ver.messages.length !== 1 ? "s" : ""}</span>
         </div>
         <button
-          className="flex items-center gap-1 px-2 py-1 bg-acode-accent-primary/10 hover:bg-acode-accent-primary/20 text-acode-accent-primary rounded-md transition-colors"
+          className="flex items-center gap-1 px-2 py-1 bg-dalam-accent-primary/10 hover:bg-dalam-accent-primary/20 text-dalam-accent-primary rounded-md transition-colors"
           title="Reset to this version"
           onClick={onConfirm}
         >
@@ -468,7 +468,7 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
           <span>Reset</span>
         </button>
         <button
-          className="text-acode-text-muted hover:text-acode-text-primary transition-colors"
+          className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
           title="Cancel and return to current"
           onClick={onCancel}
         >
@@ -510,6 +510,7 @@ function ChatView() {
   const [showFollowupAgentDropdown, setShowFollowupAgentDropdown] = useState(false);
   const [showFollowupModelDropdown, setShowFollowupModelDropdown] = useState(false);
   const [inputExpanded, setInputExpanded] = useState(false);
+  const [timestamp] = useState(() => Date.now());
 
   // Cleanup provider hover timeout on unmount
   useEffect(() => {
@@ -611,7 +612,7 @@ function ChatView() {
   /plan       - Switches active agent to Plan mode
   /reasoning  - Toggles reasoning modes or shows details
   /share      - Formats and copies conversation to clipboard
-  /init       - Scans workspace & creates/bootstraps ACODE.md
+  /init       - Scans workspace & creates/bootstraps DALAM.md
 
 Keyboard Shortcuts:
   ${mod}K          - Open command palette
@@ -712,19 +713,19 @@ Keyboard Shortcuts:
       
       if (!targetAgentName) {
         const agentList = PRIMARY_AGENTS.map(a => {
-          const display = AGENT_DISPLAY[a.name as import("@acode/shared-types").PrimaryAgentName];
+          const display = AGENT_DISPLAY[a.name as import("@dalam/shared-types").PrimaryAgentName];
           return `- ${a.name} (${display?.label ?? a.name})`;
         }).join("\n");
         chat.injectSystemMessage(`Usage: /agent <agentName>\n\nAvailable Primary Agents:\n${agentList}`);
       } else {
         const found = PRIMARY_AGENTS.find(a => {
-          const display = AGENT_DISPLAY[a.name as import("@acode/shared-types").PrimaryAgentName];
+          const display = AGENT_DISPLAY[a.name as import("@dalam/shared-types").PrimaryAgentName];
           return a.name.toLowerCase() === targetAgentName || 
                  (display && display.label.toLowerCase().includes(targetAgentName));
         });
         if (found) {
-          useAgents.getState().setActiveAgent(found.name as import("@acode/shared-types").PrimaryAgentName);
-          const display = AGENT_DISPLAY[found.name as import("@acode/shared-types").PrimaryAgentName];
+          useAgents.getState().setActiveAgent(found.name as import("@dalam/shared-types").PrimaryAgentName);
+          const display = AGENT_DISPLAY[found.name as import("@dalam/shared-types").PrimaryAgentName];
           chat.injectSystemMessage(`Active agent switched to: ${display?.label ?? found.name} (${found.name})`);
         } else {
           chat.injectSystemMessage(`Agent "${targetAgentName}" not found. Type "/agent" to see available options.`);
@@ -760,7 +761,7 @@ Keyboard Shortcuts:
         return;
       }
       const formatted = messages.map(m => `### ${m.role.toUpperCase()}:\n\n${m.content}\n`).join("\n---\n\n");
-      const title = `ACode Session Share log - ${new Date().toLocaleString()}\n\n`;
+      const title = `Dalam Session Share log - ${new Date().toLocaleString()}\n\n`;
       const shareContent = title + formatted;
       
       void (async () => {
@@ -788,7 +789,7 @@ Keyboard Shortcuts:
       void (async () => {
         try {
           toast.info("Scanning workspace...");
-          const api = ensureAcodeAPI();
+          const api = ensureDalamAPI();
           const files = fileTree; 
           const filesText = files.length > 0 
             ? files.map(f => `  - \`${f.name}\` (${f.type})`).join("\n")
@@ -806,9 +807,9 @@ Keyboard Shortcuts:
           const hasReact = (extCounts["tsx"] ?? 0) + (extCounts["jsx"] ?? 0);
           const hasConfig = files.some(f => f.name === "package.json" || f.name === "Cargo.toml" || f.name === "pyproject.toml");
           
-          const acodeMdContent = `# ${workspace.name} — ACode Workspace Instructions
+          const dalamMdContent = `# ${workspace.name} — Dalam Workspace Instructions
 
-> Generated by \`/init\` on ${new Date().toLocaleDateString()}.\n> Edit this file to teach ACode about your project conventions.\n> ACode loads instructions from a 4-layer hierarchy (lowest → highest priority):\n>\n>   1. **Global** — \`~/.acode/ACODE.md\` (your personal rules, all projects)\n>   2. **Org** — \`.acode/org/ACODE.md\` (team rules, shared via repo)\n>   3. **Project** — \`ACODE.md\` (this file — project-specific rules)\n>   4. **Local** — \`.acode/local/ACODE.md\` (your overrides for this project, gitignored)
+> Generated by \`/init\` on ${new Date().toLocaleDateString()}.\n> Edit this file to teach Dalam about your project conventions.\n> Dalam loads instructions from a 4-layer hierarchy (lowest → highest priority):\n>\n>   1. **Global** — \`~/.dalam/DALAM.md\` (your personal rules, all projects)\n>   2. **Org** — \`.dalam/org/DALAM.md\` (team rules, shared via repo)\n>   3. **Project** — \`DALAM.md\` (this file — project-specific rules)\n>   4. **Local** — \`.dalam/local/DALAM.md\` (your overrides for this project, gitignored)
 
 ---
 
@@ -875,7 +876,7 @@ The glob supports \`*\` (single segment) and \`**\` (recursive) patterns.
 
 ## Build & Test Commands
 
-Add your project's common commands here so ACode knows how to build:
+Add your project's common commands here so Dalam knows how to build:
 
 | Command | Purpose |
 |---------|----------|
@@ -885,32 +886,32 @@ Add your project's common commands here so ACode knows how to build:
 
 ## Notes
 
-- ACode reads this file at the start of every conversation
+- Dalam reads this file at the start of every conversation
 - Changes take effect on the next prompt submission
-- For personal overrides, create \`.acode/local/ACODE.md\` (gitignored)
-- For team-shared rules, create \`.acode/org/ACODE.md\` and commit it
+- For personal overrides, create \`.dalam/local/DALAM.md\` (gitignored)
+- For team-shared rules, create \`.dalam/org/DALAM.md\` and commit it
 `;
-          const dotAcode = `${workspace.path}/.acode`;
-          const plansDir = `${dotAcode}/plans`;
-          const acodeMdPath = `${workspace.path}/ACODE.md`;
+          const dotDalam = `${workspace.path}/.dalam`;
+          const plansDir = `${dotDalam}/plans`;
+          const dalamMdPath = `${workspace.path}/DALAM.md`;
           
           const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
           
-          if (!(await exists(dotAcode))) {
-            await mkdir(dotAcode);
+          if (!(await exists(dotDalam))) {
+            await mkdir(dotDalam);
           }
           if (!(await exists(plansDir))) {
             await mkdir(plansDir);
           }
           
-          await api.fs.writeFile(acodeMdPath, acodeMdContent);
+          await api.fs.writeFile(dalamMdPath, dalamMdContent);
           await useWorkspace.getState().refreshFileTree();
           
           chat.injectSystemMessage(`Workspace bootstrap completed:
-  1. Created ACODE.md overview at: ${acodeMdPath}
-  2. Setup .acode/plans directory for Plan mode.
+  1. Created DALAM.md overview at: ${dalamMdPath}
+  2. Setup .dalam/plans directory for Plan mode.
   3. Active workspace memory loaded.`);
-          toast.success("Workspace bootstrapped", "ACODE.md generated.");
+          toast.success("Workspace bootstrapped", "DALAM.md generated.");
         } catch (err) {
           toast.error("Failed to initialize workspace", String(err));
           chat.injectSystemMessage(`Workspace bootstrap failed: ${String(err)}`);
@@ -941,7 +942,7 @@ Add your project's common commands here so ACode knows how to build:
   const totalModified = gitStatus?.modified.length ?? 0;
 
   return (
-    <div className="h-full flex flex-col bg-acode-bg-primary">
+    <div className="h-full flex flex-col bg-dalam-bg-primary">
       <TopNav />
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
@@ -950,7 +951,7 @@ Add your project's common commands here so ACode knows how to build:
             {/* Large background A watermark — low opacity, behind everything */}
             <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center select-none">
               <span
-                className="text-acode-text-primary"
+                className="text-dalam-text-primary"
                 style={{
                   fontFamily: "'Newsreader', 'Iowan Old Style', 'Georgia', serif",
                   fontSize: "min(95vh, 1300px)",
@@ -969,48 +970,48 @@ Add your project's common commands here so ACode knows how to build:
             {/* Foreground content — sits above the A watermark */}
             <div className="relative w-full max-w-2xl">
               <h1
-                className="text-4xl text-acode-text-primary text-center mb-10 tracking-tight"
+                className="text-4xl text-dalam-text-primary text-center mb-10 tracking-tight"
                 style={{ fontFamily: "'Newsreader', 'Iowan Old Style', 'Georgia', serif", fontWeight: 500 }}
               >
                 {workspace
-                  ? <>Start a new task in <span className="text-acode-accent-primary">{workspace.name}</span></>
+                  ? <>Start a new task in <span className="text-dalam-accent-primary">{workspace.name}</span></>
                   : "Open a folder to begin"}
               </h1>
               {/* Removed overflow-hidden so dropdowns can render above the card */}
-              <div className="bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl">
+              <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl">
                 <div className="px-4 pt-2.5 flex items-center gap-3">
                   <div className="relative" ref={workspaceRef}>
                     <button
-                      className={`flex items-center gap-1.5 text-sm transition-colors ${workspace ? "text-acode-text-secondary hover:text-acode-text-primary" : "text-acode-text-muted hover:text-acode-text-secondary"}`}
+                      className={`flex items-center gap-1.5 text-sm transition-colors ${workspace ? "text-dalam-text-secondary hover:text-dalam-text-primary" : "text-dalam-text-muted hover:text-dalam-text-secondary"}`}
                       onClick={() => { setShowWorkspaceDropdown((v) => !v); setShowBranchDropdown(false); setShowAgentDropdown(false); setShowModelDropdown(false); }}
                       title={workspace ? `Active workspace: ${workspace.name}` : "Select a folder to start working"}
                     >
-                      <FolderOpen className={`w-4 h-4 ${workspace ? "text-acode-text-muted" : "text-amber-400/80"}`} />
+                      <FolderOpen className={`w-4 h-4 ${workspace ? "text-dalam-text-muted" : "text-amber-400/80"}`} />
                       <span>{workspace?.name || "Select a folder"}</span>
-                      <ChevronDown className="w-3.5 h-3.5 text-acode-text-muted" />
+                      <ChevronDown className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                     {showWorkspaceDropdown && (
-                      <div className="absolute top-full left-0 mt-1 w-64 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
-                        <div className="p-2 border-b border-acode-border-primary">
+                      <div className="absolute top-full left-0 mt-1 w-64 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
+                        <div className="p-2 border-b border-dalam-border-primary">
                           <input className="input-base w-full text-xs" placeholder="Search workspaces" autoFocus />
                         </div>
                         <div className="max-h-60 overflow-y-auto">
                           {workspaces.length === 0 && (
-                            <div className="px-3 py-3 text-xs text-acode-text-muted">No workspaces yet. Open a folder to get started.</div>
+                            <div className="px-3 py-3 text-xs text-dalam-text-muted">No workspaces yet. Open a folder to get started.</div>
                           )}
                           {workspaces.map((ws) => (
                             <button key={ws.id}
-                              className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-acode-bg-hover transition-colors ${ws.id === activeWorkspaceId ? "bg-acode-bg-hover" : ""}`}
+                              className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-dalam-bg-hover transition-colors ${ws.id === activeWorkspaceId ? "bg-dalam-bg-hover" : ""}`}
                               onClick={() => { setActiveWorkspace(ws.id); setShowWorkspaceDropdown(false); }}>
-                              <FolderOpen className="w-4 h-4 text-acode-text-muted flex-shrink-0" />
-                              <span className="flex-1 truncate text-acode-text-primary">{ws.name}</span>
-                              {ws.id === activeWorkspaceId && <Check className="w-4 h-4 text-acode-accent-primary" />}
+                              <FolderOpen className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
+                              <span className="flex-1 truncate text-dalam-text-primary">{ws.name}</span>
+                              {ws.id === activeWorkspaceId && <Check className="w-4 h-4 text-dalam-accent-primary" />}
                             </button>
                           ))}
-                          <div className="border-t border-acode-border-primary">
-                            <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
+                          <div className="border-t border-dalam-border-primary">
+                            <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
                               onClick={() => { void openWorkspace(); setShowWorkspaceDropdown(false); }}>
-                              <FolderOpen className="w-4 h-4 text-acode-text-muted flex-shrink-0" />
+                              <FolderOpen className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
                               <span>Open folder…</span>
                             </button>
                           </div>
@@ -1020,16 +1021,16 @@ Add your project's common commands here so ACode knows how to build:
                   </div>
                   {gitStatus && (
                     <div className="relative" ref={branchRef}>
-                      <button className="flex items-center gap-1.5 text-xs text-acode-text-muted hover:text-acode-text-secondary transition-colors"
+                      <button className="flex items-center gap-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-secondary transition-colors"
                         onClick={() => { setShowBranchDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowAgentDropdown(false); setShowModelDropdown(false); }}>
                         <GitBranch className="w-3.5 h-3.5" />
                         <span>{gitStatus.branch}</span>
                         <ChevronDown className="w-3 h-3" />
                       </button>
                       {showBranchDropdown && (
-                        <div className="absolute top-full left-0 mt-1 w-40 bg-acode-bg-secondary border border-acode-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
-                          <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-acode-text-primary hover:bg-acode-bg-hover">
-                            <Check className="w-3.5 h-3.5 text-acode-accent-primary" />{gitStatus.branch}
+                        <div className="absolute top-full left-0 mt-1 w-40 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
+                          <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-primary hover:bg-dalam-bg-hover">
+                            <Check className="w-3.5 h-3.5 text-dalam-accent-primary" />{gitStatus.branch}
                           </button>
                         </div>
                       )}
@@ -1040,15 +1041,15 @@ Add your project's common commands here so ACode knows how to build:
                   {pendingAttachments.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {pendingAttachments.map((att) => (
-                        <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-acode-bg-active border border-acode-border-primary rounded-md text-xs text-acode-text-primary">
+                        <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary">
                           {att.mimeType.startsWith("image/") ? (
                             <img src={`data:${att.mimeType};base64,${att.content}`} alt={att.name} className="w-5 h-5 rounded object-cover" />
                           ) : (
-                            <FileText className="w-3.5 h-3.5 text-acode-text-muted" />
+                            <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
                           )}
                           <span className="max-w-[120px] truncate">{att.name}</span>
                           <button
-                            className="text-acode-text-muted hover:text-acode-text-primary transition-colors ml-0.5"
+                            className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
                             onClick={() => removePendingAttachment(att.id)}
                             title={`Remove ${att.name}`}
                           >
@@ -1060,13 +1061,13 @@ Add your project's common commands here so ACode knows how to build:
                   )}
                   <textarea
                     ref={mainTextareaRef}
-                    className={`w-full bg-transparent border-0 outline-none text-sm text-acode-text-primary placeholder-acode-text-muted resize-none leading-relaxed overflow-hidden transition-all ${inputExpanded ? "min-h-[160px]" : "min-h-[28px]"}`}
+                    className={`w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none leading-relaxed overflow-hidden transition-all ${inputExpanded ? "min-h-[160px]" : "min-h-[28px]"}`}
                     placeholder={
                       activeAgentName === "plan"
                         ? "Describe a task to plan. The agent will explore the codebase, produce a plan, and ask you to approve before executing."
                         : activeAgentName === "yolo"
                           ? "YOLO mode — everything runs without permission prompts. Be specific about what you want."
-                          : "Ask ACode anything, @ to add files, / for commands, $ for skills, # for related conversations"
+                          : "Ask Dalam anything, @ to add files, / for commands, $ for skills, # for related conversations"
                     }
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
@@ -1084,7 +1085,7 @@ Add your project's common commands here so ACode knows how to build:
                   />
                   {/* Expand/Collapse button */}
                   <button
-                    className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center rounded text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+                    className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                     onClick={() => setInputExpanded((v) => !v)}
                     title={inputExpanded ? "Collapse input" : "Expand input"}
                   >
@@ -1095,7 +1096,7 @@ Add your project's common commands here so ACode knows how to build:
                   <div className="flex items-center gap-2">
                     <AttachFileButton />
                     <div className="relative" ref={agentRef}>
-                      <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-acode-bg-hover rounded-md transition-colors ${agentInfo.color}`}
+                      <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-dalam-bg-hover rounded-md transition-colors ${agentInfo.color}`}
                         onClick={() => { setShowAgentDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowModelDropdown(false); }}
                         title={`Primary agent: ${agentInfo.label}`}
                       >
@@ -1104,34 +1105,34 @@ Add your project's common commands here so ACode knows how to build:
                         <ChevronDown className="w-3 h-3" />
                       </button>
                       {showAgentDropdown && (
-                        <div className="absolute bottom-full left-0 mb-1 w-80 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
-                          <div className="px-3 py-2 border-b border-acode-border-primary">
-                            <div className="text-[10px] uppercase tracking-wider text-acode-text-muted">Primary agent</div>
-                            <div className="text-xs text-acode-text-muted mt-0.5">Switches the active agent and its permission policy.</div>
+                        <div className="absolute bottom-full left-0 mb-1 w-80 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
+                          <div className="px-3 py-2 border-b border-dalam-border-primary">
+                            <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted">Primary agent</div>
+                            <div className="text-xs text-dalam-text-muted mt-0.5">Switches the active agent and its permission policy.</div>
                           </div>
                           {PRIMARY_AGENTS.map((agent) => {
                             const meta = AGENT_DISPLAY[agent.name as PrimaryAgentName];
                             const Icon = meta.icon;
                             return (
                               <button key={agent.name}
-                                className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-acode-bg-hover transition-colors ${activeAgentName === agent.name ? "bg-acode-bg-hover" : ""}`}
+                                className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-dalam-bg-hover transition-colors ${activeAgentName === agent.name ? "bg-dalam-bg-hover" : ""}`}
                                 onClick={() => { setActiveAgent(agent.name as PrimaryAgentName); setShowAgentDropdown(false); }}>
                                 <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${meta.color}`} />
                                 <div className="flex-1 min-w-0">
-                                  <div className="text-sm text-acode-text-primary font-medium flex items-center gap-1.5">
+                                  <div className="text-sm text-dalam-text-primary font-medium flex items-center gap-1.5">
                                     {meta.label}
-                                    {activeAgentName === agent.name && <span className="text-[9px] uppercase text-acode-accent-primary tracking-wider">active</span>}
+                                    {activeAgentName === agent.name && <span className="text-[9px] uppercase text-dalam-accent-primary tracking-wider">active</span>}
                                   </div>
-                                  <div className="text-xs text-acode-text-muted mt-0.5">{meta.description}</div>
+                                  <div className="text-xs text-dalam-text-muted mt-0.5">{meta.description}</div>
                                 </div>
-                                {activeAgentName === agent.name && <Check className="w-4 h-4 text-acode-accent-primary flex-shrink-0 mt-0.5" />}
+                                {activeAgentName === agent.name && <Check className="w-4 h-4 text-dalam-accent-primary flex-shrink-0 mt-0.5" />}
                               </button>
                             );
                           })}
-                          <div className="border-t border-acode-border-primary px-3 py-2">
+                          <div className="border-t border-dalam-border-primary px-3 py-2">
                             <button
                               onClick={() => { useSettingsView.getState().open("permissions"); setShowAgentDropdown(false); }}
-                              className="text-xs text-acode-text-secondary hover:text-acode-text-primary flex items-center gap-1.5"
+                              className="text-xs text-dalam-text-secondary hover:text-dalam-text-primary flex items-center gap-1.5"
                             >
                               <Shield className="w-3 h-3" />
                               Configure permission rules…
@@ -1143,14 +1144,14 @@ Add your project's common commands here so ACode knows how to build:
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="relative" ref={modelRef}>
-                      <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-acode-text-secondary hover:bg-acode-bg-hover rounded-md transition-colors"
+                      <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
                         onClick={() => { setShowModelDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowAgentDropdown(false); }}>
-                        <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-acode-git-added" : "bg-acode-text-muted"}`} />
+                        <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
                         {currentModel?.model.name || (selectedModelId || "Select model")}
                         <ChevronDown className="w-3 h-3" />
                       </button>
                       {showModelDropdown && (
-                        <div className="absolute bottom-full right-0 mb-1 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 min-w-[220px]" data-dropdown-body>
+                        <div className="absolute bottom-full right-0 mb-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 min-w-[220px]" data-dropdown-body>
                           <div className="max-h-80 overflow-y-auto">
                             {providers.filter((p) => p.enabled).map((p) => {
                               const enabledModels = p.models.filter((m) => (m as any).enabled !== false);
@@ -1161,60 +1162,42 @@ Add your project's common commands here so ACode knows how to build:
                                   ref={(el) => { providerRowRefs.current[p.id] = el; }}
                                   onMouseEnter={() => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); setHoveredProvider(p.id); }}
                                   onMouseLeave={() => { providerHoverTimeout.current = setTimeout(() => setHoveredProvider(null), 200); }}>
-                                  <div className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors ${hasActiveModel ? "text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}>
+                                  <div className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors ${hasActiveModel ? "text-dalam-accent-primary" : "text-dalam-text-primary hover:bg-dalam-bg-hover"}`}>
                                     <span className="text-sm">{p.name}</span>
                                     <div className="flex items-center gap-1">
-                                      {hasActiveModel && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
-                                      <ChevronRight className="w-3 h-3 text-acode-text-muted" />
+                                      {hasActiveModel && <Check className="w-3.5 h-3.5 text-dalam-accent-primary" />}
+                                      <ChevronRight className="w-3 h-3 text-dalam-text-muted" />
                                     </div>
                                   </div>
                                 </div>
                               );
                             })}
                           </div>
-                          <div className="border-t border-acode-border-primary">
-                            <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
+                          <div className="border-t border-dalam-border-primary">
+                            <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
                               onClick={() => { useSettingsView.getState().open("models"); setShowModelDropdown(false); }}>
-                              <Settings className="w-4 h-4 text-acode-text-muted" />
+                              <Settings className="w-4 h-4 text-dalam-text-muted" />
                               <span>Manage models</span>
                             </button>
                           </div>
                         </div>
                       )}
                       {/* Sub-dropdown rendered OUTSIDE the scrollable container via portal-like approach */}
-                      {showModelDropdown && hoveredProvider && (() => {
-                        const p = providers.find((pr) => pr.id === hoveredProvider);
-                        if (!p) return null;
-                        const enabledModels = p.models.filter((m) => (m as any).enabled !== false);
-                        const rowEl = providerRowRefs.current[hoveredProvider];
-                        const dropdownEl = modelRef.current?.querySelector('[data-dropdown-body]');
-                        if (!rowEl || !dropdownEl) return null;
-                        const rowRect = rowEl.getBoundingClientRect();
-                        const dropRect = dropdownEl.getBoundingClientRect();
-                        const topOffset = rowRect.top - dropRect.top;
-                        return ReactDOM.createPortal(
-                          <div className="fixed w-56 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-[100]"
-                            style={{ left: dropRect.right + 2, top: dropRect.top + topOffset }}
-                            data-model-subdropdown
-                            onMouseEnter={() => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); }}
-                            onMouseLeave={() => { providerHoverTimeout.current = setTimeout(() => setHoveredProvider(null), 200); }}>
-                            <div className="max-h-64 overflow-y-auto">
-                              {enabledModels.map((m) => (
-                                <button key={m.modelId}
-                                  className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover text-acode-accent-primary" : "text-acode-text-primary hover:bg-acode-bg-hover"}`}
-                                  onClick={() => { setSelectedModel(m.modelId); setShowModelDropdown(false); }}>
-                                  <span className="flex-1 truncate">{m.name}</span>
-                                  {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
-                                </button>
-                              ))}
-                            </div>
-                          </div>,
-                          document.body
-                        );
-                      })()}
+                      {showModelDropdown && hoveredProvider && (
+                        <ModelSubDropdown
+                          hoveredProvider={hoveredProvider}
+                          providerRowRefs={providerRowRefs}
+                          modelRef={modelRef}
+                          providers={providers}
+                          selectedModelId={selectedModelId}
+                          onSelect={(modelId) => { setSelectedModel(modelId); setShowModelDropdown(false); }}
+                          onClose={() => setHoveredProvider(null)}
+                          hoverTimeoutRef={providerHoverTimeout}
+                        />
+                      )}
                     </div>
                     <button
-                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                       disabled={!value.trim() || isStreaming || !workspace || (!selectedModelId && !settings.selectedModel)}
                       onClick={handleSubmit}
                       title={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : isStreaming ? "Streaming…" : "Send"}
@@ -1229,11 +1212,11 @@ Add your project's common commands here so ACode knows how to build:
         ) : (
           <div className="max-w-3xl mx-auto py-6 px-6 space-y-1">
             {gitStatus && (totalAdded + totalDeleted + totalModified) > 0 && (
-              <div className="flex items-center gap-2 mb-4 text-[11px] text-acode-text-muted">
+              <div className="flex items-center gap-2 mb-4 text-[11px] text-dalam-text-muted">
                 <FileText className="w-3 h-3" />
                 <span>Changes</span>
-                {totalAdded > 0 && <span className="text-acode-git-added">+{totalAdded}</span>}
-                {totalDeleted > 0 && <span className="text-acode-git-deleted">-{totalDeleted}</span>}
+                {totalAdded > 0 && <span className="text-dalam-git-added">+{totalAdded}</span>}
+                {totalDeleted > 0 && <span className="text-dalam-git-deleted">-{totalDeleted}</span>}
                 <span className="ml-auto flex items-center gap-1">
                   <Cpu className="w-2.5 h-2.5" />
                   {currentModel?.model.name || "Select model"}
@@ -1241,17 +1224,17 @@ Add your project's common commands here so ACode knows how to build:
               </div>
             )}
             {hasMessages && (
-              <div className="max-w-3xl mx-auto mt-4 mb-6 px-6 text-[10px] text-acode-text-muted flex items-center gap-2">
+              <div className="max-w-3xl mx-auto mt-4 mb-6 px-6 text-[10px] text-dalam-text-muted flex items-center gap-2">
                 <span className="flex items-center gap-1">
                   <Hash className="w-3 h-3" />
                   {messages.length} {messages.length === 1 ? "message" : "messages"}
                 </span>
-                <span className="text-acode-text-muted/40">·</span>
+                <span className="text-dalam-text-muted/40">·</span>
                 <span className="flex items-center gap-1" title="Approximate token count (1 token ≈ 4 chars)">
                   <Sparkles className="w-3 h-3" />
                   {Math.ceil(messages.reduce((sum, m) => sum + m.content.length, 0) / 4).toLocaleString()} tokens
                 </span>
-                <span className="text-acode-text-muted/40">·</span>
+                <span className="text-dalam-text-muted/40">·</span>
                 <span className="flex items-center gap-1">
                   {formatTime(messages[0].timestamp)}
                 </span>
@@ -1263,22 +1246,22 @@ Add your project's common commands here so ACode knows how to build:
             )}
             {messages.map((m) => <ChatMessage key={m.id} message={m} activeAgentName={activeAgentName} />)}
             {planApproval && planApproval.status === "pending" && (
-              <div className="mx-4 my-3 p-4 bg-acode-accent-subtle border border-acode-accent-primary/30 rounded-xl animate-fade-in">
+              <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
-                  <ClipboardList className="w-4 h-4 text-acode-accent-primary" />
-                  <span className="text-sm font-medium text-acode-text-primary">Plan ready for review</span>
+                  <ClipboardList className="w-4 h-4 text-dalam-accent-primary" />
+                  <span className="text-sm font-medium text-dalam-text-primary">Plan ready for review</span>
                 </div>
-                <p className="text-xs text-acode-text-muted mb-3">The AI has produced a plan. Approve to switch to Build mode and execute it.</p>
+                <p className="text-xs text-dalam-text-muted mb-3">The AI has produced a plan. Approve to switch to Build mode and execute it.</p>
                 <div className="flex gap-2">
                   <button
                     onClick={approvePlan}
-                    className="px-4 py-1.5 bg-acode-accent-primary hover:bg-acode-accent-hover text-white text-sm rounded-lg transition-colors"
+                    className="px-4 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-lg transition-colors"
                   >
                     Approve & Build
                   </button>
                   <button
                     onClick={rejectPlan}
-                    className="px-4 py-1.5 bg-acode-bg-active hover:bg-acode-bg-tertiary text-acode-text-primary text-sm rounded-lg border border-acode-border-primary transition-colors"
+                    className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-dalam-text-primary text-sm rounded-lg border border-dalam-border-primary transition-colors"
                   >
                     Reject
                   </button>
@@ -1290,7 +1273,7 @@ Add your project's common commands here so ACode knows how to build:
                 activities={pendingActivities}
                 toolCalls={pendingToolCalls}
                 thinkingContent={thinkingContent}
-                sessionStartTime={session?.startedAt ?? Date.now()}
+                sessionStartTime={session?.startedAt ?? timestamp}
               />
             )}
             {isStreaming && streamingContent && (
@@ -1299,7 +1282,7 @@ Add your project's common commands here so ACode knows how to build:
                   id: "streaming",
                   role: "assistant",
                   content: streamingContent,
-                  timestamp: Date.now(),
+                  timestamp: timestamp,
                   ...(thinkingContent ? { thinking: thinkingContent } : {}),
                 }}
                 pending
@@ -1308,7 +1291,7 @@ Add your project's common commands here so ACode knows how to build:
             )}
             {isStreaming && !streamingContent && pendingToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent && (
               <div className="py-3 animate-fade-in-up">
-                <div className="flex items-center gap-3 text-[13px] text-acode-text-secondary">
+                <div className="flex items-center gap-3 text-[13px] text-dalam-text-secondary">
                   <div className="animate-thinking-wave">
                     <span /><span /><span /><span /><span />
                   </div>
@@ -1334,21 +1317,21 @@ Add your project's common commands here so ACode knows how to build:
 
       {/* Only show follow-up input when there are actual messages */}
       {hasMessages && (
-        <div className="border-t border-acode-border-primary p-3 flex-shrink-0 bg-acode-bg-primary">
-          <div className="bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-lg">
+        <div className="border-t border-dalam-border-primary p-3 flex-shrink-0 bg-dalam-bg-primary">
+          <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
             <div className={`px-4 py-3 relative ${inputExpanded ? "min-h-[200px]" : ""}`}>
               {pendingAttachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {pendingAttachments.map((att) => (
-                    <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-acode-bg-active border border-acode-border-primary rounded-md text-xs text-acode-text-primary">
+                    <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary">
                       {att.mimeType.startsWith("image/") ? (
                         <img src={`data:${att.mimeType};base64,${att.content}`} alt={att.name} className="w-5 h-5 rounded object-cover" />
                       ) : (
-                        <FileText className="w-3.5 h-3.5 text-acode-text-muted" />
+                        <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
                       )}
                       <span className="max-w-[120px] truncate">{att.name}</span>
                       <button
-                        className="text-acode-text-muted hover:text-acode-text-primary transition-colors ml-0.5"
+                        className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
                         onClick={() => removePendingAttachment(att.id)}
                         title={`Remove ${att.name}`}
                       >
@@ -1359,7 +1342,7 @@ Add your project's common commands here so ACode knows how to build:
                 </div>
               )}
               <textarea ref={followupTextareaRef}
-                className={`w-full bg-transparent border-0 outline-none text-sm text-acode-text-primary placeholder-acode-text-muted resize-none overflow-hidden transition-all ${inputExpanded ? "min-h-[160px]" : "min-h-[40px]"}`}
+                className={`w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none overflow-hidden transition-all ${inputExpanded ? "min-h-[160px]" : "min-h-[40px]"}`}
                 placeholder="Ask for follow-up changes" value={value} onChange={(e) => setValue(e.target.value)}
                 onKeyDown={handleFollowupKeyDown} rows={inputExpanded ? 8 : 1} disabled={isStreaming} />
               <PromptAutocomplete
@@ -1372,7 +1355,7 @@ Add your project's common commands here so ACode knows how to build:
               />
               {/* Expand/Collapse button */}
               <button
-                className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center rounded text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+                className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                 onClick={() => setInputExpanded((v) => !v)}
                 title={inputExpanded ? "Collapse input" : "Expand input"}
               >
@@ -1383,27 +1366,27 @@ Add your project's common commands here so ACode knows how to build:
               <div className="flex items-center gap-2">
                 <AttachFileButton />
                 <div className="relative" ref={followupAgentRef}>
-                  <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-acode-bg-hover rounded-md transition-colors ${agentInfo.color}`}
+                  <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-dalam-bg-hover rounded-md transition-colors ${agentInfo.color}`}
                     onClick={() => { setShowFollowupAgentDropdown((v) => !v); setShowFollowupModelDropdown(false); }}>
                     <AgentIcon className="w-3.5 h-3.5" />
                     <span>{agentInfo.label}</span>
                     <ChevronDown className="w-3 h-3" />
                   </button>
                   {showFollowupAgentDropdown && (
-                    <div className="absolute bottom-full left-0 mb-1 w-80 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
+                    <div className="absolute bottom-full left-0 mb-1 w-80 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
                       {PRIMARY_AGENTS.map((agent) => {
                         const meta = AGENT_DISPLAY[agent.name as PrimaryAgentName];
                         const Icon = meta.icon;
                         return (
                           <button key={agent.name}
-                            className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-acode-bg-hover transition-colors ${activeAgentName === agent.name ? "bg-acode-bg-hover" : ""}`}
+                            className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-dalam-bg-hover transition-colors ${activeAgentName === agent.name ? "bg-dalam-bg-hover" : ""}`}
                             onClick={() => { setActiveAgent(agent.name as PrimaryAgentName); setShowFollowupAgentDropdown(false); }}>
                             <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${meta.color}`} />
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm text-acode-text-primary font-medium">{meta.label}</div>
-                              <div className="text-xs text-acode-text-muted">{meta.description}</div>
+                              <div className="text-sm text-dalam-text-primary font-medium">{meta.label}</div>
+                              <div className="text-xs text-dalam-text-muted">{meta.description}</div>
                             </div>
-                            {activeAgentName === agent.name && <Check className="w-4 h-4 text-acode-accent-primary flex-shrink-0 mt-0.5" />}
+                            {activeAgentName === agent.name && <Check className="w-4 h-4 text-dalam-accent-primary flex-shrink-0 mt-0.5" />}
                           </button>
                         );
                       })}
@@ -1413,31 +1396,31 @@ Add your project's common commands here so ACode knows how to build:
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative" ref={followupModelRef}>
-                  <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-acode-text-secondary hover:bg-acode-bg-hover rounded-md transition-colors"
+                  <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
                     onClick={() => { setShowFollowupModelDropdown((v) => !v); setShowFollowupAgentDropdown(false); }}>
-                        <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-acode-git-added" : "bg-acode-text-muted"}`} />
+                        <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
                         {currentModel?.model.name || (selectedModelId || "Select model")}
                         <ChevronDown className="w-3 h-3" />
                   </button>
                   {showFollowupModelDropdown && (
-                    <div className="absolute bottom-full right-0 mb-1 w-64 bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl z-50 overflow-hidden max-h-80 overflow-y-auto">
+                    <div className="absolute bottom-full right-0 mb-1 w-64 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden max-h-80 overflow-y-auto">
                       {providers.filter((p) => p.enabled).map((p) => (
                         <div key={p.id}>
-                          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-acode-text-muted border-b border-acode-border-primary">{p.name}</div>
+                          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary">{p.name}</div>
                           {p.models.filter((m) => m.enabled !== false).map((m) => (
                             <button key={m.modelId}
-                              className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-acode-bg-hover transition-colors ${selectedModelId === m.modelId ? "bg-acode-bg-hover" : ""}`}
+                              className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-dalam-bg-hover transition-colors ${selectedModelId === m.modelId ? "bg-dalam-bg-hover" : ""}`}
                               onClick={() => { setSelectedModel(m.modelId); setShowFollowupModelDropdown(false); }}>
-                              <span className="flex-1 truncate text-acode-text-primary">{m.name}</span>
-                              {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-acode-accent-primary" />}
+                              <span className="flex-1 truncate text-dalam-text-primary">{m.name}</span>
+                              {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-dalam-accent-primary" />}
                             </button>
                           ))}
                         </div>
                       ))}
-                      <div className="border-t border-acode-border-primary">
-                        <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
+                      <div className="border-t border-dalam-border-primary">
+                        <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
                           onClick={() => { useSettingsView.getState().open("models"); setShowFollowupModelDropdown(false); }}>
-                          <Settings className="w-4 h-4 text-acode-text-muted" />
+                          <Settings className="w-4 h-4 text-dalam-text-muted" />
                           <span>Manage models</span>
                         </button>
                       </div>
@@ -1445,7 +1428,7 @@ Add your project's common commands here so ACode knows how to build:
                   )}
                 </div>
                 <button
-                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                   disabled={!value.trim() || isStreaming || !workspace || (!selectedModelId && !settings.selectedModel)}
                   onClick={handleSubmit}
                   title={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : isStreaming ? "Streaming…" : "Send"}
@@ -1467,7 +1450,53 @@ Add your project's common commands here so ACode knows how to build:
  * calls as a single collapsible group so the user can hide the noise and
  * focus on the streamed text.
  */
-function RunningToolsSection({ toolCalls }: { toolCalls: import("@acode/shared-types").ToolCall[] }) {
+function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, providers, selectedModelId, onSelect, onClose, hoverTimeoutRef }: {
+  hoveredProvider: string;
+  providerRowRefs: React.MutableRefObject<Record<string, HTMLElement | null>>;
+  modelRef: React.RefObject<HTMLDivElement | null>;
+  providers: ModelProvider[];
+  selectedModelId: string;
+  onSelect: (modelId: string) => void;
+  onClose: () => void;
+  hoverTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
+}) {
+  const [style, setStyle] = useState<React.CSSProperties>({});
+  const p = providers.find((pr) => pr.id === hoveredProvider);
+  const enabledModels = p?.models.filter((m) => (m as any).enabled !== false) ?? [];
+
+  useLayoutEffect(() => {
+    const rowEl = providerRowRefs.current[hoveredProvider];
+    const dropdownEl = modelRef.current?.querySelector('[data-dropdown-body]');
+    if (!rowEl || !dropdownEl) return;
+    const rowRect = rowEl.getBoundingClientRect();
+    const dropRect = dropdownEl.getBoundingClientRect();
+    setStyle({ left: dropRect.right + 2, top: dropRect.top + rowRect.top - dropRect.top });
+  }, [hoveredProvider, providerRowRefs, modelRef]);
+
+  if (!p || enabledModels.length === 0) return null;
+
+  return ReactDOM.createPortal(
+    <div className="fixed w-56 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-[100]"
+      style={style}
+      data-model-subdropdown
+      onMouseEnter={() => { if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current); }}
+      onMouseLeave={() => { hoverTimeoutRef.current = setTimeout(onClose, 200); }}>
+      <div className="max-h-64 overflow-y-auto">
+        {enabledModels.map((m) => (
+          <button key={m.modelId}
+            className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-dalam-bg-hover text-dalam-accent-primary" : "text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
+            onClick={() => { onSelect(m.modelId); }}>
+            <span className="flex-1 truncate">{m.name}</span>
+            {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-dalam-accent-primary" />}
+          </button>
+        ))}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function RunningToolsSection({ toolCalls }: { toolCalls: import("@dalam/shared-types").ToolCall[] }) {
   const [open, setOpen] = useState(true);
   const done = toolCalls.filter((t) => t.status === "completed").length;
   return (
@@ -1475,19 +1504,19 @@ function RunningToolsSection({ toolCalls }: { toolCalls: import("@acode/shared-t
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full text-acode-text-secondary"
+        className="group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full text-dalam-text-secondary"
       >
         <ChevronDown
-          className={`w-3 h-3 text-acode-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
+          className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
         />
-        <Loader2 className="w-3 h-3 text-acode-accent-primary animate-spin flex-shrink-0" />
+        <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0" />
         <span>Running tools</span>
-        <span className="text-[11px] text-acode-text-muted tabular-nums ml-1">
+        <span className="text-[11px] text-dalam-text-muted tabular-nums ml-1">
           {done}/{toolCalls.length}
         </span>
       </button>
       {open && (
-        <div className="ml-3.5 mt-1 pl-3 border-l border-acode-border-primary/60">
+        <div className="ml-3.5 mt-1 pl-3 border-l border-dalam-border-primary/60">
           <ToolCallsList toolCalls={toolCalls} />
         </div>
       )}
@@ -1497,7 +1526,7 @@ function RunningToolsSection({ toolCalls }: { toolCalls: import("@acode/shared-t
 
 const EMPTY_ACTIVITIES: never[] = [];
 
-function ChatMessage({ message, pending, activeAgentName }: { message: import("@acode/shared-types").ChatMessage; pending?: boolean; activeAgentName?: string }) {
+function ChatMessage({ message, pending, activeAgentName }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; activeAgentName?: string }) {
   const toast = useToast();
   const segments = splitCodeFences(message.content);
   // For settled messages, activities come from message.activities (no store subscription needed).
@@ -1508,11 +1537,11 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
   // System message: styled notification box
   if (message.role === "system") {
     return (
-      <div className="py-2.5 px-3.5 my-3 bg-acode-bg-secondary border border-acode-border-primary rounded-xl text-xs text-acode-text-secondary flex items-start gap-3 animate-fade-in shadow-sm max-w-2xl mx-auto">
-        <Info className="w-4 h-4 text-acode-accent-primary mt-0.5 flex-shrink-0" />
+      <div className="py-2.5 px-3.5 my-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl text-xs text-dalam-text-secondary flex items-start gap-3 animate-fade-in shadow-sm max-w-2xl mx-auto">
+        <Info className="w-4 h-4 text-dalam-accent-primary mt-0.5 flex-shrink-0" />
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-acode-text-primary mb-1">System Notification</div>
-          <div className="whitespace-pre-wrap leading-relaxed font-mono text-[11px] text-acode-text-secondary">{message.content}</div>
+          <div className="font-semibold text-dalam-text-primary mb-1">System Notification</div>
+          <div className="whitespace-pre-wrap leading-relaxed font-mono text-[11px] text-dalam-text-secondary">{message.content}</div>
         </div>
       </div>
     );
@@ -1529,12 +1558,12 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
             {message.attachments && message.attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-2 justify-end">
                 {message.attachments.map((att) => (
-                  <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-acode-bg-active border border-acode-border-primary rounded-md text-xs text-acode-text-primary">
+                  <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary">
                     {att.mimeType.startsWith("image/") ? (
                       <img src={`data:${att.mimeType};base64,${att.content}`} alt={att.name} className="w-10 h-10 rounded object-cover" />
                     ) : (
                       <>
-                        <FileText className="w-3.5 h-3.5 text-acode-text-muted" />
+                        <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
                         <span className="max-w-[120px] truncate">{att.name}</span>
                       </>
                     )}
@@ -1542,8 +1571,8 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
                 ))}
               </div>
             )}
-            <div className="bg-acode-bg-secondary border border-acode-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 text-right">
-              <p className="text-[13px] text-acode-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
+            <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 text-right">
+              <p className="text-[13px] text-dalam-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
                 {message.content}
               </p>
             </div>
@@ -1609,14 +1638,14 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
 
       {/* Main assistant message — rendered with markdown */}
       {hasContent && (
-        <div className="text-[13px] text-acode-text-primary leading-relaxed my-0.5">
+        <div className="text-[13px] text-dalam-text-primary leading-relaxed my-0.5">
           {segments.filter((seg) => seg.type !== "text" || seg.content.trim()).map((seg, idx) =>
             seg.type === "code"
               ? <CodeBlock key={"code-" + idx} language={seg.language ?? ""} content={seg.content} />
-              : <div key={"txt-" + idx} className="prose-acode mb-2 last:mb-0"><MarkdownContent content={seg.content} /></div>
+              : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0"><MarkdownContent content={seg.content} /></div>
           )}
           {pending && (
-            <span className="inline-block w-1.5 h-3.5 bg-acode-accent-primary ml-0.5 animate-pulse-soft rounded-sm align-middle" />
+            <span className="inline-block w-1.5 h-3.5 bg-dalam-accent-primary ml-0.5 animate-pulse-soft rounded-sm align-middle" />
           )}
         </div>
       )}
@@ -1646,7 +1675,7 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
         <div className="flex items-center gap-2 mt-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity">
           <div className="ml-auto flex items-center gap-0.5">
             <button
-              className="p-1 rounded hover:bg-acode-bg-hover text-acode-text-muted hover:text-acode-text-primary transition-colors"
+              className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
               title="Copy"
               onClick={() => { void navigator.clipboard.writeText(message.content); toast.success("Copied"); }}
             >
@@ -1716,7 +1745,7 @@ function AttachFileButton() {
         onChange={(e) => void handleFiles(e.target.files)}
       />
       <button
-        className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+        className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
         onClick={() => inputRef.current?.click()}
         title="Attach file or image"
         aria-label="Attach file or image"
@@ -1733,7 +1762,7 @@ function MarkdownContent({ content }: { content: string }) {
       remarkPlugins={[remarkGfm]}
       components={{
         p: ({ children }) => <p className="whitespace-pre-wrap break-words mb-2 last:mb-0">{children}</p>,
-        strong: ({ children }) => <strong className="font-semibold text-acode-text-primary">{children}</strong>,
+        strong: ({ children }) => <strong className="font-semibold text-dalam-text-primary">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
         a: ({ href, children }) => (
           <a
@@ -1754,29 +1783,29 @@ function MarkdownContent({ content }: { content: string }) {
                 // Invalid URL — let the browser handle it normally
               }
             }}
-            className="text-acode-accent-primary hover:underline cursor-pointer"
+            className="text-dalam-accent-primary hover:underline cursor-pointer"
           >{children}</a>
         ),
         ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
         ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
-        li: ({ children }) => <li className="text-acode-text-secondary">{children}</li>,
-        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 text-acode-text-primary">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-base font-bold mb-2 text-acode-text-primary">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-sm font-bold mb-1 text-acode-text-primary">{children}</h3>,
+        li: ({ children }) => <li className="text-dalam-text-secondary">{children}</li>,
+        h1: ({ children }) => <h1 className="text-lg font-bold mb-2 text-dalam-text-primary">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-bold mb-2 text-dalam-text-primary">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-bold mb-1 text-dalam-text-primary">{children}</h3>,
         code: ({ children, className }) => {
           const isInline = !className;
           if (isInline) {
-            return <code className="px-1 py-0.5 bg-acode-bg-tertiary rounded text-[12px] font-mono text-acode-accent-primary">{children}</code>;
+            return <code className="px-1 py-0.5 bg-dalam-bg-tertiary rounded text-[12px] font-mono text-dalam-accent-primary">{children}</code>;
           }
           return <code className={className}>{children}</code>;
         },
         blockquote: ({ children }) => (
-          <blockquote className="border-l-2 border-acode-accent-primary/40 pl-3 my-2 text-acode-text-muted italic">{children}</blockquote>
+          <blockquote className="border-l-2 border-dalam-accent-primary/40 pl-3 my-2 text-dalam-text-muted italic">{children}</blockquote>
         ),
-        hr: () => <hr className="my-3 border-acode-border-primary" />,
+        hr: () => <hr className="my-3 border-dalam-border-primary" />,
         table: ({ children }) => <div className="overflow-x-auto my-2"><table className="text-xs border-collapse">{children}</table></div>,
-        th: ({ children }) => <th className="px-2 py-1 border border-acode-border-primary text-left font-medium">{children}</th>,
-        td: ({ children }) => <td className="px-2 py-1 border border-acode-border-primary">{children}</td>,
+        th: ({ children }) => <th className="px-2 py-1 border border-dalam-border-primary text-left font-medium">{children}</th>,
+        td: ({ children }) => <td className="px-2 py-1 border border-dalam-border-primary">{children}</td>,
       }}
     >
       {content}
@@ -1816,28 +1845,28 @@ function CodeBlock({ language, content }: { language: string; content: string })
   }, [activeFilePath, content, updateTabContent, toast]);
 
   return (
-    <div className="my-2 bg-acode-bg-primary border border-acode-border-primary rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-acode-bg-tertiary border-b border-acode-border-primary">
-        <div className="flex items-center gap-1.5 text-[10px] text-acode-text-muted"><FileCode className="w-3 h-3" />{language || "code"}<span className="text-acode-text-muted/50">· {lines.length} lines</span></div>
+    <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
+        <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted"><FileCode className="w-3 h-3" />{language || "code"}<span className="text-dalam-text-muted/50">· {lines.length} lines</span></div>
         <div className="flex items-center gap-1">
           {isLong && (
             <button
-              className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors"
+              className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
               onClick={() => setExpanded(!expanded)}
             >{expanded ? "Collapse" : "Expand"}</button>
           )}
-          <button className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors" onClick={handleApply}>Apply</button>
-          <button className="text-[10px] text-acode-text-muted hover:text-acode-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-acode-bg-hover transition-colors"
+          <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors" onClick={handleApply}>Apply</button>
+          <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
             onClick={() => { void navigator.clipboard.writeText(content); toast.success("Copied"); }}><Copy className="w-3 h-3" /></button>
         </div>
       </div>
       <pre
-        className="p-3 text-[12px] text-mono text-acode-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
+        className="p-3 text-[12px] text-mono text-dalam-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
         style={{ maxHeight: isLong && !expanded ? "240px" : undefined }}
       ><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
       {isLong && !expanded && (
         <button
-          className="w-full py-1.5 text-[10px] text-acode-accent-primary hover:bg-acode-bg-hover border-t border-acode-border-primary transition-colors"
+          className="w-full py-1.5 text-[10px] text-dalam-accent-primary hover:bg-dalam-bg-hover border-t border-dalam-border-primary transition-colors"
           onClick={() => setExpanded(true)}
         >Show all {lines.length} lines</button>
       )}
@@ -1848,9 +1877,9 @@ function CodeBlock({ language, content }: { language: string; content: string })
 function Dots() {
   return (
     <span className="inline-flex gap-0.5 ml-1">
-      <span className="w-1 h-1 rounded-full bg-acode-text-muted animate-pulse" style={{ animationDelay: "0ms" }} />
-      <span className="w-1 h-1 rounded-full bg-acode-text-muted animate-pulse" style={{ animationDelay: "120ms" }} />
-      <span className="w-1 h-1 rounded-full bg-acode-text-muted animate-pulse" style={{ animationDelay: "240ms" }} />
+      <span className="w-1 h-1 rounded-full bg-dalam-text-muted animate-pulse" style={{ animationDelay: "0ms" }} />
+      <span className="w-1 h-1 rounded-full bg-dalam-text-muted animate-pulse" style={{ animationDelay: "120ms" }} />
+      <span className="w-1 h-1 rounded-full bg-dalam-text-muted animate-pulse" style={{ animationDelay: "240ms" }} />
     </span>
   );
 }
@@ -1881,7 +1910,7 @@ function splitCodeFences(text: string): { type: "text" | "code"; content: string
   return out;
 }
 
-function findFirstFile(nodes: import("@acode/shared-types").FileNode[]): string | null {
+function findFirstFile(nodes: import("@dalam/shared-types").FileNode[]): string | null {
   for (const n of nodes) {
     if (n.type === "file" && n.name !== ".gitignore") return n.path;
     if (n.children) { const inner = findFirstFile(n.children); if (inner) return inner; }

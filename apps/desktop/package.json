@@ -1,9 +1,9 @@
 {
-  "name": "@acode/desktop",
+  "name": "@dalam/desktop",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "ACode desktop application — AI-Native IDE",
+  "description": "Dalam desktop application — AI-Native IDE",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -16,7 +16,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@acode/shared-types": "workspace:*",
+    "@dalam/shared-types": "workspace:*",
     "@monaco-editor/react": "^4.6.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",

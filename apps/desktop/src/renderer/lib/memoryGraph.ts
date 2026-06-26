@@ -288,7 +288,6 @@ export function buildMemoryGraph(
   // ── Memory ↔ Gene edges (tag-overlap weighted) ──
   for (const mem of memories) {
     const memId = `mem-${mem.id}`;
-    const memTags = new Set(mem.tags);
     for (const gene of genes) {
       const geneId = `gene-${gene.id}`;
       const overlap = mem.tags.filter(
@@ -635,14 +634,12 @@ export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): Graph
   const clustering = clusteringCoefficients(nodes);
   const components = connectedComponents(nodes);
 
-  let totalCentrality = 0;
   let totalClustering = 0;
   let maxDegree = 0;
-  let mostCentral: { id: string; label: string; centrality: number }[] = [];
+  const mostCentral: { id: string; label: string; centrality: number }[] = [];
 
   for (const node of nodes) {
     const c = centrality.get(node.id) ?? 0;
-    totalCentrality += c;
     totalClustering += clustering.get(node.id) ?? 0;
     const deg = node.connections.length;
     if (deg > maxDegree) maxDegree = deg;

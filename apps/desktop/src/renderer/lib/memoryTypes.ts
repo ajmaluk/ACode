@@ -1,10 +1,10 @@
 /**
  * ============================================================
- * ACODE MEMORY & CONTEXT TYPES
+ * DALAM MEMORY & CONTEXT TYPES
  * ============================================================
  *
  * Unified type system for the memory management layer.
- * Extends ChatMessage from @acode/shared-types — NO duplicate types.
+ * Extends ChatMessage from @dalam/shared-types — NO duplicate types.
  *
  * Research basis:
  * - MiMo-Code: tiered importance, budgeted injection (~65K)
@@ -15,7 +15,7 @@
  * ============================================================
  */
 
-import type { ChatMessage } from "@acode/shared-types";
+import type { ChatMessage } from "@dalam/shared-types";
 
 // ─── Memory categories (Claude Code Auto Memory pattern) ───
 export type MemoryCategory =

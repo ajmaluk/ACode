@@ -1,5 +1,5 @@
 /**
- * ACode Hook Listeners — Example lifecycle event handlers.
+ * Dalam Hook Listeners — Example lifecycle event handlers.
  *
  * These demonstrate how to use the hookBus for common patterns:
  *   1. Tool usage stats logging (PostToolUse)
@@ -72,10 +72,6 @@ function onPostToolUse(event: PostToolUseEvent): void {
   toolStats.totalMs += event.durationMs;
   if (event.error) toolStats.errors++;
 
-  // Log individual tool usage
-  const durationStr = event.durationMs > 1000
-    ? `${(event.durationMs / 1000).toFixed(1)}s`
-    : `${event.durationMs}ms`;
 }
 
 // ─── 2. Auto-Save Context on SessionEnd ───
@@ -83,7 +79,7 @@ function onPostToolUse(event: PostToolUseEvent): void {
  * When a session ends (completed or aborted), persists a context snapshot
  * so the next session can resume with knowledge of what happened.
  *
- * This writes a lightweight JSON summary to .acode/session-history.json
+ * This writes a lightweight JSON summary to .dalam/session-history.json
  * that can be read on the next SessionStart.
  */
 async function onSessionEnd(event: SessionEndEvent): Promise<void> {
@@ -97,8 +93,8 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
         (w) => w.id === useWorkspace.getState().activeWorkspaceId
       );
       if (workspace) {
-        const api = (await import("./acodeAPI")).ensureAcodeAPI();
-        const summaryPath = `${workspace.path}/.acode/session-history.json`;
+        const api = (await import("./dalamAPI")).ensureDalamAPI();
+        const summaryPath = `${workspace.path}/.dalam/session-history.json`;
         const { exists } = await import("@tauri-apps/plugin-fs");
 
         let history: Array<{
@@ -181,10 +177,10 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     if (entries.length === 0) {
       // Try LLM extraction for richer results
       try {
-        const { getActiveProvider } = await import("./acodeAPI");
+        const { getActiveProvider } = await import("./dalamAPI");
         const { settings, config } = getActiveProvider();
         const isAnthropic = config.apiFormat === "anthropic";
-        const { corsFetch: corsFetchFn } = await import("./acodeAPI");
+        const { corsFetch: corsFetchFn } = await import("./dalamAPI");
         const fetchLLM = async (prompt: string): Promise<string> => {
           const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
           const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -229,8 +225,6 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
       }
     }
 
-    if (saved > 0) {
-    }
   } catch (e) {
     console.warn("[HookListener] Failed to auto-extract memories:", e);
   }
@@ -241,8 +235,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     maintenanceCounter = 0;
     try {
       const { runMaintenance } = await import("./memoryStore");
-      const result = await runMaintenance();
-      const total = result.staleDetected + result.pruned + result.purged;
+      await runMaintenance();
     } catch (e) {
       console.warn("[HookListener] Memory maintenance failed:", e);
     }
@@ -259,7 +252,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
       const { useToasts } = await import("../components/ui/Toaster");
       const pushToast = useToasts.getState().push;
       // Asynchronously trigger proposal check without blocking SessionEnd execution
-      proposeSkillFromSession(event.sessionId, workspace.path, false, (t) => pushToast(t as any)).catch((err) => {
+      proposeSkillFromSession(event.sessionId, workspace.path, false, (t: any) => pushToast(t)).catch((err) => {
         console.warn("[HookListener] Background skill crystallization failed:", err);
       });
     }
@@ -303,12 +296,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
  *
  * Useful for understanding usage patterns without invasive telemetry.
  */
-function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
-  const promptChars = event.prompt.length;
-  const estimatedTokens = Math.ceil(promptChars / 4);
-  const hasAttachments = event.attachments.length > 0;
-  const historySize = event.conversationHistory.length;
-
+function onUserPromptSubmit(_event: UserPromptSubmitEvent): void {
 }
 
 // ─── 4. Session Start Tracking (SessionStart) ───

@@ -165,7 +165,7 @@ export function App() {
   if (settingsOpen) {
     return (
       <ContextMenuProvider>
-        <div className="flex flex-col h-full w-full bg-acode-bg-primary text-acode-text-primary">
+        <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
           <SettingsModal />
           <CommandPalette />
           <PermissionDialog />
@@ -179,9 +179,9 @@ export function App() {
 
   return (
     <ContextMenuProvider>
-      <div className="flex flex-col h-full w-full bg-acode-bg-primary text-acode-text-primary">
+      <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
       <div className="flex-1 min-h-0">
-        <PanelGroup direction="horizontal" autoSaveId="acode-main-layout">
+        <PanelGroup direction="horizontal" autoSaveId="dalam-main-layout">
           <Panel
             ref={sidebarPanelRef}
             id="sidebar"

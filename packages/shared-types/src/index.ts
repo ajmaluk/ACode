@@ -1,7 +1,7 @@
 /**
- * Shared types for ACode's IPC surface.
+ * Shared types for Dalam's IPC surface.
  * The renderer NEVER has direct access to Node APIs —
- * every call goes through the typed bridge defined in `acodeAPI`.
+ * every call goes through the typed bridge defined in `dalamAPI`.
  */
 
 export type Theme = "dark" | "light" | "system";
@@ -37,7 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalFontSize: 13,
   httpProxy: "",
   codeThemeLight: "github-light",
-  codeThemeDark: "acode-dark",
+  codeThemeDark: "dalam-dark",
   showLineNumbers: true,
   wordWrap: false,
   codeFontSize: 13,
@@ -348,7 +348,7 @@ export type TodoItem = {
 };
 
 /** The surface exposed by `contextBridge` to the renderer. */
-export interface AcodeAPI {
+export interface DalamAPI {
   fs: {
     readFile(path: string): Promise<string>;
     writeFile(path: string, content: string): Promise<void>;
@@ -417,6 +417,6 @@ export interface AcodeAPI {
 
 declare global {
   interface Window {
-    acodeAPI: AcodeAPI;
+    dalamAPI: DalamAPI;
   }
 }

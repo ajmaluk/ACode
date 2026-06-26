@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useWorkspace, useSettings, useSkillsMcp } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
 import { Sparkles, FolderOpen, Zap, Code2, Brain, ArrowRight, X } from "lucide-react";
-import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { ensureDalamAPI } from "@/lib/dalamAPI";
 import { modKey } from "@/lib/platform";
 
 function getSteps() {
@@ -10,7 +10,7 @@ function getSteps() {
   return [
     {
       icon: Sparkles,
-      title: "Welcome to ACode",
+      title: "Welcome to Dalam",
       body: "An AI-native IDE that reads, writes, and runs code alongside you. Built on the same foundation as Cursor and Windsurf.",
       cta: "Get started",
     },
@@ -35,7 +35,7 @@ function getSteps() {
   ];
 }
 
-const STORAGE_KEY = "acode.onboarding.done.v1";
+const STORAGE_KEY = "dalam.onboarding.done.v1";
 
 export function WelcomeScreen() {
   const [visible, setVisible] = useState(false);
@@ -77,18 +77,18 @@ export function WelcomeScreen() {
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-8 animate-fade-in">
       <div className="w-[640px] max-w-[96vw] surface shadow-2xl overflow-hidden">
-        <div className="h-1 bg-gradient-to-r from-acode-accent-primary via-acode-accent-hover to-acode-accent-primary" />
+        <div className="h-1 bg-gradient-to-r from-dalam-accent-primary via-dalam-accent-hover to-dalam-accent-primary" />
         <div className="p-8">
           <div className="flex items-start justify-between mb-6">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-acode-accent-subtle flex items-center justify-center">
-                <Icon className="w-6 h-6 text-acode-accent-primary" />
+              <div className="w-12 h-12 rounded-xl bg-dalam-accent-subtle flex items-center justify-center">
+                <Icon className="w-6 h-6 text-dalam-accent-primary" />
               </div>
               <div>
-                <h2 className="text-xl font-semibold text-acode-text-primary">
+                <h2 className="text-xl font-semibold text-dalam-text-primary">
                   {current.title}
                 </h2>
-                <p className="text-sm text-acode-text-muted mt-1 text-balance">
+                <p className="text-sm text-dalam-text-muted mt-1 text-balance">
                   {current.body}
                 </p>
               </div>
@@ -98,7 +98,7 @@ export function WelcomeScreen() {
             </button>
           </div>
 
-          <div className="bg-acode-bg-primary border border-acode-border-primary rounded-lg p-3 my-6">
+          <div className="bg-dalam-bg-primary border border-dalam-border-primary rounded-lg p-3 my-6">
             <div className="grid grid-cols-3 gap-3 text-center">
               <Stat label="Skills enabled" value={skills.filter((s) => s.enabled).length} />
               <Stat label="MCP servers" value={mcpServers.filter((m) => m.enabled).length} />
@@ -112,20 +112,20 @@ export function WelcomeScreen() {
                 <div
                   key={i}
                   className={`h-1 rounded-full transition-all ${
-                    i === step ? "w-6 bg-acode-accent-primary" : "w-1.5 bg-acode-bg-tertiary"
+                    i === step ? "w-6 bg-dalam-accent-primary" : "w-1.5 bg-dalam-bg-tertiary"
                   }`}
                 />
               ))}
             </div>
             <div className="flex items-center gap-2">
               <button
-                className="px-3 py-1.5 text-xs text-acode-text-muted hover:text-acode-text-primary"
+                className="px-3 py-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-primary"
                 onClick={close}
               >
                 Skip
               </button>
               <button
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-acode-accent-primary hover:bg-acode-accent-hover text-white text-xs rounded-md transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs rounded-md transition-colors"
                 onClick={next}
               >
                 {isLast ? (
@@ -151,10 +151,10 @@ export function WelcomeScreen() {
 function Stat({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
   return (
     <div>
-      <div className={`font-semibold text-acode-text-primary ${small ? "text-xs" : "text-lg"}`}>
+      <div className={`font-semibold text-dalam-text-primary ${small ? "text-xs" : "text-lg"}`}>
         {value}
       </div>
-      <div className="text-[10px] text-acode-text-muted uppercase tracking-wider">
+      <div className="text-[10px] text-dalam-text-muted uppercase tracking-wider">
         {label}
       </div>
     </div>

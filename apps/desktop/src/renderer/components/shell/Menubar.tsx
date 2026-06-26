@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+
 
 export type MenuAction =
   | { type: "item"; label: string; shortcut?: string; perform: () => void; disabled?: boolean }
@@ -37,8 +37,8 @@ export function Menubar({ menus }: { menus: MenuItem[] }) {
       {menus.map((m, i) => (
         <div key={m.label} className="relative">
           <button
-            className={`px-2.5 h-7 text-xs rounded text-acode-text-primary hover:bg-acode-bg-hover transition-colors ${
-              openIdx === i ? "bg-acode-bg-hover" : ""
+            className={`px-2.5 h-7 text-xs rounded text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors ${
+              openIdx === i ? "bg-dalam-bg-hover" : ""
             }`}
             onClick={() => setOpenIdx(openIdx === i ? null : i)}
             onMouseEnter={() => openIdx !== null && setOpenIdx(i)}
@@ -66,12 +66,12 @@ function Panel({
 }) {
   return (
     <div
-      className="absolute left-0 top-9 min-w-[220px] bg-acode-bg-secondary border border-acode-border-primary rounded-md shadow-2xl py-1 z-50 animate-fade-in"
+      className="absolute left-0 top-9 min-w-[220px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-md shadow-2xl py-1 z-50 animate-fade-in"
       onMouseDown={(e) => e.stopPropagation()}
     >
       {items.map((action, idx) => {
         if (action.type === "separator") {
-          return <div key={idx} className="h-px bg-acode-border-primary my-1 mx-1" />;
+          return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />;
         }
         if (action.type === "item") {
           return (
@@ -82,11 +82,11 @@ function Panel({
                 action.perform();
                 onClose();
               }}
-              className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-xs text-acode-text-primary hover:bg-acode-accent-subtle hover:text-acode-text-primary transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
+              className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-xs text-dalam-text-primary hover:bg-dalam-accent-subtle hover:text-dalam-text-primary transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
             >
               <span>{action.label}</span>
               {action.shortcut && (
-                <kbd className="text-[10px] text-acode-text-muted">{action.shortcut}</kbd>
+                <kbd className="text-[10px] text-dalam-text-muted">{action.shortcut}</kbd>
               )}
             </button>
           );
@@ -95,19 +95,19 @@ function Panel({
           return (
             <div key={idx} className="relative group">
               <button
-                className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-xs text-acode-text-primary hover:bg-acode-accent-subtle hover:text-acode-text-primary transition-colors"
+                className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-xs text-dalam-text-primary hover:bg-dalam-accent-subtle hover:text-dalam-text-primary transition-colors"
               >
                 <span>{action.label}</span>
-                <span className="text-acode-text-muted">▸</span>
+                <span className="text-dalam-text-muted">▸</span>
               </button>
-              <div className="absolute left-full top-0 min-w-[200px] bg-acode-bg-secondary border border-acode-border-primary rounded-md shadow-2xl py-1 z-50 hidden group-hover:block">
+              <div className="absolute left-full top-0 min-w-[200px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-md shadow-2xl py-1 z-50 hidden group-hover:block">
                 {action.items.map((sub, si) => {
-                  if (sub.type === "separator") return <div key={si} className="h-px bg-acode-border-primary my-1 mx-1" />;
+                  if (sub.type === "separator") return <div key={si} className="h-px bg-dalam-border-primary my-1 mx-1" />;
                   if (sub.type === "item") return (
                     <button key={si} disabled={sub.disabled} onClick={() => { sub.perform(); onClose(); }}
-                      className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-xs text-acode-text-primary hover:bg-acode-accent-subtle hover:text-acode-text-primary transition-colors disabled:opacity-50 disabled:hover:bg-transparent">
+                      className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-xs text-dalam-text-primary hover:bg-dalam-accent-subtle hover:text-dalam-text-primary transition-colors disabled:opacity-50 disabled:hover:bg-transparent">
                       <span>{sub.label}</span>
-                      {sub.shortcut && <kbd className="text-[10px] text-acode-text-muted">{sub.shortcut}</kbd>}
+                      {sub.shortcut && <kbd className="text-[10px] text-dalam-text-muted">{sub.shortcut}</kbd>}
                     </button>
                   );
                   return null;

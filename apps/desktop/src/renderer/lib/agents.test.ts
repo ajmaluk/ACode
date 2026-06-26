@@ -212,7 +212,7 @@ describe("agents", () => {
 
     it("plan agent allows write to plans dir", () => {
       const agent = getPrimaryAgent("plan");
-      const action = evaluate(agent.permission, "write", ".acode/plans/plan.md");
+      const action = evaluate(agent.permission, "write", ".dalam/plans/plan.md");
       expect(action).toBe("allow");
     });
 

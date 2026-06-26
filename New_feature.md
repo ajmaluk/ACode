@@ -1,6 +1,6 @@
 # Enhanced Implementation Plan: Self-Evolving Skill Crystallization & Advanced Memory System
 
-This document details the architectural blueprint and implementation plan for introducing a **Nous Hermes-style self-evolving skill loop** and an **integrated workspace-wide memory management system** in ACode.
+This document details the architectural blueprint and implementation plan for introducing a **Nous Hermes-style self-evolving skill loop** and an **integrated workspace-wide memory management system** in Dalam.
 
 ---
 
@@ -30,7 +30,7 @@ The crystallization lifecycle runs asynchronously off the main thread to ensure 
         ▼                 ▼
    [On Approve]     [On Reject] ──► [Log Telemetry] ──► [Purge Memory Buffer]
         │
-        ├──► 1. Write Directory Structure (.acode/skills/[name])
+        ├──► 1. Write Directory Structure (.dalam/skills/[name])
         ├──► 2. Commit SKILL.md with Sanitized Frontmatter
         └──► 3. Hot-Reload Active Workspace Skills Index
 ```
@@ -47,7 +47,7 @@ Skills are stored inside the local project workspace configuration folder to ens
 
 ```text
 workspace-root/
-└── .acode/
+└── .dalam/
     ├── memory/
     │   └── factual_store.db      # Existing SQLite Context File
     └── skills/
@@ -112,17 +112,17 @@ export const Toaster: React.FC = () => {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className="p-4 bg-acode-bg shadow-2xl rounded-lg border border-acode-border flex flex-col pointer-events-auto animate-slide-in"
+          className="p-4 bg-dalam-bg shadow-2xl rounded-lg border border-dalam-border flex flex-col pointer-events-auto animate-slide-in"
           role="alert"
         >
           <div className="flex justify-between items-start">
             <div>
-              <h4 className="text-sm font-bold text-acode-text-primary">{t.title}</h4>
-              {t.description && <p className="text-xs text-acode-text-secondary mt-1">{t.description}</p>}
+              <h4 className="text-sm font-bold text-dalam-text-primary">{t.title}</h4>
+              {t.description && <p className="text-xs text-dalam-text-secondary mt-1">{t.description}</p>}
             </div>
             <button 
               onClick={() => dismiss(t.id)} 
-              className="text-xs text-acode-text-muted hover:text-acode-text-primary"
+              className="text-xs text-dalam-text-muted hover:text-dalam-text-primary"
               aria-label="Close notification"
             >
               ✕
@@ -136,10 +136,10 @@ export const Toaster: React.FC = () => {
                   key={`${t.id}-${act.label}`}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md shadow-sm transition-all active:scale-95 ${
                     act.variant === "primary"
-                      ? "bg-acode-accent-primary text-white hover:bg-opacity-90"
+                      ? "bg-dalam-accent-primary text-white hover:bg-opacity-90"
                       : act.variant === "danger"
-                      ? "bg-acode-git-deleted text-white hover:bg-opacity-90"
-                      : "bg-acode-bg-hover text-acode-text-primary border border-acode-border-subtle hover:bg-opacity-80"
+                      ? "bg-dalam-git-deleted text-white hover:bg-opacity-90"
+                      : "bg-dalam-bg-hover text-dalam-text-primary border border-dalam-border-subtle hover:bg-opacity-80"
                   }`}
                   onClick={() => {
                     act.onClick();
@@ -163,7 +163,7 @@ export const Toaster: React.FC = () => {
 #### `skillCrystallizer.ts`
 
 ```typescript
-import { ensureAcodeAPI } from "./acodeAPI";
+import { ensureDalamAPI } from "./dalamAPI";
 import { useSettings, useToasts, useWorkspace } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
 import { SkillProposalSchema, SkillProposal } from "./types";
@@ -179,7 +179,7 @@ function extractTokenOptimizedTranscript(messages: any[]): string {
 }
 
 export async function proposeSkillFromSession(sessionId: string, workspacePath: string, force = false): Promise<void> {
-  const api = ensureAcodeAPI();
+  const api = ensureDalamAPI();
   const store = (await import("../store/useAppStore")).useChat.getState();
   const session = store.chatSessions.find(s => s.id === sessionId);
   if (!session) return;
@@ -247,7 +247,7 @@ ${cleanTranscript}
           onClick: async () => {
             try {
               const { exists, mkdir, writeFile } = await import("@tauri-apps/plugin-fs");
-              const targetDirectory = joinPath(workspacePath, `.acode/skills/${validatedData.name}`);
+              const targetDirectory = joinPath(workspacePath, `.dalam/skills/${validatedData.name}`);
               
               if (!(await exists(targetDirectory))) {
                 await mkdir(targetDirectory, { recursive: true });
@@ -294,7 +294,7 @@ Over extended usage, agent runloops risk over-indexing tiny, fractured skills (e
 ```typescript
 import { readDir, readFile, writeFile, remove } from "@tauri-apps/plugin-fs";
 import { joinPath } from "@/lib/pathUtils";
-import { ensureAcodeAPI } from "./acodeAPI";
+import { ensureDalamAPI } from "./dalamAPI";
 
 /**
  * Computes token-level intersection sets to catch surface-level duplicate structures.
@@ -310,8 +310,8 @@ function calculateTokenSimilarity(textA: string, textB: string): number {
 }
 
 export async function executeWorkspaceDreamOptimization(workspacePath: string): Promise<void> {
-  const skillsPath = joinPath(workspacePath, ".acode/skills");
-  const api = ensureAcodeAPI();
+  const skillsPath = joinPath(workspacePath, ".dalam/skills");
+  const api = ensureDalamAPI();
   
   try {
     const skillDirs = await readDir(skillsPath);
@@ -380,5 +380,5 @@ To guarantee system stability, verify implementation steps against this testing 
 | --- | --- | --- | --- |
 | **Zod Boundaries** | Mock LLM output payload utilizing invalid names like `Config_Tailwind!` | Code Exec Call Stack via Vitest/Jest runner | System intercepts structural layout mutations and drops processing silently before throwing unhandled runtime rejections. |
 | **UI Notification Memory** | Fire `/crystallize` 10 consecutive times in chat. | Chrome DevTools Memory Profiler Heap Allocation Timelines | Clicking `Approve` or `Reject` completely releases element objects, preventing lingering pointer accumulation inside the React renderer state array. |
-| **Disk Serialization** | Execute continuous automation tasks, and hit `Approve` inside toast popup UI. | Local inspection of file system target tree paths | A valid `.acode/skills/<slug>/SKILL.md` is initialized on disk with a clean, unescaped, fully human-readable YAML configuration blocks layout. |
+| **Disk Serialization** | Execute continuous automation tasks, and hit `Approve` inside toast popup UI. | Local inspection of file system target tree paths | A valid `.dalam/skills/<slug>/SKILL.md` is initialized on disk with a clean, unescaped, fully human-readable YAML configuration blocks layout. |
 | **Slash Interception** | Type raw command sequence `/crystallize` directly into main pane inputs. | UI Component State Capture Logs | Bypasses standard threshold gate checks (`toolsExecuted >= 5`), signaling the AI generation stack instantly. |

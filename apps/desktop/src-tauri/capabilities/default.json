@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables all permissions for ACode",
+  "description": "enables all permissions for Dalam",
   "windows": ["main"],
   "permissions": [
     "core:default",

@@ -1,5 +1,5 @@
 /**
- * ACode Hook Event Bus — lifecycle event system.
+ * Dalam Hook Event Bus — lifecycle event system.
  *
  * Events are fired at specific points in the session lifecycle:
  *   - SessionStart:    When a new chat session is created

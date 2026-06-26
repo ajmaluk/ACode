@@ -2,15 +2,15 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
-import { ensureAcodeAPI } from "./lib/acodeAPI";
+import { ensureDalamAPI } from "./lib/dalamAPI";
 import { registerHookListeners } from "./lib/hookListeners";
 import "./index.css";
 
 // Initialize the API bridge (real in Electron, mock in browser)
 try {
-  ensureAcodeAPI();
+  ensureDalamAPI();
 } catch (err) {
-  console.error("Failed to initialize ACode API:", err);
+  console.error("Failed to initialize Dalam API:", err);
 }
 
 // Register hook listeners for tool usage logging, session auto-save, etc.

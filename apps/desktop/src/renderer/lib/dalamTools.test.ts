@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-// Extract parseToolCalls and parseAttributes from acodeAPI for testing
+// Extract parseToolCalls and parseAttributes from dalamAPI for testing
 // We test the parsing logic directly since execution requires Tauri runtime
 
 function parseAttributes(tagStr: string): Record<string, string> {
@@ -13,187 +13,161 @@ function parseAttributes(tagStr: string): Record<string, string> {
   return attrs;
 }
 
-// Re-implement parseToolCalls for testing (mirrors acodeAPI.ts logic)
+// Re-implement parseToolCalls for testing (mirrors dalamAPI.ts logic)
 function parseToolCalls(text: string): { name: string; args: Record<string, any> }[] {
   const calls: { name: string; args: Record<string, any> }[] = [];
 
-  const readFileRegex = /<read_file\s+path=["']([^"']+)["']\s*\/>/gi;
-  let match;
-  while ((match = readFileRegex.exec(text)) !== null) {
-    calls.push({ name: "read_file", args: { path: match[1] } });
+  function extract(regex: RegExp, fn: (m: RegExpExecArray) => void): void {
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(text)) !== null) fn(m);
   }
 
-  const writeFileRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
-  while ((match = writeFileRegex.exec(text)) !== null) {
-    calls.push({ name: "write_file", args: { path: match[1], content: match[2] } });
-  }
+  extract(/<read_file\s+path=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "read_file", args: { path: m[1] } });
+  });
 
-  const editFileRegex = /<edit_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/edit_file>/gi;
-  while ((match = editFileRegex.exec(text)) !== null) {
-    const inner = match[2];
+  extract(/<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi, (m) => {
+    calls.push({ name: "write_file", args: { path: m[1], content: m[2] } });
+  });
+
+  extract(/<edit_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/edit_file>/gi, (m) => {
+    const inner = m[2];
     const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(inner);
     const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(inner);
     if (searchMatch && replaceMatch) {
-      calls.push({ name: "edit_file", args: { path: match[1], search: searchMatch[1], replace: replaceMatch[1] } });
+      calls.push({ name: "edit_file", args: { path: m[1], search: searchMatch[1], replace: replaceMatch[1] } });
     }
-  }
+  });
 
-  const listDirRegex = /<list_dir\s+path=["']([^"']+)["']\s*\/>/gi;
-  while ((match = listDirRegex.exec(text)) !== null) {
-    calls.push({ name: "list_dir", args: { path: match[1] } });
-  }
+  extract(/<list_dir\s+path=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "list_dir", args: { path: m[1] } });
+  });
 
-  const grepFileRegex = /<grep_file\s+([\s\S]*?)\/?>/gi;
-  while ((match = grepFileRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<grep_file\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.path && attrs.pattern) {
       calls.push({ name: "grep_file", args: { path: attrs.path, pattern: attrs.pattern, regex: attrs.regex, max_results: attrs.max_results } });
     }
-  }
+  });
 
-  const searchFilesRegex = /<search_files\s+([\s\S]*?)\/?>/gi;
-  while ((match = searchFilesRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<search_files\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.pattern) {
       calls.push({ name: "search_files", args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results } });
     }
-  }
+  });
 
-  const runCommandRegex = /<run_command\s+command=["']([^"']+)["']\s*\/>/gi;
-  while ((match = runCommandRegex.exec(text)) !== null) {
-    calls.push({ name: "run_command", args: { command: match[1] } });
-  }
+  extract(/<run_command\s+command=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "run_command", args: { command: m[1] } });
+  });
 
-  const gitStatusRegex = /<git_status\s*\/>/gi;
-  while ((match = gitStatusRegex.exec(text)) !== null) {
+  extract(/<git_status\s*\/>/gi, () => {
     calls.push({ name: "git_status", args: {} });
-  }
+  });
 
-  const gitCommitRegex = /<git_commit\s+message=["']([^"']+)["']\s*\/>/gi;
-  while ((match = gitCommitRegex.exec(text)) !== null) {
-    calls.push({ name: "git_commit", args: { message: match[1] } });
-  }
+  extract(/<git_commit\s+message=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "git_commit", args: { message: m[1] } });
+  });
 
-  const gitLogRegex = /<git_log\s*\/>/gi;
-  while ((match = gitLogRegex.exec(text)) !== null) {
+  extract(/<git_log\s*\/>/gi, () => {
     calls.push({ name: "git_log", args: {} });
-  }
+  });
 
-  const clipboardReadRegex = /<clipboard_read\s*\/>/gi;
-  while ((match = clipboardReadRegex.exec(text)) !== null) {
+  extract(/<clipboard_read\s*\/>/gi, () => {
     calls.push({ name: "clipboard_read", args: {} });
-  }
+  });
 
-  const clipboardWriteRegex = /<clipboard_write>([\s\S]*?)<\/clipboard_write>/gi;
-  while ((match = clipboardWriteRegex.exec(text)) !== null) {
-    calls.push({ name: "clipboard_write", args: { text: match[1] } });
-  }
+  extract(/<clipboard_write>([\s\S]*?)<\/clipboard_write>/gi, (m) => {
+    calls.push({ name: "clipboard_write", args: { text: m[1] } });
+  });
 
-  const notifyRegex = /<notify\s+([\s\S]*?)\/?>/gi;
-  while ((match = notifyRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<notify\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.title) {
       calls.push({ name: "notify", args: { title: attrs.title, body: attrs.body ?? "" } });
     }
-  }
+  });
 
-  const systemInfoRegex = /<system_info\s*\/>/gi;
-  while ((match = systemInfoRegex.exec(text)) !== null) {
+  extract(/<system_info\s*\/>/gi, () => {
     calls.push({ name: "system_info", args: {} });
-  }
+  });
 
-  const openUrlRegex = /<open_url\s+([\s\S]*?)\/?>/gi;
-  while ((match = openUrlRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<open_url\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.url) {
       calls.push({ name: "open_url", args: { url: attrs.url } });
     }
-  }
+  });
 
-  const launchAppRegex = /<launch_app\s+([\s\S]*?)\/?>/gi;
-  while ((match = launchAppRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<launch_app\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.name) {
       calls.push({ name: "launch_app", args: { name: attrs.name, args: attrs.args, cwd: attrs.cwd } });
     }
-  }
+  });
 
-  const revealRegex = /<reveal_in_finder\s+([\s\S]*?)\/?>/gi;
-  while ((match = revealRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<reveal_in_finder\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.path) {
       calls.push({ name: "reveal_in_finder", args: { path: attrs.path } });
     }
-  }
+  });
 
-  const getEnvRegex = /<get_env\s+key=["']([^"']+)["']\s*\/>/gi;
-  while ((match = getEnvRegex.exec(text)) !== null) {
-    calls.push({ name: "get_env", args: { key: match[1] } });
-  }
+  extract(/<get_env\s+key=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "get_env", args: { key: m[1] } });
+  });
 
-  const getScreenInfoRegex = /<get_screen_info\s*\/>/gi;
-  while ((match = getScreenInfoRegex.exec(text)) !== null) {
+  extract(/<get_screen_info\s*\/>/gi, () => {
     calls.push({ name: "get_screen_info", args: {} });
-  }
+  });
 
-  const listProcessesRegex = /<list_processes\s*\/>/gi;
-  while ((match = listProcessesRegex.exec(text)) !== null) {
+  extract(/<list_processes\s*\/>/gi, () => {
     calls.push({ name: "list_processes", args: {} });
-  }
+  });
 
-  const killProcessRegex = /<kill_process\s+pid=["']([^"']+)["']\s*\/>/gi;
-  while ((match = killProcessRegex.exec(text)) !== null) {
-    calls.push({ name: "kill_process", args: { pid: match[1] } });
-  }
+  extract(/<kill_process\s+pid=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "kill_process", args: { pid: m[1] } });
+  });
 
-  const getDiskSpaceRegex = /<get_disk_space\s+path=["']([^"']+)["']\s*\/>/gi;
-  while ((match = getDiskSpaceRegex.exec(text)) !== null) {
-    calls.push({ name: "get_disk_space", args: { path: match[1] } });
-  }
+  extract(/<get_disk_space\s+path=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "get_disk_space", args: { path: m[1] } });
+  });
 
-  const memorySaveRegex = /<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi;
-  while ((match = memorySaveRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    calls.push({ name: "memory_save", args: { category: attrs.category, tier: attrs.tier, summary: attrs.summary, tags: attrs.tags, content: match[2].trim() } });
-  }
+  extract(/<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi, (m) => {
+    const attrs = parseAttributes(m[1]);
+    calls.push({ name: "memory_save", args: { category: attrs.category, tier: attrs.tier, summary: attrs.summary, tags: attrs.tags, content: m[2].trim() } });
+  });
 
-  const memorySearchRegex = /<memory_search\s+([\s\S]*?)\/?>/gi;
-  while ((match = memorySearchRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+  extract(/<memory_search\s+([\s\S]*?)\/?>/gi, (m) => {
+    const attrs = parseAttributes(m[0]);
     if (attrs.query) {
       calls.push({ name: "memory_search", args: { query: attrs.query, category: attrs.category, limit: attrs.limit } });
     }
-  }
+  });
 
-  const memoryDeleteRegex = /<memory_delete\s+id=["']([^"']+)["']\s*\/>/gi;
-  while ((match = memoryDeleteRegex.exec(text)) !== null) {
-    calls.push({ name: "memory_delete", args: { id: match[1] } });
-  }
+  extract(/<memory_delete\s+id=["']([^"']+)["']\s*\/>/gi, (m) => {
+    calls.push({ name: "memory_delete", args: { id: m[1] } });
+  });
 
-  const memoryStatsRegex = /<memory_stats\s*\/>/gi;
-  while ((match = memoryStatsRegex.exec(text)) !== null) {
+  extract(/<memory_stats\s*\/>/gi, () => {
     calls.push({ name: "memory_stats", args: {} });
-  }
+  });
 
-  const memoryMaintainRegex = /<memory_maintain\s*\/>/gi;
-  while ((match = memoryMaintainRegex.exec(text)) !== null) {
+  extract(/<memory_maintain\s*\/>/gi, () => {
     calls.push({ name: "memory_maintain", args: {} });
-  }
+  });
 
-  const memoryExtractRegex = /<memory_extract\s*\/>/gi;
-  while ((match = memoryExtractRegex.exec(text)) !== null) {
+  extract(/<memory_extract\s*\/>/gi, () => {
     calls.push({ name: "memory_extract", args: {} });
-  }
+  });
 
-  const memoryExportRegex = /<memory_export\s*\/>/gi;
-  while ((match = memoryExportRegex.exec(text)) !== null) {
+  extract(/<memory_export\s*\/>/gi, () => {
     calls.push({ name: "memory_export", args: {} });
-  }
+  });
 
-  const memoryImportRegex = /<memory_import\s*\/>/gi;
-  while ((match = memoryImportRegex.exec(text)) !== null) {
+  extract(/<memory_import\s*\/>/gi, () => {
     calls.push({ name: "memory_import", args: {} });
-  }
+  });
 
   return calls;
 }
@@ -591,7 +565,7 @@ describe("parseToolCalls", () => {
     it("includes common junk directories", () => {
       const expectedJunk = [".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"];
       const junkSet = new Set(expectedJunk);
-      // Verify essential directories are present (the set matches acodeAPI.ts JUNK_DIRS)
+      // Verify essential directories are present (the set matches dalamAPI.ts JUNK_DIRS)
       expect(junkSet.has(".git")).toBe(true);
       expect(junkSet.has("node_modules")).toBe(true);
       expect(junkSet.has("dist")).toBe(true);

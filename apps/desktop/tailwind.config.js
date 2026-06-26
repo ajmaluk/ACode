@@ -5,7 +5,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        acode: {
+        dalam: {
           bg: {
             primary: "#0d0d0d",
             secondary: "#1a1a1a",

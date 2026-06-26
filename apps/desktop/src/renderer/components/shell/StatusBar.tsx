@@ -20,7 +20,7 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
   const StatusIcon = !session ? Circle : session.status === "running" ? Loader2 : CheckCircle2;
 
   return (
-    <footer className="h-6 flex items-center justify-between bg-acode-bg-tertiary border-t border-acode-border-primary px-3 text-[11px] text-acode-text-muted flex-shrink-0 select-none">
+    <footer className="h-6 flex items-center justify-between bg-dalam-bg-tertiary border-t border-dalam-border-primary px-3 text-[11px] text-dalam-text-muted flex-shrink-0 select-none">
       <div className="flex items-center gap-3 min-w-0 overflow-hidden">
         <span className="flex items-center gap-1.5 flex-shrink-0">
           <GitBranch className="w-3 h-3" />
@@ -28,24 +28,24 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
         </span>
         {changes > 0 ? (
           <span className="flex items-center gap-1.5 flex-shrink-0">
-            {added > 0 && <span className="text-acode-git-added">+{added}</span>}
-            {deleted > 0 && <span className="text-acode-git-deleted">-{deleted}</span>}
-            {modified > 0 && <span className="text-acode-git-modified">~{modified}</span>}
+            {added > 0 && <span className="text-dalam-git-added">+{added}</span>}
+            {deleted > 0 && <span className="text-dalam-git-deleted">-{deleted}</span>}
+            {modified > 0 && <span className="text-dalam-git-modified">~{modified}</span>}
           </span>
         ) : (
           <span className="flex items-center gap-1.5 flex-shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-acode-git-added" />
+            <span className="w-1.5 h-1.5 rounded-full bg-dalam-git-added" />
             Clean
           </span>
         )}
         {activeTab && activeTab.cursor && (
-          <span className="flex items-center gap-2 flex-shrink-0 text-acode-text-muted">
-            <span className="text-acode-text-muted/50">·</span>
+          <span className="flex items-center gap-2 flex-shrink-0 text-dalam-text-muted">
+            <span className="text-dalam-text-muted/50">·</span>
             <span>Ln {activeTab.cursor.line}, Col {activeTab.cursor.column}</span>
           </span>
         )}
         {!workspaceReady && (
-          <span className="flex items-center gap-1.5 text-acode-text-muted flex-shrink-0">
+          <span className="flex items-center gap-1.5 text-dalam-text-muted flex-shrink-0">
             <AlertCircle className="w-3 h-3" />
             No workspace
           </span>
@@ -54,7 +54,7 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
       <div className="flex items-center gap-3 flex-shrink-0">
         {session && (
           <span className="flex items-center gap-1.5">
-            <StatusIcon className={`w-3 h-3 ${session.status === "running" ? "text-acode-accent-primary animate-spin" : "text-acode-git-added"}`} />
+            <StatusIcon className={`w-3 h-3 ${session.status === "running" ? "text-dalam-accent-primary animate-spin" : "text-dalam-git-added"}`} />
             {session.status}
           </span>
         )}
@@ -62,7 +62,7 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
           <Cpu className="w-3 h-3" />
           {resolvedModel?.model.name || settings.selectedModel || "No model"}
         </span>
-        <span className={`flex items-center gap-1.5 ${resolvedModel ? "text-acode-git-added" : "text-acode-text-muted"}`}>
+        <span className={`flex items-center gap-1.5 ${resolvedModel ? "text-dalam-git-added" : "text-dalam-text-muted"}`}>
           <Wifi className="w-3 h-3" />
           {resolvedModel ? "Connected" : "No model"}
         </span>

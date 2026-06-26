@@ -1,10 +1,10 @@
 /**
  * ============================================================
- * ACODE MEMORY STORE — SQLite + Markdown Hybrid
+ * DALAM MEMORY STORE — SQLite + Markdown Hybrid
  * ============================================================
  *
  * Architecture (Git-first Markdown / SQLite-Cache Hybrid):
- *   - Source of truth: Markdown files in .acode/memories/*.md
+ *   - Source of truth: Markdown files in .dalam/memories/*.md
  *     (git-friendly, human-readable, diffable)
  *   - Search cache: SQLite via @tauri-apps/plugin-sql with FTS5
  *     (fast keyword search, rebuilt from markdown if lost)
@@ -31,8 +31,8 @@ import { getDb } from "./database";
 import { joinPath } from "@/lib/pathUtils";
 
 // ─── Constants ───────────────────────────────────────────────
-const MEMORY_DIR = ".acode/memories";
-const MEMORY_INDEX = ".acode/MEMORY.md";
+const MEMORY_DIR = ".dalam/memories";
+const MEMORY_INDEX = ".dalam/MEMORY.md";
 
 // ─── Unique ID generation ────────────────────────────────────
 function generateId(): string {
@@ -51,7 +51,7 @@ function generateId(): string {
  * 3. Related conflict (>0.65, same category) → UPDATE
  * 4. New info → INSERT
  *
- * Also writes a markdown file in .acode/memories/ as source of truth.
+ * Also writes a markdown file in .dalam/memories/ as source of truth.
  */
 export async function saveMemory(
   entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">,
@@ -155,7 +155,7 @@ export async function searchMemories(
   } = {}
 ): Promise<MemoryEntry[]> {
   const db = getDb();
-  const { category, tier, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
+  const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
 
   let sql = `
     SELECT m.*, memories_fts.rank as _rank
@@ -519,9 +519,9 @@ export async function updateMemoryIndex(workspacePath: string): Promise<void> {
 
   try {
     const { exists, mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
-    const acodeDir = joinPath(workspacePath, ".acode");
-    if (!(await exists(acodeDir))) {
-      await mkdir(acodeDir, { recursive: true });
+    const dalamDir = joinPath(workspacePath, ".dalam");
+    if (!(await exists(dalamDir))) {
+      await mkdir(dalamDir, { recursive: true });
     }
     await writeTextFile(joinPath(workspacePath, MEMORY_INDEX), header + lines.join("\n") + "\n");
   } catch (e) {
@@ -571,7 +571,7 @@ export function extractMemoriesFromExchange(
   }
 
   // Detect file paths
-  const pathPattern = /(?:in|from|to|at|file)\s+[`"']?([\/\w.-]+\.\w{1,5})[`"']?/gi;
+  const pathPattern = /(?:in|from|to|at|file)\s+[`"']?([/\w.-]+\.\w{1,5})[`"']?/gi;
   let pathMatch;
   while ((pathMatch = pathPattern.exec(combined)) !== null && entries.length < maxEntries) {
     const filePath = pathMatch[1];

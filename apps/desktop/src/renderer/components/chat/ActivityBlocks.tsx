@@ -1,5 +1,5 @@
 /**
- * ACode chat activity blocks.
+ * Dalam chat activity blocks.
  *
  * Every agent activity — thinking, reading, exploring, running tools, invoking
  * skills, editing files, proposing plans — renders as a single inline row
@@ -38,7 +38,7 @@ import type {
   SkillInfo,
   TodoItem,
   ToolCall,
-} from "@acode/shared-types";
+} from "@dalam/shared-types";
 import { useChat, useDiffView, useWorkspace, BUNDLED_SKILLS } from "@/store/useAppStore";
 import { basename, dirname } from "@/lib/pathUtils";
 
@@ -79,12 +79,12 @@ function ActivityRow({
         onClick={() => hasDetail && setOpen((o) => !o)}
         className={`group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full opacity-60 hover:opacity-100 transition-opacity ${
           hasDetail ? "cursor-pointer" : "cursor-default"
-        } text-acode-text-secondary`}
+        } text-dalam-text-secondary`}
         title={hasDetail ? (open ? "Click to collapse" : "Click to expand") : undefined}
       >
         {hasDetail ? (
           <ChevronDown
-            className={`w-3 h-3 text-acode-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
+            className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
           />
         ) : (
           <span className="w-3 h-3 flex-shrink-0" />
@@ -93,11 +93,11 @@ function ActivityRow({
           <span className={`flex-shrink-0 inline-flex items-center opacity-80 ${iconClass ?? ""}`}>{icon}</span>
         )}
         <span className="truncate">{label}</span>
-        {meta && <span className="text-acode-text-muted/80 text-[11px] truncate">{meta}</span>}
+        {meta && <span className="text-dalam-text-muted/80 text-[11px] truncate">{meta}</span>}
         {trailing && <span className="ml-auto flex-shrink-0 flex items-center gap-1 opacity-80">{trailing}</span>}
       </button>
       {hasDetail && open && (
-        <div className="ml-3.5 mt-1 pl-3 border-l border-acode-border-primary/60 text-[12px] text-acode-text-secondary/80 leading-relaxed">
+        <div className="ml-3.5 mt-1 pl-3 border-l border-dalam-border-primary/60 text-[12px] text-dalam-text-secondary/80 leading-relaxed">
           {children}
         </div>
       )}
@@ -117,9 +117,9 @@ export function ThinkingBlock({ content, streaming }: { content: string; streami
           {streaming ? (
             <>
               <span className="flex items-center gap-0.5">
-                <span className="w-1 h-1 rounded-full bg-acode-accent-primary animate-thinking-wave" style={{ animationDelay: "0s" }} />
-                <span className="w-1 h-1 rounded-full bg-acode-accent-primary animate-thinking-wave" style={{ animationDelay: "0.15s" }} />
-                <span className="w-1 h-1 rounded-full bg-acode-accent-primary animate-thinking-wave" style={{ animationDelay: "0.3s" }} />
+                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary animate-thinking-wave" style={{ animationDelay: "0s" }} />
+                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary animate-thinking-wave" style={{ animationDelay: "0.15s" }} />
+                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary animate-thinking-wave" style={{ animationDelay: "0.3s" }} />
               </span>
               Thinking…
             </>
@@ -129,9 +129,9 @@ export function ThinkingBlock({ content, streaming }: { content: string; streami
       meta={streaming ? undefined : `${content.length} chars`}
       defaultOpen={false}
     >
-      <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-acode-text-secondary/90">
+      <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-dalam-text-secondary/90">
         {content}
-        {streaming && <span className="inline-block w-1.5 h-3 bg-acode-accent-primary ml-0.5 animate-pulse-soft align-middle" />}
+        {streaming && <span className="inline-block w-1.5 h-3 bg-dalam-accent-primary ml-0.5 animate-pulse-soft align-middle" />}
       </pre>
     </ActivityRow>
   );
@@ -150,7 +150,7 @@ export type ExploreResult = {
 export function ExploreBlock({ result }: { result: ExploreResult }) {
   return (
     <ActivityRow
-      label={<>Explored {result.kind ? <span className="text-acode-text-secondary/70">{result.kind}</span> : "codebase"}</>}
+      label={<>Explored {result.kind ? <span className="text-dalam-text-secondary/70">{result.kind}</span> : "codebase"}</>}
       meta={result.query}
       defaultOpen
       trailing={
@@ -163,7 +163,7 @@ export function ExploreBlock({ result }: { result: ExploreResult }) {
         {result.matches.map((m, idx) => (
           <li
             key={idx}
-            className="flex items-center gap-2 hover:opacity-100 opacity-90 font-mono text-[11px] cursor-pointer hover:bg-acode-bg-hover rounded px-1 py-0.5 transition-colors"
+            className="flex items-center gap-2 hover:opacity-100 opacity-90 font-mono text-[11px] cursor-pointer hover:bg-dalam-bg-hover rounded px-1 py-0.5 transition-colors"
             onClick={() => {
               useWorkspace.getState().openFile(m.path);
             }}
@@ -202,11 +202,11 @@ export function ReadBlock({ path, content, lineRange }: { path: string; content:
       meta={path}
       trailing={<span className="text-[10px] tabular-nums">{range}</span>}
     >
-      <pre className="text-[11px] font-mono leading-relaxed bg-acode-bg-secondary/30 rounded-md p-2 max-h-80 overflow-y-auto scrollbar-thin">
+      <pre className="text-[11px] font-mono leading-relaxed bg-dalam-bg-secondary/30 rounded-md p-2 max-h-80 overflow-y-auto scrollbar-thin">
         {lines.map((line, i) => {
           const lineNum = start + i;
           return (
-            <div key={i} className="flex hover:bg-acode-bg-hover/30">
+            <div key={i} className="flex hover:bg-dalam-bg-hover/30">
               <span className="w-12 flex-shrink-0 text-right pr-2 opacity-50 select-none tabular-nums">
                 {lineNum}
               </span>
@@ -225,7 +225,7 @@ export function ReadBlock({ path, content, lineRange }: { path: string; content:
 // ContextGatheringGroup — collapsible group for explore/read activities
 // ============================================================================
 
-export function ContextGatheringGroup({ activities }: { activities: import("@acode/shared-types").PendingActivity[] }) {
+export function ContextGatheringGroup({ activities }: { activities: import("@dalam/shared-types").PendingActivity[] }) {
   const [open, setOpen] = useState(false);
   if (activities.length === 0) return null;
 
@@ -240,16 +240,16 @@ export function ContextGatheringGroup({ activities }: { activities: import("@aco
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full opacity-60 hover:opacity-100 transition-opacity cursor-pointer text-acode-text-secondary"
+        className="group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full opacity-60 hover:opacity-100 transition-opacity cursor-pointer text-dalam-text-secondary"
         title={open ? "Click to collapse context" : "Click to expand context"}
       >
-        <ChevronDown className={`w-3 h-3 text-acode-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`} />
+        <ChevronDown className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`} />
         <Search className="w-3 h-3 flex-shrink-0 opacity-80" />
         <span className="truncate">Gathered context ({parts.join(", ")})</span>
         <span className="ml-auto text-[10px] tabular-nums opacity-70">{activities.length} items</span>
       </button>
       {open && (
-        <div className="ml-3.5 mt-1 pl-3 border-l border-acode-border-primary/60 text-[12px] text-acode-text-secondary/80 leading-relaxed space-y-1">
+        <div className="ml-3.5 mt-1 pl-3 border-l border-dalam-border-primary/60 text-[12px] text-dalam-text-secondary/80 leading-relaxed space-y-1">
           {activities.map((activity) => {
             if (activity.type === "explore") {
               return <ExploreBlock key={activity.id} result={activity} />;
@@ -271,8 +271,8 @@ export function ContextGatheringGroup({ activities }: { activities: import("@aco
 
 export function SkillBlock({ name, args, content, status }: { name: string; args?: string; content?: string; status?: "running" | "completed" | "failed" }) {
   const skill = BUNDLED_SKILLS.find((s: SkillInfo) => s.name === name);
-  const statusIcon = status === "running" ? <span className="w-1.5 h-1.5 rounded-full bg-acode-accent-primary animate-pulse" />
-    : status === "failed" ? <span className="w-1.5 h-1.5 rounded-full bg-acode-git-deleted" />
+  const statusIcon = status === "running" ? <span className="w-1.5 h-1.5 rounded-full bg-dalam-accent-primary animate-pulse" />
+    : status === "failed" ? <span className="w-1.5 h-1.5 rounded-full bg-dalam-git-deleted" />
     : null;
   return (
     <ActivityRow
@@ -280,7 +280,7 @@ export function SkillBlock({ name, args, content, status }: { name: string; args
       trailing={<>{statusIcon}{skill ? <span className="text-[10px] italic opacity-70 truncate max-w-[200px]">{skill.description}</span> : null}</>}
     >
       {content && (
-        <pre className="font-mono text-[11px] bg-acode-bg-secondary/30 rounded-md p-2 max-h-60 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
+        <pre className="font-mono text-[11px] bg-dalam-bg-secondary/30 rounded-md p-2 max-h-60 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
           {content}
         </pre>
       )}
@@ -299,7 +299,7 @@ export function PlanBlock({ plan }: { plan: string }) {
       meta="ready to review"
       defaultOpen
     >
-      <pre className="whitespace-pre-wrap break-words leading-relaxed text-acode-text-primary">
+      <pre className="whitespace-pre-wrap break-words leading-relaxed text-dalam-text-primary">
         {plan}
       </pre>
     </ActivityRow>
@@ -317,7 +317,7 @@ export function BashActivityBlock({ command, result }: { command: string; result
       defaultOpen={false}
     >
       {result ? (
-        <pre className="font-mono text-[11px] bg-acode-bg-secondary/30 rounded-md p-2 max-h-60 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
+        <pre className="font-mono text-[11px] bg-dalam-bg-secondary/30 rounded-md p-2 max-h-60 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
           {result}
         </pre>
       ) : (
@@ -332,51 +332,51 @@ export function BashActivityBlock({ command, result }: { command: string; result
 // ============================================================================
 
 const TOOL_META: Record<string, { icon: React.ElementType; label: string; color: string }> = {
-  read_file: { icon: FileText, label: "Read", color: "text-acode-text-muted" },
-  read: { icon: FileText, label: "Read", color: "text-acode-text-muted" },
-  edit_file: { icon: Code2, label: "Edited", color: "text-acode-text-muted" },
-  edit: { icon: Code2, label: "Edited", color: "text-acode-text-muted" },
-  write_file: { icon: FilePlus, label: "Wrote", color: "text-acode-text-muted" },
-  write: { icon: FilePlus, label: "Wrote", color: "text-acode-text-muted" },
-  create_file: { icon: FilePlus, label: "Created", color: "text-acode-text-muted" },
-  bash: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
-  shell: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
-  execute: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
-  run_command: { icon: Terminal, label: "Ran", color: "text-acode-text-muted" },
-  file_search: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
-  search_files: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
-  grep: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
-  grep_file: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
-  list_dir: { icon: FileText, label: "Listed", color: "text-acode-text-muted" },
-  webfetch: { icon: Code2, label: "Fetched", color: "text-acode-text-muted" },
-  websearch: { icon: Search, label: "Searched", color: "text-acode-text-muted" },
-  git_status: { icon: Code2, label: "Git Status", color: "text-acode-text-muted" },
-  git_commit: { icon: Code2, label: "Git Commit", color: "text-acode-text-muted" },
-  git_log: { icon: Code2, label: "Git Log", color: "text-acode-text-muted" },
-  clipboard_read: { icon: FileText, label: "Clipboard", color: "text-acode-text-muted" },
-  clipboard_write: { icon: FileText, label: "Clipboard", color: "text-acode-text-muted" },
-  notify: { icon: Shield, label: "Notify", color: "text-acode-text-muted" },
-  system_info: { icon: Code2, label: "System Info", color: "text-acode-text-muted" },
-  open_url: { icon: Code2, label: "Open URL", color: "text-acode-text-muted" },
-  launch_app: { icon: Terminal, label: "Launched", color: "text-acode-text-muted" },
-  reveal_in_finder: { icon: FileText, label: "Revealed", color: "text-acode-text-muted" },
-  memory_save: { icon: Shield, label: "Memory Save", color: "text-acode-text-muted" },
-  memory_search: { icon: Search, label: "Memory Search", color: "text-acode-text-muted" },
-  memory_delete: { icon: X, label: "Memory Delete", color: "text-acode-text-muted" },
-  memory_stats: { icon: Code2, label: "Memory Stats", color: "text-acode-text-muted" },
-  memory_maintain: { icon: Shield, label: "Memory Maintain", color: "text-acode-text-muted" },
-  memory_extract: { icon: Code2, label: "Memory Extract", color: "text-acode-text-muted" },
-  memory_export: { icon: Code2, label: "Memory Export", color: "text-acode-text-muted" },
-  memory_import: { icon: Code2, label: "Memory Import", color: "text-acode-text-muted" },
-  get_env: { icon: Code2, label: "Get Env", color: "text-acode-text-muted" },
-  get_screen_info: { icon: Code2, label: "Screen Info", color: "text-acode-text-muted" },
-  list_processes: { icon: Terminal, label: "Processes", color: "text-acode-text-muted" },
-  kill_process: { icon: X, label: "Kill Process", color: "text-acode-text-muted" },
-  get_disk_space: { icon: Code2, label: "Disk Space", color: "text-acode-text-muted" },
+  read_file: { icon: FileText, label: "Read", color: "text-dalam-text-muted" },
+  read: { icon: FileText, label: "Read", color: "text-dalam-text-muted" },
+  edit_file: { icon: Code2, label: "Edited", color: "text-dalam-text-muted" },
+  edit: { icon: Code2, label: "Edited", color: "text-dalam-text-muted" },
+  write_file: { icon: FilePlus, label: "Wrote", color: "text-dalam-text-muted" },
+  write: { icon: FilePlus, label: "Wrote", color: "text-dalam-text-muted" },
+  create_file: { icon: FilePlus, label: "Created", color: "text-dalam-text-muted" },
+  bash: { icon: Terminal, label: "Ran", color: "text-dalam-text-muted" },
+  shell: { icon: Terminal, label: "Ran", color: "text-dalam-text-muted" },
+  execute: { icon: Terminal, label: "Ran", color: "text-dalam-text-muted" },
+  run_command: { icon: Terminal, label: "Ran", color: "text-dalam-text-muted" },
+  file_search: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
+  search_files: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
+  grep: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
+  grep_file: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
+  list_dir: { icon: FileText, label: "Listed", color: "text-dalam-text-muted" },
+  webfetch: { icon: Code2, label: "Fetched", color: "text-dalam-text-muted" },
+  websearch: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
+  git_status: { icon: Code2, label: "Git Status", color: "text-dalam-text-muted" },
+  git_commit: { icon: Code2, label: "Git Commit", color: "text-dalam-text-muted" },
+  git_log: { icon: Code2, label: "Git Log", color: "text-dalam-text-muted" },
+  clipboard_read: { icon: FileText, label: "Clipboard", color: "text-dalam-text-muted" },
+  clipboard_write: { icon: FileText, label: "Clipboard", color: "text-dalam-text-muted" },
+  notify: { icon: Shield, label: "Notify", color: "text-dalam-text-muted" },
+  system_info: { icon: Code2, label: "System Info", color: "text-dalam-text-muted" },
+  open_url: { icon: Code2, label: "Open URL", color: "text-dalam-text-muted" },
+  launch_app: { icon: Terminal, label: "Launched", color: "text-dalam-text-muted" },
+  reveal_in_finder: { icon: FileText, label: "Revealed", color: "text-dalam-text-muted" },
+  memory_save: { icon: Shield, label: "Memory Save", color: "text-dalam-text-muted" },
+  memory_search: { icon: Search, label: "Memory Search", color: "text-dalam-text-muted" },
+  memory_delete: { icon: X, label: "Memory Delete", color: "text-dalam-text-muted" },
+  memory_stats: { icon: Code2, label: "Memory Stats", color: "text-dalam-text-muted" },
+  memory_maintain: { icon: Shield, label: "Memory Maintain", color: "text-dalam-text-muted" },
+  memory_extract: { icon: Code2, label: "Memory Extract", color: "text-dalam-text-muted" },
+  memory_export: { icon: Code2, label: "Memory Export", color: "text-dalam-text-muted" },
+  memory_import: { icon: Code2, label: "Memory Import", color: "text-dalam-text-muted" },
+  get_env: { icon: Code2, label: "Get Env", color: "text-dalam-text-muted" },
+  get_screen_info: { icon: Code2, label: "Screen Info", color: "text-dalam-text-muted" },
+  list_processes: { icon: Terminal, label: "Processes", color: "text-dalam-text-muted" },
+  kill_process: { icon: X, label: "Kill Process", color: "text-dalam-text-muted" },
+  get_disk_space: { icon: Code2, label: "Disk Space", color: "text-dalam-text-muted" },
 };
 
 function getToolMeta(name: string) {
-  return TOOL_META[name] ?? { icon: Code2, label: name, color: "text-acode-text-muted" };
+  return TOOL_META[name] ?? { icon: Code2, label: name, color: "text-dalam-text-muted" };
 }
 
 export function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
@@ -439,7 +439,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
             <>
               <span>·</span>
                 <button
-                  className="text-[10px] text-acode-accent-primary hover:underline"
+                  className="text-[10px] text-dalam-accent-primary hover:underline"
                   onClick={(e) => {
                     e.stopPropagation();
                     const isWrite = toolCall.name === "write_file" || toolCall.name === "write";
@@ -461,14 +461,14 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
       <div className="space-y-2 text-[11px]">
         <div>
           <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">Arguments</div>
-          <pre className="font-mono whitespace-pre-wrap break-words bg-acode-bg-secondary/30 rounded-md p-2">
+          <pre className="font-mono whitespace-pre-wrap break-words bg-dalam-bg-secondary/30 rounded-md p-2">
             {JSON.stringify(toolCall.args, null, 2)}
           </pre>
         </div>
         {toolCall.result && (
           <div>
             <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">Result</div>
-            <pre className="font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto scrollbar-thin bg-acode-bg-secondary/30 rounded-md p-2">
+            <pre className="font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto scrollbar-thin bg-dalam-bg-secondary/30 rounded-md p-2">
               {toolCall.result}
             </pre>
           </div>
@@ -477,13 +477,13 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
           <div className="flex items-center gap-1.5 pt-1">
             <button
               onClick={() => resolveToolApproval(toolCall.id, "approved", "Approved by user")}
-              className="flex items-center gap-1 px-2 py-1 bg-acode-git-added/20 hover:bg-acode-git-added/30 text-acode-git-added text-xs rounded transition-colors"
+              className="flex items-center gap-1 px-2 py-1 bg-dalam-git-added/20 hover:bg-dalam-git-added/30 text-dalam-git-added text-xs rounded transition-colors"
             >
               <Check className="w-3 h-3" />Approve
             </button>
             <button
               onClick={() => resolveToolApproval(toolCall.id, "denied", "Denied by user")}
-              className="flex items-center gap-1 px-2 py-1 bg-acode-git-deleted/20 hover:bg-acode-git-deleted/30 text-acode-git-deleted text-xs rounded transition-colors"
+              className="flex items-center gap-1 px-2 py-1 bg-dalam-git-deleted/20 hover:bg-dalam-git-deleted/30 text-dalam-git-deleted text-xs rounded transition-colors"
             >
               <X className="w-3 h-3" />Deny
             </button>
@@ -508,8 +508,8 @@ export function ChangesCard({ changes }: { changes: FileChange[] }) {
       label={<>{changes.length} {changes.length === 1 ? "file" : "files"} changed</>}
       meta={
         <span className="font-mono text-[11px]">
-          <span className="text-acode-git-added">+{totalAdded.toLocaleString()}</span>{" "}
-          <span className="text-acode-git-deleted">−{totalRemoved.toLocaleString()}</span>
+          <span className="text-dalam-git-added">+{totalAdded.toLocaleString()}</span>{" "}
+          <span className="text-dalam-git-deleted">−{totalRemoved.toLocaleString()}</span>
         </span>
       }
     >
@@ -532,12 +532,12 @@ function FileChangeRow({ change, onOpenDiff }: { change: FileChange; onOpenDiff:
       <span className="font-medium flex-shrink-0">{fileName}</span>
       <span className="opacity-70 truncate font-mono flex-1 min-w-0 text-[11px]">{dirPath}</span>
       <span className="text-[11px] font-mono flex-shrink-0">
-        <span className="text-acode-git-added">+{change.additions}</span>{" "}
-        <span className="text-acode-git-deleted">−{change.deletions}</span>
+        <span className="text-dalam-git-added">+{change.additions}</span>{" "}
+        <span className="text-dalam-git-deleted">−{change.deletions}</span>
       </span>
       <button
         onClick={onOpenDiff}
-        className="text-[10px] text-acode-accent-primary hover:underline flex-shrink-0"
+        className="text-[10px] text-dalam-accent-primary hover:underline flex-shrink-0"
       >
         Open diff
       </button>
@@ -561,8 +561,8 @@ export function TodoBlock({ todos }: { todos: TodoItem[] }) {
       meta={
         <span className="flex items-center gap-2">
           <span className="tabular-nums">{completed}/{total}</span>
-          <span className="h-1 w-16 bg-acode-bg-secondary/60 rounded-full overflow-hidden flex-shrink-0">
-            <span className="block h-full bg-acode-accent-primary" style={{ width: `${pct}%` }} />
+          <span className="h-1 w-16 bg-dalam-bg-secondary/60 rounded-full overflow-hidden flex-shrink-0">
+            <span className="block h-full bg-dalam-accent-primary" style={{ width: `${pct}%` }} />
           </span>
         </span>
       }
@@ -578,11 +578,11 @@ export function TodoBlock({ todos }: { todos: TodoItem[] }) {
               className="flex items-start gap-1.5 text-[12px]"
             >
               {done ? (
-                <CheckCircle2 className="w-3 h-3 text-acode-git-added flex-shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-3 h-3 text-dalam-git-added flex-shrink-0 mt-0.5" />
               ) : inFlight ? (
-                <Loader2 className="w-3 h-3 text-acode-accent-primary animate-spin flex-shrink-0 mt-0.5" />
+                <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0 mt-0.5" />
               ) : (
-                <span className="w-3 h-3 rounded-full border border-acode-text-muted/40 flex-shrink-0 mt-0.5" />
+                <span className="w-3 h-3 rounded-full border border-dalam-text-muted/40 flex-shrink-0 mt-0.5" />
               )}
               <span className={done ? "line-through opacity-70" : ""}>{t.content}</span>
             </li>
@@ -614,7 +614,7 @@ export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summa
         <span className="flex items-center gap-2">
           <span className="font-medium">Todo</span>
           {current && (
-            <span className="text-acode-accent-primary/80 text-[11px] italic truncate max-w-[300px]">
+            <span className="text-dalam-accent-primary/80 text-[11px] italic truncate max-w-[300px]">
               {current.title}
             </span>
           )}
@@ -624,7 +624,7 @@ export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summa
         <span className="flex items-center gap-1.5 text-[10px] tabular-nums">
           <span>{completed}/{total}</span>
           {summary && completed === total && (
-            <span className="text-acode-git-added text-[10px]">{summary}</span>
+            <span className="text-dalam-git-added text-[10px]">{summary}</span>
           )}
         </span>
       }
@@ -638,17 +638,17 @@ export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summa
           return (
             <li key={task.id} className="flex items-start gap-2 text-[12px]">
               {isDone ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-acode-git-added flex-shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-dalam-git-added flex-shrink-0 mt-0.5" />
               ) : isRunning ? (
                 <span className="w-3.5 h-3.5 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <span className="text-acode-accent-primary text-sm">→</span>
+                  <span className="text-dalam-accent-primary text-sm">→</span>
                 </span>
               ) : isFailed ? (
-                <X className="w-3.5 h-3.5 text-acode-git-deleted flex-shrink-0 mt-0.5" />
+                <X className="w-3.5 h-3.5 text-dalam-git-deleted flex-shrink-0 mt-0.5" />
               ) : (
-                <span className="w-3.5 h-3.5 rounded-full border border-acode-text-muted/40 flex-shrink-0 mt-0.5" />
+                <span className="w-3.5 h-3.5 rounded-full border border-dalam-text-muted/40 flex-shrink-0 mt-0.5" />
               )}
-              <span className={`${isDone ? "line-through opacity-70" : ""} ${isFailed ? "text-acode-git-deleted" : ""}`}>
+              <span className={`${isDone ? "line-through opacity-70" : ""} ${isFailed ? "text-dalam-git-deleted" : ""}`}>
                 {task.title}
               </span>
             </li>

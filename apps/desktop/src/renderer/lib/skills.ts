@@ -1,5 +1,5 @@
 /**
- * ACode Skills system.
+ * Dalam Skills system.
  *
  * Skills are markdown files with a YAML frontmatter:
  * ---
@@ -10,10 +10,10 @@
  * The body is the prompt that gets injected when the skill is invoked.
  *
  * Skills are scanned from:
- *   - `.acode/skills/<name>/SKILL.md` (project-level, highest priority)
- *   - BUNDLED_SKILLS (shipped with ACode, lowest priority)
+ *   - `.dalam/skills/<name>/SKILL.md` (project-level, highest priority)
+ *   - BUNDLED_SKILLS (shipped with Dalam, lowest priority)
  */
-import type { SkillInfo } from "@acode/shared-types";
+import type { SkillInfo } from "@dalam/shared-types";
 import { joinPath } from "@/lib/pathUtils";
 
 // ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ export function skillInfoFromParsed(
 }
 
 // ----------------------------------------------------------------------------
-// Bundled skills — shipped with ACode.
+// Bundled skills — shipped with Dalam.
 // ----------------------------------------------------------------------------
 
 const SKILL_BODY_ACCESSIBILITY = `You are an accessibility auditor. Review the user's selected code against WCAG 2.1 AA standards.
@@ -195,7 +195,7 @@ Structure:
 5. **Test plan** — how you'll verify each step
 6. **Rollout** — how to ship safely (feature flag, gradual, canary)
 
-Do NOT write any code. The plan goes in \`.acode/plans/\`.`;
+Do NOT write any code. The plan goes in \`.dalam/plans/\`.`;
 
 export const BUNDLED_SKILLS: SkillInfo[] = [
   { name: "accessibility-compliance", description: "Audit code for WCAG 2.1 AA compliance", content: SKILL_BODY_ACCESSIBILITY, location: "bundled://accessibility-compliance/SKILL.md", source: "bundled" },
@@ -302,7 +302,7 @@ class SkillRegistry {
 export const skillRegistry = new SkillRegistry();
 
 // ---------------------------------------------------------------------------
-// Project-level skill loading (from .acode/skills/*/SKILL.md)
+// Project-level skill loading (from .dalam/skills/*/SKILL.md)
 // ---------------------------------------------------------------------------
 
 /**
@@ -311,10 +311,10 @@ export const skillRegistry = new SkillRegistry();
  * a SKILL.md file with YAML frontmatter.
  *
  * Example layout:
- *   .acode/skills/my-skill/SKILL.md
- *   .acode/skills/another-skill/SKILL.md
+ *   .dalam/skills/my-skill/SKILL.md
+ *   .dalam/skills/another-skill/SKILL.md
  *
- * This is designed to be called from the Tauri backend via acodeAPI.fs.*
+ * This is designed to be called from the Tauri backend via dalamAPI.fs.*
  * but since the renderer uses dynamic imports, we accept a filesystem
  * adapter that provides listDir and readFile.
  */
@@ -352,7 +352,7 @@ export async function loadSkillsFromDirectory(
 }
 
 /**
- * Load project-level skills from .acode/skills/ in the workspace.
+ * Load project-level skills from .dalam/skills/ in the workspace.
  * Called during workspace init to populate the skill registry.
  */
 export async function loadProjectSkills(
@@ -362,7 +362,7 @@ export async function loadProjectSkills(
     readFile: (path: string) => Promise<string>;
   }
 ): Promise<SkillInfo[]> {
-  const skillsDir = joinPath(workspacePath, ".acode", "skills");
+  const skillsDir = joinPath(workspacePath, ".dalam", "skills");
   return loadSkillsFromDirectory(skillsDir, fsAdapter, "project");
 }
 
@@ -426,7 +426,7 @@ export async function loadSkillContent(
 
 /**
  * Render the body of a skill into a system-prompt fragment. Mirrors how
- * ACode injects skills — the description goes into the agent's prompt
+ * Dalam injects skills — the description goes into the agent's prompt
  * and the content becomes available on demand.
  */
 export function renderSkillForPrompt(skill: SkillInfo): string {

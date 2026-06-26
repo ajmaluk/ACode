@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useGit, useChat, useWorkspace, useDiffView, useUI, useTerminal } from "@/store/useAppStore";
-import type { GitStatus } from "@acode/shared-types";
-import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import type { GitStatus } from "@dalam/shared-types";
+import { ensureDalamAPI } from "@/lib/dalamAPI";
 import { computeDiff } from "@/lib/diff";
 import { useToast } from "@/components/ui/Toaster";
 import { TerminalPanel } from "../terminal/TerminalPanel";
@@ -58,9 +58,9 @@ export function RightPanel() {
   }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab]);
 
   return (
-    <aside className="h-full flex flex-row-reverse bg-acode-bg-primary border-l border-acode-border-primary">
+    <aside className="h-full flex flex-row-reverse bg-dalam-bg-primary border-l border-dalam-border-primary">
       {/* Activity bar on the right edge */}
-      <div className="w-11 flex-shrink-0 bg-acode-bg-tertiary border-l border-acode-border-primary flex flex-col items-center pt-2 pb-3 gap-1 select-none">
+      <div className="w-11 flex-shrink-0 bg-dalam-bg-tertiary border-l border-dalam-border-primary flex flex-col items-center pt-2 pb-3 gap-1 select-none">
         <div className="flex-1 flex flex-col items-center gap-1">
           {TABS.map((t) => {
             const Icon = t.icon;
@@ -79,29 +79,29 @@ export function RightPanel() {
                 title={t.label}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-100 relative group ${
                   isActive
-                    ? "bg-acode-accent-subtle text-acode-accent-primary shadow-sm"
-                    : "text-acode-text-muted hover:bg-acode-bg-hover hover:text-acode-text-primary"
+                    ? "bg-dalam-accent-subtle text-dalam-accent-primary shadow-sm"
+                    : "text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-primary"
                 }`}
               >
                 <Icon className="w-[18px] h-[18px]" />
                 {hasChanges && (
-                  <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-acode-accent-primary" />
+                  <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-dalam-accent-primary" />
                 )}
                 {isActive && (
-                  <span className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-acode-accent-primary shadow-sm shadow-acode-accent-primary/30" />
+                  <span className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-dalam-accent-primary shadow-sm shadow-dalam-accent-primary/30" />
                 )}
-                <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity bg-acode-bg-tertiary border border-acode-border-primary text-acode-text-primary text-[11px] px-2 py-1 rounded-md whitespace-nowrap shadow-xl z-50 font-medium">
+                <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity bg-dalam-bg-tertiary border border-dalam-border-primary text-dalam-text-primary text-[11px] px-2 py-1 rounded-md whitespace-nowrap shadow-xl z-50 font-medium">
                   {t.label}
                 </span>
               </button>
             );
           })}
         </div>
-        <div className="pt-2 border-t border-acode-border-primary/50 w-full flex flex-col items-center gap-1">
+        <div className="pt-2 border-t border-dalam-border-primary/50 w-full flex flex-col items-center gap-1">
           <button
             onClick={() => useUI.getState().toggleRightPanel()}
             title="Close panel"
-            className="w-9 h-9 flex items-center justify-center rounded-lg text-acode-text-muted hover:bg-acode-bg-hover hover:text-acode-text-primary transition-all"
+            className="w-9 h-9 flex items-center justify-center rounded-lg text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-all"
           >
             <PanelRightClose className="w-[18px] h-[18px]" />
           </button>
@@ -110,8 +110,8 @@ export function RightPanel() {
 
       {/* Content panel */}
       <div className="flex-1 min-w-0 flex flex-col">
-        <div className="flex items-center justify-between px-3 py-1.5 border-b border-acode-border-primary bg-acode-bg-secondary/30 flex-shrink-0 min-h-[33px]">
-          <span className="text-[11px] font-medium text-acode-text-secondary uppercase tracking-wider">
+        <div className="flex items-center justify-between px-3 py-1.5 border-b border-dalam-border-primary bg-dalam-bg-secondary/30 flex-shrink-0 min-h-[33px]">
+          <span className="text-[11px] font-medium text-dalam-text-secondary uppercase tracking-wider">
             {TABS.find((t) => t.id === tab)?.label ?? ""}
           </span>
           <div className="flex items-center gap-0.5">
@@ -144,9 +144,10 @@ function DiffTab() {
   useEffect(() => {
     if (!current) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     void (async () => {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       try {
         // Modified content: always read the current file
         const currentContent = await api.fs.readFile(current.path);
@@ -197,11 +198,11 @@ function DiffTab() {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-acode-accent-subtle flex items-center justify-center">
-            <Columns className="w-7 h-7 text-acode-accent-primary" />
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
+            <Columns className="w-7 h-7 text-dalam-accent-primary" />
           </div>
-          <p className="text-sm text-acode-text-primary font-medium mb-1">No diff selected</p>
-          <p className="text-xs text-acode-text-muted max-w-[200px] leading-relaxed">
+          <p className="text-sm text-dalam-text-primary font-medium mb-1">No diff selected</p>
+          <p className="text-xs text-dalam-text-muted max-w-[200px] leading-relaxed">
             Click on a file in the Git tab or select a change from the chat to view its diff here.
           </p>
         </div>
@@ -211,26 +212,26 @@ function DiffTab() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-acode-border-primary bg-acode-bg-tertiary/50 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-dalam-border-primary bg-dalam-bg-tertiary/50 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <FileCode className="w-3.5 h-3.5 text-acode-text-muted flex-shrink-0" />
-          <span className="text-xs text-acode-text-primary font-mono truncate">{current.path}</span>
-          <span className="px-1.5 py-0.5 text-[9px] rounded bg-acode-bg-active text-acode-text-muted uppercase flex-shrink-0">{current.action}</span>
+          <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
+          <span className="text-xs text-dalam-text-primary font-mono truncate">{current.path}</span>
+          <span className="px-1.5 py-0.5 text-[9px] rounded bg-dalam-bg-active text-dalam-text-muted uppercase flex-shrink-0">{current.action}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0 ml-2">
           <button className="btn-icon" onClick={prev} disabled={history.length === 0} title="Previous change"><ArrowLeft className="w-3.5 h-3.5" /></button>
           <button className="btn-icon" onClick={next} disabled={forwardStack.length === 0} title="Next change"><ArrowRight className="w-3.5 h-3.5" /></button>
-          <div className="w-px h-4 bg-acode-border-primary mx-1" />
-          <button className={`btn-icon ${view === "unified" ? "text-acode-accent-primary" : ""}`} onClick={() => setView("unified")} title="Unified view"><Code2 className="w-3.5 h-3.5" /></button>
-          <button className={`btn-icon ${view === "split" ? "text-acode-accent-primary" : ""}`} onClick={() => setView("split")} title="Split view"><Columns className="w-3.5 h-3.5" /></button>
-          <div className="w-px h-4 bg-acode-border-primary mx-1" />
+          <div className="w-px h-4 bg-dalam-border-primary mx-1" />
+          <button className={`btn-icon ${view === "unified" ? "text-dalam-accent-primary" : ""}`} onClick={() => setView("unified")} title="Unified view"><Code2 className="w-3.5 h-3.5" /></button>
+          <button className={`btn-icon ${view === "split" ? "text-dalam-accent-primary" : ""}`} onClick={() => setView("split")} title="Split view"><Columns className="w-3.5 h-3.5" /></button>
+          <div className="w-px h-4 bg-dalam-border-primary mx-1" />
           <button className="btn-icon" onClick={close} title="Close diff"><X className="w-3.5 h-3.5" /></button>
         </div>
       </div>
 
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-5 h-5 text-acode-accent-primary animate-spin" />
+          <Loader2 className="w-5 h-5 text-dalam-accent-primary animate-spin" />
         </div>
       ) : (
         <DiffContent originalContent={originalContent} modifiedContent={modifiedContent} view={view} />
@@ -247,9 +248,9 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <Check className="w-8 h-8 mx-auto mb-3 text-acode-git-added" />
-          <p className="text-sm text-acode-text-muted">No differences</p>
-          <p className="text-xs text-acode-text-muted/60 mt-1">Files are identical</p>
+          <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" />
+          <p className="text-sm text-dalam-text-muted">No differences</p>
+          <p className="text-xs text-dalam-text-muted/60 mt-1">Files are identical</p>
         </div>
       </div>
     );
@@ -259,9 +260,9 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
     <div className="flex-1 min-h-0 overflow-y-auto p-3">
       {/* Summary bar */}
       <div className="flex items-center gap-3 mb-3 text-[11px]">
-        <span className="text-acode-git-added font-mono">+{diff.additions}</span>
-        <span className="text-acode-git-deleted font-mono">-{diff.deletions}</span>
-        <span className="text-acode-text-muted">{diff.hunks.length} hunk{diff.hunks.length !== 1 ? "s" : ""}</span>
+        <span className="text-dalam-git-added font-mono">+{diff.additions}</span>
+        <span className="text-dalam-git-deleted font-mono">-{diff.deletions}</span>
+        <span className="text-dalam-text-muted">{diff.hunks.length} hunk{diff.hunks.length !== 1 ? "s" : ""}</span>
       </div>
 
       {view === "unified" ? (
@@ -269,7 +270,7 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
           {diff.hunks.map((hunk, hunkIdx) => (
             <div key={hunkIdx} className="mb-3">
               {/* Hunk header */}
-              <div className="flex items-center px-2 py-1 bg-acode-bg-tertiary/60 text-acode-text-muted text-[10px] border-t border-b border-acode-border-primary/40">
+              <div className="flex items-center px-2 py-1 bg-dalam-bg-tertiary/60 text-dalam-text-muted text-[10px] border-t border-b border-dalam-border-primary/40">
                 <span>@@ -{hunk.oldStart},{hunk.oldCount} +{hunk.newStart},{hunk.newCount} @@</span>
               </div>
               {/* Lines */}
@@ -278,29 +279,29 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
                 return (
                   <div
                     key={lineIdx}
-                    className={`flex hover:bg-acode-bg-hover/30 ${
+                    className={`flex hover:bg-dalam-bg-hover/30 ${
                       line.type === "add"
-                        ? "bg-acode-git-added/10"
+                        ? "bg-dalam-git-added/10"
                         : line.type === "remove"
-                          ? "bg-acode-git-deleted/10"
+                          ? "bg-dalam-git-deleted/10"
                           : ""
                     }`}
                   >
-                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
-                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
+                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
+                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
                     <span className={`w-5 text-center select-none flex-shrink-0 ${
                       line.type === "add"
-                        ? "text-acode-git-added"
+                        ? "text-dalam-git-added"
                         : line.type === "remove"
-                          ? "text-acode-git-deleted"
-                          : "text-acode-text-muted/40"
+                          ? "text-dalam-git-deleted"
+                          : "text-dalam-text-muted/40"
                     }`}>{prefix}</span>
                     <span className={`flex-1 whitespace-pre px-1 ${
                       line.type === "add"
-                        ? "text-acode-git-added"
+                        ? "text-dalam-git-added"
                         : line.type === "remove"
-                          ? "text-acode-git-deleted"
-                          : "text-acode-text-primary"
+                          ? "text-dalam-git-deleted"
+                          : "text-dalam-text-primary"
                     }`}>{line.content || "\u00A0"}</span>
                   </div>
                 );
@@ -350,37 +351,37 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
   const totalRows = Math.max(leftLines.length, rightLines.length);
 
   return (
-    <div className="flex gap-0 border border-acode-border-primary/40 rounded-lg overflow-hidden">
+    <div className="flex gap-0 border border-dalam-border-primary/40 rounded-lg overflow-hidden">
       {/* Left panel: old */}
-      <div className="flex-1 min-w-0 overflow-y-auto border-r border-acode-border-primary/40">
-        <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-1 px-2 py-1 bg-acode-bg-tertiary/40">Original</div>
+      <div className="flex-1 min-w-0 overflow-y-auto border-r border-dalam-border-primary/40">
+        <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">Original</div>
         {Array.from({ length: totalRows }, (_, i) => {
           const entry = leftLines[i];
           if (!entry) return <div key={i} className="h-[20px]" />;
           const { line } = entry;
           const isRemove = line.type === "remove";
           return (
-            <div key={i} className={`flex hover:bg-acode-bg-hover/30 text-[11px] font-mono leading-relaxed ${isRemove ? "bg-acode-git-deleted/10" : ""}`}>
-              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
-              <span className={`w-4 text-center select-none flex-shrink-0 ${isRemove ? "text-acode-git-deleted" : "text-acode-text-muted/30"}`}>{isRemove ? "-" : " "}</span>
-              <span className={`flex-1 whitespace-pre px-1 ${isRemove ? "text-acode-git-deleted" : "text-acode-text-secondary"}`}>{line.content || "\u00A0"}</span>
+            <div key={i} className={`flex hover:bg-dalam-bg-hover/30 text-[11px] font-mono leading-relaxed ${isRemove ? "bg-dalam-git-deleted/10" : ""}`}>
+              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
+              <span className={`w-4 text-center select-none flex-shrink-0 ${isRemove ? "text-dalam-git-deleted" : "text-dalam-text-muted/30"}`}>{isRemove ? "-" : " "}</span>
+              <span className={`flex-1 whitespace-pre px-1 ${isRemove ? "text-dalam-git-deleted" : "text-dalam-text-secondary"}`}>{line.content || "\u00A0"}</span>
             </div>
           );
         })}
       </div>
       {/* Right panel: new */}
       <div className="flex-1 min-w-0 overflow-y-auto">
-        <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-1 px-2 py-1 bg-acode-bg-tertiary/40">Modified</div>
+        <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">Modified</div>
         {Array.from({ length: totalRows }, (_, i) => {
           const entry = rightLines[i];
           if (!entry) return <div key={i} className="h-[20px]" />;
           const { line } = entry;
           const isAdd = line.type === "add";
           return (
-            <div key={i} className={`flex hover:bg-acode-bg-hover/30 text-[11px] font-mono leading-relaxed ${isAdd ? "bg-acode-git-added/10" : ""}`}>
-              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-acode-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
-              <span className={`w-4 text-center select-none flex-shrink-0 ${isAdd ? "text-acode-git-added" : "text-acode-text-muted/30"}`}>{isAdd ? "+" : " "}</span>
-              <span className={`flex-1 whitespace-pre px-1 ${isAdd ? "text-acode-git-added" : "text-acode-text-primary"}`}>{line.content || "\u00A0"}</span>
+            <div key={i} className={`flex hover:bg-dalam-bg-hover/30 text-[11px] font-mono leading-relaxed ${isAdd ? "bg-dalam-git-added/10" : ""}`}>
+              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
+              <span className={`w-4 text-center select-none flex-shrink-0 ${isAdd ? "text-dalam-git-added" : "text-dalam-text-muted/30"}`}>{isAdd ? "+" : " "}</span>
+              <span className={`flex-1 whitespace-pre px-1 ${isAdd ? "text-dalam-git-added" : "text-dalam-text-primary"}`}>{line.content || "\u00A0"}</span>
             </div>
           );
         })}
@@ -422,11 +423,11 @@ function ReviewTab() {
       <div className="flex-1 flex flex-col min-h-0">
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center">
-            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-acode-accent-subtle flex items-center justify-center">
-              <WandSparkles className="w-7 h-7 text-acode-accent-primary" />
+            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
+              <WandSparkles className="w-7 h-7 text-dalam-accent-primary" />
             </div>
-            <p className="text-sm text-acode-text-primary font-medium mb-1">Code Review</p>
-            <p className="text-xs text-acode-text-muted max-w-[200px] leading-relaxed">
+            <p className="text-sm text-dalam-text-primary font-medium mb-1">Code Review</p>
+            <p className="text-xs text-dalam-text-muted max-w-[200px] leading-relaxed">
               Review your code changes with AI-powered analysis. Changes will appear here as the agent makes edits.
             </p>
           </div>
@@ -437,24 +438,24 @@ function ReviewTab() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="px-3 py-2 border-b border-acode-border-primary">
-        <span className="text-xs text-acode-text-muted">{fileChanges.length} file(s) changed</span>
+      <div className="px-3 py-2 border-b border-dalam-border-primary">
+        <span className="text-xs text-dalam-text-muted">{fileChanges.length} file(s) changed</span>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {fileChanges.map((fc) => (
           <div
             key={fc.path}
-            className="flex items-center gap-2 px-3 py-2 hover:bg-acode-bg-hover transition-colors cursor-pointer"
+            className="flex items-center gap-2 px-3 py-2 hover:bg-dalam-bg-hover transition-colors cursor-pointer"
             onClick={() => { openDiff({ path: fc.path, action: fc.action as any, additions: fc.additions, deletions: fc.deletions }); }}
           >
-            <FileCode className="w-3.5 h-3.5 text-acode-text-muted flex-shrink-0" />
+            <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-xs text-acode-text-primary truncate">{fc.path.split("/").pop()}</div>
-              <div className="text-[10px] text-acode-text-muted truncate">{fc.path}</div>
+              <div className="text-xs text-dalam-text-primary truncate">{fc.path.split("/").pop()}</div>
+              <div className="text-[10px] text-dalam-text-muted truncate">{fc.path}</div>
             </div>
             <div className="flex items-center gap-1 text-[10px]">
-              {fc.additions > 0 && <span className="text-acode-git-added">+{fc.additions}</span>}
-              {fc.deletions > 0 && <span className="text-acode-git-deleted">-{fc.deletions}</span>}
+              {fc.additions > 0 && <span className="text-dalam-git-added">+{fc.additions}</span>}
+              {fc.deletions > 0 && <span className="text-dalam-git-deleted">-{fc.deletions}</span>}
             </div>
           </div>
         ))}
@@ -473,9 +474,9 @@ function ProgressTab() {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <ListTodo className="w-8 h-8 mx-auto mb-3 text-acode-text-muted/50" />
-          <p className="text-sm text-acode-text-muted">No tasks yet</p>
-          <p className="text-xs text-acode-text-muted/60 mt-1">Tasks will appear here as the agent works</p>
+          <ListTodo className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" />
+          <p className="text-sm text-dalam-text-muted">No tasks yet</p>
+          <p className="text-xs text-dalam-text-muted/60 mt-1">Tasks will appear here as the agent works</p>
         </div>
       </div>
     );
@@ -484,43 +485,43 @@ function ProgressTab() {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
       {isStreaming && activeTodos.length === 0 && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-acode-bg-tertiary rounded-lg">
-          <Loader2 className="w-3.5 h-3.5 text-acode-accent-primary animate-spin" />
-          <span className="text-xs text-acode-text-secondary">Processing...</span>
+        <div className="flex items-center gap-2 px-3 py-2 bg-dalam-bg-tertiary rounded-lg">
+          <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin" />
+          <span className="text-xs text-dalam-text-secondary">Processing...</span>
         </div>
       )}
       {activeTodos.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-acode-accent-primary mb-2 flex items-center gap-2">
+          <div className="text-[10px] uppercase tracking-wider text-dalam-accent-primary mb-2 flex items-center gap-2">
             <Loader2 className="w-3 h-3 animate-spin" />
             In progress
           </div>
           {activeTodos.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-acode-bg-hover rounded-lg transition-colors">
-              <Loader2 className="w-3.5 h-3.5 text-acode-accent-primary animate-spin mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-acode-text-primary">{t.content}</span>
+            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+              <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin mt-0.5 flex-shrink-0" />
+              <span className="text-xs text-dalam-text-primary">{t.content}</span>
             </div>
           ))}
         </div>
       )}
       {pendingTodos.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-acode-text-muted mb-2">Pending</div>
+          <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-2">Pending</div>
           {pendingTodos.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-acode-bg-hover rounded-lg transition-colors">
-              <Circle className="w-3.5 h-3.5 text-acode-text-muted mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-acode-text-muted">{t.content}</span>
+            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+              <Circle className="w-3.5 h-3.5 text-dalam-text-muted mt-0.5 flex-shrink-0" />
+              <span className="text-xs text-dalam-text-muted">{t.content}</span>
             </div>
           ))}
         </div>
       )}
       {completedTodos.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-acode-git-added mb-2">Completed</div>
+          <div className="text-[10px] uppercase tracking-wider text-dalam-git-added mb-2">Completed</div>
           {completedTodos.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-acode-bg-hover rounded-lg transition-colors">
-              <Check className="w-3.5 h-3.5 text-acode-git-added mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-acode-text-primary line-through opacity-70">{t.content}</span>
+            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+              <Check className="w-3.5 h-3.5 text-dalam-git-added mt-0.5 flex-shrink-0" />
+              <span className="text-xs text-dalam-text-primary line-through opacity-70">{t.content}</span>
             </div>
           ))}
         </div>
@@ -538,7 +539,7 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
   const handleCommit = useCallback(async () => {
     if (!commitMsg.trim()) { toast.error("Empty", "Commit message is required"); return; }
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       const wsPath = useWorkspace.getState().workspaces.find(
         (w) => w.id === useWorkspace.getState().activeWorkspaceId
       )?.path ?? ".";
@@ -553,8 +554,8 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <Loader2 className="w-6 h-6 mx-auto mb-3 text-acode-text-muted/50 animate-spin" />
-          <p className="text-sm text-acode-text-muted">Loading git status...</p>
+          <Loader2 className="w-6 h-6 mx-auto mb-3 text-dalam-text-muted/50 animate-spin" />
+          <p className="text-sm text-dalam-text-muted">Loading git status...</p>
         </div>
       </div>
     );
@@ -563,16 +564,16 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
   return (
     <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
       {/* Branch info */}
-      <div className="px-3 pt-2.5 pb-1.5 border-b border-acode-border-primary">
+      <div className="px-3 pt-2.5 pb-1.5 border-b border-dalam-border-primary">
         <div className="flex items-center gap-2 mb-1.5">
-          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-acode-accent-subtle rounded-md">
-            <GitBranch className="w-3 h-3 text-acode-accent-primary" />
-            <span className="text-[11px] font-medium text-acode-accent-primary font-mono">{status.branch}</span>
+          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-dalam-accent-subtle rounded-md">
+            <GitBranch className="w-3 h-3 text-dalam-accent-primary" />
+            <span className="text-[11px] font-medium text-dalam-accent-primary font-mono">{status.branch}</span>
           </div>
-          <div className="flex items-center gap-1 text-[10px] text-acode-text-muted">
+          <div className="flex items-center gap-1 text-[10px] text-dalam-text-muted">
             {status.ahead > 0 && <span className="flex items-center gap-0.5"><ArrowUp className="w-2.5 h-2.5" />{status.ahead}</span>}
             {status.behind > 0 && <span className="flex items-center gap-0.5"><ArrowDown className="w-2.5 h-2.5" />{status.behind}</span>}
-            {status.ahead === 0 && status.behind === 0 && <span className="text-acode-git-added">up to date</span>}
+            {status.ahead === 0 && status.behind === 0 && <span className="text-dalam-git-added">up to date</span>}
           </div>
         </div>
       </div>
@@ -580,9 +581,9 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
       {hasChanges ? (
         <>
           {/* Commit area */}
-          <div className="p-3 border-b border-acode-border-primary bg-acode-bg-secondary/20">
+          <div className="p-3 border-b border-dalam-border-primary bg-dalam-bg-secondary/20">
             <textarea
-              className="w-full bg-acode-bg-tertiary border border-acode-border-primary rounded-lg px-3 py-2 text-xs font-mono text-acode-text-primary placeholder-acode-text-muted resize-none outline-none focus:border-acode-accent-primary transition-colors min-h-[56px]"
+              className="w-full bg-dalam-bg-tertiary border border-dalam-border-primary rounded-lg px-3 py-2 text-xs font-mono text-dalam-text-primary placeholder-dalam-text-muted resize-none outline-none focus:border-dalam-accent-primary transition-colors min-h-[56px]"
               placeholder="Commit message"
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
@@ -592,7 +593,7 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
             <button
               onClick={handleCommit}
               disabled={!commitMsg.trim()}
-              className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-acode-accent-primary hover:bg-acode-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
+              className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
             >
               <GitCommitHorizontal className="w-3.5 h-3.5" />
               Commit
@@ -603,33 +604,33 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
           <div className="py-1">
             {(status.modified?.length ?? 0) > 0 && (
               <div>
-                <SectionHeader label="Modified" count={status.modified.length} color="text-acode-git-modified" />
+                <SectionHeader label="Modified" count={status.modified.length} color="text-dalam-git-modified" />
                 {status.modified.slice(0, 50).map((f) => (
-                  <FileRow key={f} path={f} action="modified" icon={<FileCode className="w-3 h-3 text-acode-git-modified" />} />
+                  <FileRow key={f} path={f} action="modified" icon={<FileCode className="w-3 h-3 text-dalam-git-modified" />} />
                 ))}
               </div>
             )}
             {(status.added?.length ?? 0) > 0 && (
               <div>
-                <SectionHeader label="Added" count={status.added.length} color="text-acode-git-added" />
+                <SectionHeader label="Added" count={status.added.length} color="text-dalam-git-added" />
                 {status.added.slice(0, 50).map((f) => (
-                  <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-acode-git-added" />} />
+                  <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-git-added" />} />
                 ))}
               </div>
             )}
             {(status.deleted?.length ?? 0) > 0 && (
               <div>
-                <SectionHeader label="Deleted" count={status.deleted.length} color="text-acode-git-deleted" />
+                <SectionHeader label="Deleted" count={status.deleted.length} color="text-dalam-git-deleted" />
                 {status.deleted.slice(0, 50).map((f) => (
-                  <FileRow key={f} path={f} action="deleted" icon={<X className="w-3 h-3 text-acode-git-deleted" />} />
+                  <FileRow key={f} path={f} action="deleted" icon={<X className="w-3 h-3 text-dalam-git-deleted" />} />
                 ))}
               </div>
             )}
             {(status.untracked?.length ?? 0) > 0 && (
               <div>
-                <SectionHeader label="Untracked" count={status.untracked.length} color="text-acode-text-muted" />
+                <SectionHeader label="Untracked" count={status.untracked.length} color="text-dalam-text-muted" />
                 {status.untracked.slice(0, 50).map((f) => (
-                  <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-acode-text-muted" />} />
+                  <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-text-muted" />} />
                 ))}
               </div>
             )}
@@ -638,9 +639,9 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
       ) : (
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center">
-            <Check className="w-8 h-8 mx-auto mb-3 text-acode-git-added" />
-            <p className="text-sm text-acode-text-muted">No changes</p>
-            <p className="text-xs text-acode-text-muted/60 mt-1">Working tree is clean</p>
+            <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" />
+            <p className="text-sm text-dalam-text-muted">No changes</p>
+            <p className="text-xs text-dalam-text-muted/60 mt-1">Working tree is clean</p>
           </div>
         </div>
       )}
@@ -650,7 +651,7 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
 
 function SectionHeader({ label, count, color }: { label: string; count: number; color: string }) {
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase tracking-wider text-acode-text-muted">
+    <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted">
       <span className={color}>{count}</span>
       <span>{label}</span>
     </div>
@@ -666,13 +667,13 @@ function FileRow({ path, icon, action = "modified" }: { path: string; icon: Reac
     openDiff({ path, action, additions: 0, deletions: 0 });
   };
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-acode-bg-hover transition-colors group" onClick={handleOpenDiff}>
+    <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-dalam-bg-hover transition-colors group" onClick={handleOpenDiff}>
       <span className="flex-shrink-0">{icon}</span>
       <div className="flex-1 min-w-0">
-        <div className="text-xs text-acode-text-primary truncate">{fileName}</div>
-        {dir && <div className="text-[9px] text-acode-text-muted/60 truncate">{dir}</div>}
+        <div className="text-xs text-dalam-text-primary truncate">{fileName}</div>
+        {dir && <div className="text-[9px] text-dalam-text-muted/60 truncate">{dir}</div>}
       </div>
-      <button className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-acode-text-muted hover:text-acode-text-primary" title="Open diff" onClick={handleOpenDiff}><Eye className="w-3 h-3" /></button>
+      <button className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-dalam-text-muted hover:text-dalam-text-primary" title="Open diff" onClick={handleOpenDiff}><Eye className="w-3 h-3" /></button>
     </div>
   );
 }
@@ -694,6 +695,7 @@ function BrowserTab() {
   const activeTab = browserTabs.find((t) => t.id === activeBrowserTabId);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (activeTab) setInputValue(activeTab.url);
   }, [activeTab?.url, activeTab?.id]);
 
@@ -709,10 +711,10 @@ function BrowserTab() {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <Globe className="w-8 h-8 mx-auto mb-3 text-acode-text-muted/50" />
-          <p className="text-sm text-acode-text-muted">No browser tabs</p>
+          <Globe className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" />
+          <p className="text-sm text-dalam-text-muted">No browser tabs</p>
           <button
-            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-acode-accent-primary hover:bg-acode-accent-hover text-white text-xs rounded-md transition-colors mx-auto"
+            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs rounded-md transition-colors mx-auto"
             onClick={() => addBrowserTab()}
           >
             <Plus className="w-3 h-3" />
@@ -726,39 +728,39 @@ function BrowserTab() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Tab bar */}
-      <div className="flex items-center bg-acode-bg-tertiary border-b border-acode-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
+      <div className="flex items-center bg-dalam-bg-tertiary border-b border-dalam-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
         {browserTabs.map((t) => (
           <div
             key={t.id}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 border-r border-acode-border-primary cursor-pointer transition-colors text-xs ${
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 border-r border-dalam-border-primary cursor-pointer transition-colors text-xs ${
               t.id === activeBrowserTabId
-                ? "bg-acode-bg-primary text-acode-text-primary"
-                : "bg-acode-bg-tertiary text-acode-text-muted hover:bg-acode-bg-hover"
+                ? "bg-dalam-bg-primary text-dalam-text-primary"
+                : "bg-dalam-bg-tertiary text-dalam-text-muted hover:bg-dalam-bg-hover"
             }`}
             onClick={() => setActiveBrowserTab(t.id)}
           >
             <Globe className="w-3 h-3 flex-shrink-0" />
             <span className="truncate max-w-[100px]">{t.title}</span>
             <button
-              className="ml-1 rounded p-0.5 opacity-0 hover:opacity-100 hover:bg-acode-bg-active transition-opacity"
+              className="ml-1 rounded p-0.5 opacity-0 hover:opacity-100 hover:bg-dalam-bg-active transition-opacity"
               onClick={(e) => { e.stopPropagation(); removeBrowserTab(t.id); }}
             >
               <X className="w-2.5 h-2.5" />
             </button>
           </div>
         ))}
-        <button className="px-2 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors flex-shrink-0" onClick={() => addBrowserTab()}>
+        <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex-shrink-0" onClick={() => addBrowserTab()}>
           <Plus className="w-3 h-3" />
         </button>
       </div>
 
       {/* URL bar */}
-      <form onSubmit={onNavigate} className="flex items-center gap-1.5 px-2 py-1.5 border-b border-acode-border-primary bg-acode-bg-tertiary/50 flex-shrink-0">
+      <form onSubmit={onNavigate} className="flex items-center gap-1.5 px-2 py-1.5 border-b border-dalam-border-primary bg-dalam-bg-tertiary/50 flex-shrink-0">
         <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx <= 0} onClick={() => activeTab && goBackBrowser(activeTab.id)} title="Back"><ArrowLeft className="w-3 h-3" /></button>
         <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx >= activeTab.history.length - 1} onClick={() => activeTab && goForwardBrowser(activeTab.id)} title="Forward"><ArrowRight className="w-3 h-3" /></button>
         <button type="button" className="btn-icon" onClick={() => activeTab && refreshBrowser(activeTab.id)} title="Refresh"><RefreshCw className="w-3 h-3" /></button>
         <input
-          className="flex-1 bg-acode-bg-tertiary border border-acode-border-primary rounded-md px-2.5 py-1 text-xs text-acode-text-primary placeholder-acode-text-muted outline-none focus:border-acode-accent-primary transition-colors"
+          className="flex-1 bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md px-2.5 py-1 text-xs text-dalam-text-primary placeholder-dalam-text-muted outline-none focus:border-dalam-accent-primary transition-colors"
           placeholder="Search or enter URL"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
@@ -788,17 +790,17 @@ function BrowserTab() {
               }}
             />
             {activeTab.loading && (
-              <div className="absolute inset-0 bg-acode-bg-primary/50 flex items-center justify-center backdrop-blur-[1px]">
-                <Loader2 className="w-6 h-6 text-acode-accent-primary animate-spin" />
+              <div className="absolute inset-0 bg-dalam-bg-primary/50 flex items-center justify-center backdrop-blur-[1px]">
+                <Loader2 className="w-6 h-6 text-dalam-accent-primary animate-spin" />
               </div>
             )}
           </>
         ) : (
-          <div className="w-full h-full flex items-center justify-center p-8 bg-acode-bg-primary">
+          <div className="w-full h-full flex items-center justify-center p-8 bg-dalam-bg-primary">
             <div className="text-center">
-              <Globe className="w-10 h-10 mx-auto mb-3 text-acode-text-muted/40" />
-              <p className="text-sm text-acode-text-muted">Enter a URL to browse</p>
-              <p className="text-xs text-acode-text-muted/60 mt-1">Built-in web browser</p>
+              <Globe className="w-10 h-10 mx-auto mb-3 text-dalam-text-muted/40" />
+              <p className="text-sm text-dalam-text-muted">Enter a URL to browse</p>
+              <p className="text-xs text-dalam-text-muted/60 mt-1">Built-in web browser</p>
             </div>
           </div>
         )}

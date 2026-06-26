@@ -20,7 +20,7 @@
     "resolveJsonModule": true,
     "paths": {
       "@/*": ["./src/renderer/*"],
-      "@acode/shared-types": ["../../packages/shared-types/src"]
+      "@dalam/shared-types": ["../../packages/shared-types/src"]
     }
   },
   "include": ["src/renderer"]

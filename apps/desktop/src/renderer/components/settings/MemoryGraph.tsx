@@ -61,6 +61,7 @@ export function MemoryGraph() {
       }))
     );
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setGraphData(data);
   }, []);
 
@@ -147,7 +148,7 @@ export function MemoryGraph() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4 text-[10px] text-acode-text-muted">
+      <div className="flex items-center gap-4 text-[10px] text-dalam-text-muted">
         {legend.map(([type, color]) => (
           <div key={type} className="flex items-center gap-1">
             <span className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
@@ -156,7 +157,7 @@ export function MemoryGraph() {
         ))}
       </div>
 
-      <div className="relative bg-acode-bg-primary border border-acode-border-primary rounded-xl overflow-hidden">
+      <div className="relative bg-dalam-bg-primary border border-dalam-border-primary rounded-xl overflow-hidden">
         <canvas
           ref={canvasRef}
           width={620}
@@ -168,21 +169,21 @@ export function MemoryGraph() {
 
         {/* Node detail panel */}
         {(selectedNode || hoveredNode) && (
-          <div className="absolute top-2 right-2 bg-acode-bg-secondary border border-acode-border-primary rounded-lg p-3 shadow-lg min-w-[180px]">
-            <div className="text-xs font-medium text-acode-text-primary mb-1">
+          <div className="absolute top-2 right-2 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg p-3 shadow-lg min-w-[180px]">
+            <div className="text-xs font-medium text-dalam-text-primary mb-1">
               {selectedNode?.label || hoveredNode?.label}
             </div>
-            <div className="text-[10px] text-acode-text-muted">
+            <div className="text-[10px] text-dalam-text-muted">
               Type: {selectedNode?.type || hoveredNode?.type}
             </div>
             {(selectedNode?.metadata || hoveredNode?.metadata) && (
-              <div className="text-[10px] text-acode-text-muted mt-1 space-y-0.5">
+              <div className="text-[10px] text-dalam-text-muted mt-1 space-y-0.5">
                 {Object.entries(selectedNode?.metadata || hoveredNode?.metadata || {}).map(([k, v]) => (
                   <div key={k}>{k}: {String(v)}</div>
                 ))}
               </div>
             )}
-            <div className="text-[10px] text-acode-text-muted mt-1">
+            <div className="text-[10px] text-dalam-text-muted mt-1">
               Connections: {selectedNode?.connections.length || hoveredNode?.connections.length || 0}
             </div>
           </div>
@@ -190,7 +191,7 @@ export function MemoryGraph() {
       </div>
 
       {graphData && (
-        <div className="text-[10px] text-acode-text-muted text-center">
+        <div className="text-[10px] text-dalam-text-muted text-center">
           {graphData.nodes.length} nodes · {graphData.edges.length} connections
         </div>
       )}

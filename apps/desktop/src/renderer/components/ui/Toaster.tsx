@@ -55,27 +55,27 @@ const timerRegistry = new Map<string, ReturnType<typeof setTimeout>>();
 
 const KIND_STYLES: Record<ToastKind, { ring: string; text: string; icon: React.ReactNode; bar: string }> = {
   success: {
-    ring: "border-l-acode-git-added",
-    text: "text-acode-git-added",
-    bar: "bg-acode-git-added",
+    ring: "border-l-dalam-git-added",
+    text: "text-dalam-git-added",
+    bar: "bg-dalam-git-added",
     icon: <CheckCircle2 className="w-4 h-4" />,
   },
   error: {
-    ring: "border-l-acode-git-deleted",
-    text: "text-acode-git-deleted",
-    bar: "bg-acode-git-deleted",
+    ring: "border-l-dalam-git-deleted",
+    text: "text-dalam-git-deleted",
+    bar: "bg-dalam-git-deleted",
     icon: <XCircle className="w-4 h-4" />,
   },
   warning: {
-    ring: "border-l-acode-git-modified",
-    text: "text-acode-git-modified",
-    bar: "bg-acode-git-modified",
+    ring: "border-l-dalam-git-modified",
+    text: "text-dalam-git-modified",
+    bar: "bg-dalam-git-modified",
     icon: <AlertTriangle className="w-4 h-4" />,
   },
   info: {
-    ring: "border-l-acode-accent-primary",
-    text: "text-acode-accent-primary",
-    bar: "bg-acode-accent-primary",
+    ring: "border-l-dalam-accent-primary",
+    text: "text-dalam-accent-primary",
+    bar: "bg-dalam-accent-primary",
     icon: <Info className="w-4 h-4" />,
   },
 };
@@ -95,11 +95,11 @@ export function Toaster() {
             <div className="flex items-start gap-2 p-3">
               <span className={style.text}>{style.icon}</span>
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-acode-text-primary">
+                <div className="text-sm font-medium text-dalam-text-primary">
                   {t.title}
                 </div>
                 {t.description && (
-                  <div className="text-xs text-acode-text-muted mt-0.5">
+                  <div className="text-xs text-dalam-text-muted mt-0.5">
                     {t.description}
                   </div>
                 )}
@@ -110,10 +110,10 @@ export function Toaster() {
                         key={act.label}
                         className={`px-2 py-0.5 rounded text-xs font-semibold select-none cursor-pointer transition-colors ${
                           act.variant === "primary"
-                            ? "bg-acode-accent-primary text-white hover:bg-opacity-90"
+                            ? "bg-dalam-accent-primary text-white hover:bg-opacity-90"
                             : act.variant === "danger"
-                            ? "bg-acode-git-deleted text-white hover:bg-opacity-90"
-                            : "bg-acode-bg-hover text-acode-text-primary hover:bg-opacity-80"
+                            ? "bg-dalam-git-deleted text-white hover:bg-opacity-90"
+                            : "bg-dalam-bg-hover text-dalam-text-primary hover:bg-opacity-80"
                         }`}
                         onClick={() => {
                           act.onClick();
@@ -151,18 +151,18 @@ export function useToast() {
 // Add to globals via a small util — keeps the keyframes in sync
 export function useProgressKeyframes() {
   useEffect(() => {
-    const id = "acode-progress-keyframes";
+    const id = "dalam-progress-keyframes";
     if (document.getElementById(id)) return;
     const style = document.createElement("style");
     style.id = id;
     style.textContent = `
-      @keyframes acode-progress {
+      @keyframes dalam-progress {
         from { transform: scaleX(1); }
         to { transform: scaleX(0); }
       }
       .animate-progress {
         transform-origin: left;
-        animation-name: acode-progress;
+        animation-name: dalam-progress;
         animation-timing-function: linear;
         animation-fill-mode: forwards;
       }

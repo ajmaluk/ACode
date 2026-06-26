@@ -1,5 +1,5 @@
 {
-  "name": "@acode/shared-types",
+  "name": "@dalam/shared-types",
   "version": "0.1.0",
   "private": true,
   "main": "./src/index.ts",

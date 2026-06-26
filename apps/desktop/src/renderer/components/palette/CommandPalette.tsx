@@ -18,7 +18,7 @@ import {
   Layers,
   ChevronRight,
 } from "lucide-react";
-import { getRecentFiles } from "@/lib/acodeAPI";
+import { getRecentFiles } from "@/lib/dalamAPI";
 import { modKey } from "@/lib/platform";
 
 type Item = {
@@ -40,6 +40,7 @@ export function CommandPalette() {
   const [recent, setRecent] = useState<string[]>([]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (open) setRecent(getRecentFiles());
   }, [open]);
 
@@ -199,34 +200,34 @@ export function CommandPalette() {
       onClick={() => setOpen(false)}
     >
       <div
-        className="w-[680px] max-w-[92vw] bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl overflow-hidden"
+        className="w-[680px] max-w-[92vw] bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <Command shouldFilter loop className="flex flex-col">
-          <div className="flex items-center px-3 border-b border-acode-border-primary">
-            <Search className="w-4 h-4 text-acode-text-muted mr-2 flex-shrink-0" />
+          <div className="flex items-center px-3 border-b border-dalam-border-primary">
+            <Search className="w-4 h-4 text-dalam-text-muted mr-2 flex-shrink-0" />
             <Command.Input
               value={query}
               onValueChange={setQuery}
               placeholder="Type a command, search files, or jump to a setting…"
-              className="flex-1 bg-transparent border-0 outline-none py-3 text-sm text-acode-text-primary placeholder-acode-text-muted"
+              className="flex-1 bg-transparent border-0 outline-none py-3 text-sm text-dalam-text-primary placeholder-dalam-text-muted"
               autoFocus
             />
             {query ? (
               <button
-                className="text-[10px] text-acode-text-muted hover:text-acode-text-primary px-1.5"
+                className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5"
                 onClick={() => setQuery("")}
               >
                 clear
               </button>
             ) : null}
-            <kbd className="text-[10px] text-acode-text-muted px-1.5 py-0.5 bg-acode-bg-tertiary rounded ml-2">
+            <kbd className="text-[10px] text-dalam-text-muted px-1.5 py-0.5 bg-dalam-bg-tertiary rounded ml-2">
               esc
             </kbd>
           </div>
 
           <Command.List className="max-h-[55vh] overflow-y-auto py-2 scrollbar-thin">
-            <Command.Empty className="px-3 py-8 text-center text-sm text-acode-text-muted">
+            <Command.Empty className="px-3 py-8 text-center text-sm text-dalam-text-muted">
               <p>No results for "{query}"</p>
               <p className="text-[11px] mt-1">Try a different search or check the help (?)</p>
             </Command.Empty>
@@ -248,21 +249,21 @@ export function CommandPalette() {
             )}
           </Command.List>
 
-          <div className="border-t border-acode-border-primary px-3 py-1.5 flex items-center justify-between text-[10px] text-acode-text-muted bg-acode-bg-tertiary/30">
+          <div className="border-t border-dalam-border-primary px-3 py-1.5 flex items-center justify-between text-[10px] text-dalam-text-muted bg-dalam-bg-tertiary/30">
             <div className="flex items-center gap-2">
               <span className="flex items-center gap-1">
-                <kbd className="px-1 bg-acode-bg-tertiary rounded">↑↓</kbd> navigate
+                <kbd className="px-1 bg-dalam-bg-tertiary rounded">↑↓</kbd> navigate
               </span>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 bg-acode-bg-tertiary rounded">↵</kbd> open
+                <kbd className="px-1 bg-dalam-bg-tertiary rounded">↵</kbd> open
               </span>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 bg-acode-bg-tertiary rounded">esc</kbd> close
+                <kbd className="px-1 bg-dalam-bg-tertiary rounded">esc</kbd> close
               </span>
             </div>
-            <span className="flex items-center gap-1 text-acode-accent-primary">
+            <span className="flex items-center gap-1 text-dalam-accent-primary">
               <Sparkles className="w-3 h-3" />
-              ACode
+              Dalam
             </span>
           </div>
         </Command>
@@ -276,19 +277,19 @@ function Row({ item }: { item: Item }) {
     <Command.Item
       value={item.label + " " + (item.hint ?? "")}
       onSelect={item.perform}
-      className="group flex items-center gap-2 px-2 py-1.5 mx-1 rounded cursor-pointer text-sm aria-selected:bg-acode-accent-subtle data-[selected=true]:bg-acode-accent-subtle"
+      className="group flex items-center gap-2 px-2 py-1.5 mx-1 rounded cursor-pointer text-sm aria-selected:bg-dalam-accent-subtle data-[selected=true]:bg-dalam-accent-subtle"
     >
-      <span className="text-acode-text-muted flex-shrink-0">{item.icon}</span>
-      <span className="flex-1 text-acode-text-primary truncate">{item.label}</span>
+      <span className="text-dalam-text-muted flex-shrink-0">{item.icon}</span>
+      <span className="flex-1 text-dalam-text-primary truncate">{item.label}</span>
       {item.hint && (
-        <span className="text-[10px] text-acode-text-muted truncate max-w-[200px]">{item.hint}</span>
+        <span className="text-[10px] text-dalam-text-muted truncate max-w-[200px]">{item.hint}</span>
       )}
       {item.shortcut && (
-        <kbd className="text-[10px] text-acode-text-muted px-1.5 py-0.5 bg-acode-bg-tertiary rounded flex-shrink-0">
+        <kbd className="text-[10px] text-dalam-text-muted px-1.5 py-0.5 bg-dalam-bg-tertiary rounded flex-shrink-0">
           {item.shortcut}
         </kbd>
       )}
-      <ChevronRight className="w-3 h-3 text-acode-text-muted opacity-0 group-aria-selected:opacity-100" />
+      <ChevronRight className="w-3 h-3 text-dalam-text-muted opacity-0 group-aria-selected:opacity-100" />
     </Command.Item>
   );
 }

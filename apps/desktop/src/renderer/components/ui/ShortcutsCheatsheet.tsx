@@ -68,12 +68,12 @@ export function ShortcutsCheatsheet() {
       onClick={() => setOpen(false)}
     >
       <div
-        className="w-[760px] max-w-[96vw] max-h-[86vh] bg-acode-bg-secondary border border-acode-border-primary rounded-xl shadow-2xl flex flex-col"
+        className="w-[760px] max-w-[96vw] max-h-[86vh] bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="h-12 flex items-center justify-between px-4 border-b border-acode-border-primary">
-          <div className="flex items-center gap-2 text-sm font-medium text-acode-text-primary">
-            <Keyboard className="w-4 h-4 text-acode-accent-primary" />
+        <header className="h-12 flex items-center justify-between px-4 border-b border-dalam-border-primary">
+          <div className="flex items-center gap-2 text-sm font-medium text-dalam-text-primary">
+            <Keyboard className="w-4 h-4 text-dalam-accent-primary" />
             Keyboard shortcuts
           </div>
           <button className="btn-icon" onClick={() => setOpen(false)}>
@@ -83,18 +83,18 @@ export function ShortcutsCheatsheet() {
         <div className="grid grid-cols-2 gap-6 p-6 overflow-y-auto scrollbar-thin">
           {sections.map((s) => (
             <section key={s.title}>
-              <h3 className="text-[11px] uppercase tracking-wider text-acode-text-muted mb-2">
+              <h3 className="text-[11px] uppercase tracking-wider text-dalam-text-muted mb-2">
                 {s.title}
               </h3>
               <div className="space-y-1.5">
                 {s.shortcuts.map((sc) => (
                   <div key={sc.desc} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-acode-text-secondary">{sc.desc}</span>
+                    <span className="text-dalam-text-secondary">{sc.desc}</span>
                     <span className="flex items-center gap-1 flex-shrink-0">
                       {sc.keys.map((k, i) => (
                         <kbd
                           key={i}
-                          className="px-1.5 py-0.5 bg-acode-bg-tertiary border border-acode-border-primary rounded text-[11px] text-acode-text-primary min-w-[20px] text-center"
+                          className="px-1.5 py-0.5 bg-dalam-bg-tertiary border border-dalam-border-primary rounded text-[11px] text-dalam-text-primary min-w-[20px] text-center"
                         >
                           {k}
                         </kbd>
@@ -106,8 +106,8 @@ export function ShortcutsCheatsheet() {
             </section>
           ))}
         </div>
-        <footer className="border-t border-acode-border-primary px-4 py-2 text-[11px] text-acode-text-muted">
-          Press <kbd className="px-1 bg-acode-bg-tertiary rounded">?</kbd> anywhere to reopen this.
+        <footer className="border-t border-dalam-border-primary px-4 py-2 text-[11px] text-dalam-text-muted">
+          Press <kbd className="px-1 bg-dalam-bg-tertiary rounded">?</kbd> anywhere to reopen this.
         </footer>
       </div>
     </div>

@@ -7,7 +7,7 @@ import {
   pruneToolOutputs,
   parseContextWindow,
 } from "./contextManager";
-import type { ChatMessage } from "@acode/shared-types";
+import type { ChatMessage } from "@dalam/shared-types";
 
 function msg(role: "user" | "assistant", content: string, extra?: Partial<ChatMessage>): ChatMessage {
   return { id: `m-${Math.random()}`, role, content, timestamp: Date.now(), ...extra };

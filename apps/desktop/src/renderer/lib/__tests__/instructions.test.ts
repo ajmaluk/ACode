@@ -125,10 +125,10 @@ describe("Instructions System", () => {
   describe("loadInstructions", () => {
     it("loads and prioritizes instructions across 4 layers", async () => {
       const mockFs: Record<string, string> = {
-        "/home/user/.acode/ACODE.md": "Global layer rule\n@path: *.ts\nGlobal path rule",
-        "/workspace/.acode/org/ACODE.md": "Org layer rule",
-        "/workspace/ACODE.md": "Project layer rule\n@path: *.ts\nProject path rule",
-        "/workspace/.acode/local/ACODE.md": "Local layer rule"
+        "/home/user/.dalam/DALAM.md": "Global layer rule\n@path: *.ts\nGlobal path rule",
+        "/workspace/.dalam/org/DALAM.md": "Org layer rule",
+        "/workspace/DALAM.md": "Project layer rule\n@path: *.ts\nProject path rule",
+        "/workspace/.dalam/local/DALAM.md": "Local layer rule"
       };
 
       const adapter: InstructionFsAdapter = {
@@ -146,8 +146,8 @@ describe("Instructions System", () => {
 
       // Path-scoped rules for *.ts should be merged: global path rule + project path rule
       expect(instructions.pathScopedRules.get("*.ts")).toBe("Global path rule\nProject path rule");
-      expect(instructions.loadedPaths).toContain("/home/user/.acode/ACODE.md");
-      expect(instructions.loadedPaths).toContain("/workspace/ACODE.md");
+      expect(instructions.loadedPaths).toContain("/home/user/.dalam/DALAM.md");
+      expect(instructions.loadedPaths).toContain("/workspace/DALAM.md");
     });
   });
 });

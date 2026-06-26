@@ -6,7 +6,7 @@ loader.config({
   paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" },
 });
 
-const ACODE_LIGHT = {
+const DALAM_LIGHT = {
   base: "vs" as const,
   inherit: true,
   rules: [
@@ -42,7 +42,7 @@ const ACODE_LIGHT = {
   },
 };
 
-const ACODE_DARK = {
+const DALAM_DARK = {
   base: "vs-dark" as const,
   inherit: true,
   rules: [
@@ -110,16 +110,16 @@ export function CodeView({ path, content, onChange }: Props) {
   })();
 
   const onMount: OnMount = (editor, monaco) => {
-    monaco.editor.defineTheme("acode-dark", ACODE_DARK as never);
-    monaco.editor.defineTheme("acode-light", ACODE_LIGHT as never);
-    monaco.editor.setTheme(theme === "light" ? "acode-light" : "acode-dark");
+    monaco.editor.defineTheme("dalam-dark", DALAM_DARK as never);
+    monaco.editor.defineTheme("dalam-light", DALAM_LIGHT as never);
+    monaco.editor.setTheme(theme === "light" ? "dalam-light" : "dalam-dark");
   };
 
   useEffect(() => {
     const t = setTimeout(() => {
       try {
         const monaco = (window as unknown as { monaco?: { editor: { setTheme: (name: string) => void } } }).monaco;
-        if (monaco) monaco.editor.setTheme(theme === "light" ? "acode-light" : "acode-dark");
+        if (monaco) monaco.editor.setTheme(theme === "light" ? "dalam-light" : "dalam-dark");
       } catch { /* noop */ }
     }, 0);
     return () => clearTimeout(t);
@@ -130,13 +130,13 @@ export function CodeView({ path, content, onChange }: Props) {
       path={path ?? undefined}
       value={content}
       language={monacoLang}
-      theme={theme === "light" ? "acode-light" : "acode-dark"}
+      theme={theme === "light" ? "dalam-light" : "dalam-dark"}
       onChange={(v) => onChange?.(v ?? "")}
       onMount={onMount}
       loading={
-        <div className="h-full w-full flex items-center justify-center bg-acode-bg-primary">
-          <div className="flex items-center gap-2 text-sm text-acode-text-muted">
-            <div className="w-2 h-2 rounded-full bg-acode-accent-primary animate-pulse-soft" />
+        <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
+          <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
+            <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
             Loading editor…
           </div>
         </div>

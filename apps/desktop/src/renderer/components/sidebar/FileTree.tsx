@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -15,27 +15,28 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import type { FileNode as FileNodeT } from "@acode/shared-types";
+import type { FileNode as FileNodeT } from "@dalam/shared-types";
 import { useWorkspace } from "@/store/useAppStore";
 import { showContextMenu, type ContextMenuItem } from "@/components/ui/ContextMenu";
 import { useToast } from "@/components/ui/Toaster";
 
-function getFileIcon(name: string) {
+function renderFileIcon(name: string, className: string) {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  const iconClass = className;
   if (["ts", "tsx", "js", "jsx", "rs", "go", "py", "rb", "java"].includes(ext))
-    return FileCode;
-  if (["json", "yaml", "yml", "toml", "xml"].includes(ext)) return FileJson;
-  if (["md", "mdx", "txt", "rst"].includes(ext)) return FileText;
-  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext)) return ImageIcon;
-  if (["css", "scss", "less", "sass"].includes(ext)) return FileType;
-  return FileIcon;
+    return <FileCode className={iconClass} />;
+  if (["json", "yaml", "yml", "toml", "xml"].includes(ext)) return <FileJson className={iconClass} />;
+  if (["md", "mdx", "txt", "rst"].includes(ext)) return <FileText className={iconClass} />;
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext)) return <ImageIcon className={iconClass} />;
+  if (["css", "scss", "less", "sass"].includes(ext)) return <FileType className={iconClass} />;
+  return <FileIcon className={iconClass} />;
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  modified: "text-acode-git-modified",
-  added: "text-acode-git-added",
-  deleted: "text-acode-git-deleted",
-  untracked: "text-acode-git-untracked",
+  modified: "text-dalam-git-modified",
+  added: "text-dalam-git-added",
+  deleted: "text-dalam-git-deleted",
+  untracked: "text-dalam-git-untracked",
 };
 
 const STATUS_LETTER: Record<string, string> = {
@@ -77,7 +78,7 @@ export function FileTree() {
 
   if (!fileTree.length) {
     return (
-      <div className="p-4 text-xs text-acode-text-muted">
+      <div className="p-4 text-xs text-dalam-text-muted">
         Open a folder to start.
       </div>
     );
@@ -98,7 +99,6 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
   const { setActiveFile, activeFilePath, openFile, createFile, createDirectory, deletePath, renamePath } = useWorkspace();
   const toast = useToast();
   const isDir = node.type === "directory";
-  const Icon = isDir ? (open ? FolderOpen : FolderClosed) : getFileIcon(node.name);
   const isActive = !isDir && activeFilePath === node.path;
   const indent = 8 + depth * 12;
 
@@ -167,24 +167,25 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
       <div>
         <button
           className={`group w-full flex items-center gap-1.5 pr-2 py-0.5 text-left transition-colors
-            hover:bg-acode-bg-hover text-acode-text-primary
-            ${open ? "bg-acode-bg-hover/30" : ""}`}
+            hover:bg-dalam-bg-hover text-dalam-text-primary
+            ${open ? "bg-dalam-bg-hover/30" : ""}`}
           style={{ paddingLeft: indent }}
           onClick={() => setOpen((o) => !o)}
           onContextMenu={handleContextMenu}
         >
-          <span className="text-acode-text-muted flex-shrink-0 w-3 h-3 flex items-center justify-center">
+          <span className="text-dalam-text-muted flex-shrink-0 w-3 h-3 flex items-center justify-center">
             {open ? (
               <ChevronDown className="w-3 h-3" />
             ) : (
               <ChevronRight className="w-3 h-3" />
             )}
           </span>
-          <Icon
-            className={`w-3.5 h-3.5 flex-shrink-0 ${
-              open ? "text-acode-accent-primary" : "text-acode-text-secondary"
-            }`}
-          />
+          {isDir
+            ? (open
+              ? <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-dalam-accent-primary" />
+              : <FolderClosed className="w-3.5 h-3.5 flex-shrink-0 text-dalam-text-secondary" />)
+            : renderFileIcon(node.name, "w-3.5 h-3.5 text-dalam-text-secondary flex-shrink-0")
+          }
           <span className="truncate flex-1">{node.name}</span>
           {node.gitStatus && (
             <span
@@ -205,8 +206,8 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
     <button
       className={`group w-full flex items-center gap-1.5 pr-2 py-0.5 text-left transition-colors
         ${isActive
-          ? "bg-acode-accent-subtle text-acode-text-primary ring-subtle"
-          : "hover:bg-acode-bg-hover text-acode-text-primary"
+          ? "bg-dalam-accent-subtle text-dalam-text-primary ring-subtle"
+          : "hover:bg-dalam-bg-hover text-dalam-text-primary"
         }`}
       style={{ paddingLeft: indent + 12 }}
       onClick={() => {
@@ -215,7 +216,7 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
       }}
       onContextMenu={handleContextMenu}
     >
-      <Icon className="w-3.5 h-3.5 text-acode-text-secondary flex-shrink-0" />
+      {renderFileIcon(node.name, "w-3.5 h-3.5 text-dalam-text-secondary flex-shrink-0")}
       <span className="truncate flex-1">{node.name}</span>
       {node.gitStatus && (
         <span

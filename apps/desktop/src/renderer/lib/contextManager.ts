@@ -1,5 +1,5 @@
 /**
- * ACode Context Manager
+ * Dalam Context Manager
  *
  * Manages context window pressure, automatic compaction,
  * tool output pruning, checkpoint triggers, and workspace memory.
@@ -11,7 +11,7 @@
  * - Claude Code: MEMORY.md pointer index (≤200 lines)
  */
 
-import type { ChatMessage, AppSettings } from "@acode/shared-types";
+import type { ChatMessage } from "@dalam/shared-types";
 
 export type ContextPressure = "none" | "low" | "medium" | "high";
 
@@ -324,8 +324,8 @@ export function buildCompactionPrompt(
 /**
  * Tool output pruning (OpenCode backward-scan algorithm).
  *
- * In ACode's architecture, tool results come back as user messages with
- * `[TOOL RESULT: ...]` or `[TOOL ERROR: ...]` prefixes (from acodeAPI.ts).
+ * In Dalam's architecture, tool results come back as user messages with
+ * `[TOOL RESULT: ...]` or `[TOOL ERROR: ...]` prefixes (from dalamAPI.ts).
  * This function identifies those messages and prunes their content to
  * reclaim tokens, while protecting the last N user turns.
  *

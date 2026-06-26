@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type {
-  AcodeAPI,
+  DalamAPI,
   AgentInfo,
   AgentMode,
   AgentSession,
@@ -21,9 +21,9 @@ import type {
   TerminalTab,
   TodoItem,
   Workspace,
-} from "@acode/shared-types";
-import { DEFAULT_SETTINGS } from "@acode/shared-types";
-import { ensureAcodeAPI } from "@/lib/acodeAPI";
+} from "@dalam/shared-types";
+import { DEFAULT_SETTINGS } from "@dalam/shared-types";
+import { ensureDalamAPI } from "@/lib/dalamAPI";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection, type PermissionKey } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
@@ -64,7 +64,7 @@ const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command"]);
 const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files"]);
 
 interface ParsedXmlToolCall {
-  toolCall: import("@acode/shared-types").ToolCall;
+  toolCall: import("@dalam/shared-types").ToolCall;
   rawMatch: string;
   matchIndex: number;
 }
@@ -74,10 +74,10 @@ interface ParsedXmlToolCall {
  * Returns extracted tool calls and the cleaned content with XML tags removed.
  */
 export function parseXmlToolCalls(content: string): {
-  toolCalls: import("@acode/shared-types").ToolCall[];
+  toolCalls: import("@dalam/shared-types").ToolCall[];
   cleanedContent: string;
 } {
-  const toolCalls: import("@acode/shared-types").ToolCall[] = [];
+  const toolCalls: import("@dalam/shared-types").ToolCall[] = [];
   const rawMatches: string[] = [];
   let match: RegExpExecArray | null;
 
@@ -178,7 +178,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   settings: { ...DEFAULT_SETTINGS },
   loaded: false,
   async load() {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     try {
       const all = await api.settings.getAll();
       set({ settings: all, loaded: true });
@@ -191,12 +191,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
     }
   },
   async update(key, value) {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     await api.settings.set(key, value as never);
     set((s) => ({ settings: { ...s.settings, [key]: value } }));
   },
   async updateSettings(updates) {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     for (const [key, value] of Object.entries(updates)) {
       await api.settings.set(key as keyof AppSettings, value as never);
     }
@@ -220,7 +220,7 @@ export type OpenTab = {
 };
 
 // ─── Workspace Persistence ────────────────────────────────────
-const WORKSPACES_STORAGE_KEY = "acode.workspaces.v1";
+const WORKSPACES_STORAGE_KEY = "dalam.workspaces.v1";
 
 function loadPersistedWorkspaces(): { workspaces: Workspace[]; activeId: string | null } {
   try {
@@ -278,12 +278,12 @@ function detectLanguage(path: string): string {
   return "plaintext";
 }
 
-async function initWorkspaceMemory(api: AcodeAPI, workspacePath: string) {
+async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    const dotAcode = joinPath(workspacePath, ".acode");
-    if (!(await exists(dotAcode))) {
-      await mkdir(dotAcode);
+    const dotDalam = joinPath(workspacePath, ".dalam");
+    if (!(await exists(dotDalam))) {
+      await mkdir(dotDalam);
     }
 
     // Initialize SQLite database for memory FTS5 search
@@ -302,7 +302,7 @@ async function initWorkspaceMemory(api: AcodeAPI, workspacePath: string) {
     }
 
     // Backward compatibility: ensure old memory.json exists if it was already in use
-    const memoryPath = joinPath(dotAcode, "memory.json");
+    const memoryPath = joinPath(dotDalam, "memory.json");
     if (!(await exists(memoryPath))) {
       const defaultMemory = {
         projectOverview: "An AI-native developer desktop environment.",
@@ -331,7 +331,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   loading: false,
 
   async openWorkspace() {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     set({ loading: true });
     try {
       const path = await api.system.openDirectoryPicker();
@@ -365,7 +365,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async loadWorkspace() {
     set({ loading: true });
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       const path = await api.system.openDirectoryPicker();
       if (!path) { set({ loading: false }); return; }
       await initWorkspaceMemory(api, path);
@@ -412,7 +412,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return;
     }
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       // Check if path is a directory — don't try to open directories as files
       const { stat } = await import("@tauri-apps/plugin-fs");
       try {
@@ -480,7 +480,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const ws = workspaces.find((w) => w.id === activeWorkspaceId);
     if (!ws) return;
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       const tree = await api.fs.listDir(ws.path);
       set({ fileTree: tree });
     } catch (err) {
@@ -490,7 +490,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async createFile(parentPath, name) {
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       await api.fs.createFile(parentPath, name);
       await get().refreshFileTree();
     } catch (err) {
@@ -500,7 +500,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async createDirectory(parentPath, name) {
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       await api.fs.createDirectory(parentPath, name);
       await get().refreshFileTree();
     } catch (err) {
@@ -510,7 +510,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async deletePath(path) {
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       await api.fs.deletePath(path);
       set((s) => {
         const tabs = s.openTabs.filter((t) => t.path !== path);
@@ -525,7 +525,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   async renamePath(path, newName) {
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       const oldTabs = get().openTabs.filter((t) => t.path === path);
       await api.fs.renamePath(path, newName);
       if (oldTabs.length > 0) {
@@ -556,7 +556,7 @@ export const useGit = create<GitState>((set) => ({
   status: null,
   loading: false,
   async refresh() {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     set({ loading: true });
     try {
       const status = await api.git.status(".");
@@ -590,11 +590,11 @@ type AgentStoreState = {
   loadSkills: () => SkillInfo[];
 };
 
-const ENABLED_SKILLS_STORAGE = "acode.enabledSkills.v1";
-const SESSION_VERSIONS_KEY = "acode.sessionVersions.v1";
-const SESSION_MESSAGES_KEY = "acode.sessionMessages.v1";
-const SESSION_AGENTS_KEY = "acode.sessionAgents.v1";
-const SESSION_SUMMARIES_KEY = "acode.chatSessions.v1";
+const ENABLED_SKILLS_STORAGE = "dalam.enabledSkills.v1";
+const SESSION_VERSIONS_KEY = "dalam.sessionVersions.v1";
+const SESSION_MESSAGES_KEY = "dalam.sessionMessages.v1";
+const SESSION_AGENTS_KEY = "dalam.sessionAgents.v1";
+const SESSION_SUMMARIES_KEY = "dalam.chatSessions.v1";
 
 function loadEnabledSkills(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -619,32 +619,32 @@ function saveEnabledSkills(s: Set<string>) {
   }
 }
 
-function loadPersistedVersions(): Record<string, import("@acode/shared-types").ChatVersion[]> {
+function loadPersistedVersions(): Record<string, import("@dalam/shared-types").ChatVersion[]> {
   try {
     const raw = localStorage.getItem(SESSION_VERSIONS_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch { return {}; }
 }
 
-function savePersistedVersions(versions: Record<string, import("@acode/shared-types").ChatVersion[]>) {
+function savePersistedVersions(versions: Record<string, import("@dalam/shared-types").ChatVersion[]>) {
   try { localStorage.setItem(SESSION_VERSIONS_KEY, JSON.stringify(versions)); } catch (e) { console.warn("Failed to save versions:", e); }
   void saveWorkspaceData();
 }
 
-function loadPersistedMessages(): Record<string, import("@acode/shared-types").ChatMessage[]> {
+function loadPersistedMessages(): Record<string, import("@dalam/shared-types").ChatMessage[]> {
   try {
     const raw = localStorage.getItem(SESSION_MESSAGES_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch { return {}; }
 }
 
-function savePersistedMessages(messages: Record<string, import("@acode/shared-types").ChatMessage[]>) {
+function savePersistedMessages(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>) {
   try {
     localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages));
   } catch (e) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
       console.warn("[Storage] Quota exceeded — pruning old tool results to free space");
-      const pruned: Record<string, import("@acode/shared-types").ChatMessage[]> = {};
+      const pruned: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
       for (const [sessionId, msgs] of Object.entries(messages)) {
         pruned[sessionId] = msgs.map(m => {
           if (m.toolCalls && m.toolCalls.length > 0) {
@@ -689,7 +689,7 @@ function savePersistedSessionSummaries(sessions: ChatSessionSummary[]) {
   void saveWorkspaceData();
 }
 
-const COMPACTION_SUMMARIES_KEY = "acode.compactionSummaries.v1";
+const COMPACTION_SUMMARIES_KEY = "dalam.compactionSummaries.v1";
 
 function loadPersistedCompactionSummaries(): Record<string, string> {
   try {
@@ -726,11 +726,11 @@ export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
 }
 
 async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
-  const api = ensureAcodeAPI();
-  const dotAcode = joinPath(workspacePath, ".acode");
-  const sessionsPath = joinPath(dotAcode, "sessions.json");
-  const configPath = joinPath(dotAcode, "config.json");
-  const contextPath = joinPath(dotAcode, "context.json");
+  const api = ensureDalamAPI();
+  const dotDalam = joinPath(workspacePath, ".dalam");
+  const sessionsPath = joinPath(dotDalam, "sessions.json");
+  const configPath = joinPath(dotDalam, "config.json");
+  const contextPath = joinPath(dotDalam, "context.json");
 
   try {
     const { exists } = await import("@tauri-apps/plugin-fs");
@@ -738,7 +738,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
     // Load always-allowed permissions from disk first (needed for tool permission evaluations)
     await usePermission.getState().loadFromDisk();
 
-    // Load project-level skills from .acode/skills/*/SKILL.md
+    // Load project-level skills from .dalam/skills/*/SKILL.md
     try {
       const projectSkills = await loadProjectSkills(workspacePath, {
         listDir: async (path: string) => {
@@ -852,7 +852,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
       try {
         const defaultContext = {
           pinnedFiles: [],
-          ignorePatterns: ["node_modules", "dist", ".git", ".acode"]
+          ignorePatterns: ["node_modules", "dist", ".git", ".dalam"]
         };
         await api.fs.writeFile(contextPath, JSON.stringify(defaultContext, null, 2));
       } catch (e) {
@@ -927,15 +927,15 @@ async function _doSaveWorkspaceData() {
   const ws = useWorkspace.getState().workspaces.find((w) => w.id === activeWorkspaceId);
   if (!ws) return;
 
-  const api = ensureAcodeAPI();
-  const dotAcode = joinPath(ws.path, ".acode");
-  const sessionsPath = joinPath(dotAcode, "sessions.json");
-  const configPath = joinPath(dotAcode, "config.json");
+  const api = ensureDalamAPI();
+  const dotDalam = joinPath(ws.path, ".dalam");
+  const sessionsPath = joinPath(dotDalam, "sessions.json");
+  const configPath = joinPath(dotDalam, "config.json");
 
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    if (!(await exists(dotAcode))) {
-      await mkdir(dotAcode);
+    if (!(await exists(dotDalam))) {
+      await mkdir(dotDalam);
     }
 
     const chatState = useChat.getState();
@@ -970,7 +970,7 @@ async function _doSaveWorkspaceData() {
       if (await exists(configPath)) {
         existingConfig = JSON.parse(await api.fs.readFile(configPath));
       }
-    } catch {}
+    } catch { /* ignore */ }
     const configData = {
       ...existingConfig,
       settings: {
@@ -1061,8 +1061,8 @@ type TaskPlanItem = {
 type ChatState = {
   session: AgentSession | null;
   messages: ChatMessage[];
-  pendingToolCalls: import("@acode/shared-types").ToolCall[];
-  pendingActivities: import("@acode/shared-types").PendingActivity[];
+  pendingToolCalls: import("@dalam/shared-types").ToolCall[];
+  pendingActivities: import("@dalam/shared-types").PendingActivity[];
   streamingContent: string;
   thinkingContent: string;
   isStreaming: boolean;
@@ -1073,23 +1073,23 @@ type ChatState = {
   taskPlanSummary: string | null;
   _pendingChanges: FileChange[];
   _userSelectedAgent: boolean;
-  chatHistory: import("@acode/shared-types").ChatMessage[][];
+  chatHistory: import("@dalam/shared-types").ChatMessage[][];
   chatHistoryIdx: number;
   chatSessions: ChatSessionSummary[];
   activeSessionId: string | null;
   sessionMessages: Record<string, ChatMessage[]>;
   sessionAgentName: Record<string, PrimaryAgentName>;
   planApproval: { planContent: string; status: "pending" | "approved" | "rejected" } | null;
-  sessionVersions: Record<string, import("@acode/shared-types").ChatVersion[]>;
+  sessionVersions: Record<string, import("@dalam/shared-types").ChatVersion[]>;
   restoredVersionId: string | null;
-  preRestoreMessages: import("@acode/shared-types").ChatMessage[] | null;
+  preRestoreMessages: import("@dalam/shared-types").ChatMessage[] | null;
   pendingAttachments: FileAttachment[];
   compactionSummaries: Record<string, string>;
   _compactingSessions: Set<string>;
   _safetyTimer: ReturnType<typeof setTimeout> | null;
   compactSessionHistory: (sessionId: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
-  startSession: (workspacePath: string, mode: import("@acode/shared-types").AgentSessionMode) => Promise<void>;
+  startSession: (workspacePath: string, mode: import("@dalam/shared-types").AgentSessionMode) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   saveVersion: (sessionId: string, label: string) => void;
   restoreVersion: (sessionId: string, versionId: string) => void;
@@ -1204,7 +1204,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async startSession(workspacePath, mode) {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     if (workspacePath) {
       await initWorkspaceMemory(api, workspacePath);
     }
@@ -1269,7 +1269,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async abort(sessionId) {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
@@ -1323,7 +1323,7 @@ export const useChat = create<ChatState>((set, get) => ({
       try {
         const agentName = useAgents.getState().activeAgentName;
         const validModes = ["build", "plan", "yolo"];
-        const sessionMode = validModes.includes(agentName) ? agentName as import("@acode/shared-types").AgentSessionMode : "build" as import("@acode/shared-types").AgentSessionMode;
+        const sessionMode = validModes.includes(agentName) ? agentName as import("@dalam/shared-types").AgentSessionMode : "build" as import("@dalam/shared-types").AgentSessionMode;
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
         console.error("Failed to start session:", err);
@@ -1333,7 +1333,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if (!session) return;
     }
     const { messages } = get();
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
 
     const { pendingAttachments } = get();
     const userMsg: ChatMessage = {
@@ -1517,7 +1517,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "message-end": {
         const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
-        const api = ensureAcodeAPI();
+        const api = ensureDalamAPI();
 
         // Clear safety timeout if it exists
         const existingTimer = get()._safetyTimer;
@@ -1687,7 +1687,7 @@ export const useChat = create<ChatState>((set, get) => ({
           : tool;
         set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, annotated] }));
         if (needsApproval) {
-          const description = `ACode (${useAgents.getState().activeAgentName} agent) wants to use \`${tool.name}\`.`;
+          const description = `Dalam (${useAgents.getState().activeAgentName} agent) wants to use \`${tool.name}\`.`;
           const activeSession = get().session;
           void usePermission.getState().ask({
             kind: permissionKey,
@@ -1889,7 +1889,7 @@ export const useChat = create<ChatState>((set, get) => ({
         usePermission.getState().ask({
           kind: permKind,
           title: "Permission required",
-          description: event.description ?? `ACode wants to run: ${event.kind}`,
+          description: event.description ?? `Dalam wants to run: ${event.kind}`,
           ...(event.command ? { command: event.command } : {}),
         }).then((decision) => {
           if (event.toolCallId) {
@@ -2061,7 +2061,7 @@ export const useChat = create<ChatState>((set, get) => ({
   removeSession(id) {
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     void get().abort(id).catch(() => {});
     api.agent.cleanupStream(id);
     set((s) => {
@@ -2170,7 +2170,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!messages.length) return;
     const versions = sessionVersions[sessionId] ?? [];
     const parentId = versions.length > 0 ? versions[versions.length - 1].id : undefined;
-    const version: import("@acode/shared-types").ChatVersion = {
+    const version: import("@dalam/shared-types").ChatVersion = {
       id: "ver-" + Math.random().toString(36).slice(2, 9),
       sessionId,
       label,
@@ -2275,7 +2275,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const { toCompact } = selectMessagesForCompaction(activeMessages, 6);
       if (toCompact.length === 0) return;
 
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       const previousSummary = compactionSummaries[sessionId];
 
       // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
@@ -2301,7 +2301,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async resolveToolApproval(toolCallId, decision, result) {
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     const sessionId = get().activeSessionId;
     const tool = get().pendingToolCalls.find((tc) => tc.id === toolCallId);
     if (decision === "approved" && sessionId && tool?.diffId) {
@@ -2514,9 +2514,9 @@ type SkillsMcpState = {
   disconnectMcpServer: (name: string) => Promise<void>;
 };
 
-const MCP_STORAGE_KEY = "acode.mcpServers.v1";
-const USER_SKILLS_STORAGE_KEY = "acode.userSkills.v1";
-const BUNDLED_SKILLS_STORAGE_KEY = "acode.bundledSkillsStates.v1";
+const MCP_STORAGE_KEY = "dalam.mcpServers.v1";
+const USER_SKILLS_STORAGE_KEY = "dalam.userSkills.v1";
+const BUNDLED_SKILLS_STORAGE_KEY = "dalam.bundledSkillsStates.v1";
 
 function saveMcpServers(servers: McpServer[]) {
   const userServers = servers
@@ -2533,7 +2533,7 @@ function loadMcpServers(): McpServer[] {
   try {
     const raw = localStorage.getItem(MCP_STORAGE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { /* ignore */ }
   return [];
 }
 
@@ -2550,7 +2550,7 @@ function loadSkills(): Skill[] {
     if (raw) {
       loadedBundledStates = { ...defaultBundledStates, ...JSON.parse(raw) };
     }
-  } catch {}
+  } catch { /* ignore */ }
 
   const mappedRegistrySkills: Skill[] = registrySkills.map((rs) => {
     const isBundled = rs.source === "bundled";
@@ -2571,7 +2571,7 @@ function loadSkills(): Skill[] {
     if (raw) {
       userSkills = JSON.parse(raw);
     }
-  } catch {}
+  } catch { /* ignore */ }
 
   const merged = [...mappedRegistrySkills];
   for (const us of userSkills) {
@@ -2802,13 +2802,13 @@ export type ModelProvider = {
   models: { name: string; modelId: string; contextWindow: string; connected?: boolean; enabled?: boolean }[];
 };
 
-const PROVIDERS_STORAGE_KEY = "acode.providers.v1";
+const PROVIDERS_STORAGE_KEY = "dalam.providers.v1";
 
 function loadProviders(): ModelProvider[] {
   try {
     const raw = localStorage.getItem(PROVIDERS_STORAGE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { /* ignore */ }
   return DEFAULT_PROVIDERS;
 }
 
@@ -2958,7 +2958,7 @@ export const useModelProviders = create<ModelProvidersState>((set, get) => ({
     set((s) => {
       const next = s.providers.filter((p) => p.id !== id);
       saveProviders(next);
-      localStorage.removeItem(`acode.provider.${id}`);
+      localStorage.removeItem(`dalam.provider.${id}`);
       return { providers: next };
     });
   },
@@ -3236,7 +3236,7 @@ export type PermissionRequest = {
   createdAt: number;
 };
 
-const ALWAYS_ALLOWED_KEY = "acode.alwaysAllowed.v1";
+const ALWAYS_ALLOWED_KEY = "dalam.alwaysAllowed.v1";
 
 function loadAlwaysAllowed(): Record<string, true> {
   try {
@@ -3252,8 +3252,8 @@ function loadAlwaysAllowed(): Record<string, true> {
 }
 
 function saveAlwaysAllowed(data: Record<string, true>) {
-  try { localStorage.setItem(ALWAYS_ALLOWED_KEY, JSON.stringify(data)); } catch {}
-  // Also persist to .acode/config.json for project-level persistence
+  try { localStorage.setItem(ALWAYS_ALLOWED_KEY, JSON.stringify(data)); } catch { /* ignore */ }
+  // Also persist to .dalam/config.json for project-level persistence
   void persistAlwaysAllowedToDisk(data);
 }
 
@@ -3262,17 +3262,17 @@ async function persistAlwaysAllowedToDisk(data: Record<string, true>) {
     const ws = useWorkspace.getState();
     const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
     if (!activeWs) return;
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    const dotAcode = joinPath(activeWs.path, ".acode");
-    if (!(await exists(dotAcode))) await mkdir(dotAcode);
-    const configPath = joinPath(dotAcode, "config.json");
+    const dotDalam = joinPath(activeWs.path, ".dalam");
+    if (!(await exists(dotDalam))) await mkdir(dotDalam);
+    const configPath = joinPath(dotDalam, "config.json");
     let existing: any = {};
     try {
       if (await exists(configPath)) {
         existing = JSON.parse(await api.fs.readFile(configPath));
       }
-    } catch {}
+    } catch { /* ignore */ }
     existing.alwaysAllowed = data;
     await api.fs.writeFile(configPath, JSON.stringify(existing, null, 2));
   } catch (e) { console.warn("Failed to persist alwaysAllowed to disk:", e); }
@@ -3283,15 +3283,15 @@ async function loadAlwaysAllowedFromDisk(): Promise<Record<string, true>> {
     const ws = useWorkspace.getState();
     const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
     if (!activeWs) return {};
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     const { exists } = await import("@tauri-apps/plugin-fs");
-    const configPath = joinPath(activeWs.path, ".acode", "config.json");
+    const configPath = joinPath(activeWs.path, ".dalam", "config.json");
     if (await exists(configPath)) {
       const content = await api.fs.readFile(configPath);
       const config = JSON.parse(content);
       return config.alwaysAllowed || {};
     }
-  } catch {}
+  } catch { /* ignore */ }
   return {};
 }
 

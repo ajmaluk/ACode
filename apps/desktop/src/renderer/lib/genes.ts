@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * ACODE GENE SYSTEM — Self-Evolving Agent Intelligence
+ * DALAM GENE SYSTEM — Self-Evolving Agent Intelligence
  * ============================================================
  *
  * Inspired by Evolver's GEP (Gene Expression Protocol):
@@ -17,7 +17,7 @@
  * ============================================================
  */
 
-import type { ChatMessage } from "@acode/shared-types";
+import type { ChatMessage } from "@dalam/shared-types";
 
 // ─── Gene Types ──────────────────────────────────────────────
 
@@ -62,13 +62,13 @@ export interface DetectedPattern {
 
 // ─── Gene Pool Management ────────────────────────────────────
 
-const GENE_POOL_KEY = "acode.genePool.v1";
+const GENE_POOL_KEY = "dalam.genePool.v1";
 
 export function loadGenePool(): GenePool {
   try {
     const raw = localStorage.getItem(GENE_POOL_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { /* ignore */ }
   return {
     genes: [],
     version: 1,

@@ -1,9 +1,9 @@
 {
-  "name": "acode",
+  "name": "dalam",
   "version": "0.1.0",
   "private": true,
-  "description": "ACode — AI-Native IDE / Agentic Development Environment",
-  "author": "ACode Team",
+  "description": "Dalam — AI-Native IDE / Agentic Development Environment",
+  "author": "Dalam Team",
   "license": "MIT",
   "workspaces": [
     "apps/*",

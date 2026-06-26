@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents, useTerminal } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
 import { modKey } from "@/lib/platform";
-import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { ensureDalamAPI } from "@/lib/dalamAPI";
 import {
   ChevronLeft, ChevronRight, Plus, PanelLeft, PanelRight,
   FolderOpen, Code2, Sparkles, TerminalSquare, FolderTree, Settings,
@@ -38,7 +38,7 @@ export function TopNav() {
       try {
         const { exists } = await import("@tauri-apps/plugin-fs");
         const { joinPath } = await import("@/lib/pathUtils");
-        const hasMemory = await exists(joinPath(activeWorkspace.path, ".acode/memory.json"));
+        const hasMemory = await exists(joinPath(activeWorkspace.path, ".dalam/memory.json"));
         if (active) setMemoryActive(hasMemory);
       } catch {
         if (active) setMemoryActive(false);
@@ -72,7 +72,7 @@ export function TopNav() {
     const path = activeWorkspace?.path;
     if (!path) return;
     try {
-      const api = ensureAcodeAPI();
+      const api = ensureDalamAPI();
       if (app === "finder") {
         await api.system.revealInFinder(path);
       } else if (app === "terminal") {
@@ -91,14 +91,14 @@ export function TopNav() {
   };
 
   return (
-    <div className="h-9 flex items-center bg-acode-bg-secondary border-b border-acode-border-primary flex-shrink-0 select-none">
+    <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary flex-shrink-0 select-none">
       {/* Left section: sidebar toggle, back, forward, new task */}
       <div className="flex items-center gap-0.5 px-1.5">
         <button
           className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
             sidebarOpen
-              ? "text-acode-text-secondary hover:bg-acode-bg-hover"
-              : "text-acode-accent-primary bg-acode-accent-subtle hover:bg-acode-bg-hover"
+              ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+              : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
           }`}
           title={sidebarOpen ? `Hide sidebar (${mod}B)` : `Show sidebar (${mod}B)`}
           onClick={toggleSidebar}
@@ -106,7 +106,7 @@ export function TopNav() {
           <PanelLeft className="w-3.5 h-3.5" />
         </button>
         <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:bg-acode-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           title={`Back (${mod}[)`}
           onClick={() => goBackChat()}
           disabled={!canGoBack}
@@ -114,7 +114,7 @@ export function TopNav() {
           <ChevronLeft className="w-4 h-4" />
         </button>
         <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:bg-acode-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           title={`Forward (${mod}])`}
           onClick={() => goForwardChat()}
           disabled={!canGoForward}
@@ -122,7 +122,7 @@ export function TopNav() {
           <ChevronRight className="w-4 h-4" />
         </button>
         <button
-          className="w-7 h-7 flex items-center justify-center rounded-full border border-acode-border-secondary text-acode-text-secondary hover:bg-acode-bg-hover hover:text-acode-text-primary transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-full border border-dalam-border-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
           title={`New task (${mod}N)`}
           onClick={() => newChat()}
         >
@@ -141,18 +141,18 @@ export function TopNav() {
                   if (inChat) setFilePickerOpen((v) => !v);
                   else void openWorkspace();
                 }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-acode-text-secondary hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors max-w-[400px]"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors max-w-[400px]"
                 title={inChat ? "Open working directory in…" : "Open a different folder"}
               >
-                <FolderOpen className="w-3.5 h-3.5 text-acode-text-muted flex-shrink-0" />
+                <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                 <span className="font-medium truncate">{activeWorkspace.name}</span>
-                <span className="text-acode-text-muted truncate text-[10px]">· {activeWorkspace.path}</span>
-                {inChat && <ChevronRight className="w-3 h-3 text-acode-text-muted rotate-90 flex-shrink-0" />}
+                <span className="text-dalam-text-muted truncate text-[10px]">· {activeWorkspace.path}</span>
+                {inChat && <ChevronRight className="w-3 h-3 text-dalam-text-muted rotate-90 flex-shrink-0" />}
               </button>
 
             {filePickerOpen && (
-              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 w-60 bg-acode-bg-secondary border border-acode-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
-                <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-acode-text-muted border-b border-acode-border-primary">Open with</div>
+              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 w-60 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
+                <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary">Open with</div>
                 {([
                   { id: "vscode", label: "VS Code", desc: "Open in Visual Studio Code", icon: Code2, color: "text-blue-400" },
                   { id: "qoder", label: "Qoder", desc: "Open in Qoder IDE", icon: Sparkles, color: "text-emerald-400" },
@@ -164,25 +164,25 @@ export function TopNav() {
                     <button
                       key={app.id}
                       onClick={() => openInApp(app.id)}
-                      className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-acode-bg-hover transition-colors"
+                      className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors"
                     >
                       <Icon className={`w-3.5 h-3.5 ${app.color} flex-shrink-0`} />
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-acode-text-primary font-medium">{app.label}</div>
-                        <div className="text-[10px] text-acode-text-muted truncate">{app.desc}</div>
+                        <div className="text-xs text-dalam-text-primary font-medium">{app.label}</div>
+                        <div className="text-[10px] text-dalam-text-muted truncate">{app.desc}</div>
                       </div>
                     </button>
                   );
                 })}
-                <div className="border-t border-acode-border-primary">
+                <div className="border-t border-dalam-border-primary">
                   <button
                     onClick={() => { setFilePickerOpen(false); void openWorkspace(); }}
-                    className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-acode-bg-hover transition-colors"
+                    className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors"
                   >
-                    <FolderOpen className="w-3.5 h-3.5 text-acode-text-muted flex-shrink-0" />
+                    <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs text-acode-text-primary font-medium">Open different folder…</div>
-                      <div className="text-[10px] text-acode-text-muted">Pick another directory</div>
+                      <div className="text-xs text-dalam-text-primary font-medium">Open different folder…</div>
+                      <div className="text-[10px] text-dalam-text-muted">Pick another directory</div>
                     </div>
                   </button>
                 </div>
@@ -191,13 +191,13 @@ export function TopNav() {
             </div>
 
             {memoryActive && (
-              <span title="Workspace Memory Active: Agent is aware of .acode/memory.json" className="flex items-center flex-shrink-0">
-                <Brain className="w-3.5 h-3.5 text-acode-accent-primary animate-pulse-soft" />
+              <span title="Workspace Memory Active: Agent is aware of .dalam/memory.json" className="flex items-center flex-shrink-0">
+                <Brain className="w-3.5 h-3.5 text-dalam-accent-primary animate-pulse-soft" />
               </span>
             )}
 
             {isCompacted && (
-              <span className="flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-semibold bg-acode-accent-subtle text-acode-accent-primary rounded-full uppercase tracking-wider animate-pulse-soft flex-shrink-0" title="This conversation's history has been compacted to fit the context window.">
+              <span className="flex items-center gap-1.5 px-2 py-0.5 text-[9px] font-semibold bg-dalam-accent-subtle text-dalam-accent-primary rounded-full uppercase tracking-wider animate-pulse-soft flex-shrink-0" title="This conversation's history has been compacted to fit the context window.">
                 Compacted
               </span>
             )}
@@ -205,7 +205,7 @@ export function TopNav() {
         ) : (
           <button
             onClick={() => void openWorkspace()}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
             title="Open a folder to start working"
           >
             <FolderOpen className="w-3.5 h-3.5 text-amber-400/80" />
@@ -219,7 +219,7 @@ export function TopNav() {
         {/* Agent indicator */}
         <button
           onClick={() => useSettingsView.getState().open("agents")}
-          className="flex items-center gap-1.5 px-2 h-7 text-xs text-acode-text-secondary hover:text-acode-text-primary bg-acode-bg-active hover:bg-acode-bg-tertiary rounded-md border border-acode-border-primary transition-colors"
+          className="flex items-center gap-1.5 px-2 h-7 text-xs text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-md border border-dalam-border-primary transition-colors"
           title="Active agent"
         >
           <Zap className={`w-3.5 h-3.5 ${AGENT_META[activeAgentName]?.color || "text-amber-400"}`} />
@@ -243,7 +243,7 @@ export function TopNav() {
 
         {session && session.workspacePath && (
           <button
-            className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
             title="Open terminal"
             onClick={() => {
               if (session.workspacePath) {
@@ -257,7 +257,7 @@ export function TopNav() {
           </button>
         )}
         <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
           title={`Settings (${mod},)`}
           onClick={() => openSettings()}
         >
@@ -266,8 +266,8 @@ export function TopNav() {
         <button
           className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
             rightPanelOpen
-              ? "text-acode-text-secondary hover:bg-acode-bg-hover"
-              : "text-acode-accent-primary bg-acode-accent-subtle hover:bg-acode-bg-hover"
+              ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+              : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
           }`}
           title={rightPanelOpen ? `Hide right panel (${mod}\\)` : `Show right panel (${mod}\\)`}
           onClick={toggleRightPanel}

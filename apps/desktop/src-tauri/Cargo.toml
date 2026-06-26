@@ -1,8 +1,8 @@
 [package]
-name = "acode"
+name = "dalam"
 version = "0.1.0"
-description = "ACode — AI-Native IDE"
-authors = ["ACode"]
+description = "Dalam — AI-Native IDE"
+authors = ["Dalam"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"

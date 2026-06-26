@@ -8,7 +8,7 @@ export function Breadcrumb() {
   const toast = useToast();
   if (!activeFilePath) {
     return (
-      <div className="h-7 px-3 flex items-center text-[11px] text-acode-text-muted border-b border-acode-border-primary bg-acode-bg-secondary">
+      <div className="h-7 px-3 flex items-center text-[11px] text-dalam-text-muted border-b border-dalam-border-primary bg-dalam-bg-secondary">
         <span>No file open</span>
       </div>
     );
@@ -23,21 +23,21 @@ export function Breadcrumb() {
   };
 
   return (
-    <div className="h-7 px-3 flex items-center text-[11px] border-b border-acode-border-primary bg-acode-bg-secondary overflow-x-auto scrollbar-thin">
+    <div className="h-7 px-3 flex items-center text-[11px] border-b border-dalam-border-primary bg-dalam-bg-secondary overflow-x-auto scrollbar-thin">
       {parts.map((part, idx) => (
         <span key={`${idx}-${part}`} className="flex items-center flex-shrink-0">
           <button
-            className="px-1 py-0.5 text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover rounded transition-colors"
+            className="px-1 py-0.5 text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors"
             onClick={() => copyDirPath(idx)}
             title={`Copy directory path: /${parts.slice(0, idx + 1).join("/")}`}
           >
             {part}
           </button>
-          <ChevronRight className="w-3 h-3 mx-0.5 text-acode-text-muted/50" />
+          <ChevronRight className="w-3 h-3 mx-0.5 text-dalam-text-muted/50" />
         </span>
       ))}
-      <span className="flex items-center gap-1.5 text-acode-text-primary font-medium flex-shrink-0">
-        <FileCode className="w-3 h-3 text-acode-accent-primary" />
+      <span className="flex items-center gap-1.5 text-dalam-text-primary font-medium flex-shrink-0">
+        <FileCode className="w-3 h-3 text-dalam-accent-primary" />
         {fileName}
       </span>
     </div>

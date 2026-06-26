@@ -5,9 +5,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTerminal, useWorkspace, useChat } from "@/store/useAppStore";
 import { Plus, X, Trash2, Bot, Wifi } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
-import { ensureAcodeAPI } from "@/lib/acodeAPI";
+import { ensureDalamAPI } from "@/lib/dalamAPI";
 
-const ACODE_TERM_THEME = {
+const DALAM_TERM_THEME = {
   background: "#0d0d0d",
   foreground: "#e0e0e0",
   cursor: "#4f8ef7",
@@ -40,7 +40,7 @@ const ANSI = {
 };
 
 const BANNER = `${ANSI.cyan}╭─────────────────────────────────────────────╮${ANSI.reset}
-│  ${ANSI.bold}ACode Terminal${ANSI.reset}  ${ANSI.dim}— interactive shell${ANSI.reset}    ${ANSI.cyan}│${ANSI.reset}
+│  ${ANSI.bold}Dalam Terminal${ANSI.reset}  ${ANSI.dim}— interactive shell${ANSI.reset}    ${ANSI.cyan}│${ANSI.reset}
 ╰─────────────────────────────────────────────╯${ANSI.reset}
 Type ${ANSI.bold}help${ANSI.reset} to see available commands. Try ${ANSI.bold}ls${ANSI.reset}, ${ANSI.bold}cat src/App.tsx${ANSI.reset}, or ${ANSI.bold}git status${ANSI.reset}.
 `;
@@ -62,7 +62,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
     if (!element) return;
 
     const term = new Terminal({
-      theme: ACODE_TERM_THEME,
+      theme: DALAM_TERM_THEME,
       fontFamily: "JetBrains Mono, SF Mono, Menlo, monospace",
       fontSize: 13,
       lineHeight: 1.2,
@@ -91,7 +91,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
       fit.fit();
     }, 50);
 
-    const api = ensureAcodeAPI();
+    const api = ensureDalamAPI();
     let isCleanedUp = false;
     let unsubData: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
@@ -178,23 +178,23 @@ export function TerminalPanel() {
   }, [addTab, cwd]);
 
   return (
-    <div className="h-full flex flex-col bg-acode-bg-primary">
-      <div className="h-8 flex items-center bg-acode-bg-secondary border-b border-acode-border-primary flex-shrink-0">
+    <div className="h-full flex flex-col bg-dalam-bg-primary">
+      <div className="h-8 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary flex-shrink-0">
         {tabs.map((t) => (
           <div
             key={t.id}
-            className={`group flex items-center gap-1.5 px-3 h-full border-r border-acode-border-primary cursor-pointer text-xs transition-colors ${
+            className={`group flex items-center gap-1.5 px-3 h-full border-r border-dalam-border-primary cursor-pointer text-xs transition-colors ${
               t.id === activeTabId
-                ? "bg-acode-bg-primary text-acode-text-primary"
-                : "bg-acode-bg-secondary text-acode-text-secondary hover:bg-acode-bg-hover"
+                ? "bg-dalam-bg-primary text-dalam-text-primary"
+                : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"
             }`}
             onClick={() => setActiveTab(t.id)}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-acode-git-added" />
+            <span className="w-1.5 h-1.5 rounded-full bg-dalam-git-added" />
             <span className="whitespace-nowrap">{t.title}</span>
             {tabs.length > 1 && (
               <button
-                className="ml-1 opacity-0 group-hover:opacity-100 hover:bg-acode-bg-active rounded p-0.5"
+                className="ml-1 opacity-0 group-hover:opacity-100 hover:bg-dalam-bg-active rounded p-0.5"
                 onClick={(e) => {
                   e.stopPropagation();
                   closeTab(t.id);
@@ -206,7 +206,7 @@ export function TerminalPanel() {
           </div>
         ))}
         <button
-          className="px-2 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+          className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
           onClick={handleAddTab}
           title="New terminal"
         >
@@ -215,10 +215,10 @@ export function TerminalPanel() {
 
         <div className="flex-1" />
 
-        <div className="flex items-center gap-1.5 px-3 text-[10px] text-acode-text-muted">
+        <div className="flex items-center gap-1.5 px-3 text-[10px] text-dalam-text-muted">
           {isStreaming ? (
             <>
-              <Bot className="w-3 h-3 text-acode-accent-primary animate-pulse-soft" />
+              <Bot className="w-3 h-3 text-dalam-accent-primary animate-pulse-soft" />
               <span>agent running</span>
             </>
           ) : (
@@ -230,7 +230,7 @@ export function TerminalPanel() {
         </div>
 
         <button
-          className="px-3 h-full text-acode-text-muted hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
+          className="px-3 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
           title="Clear (Ctrl+L)"
           onClick={() => {
             if (!activeTabId) return;

@@ -9,7 +9,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src/renderer"),
-      "@acode/shared-types": path.resolve(__dirname, "../../packages/shared-types/src"),
+      "@dalam/shared-types": path.resolve(__dirname, "../../packages/shared-types/src"),
     },
   },
   server: {

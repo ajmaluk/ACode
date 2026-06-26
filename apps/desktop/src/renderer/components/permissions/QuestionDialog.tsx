@@ -100,12 +100,12 @@ export function QuestionDialog() {
         onKeyDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-acode-border-primary bg-acode-bg-secondary/50">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-dalam-border-primary bg-dalam-bg-secondary/50">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-medium text-acode-text-primary truncate">{request.header}</span>
-            <span className="text-sm text-acode-text-primary truncate">{request.question}</span>
+            <span className="text-sm font-medium text-dalam-text-primary truncate">{request.header}</span>
+            <span className="text-sm text-dalam-text-primary truncate">{request.question}</span>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-acode-text-muted flex-shrink-0">
+          <div className="flex items-center gap-1.5 text-xs text-dalam-text-muted flex-shrink-0">
             {request.workspaceName && (
               <>
                 <FolderOpen className="w-3.5 h-3.5" />
@@ -118,7 +118,7 @@ export function QuestionDialog() {
                 <span>{request.branch}</span>
               </>
             )}
-            <span className="ml-2 text-acode-text-muted/60">1 / 1</span>
+            <span className="ml-2 text-dalam-text-muted/60">1 / 1</span>
             <button className="ml-2 btn-icon p-1" onClick={() => resolve(null)} title="Close">
               <X className="w-3.5 h-3.5" />
             </button>
@@ -135,13 +135,13 @@ export function QuestionDialog() {
                 onClick={() => resolve({ selectedLabel: opt.label })}
                 onMouseEnter={() => { setSelected(idx); setFocusedInput(false); }}
                 className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                  active ? "bg-acode-bg-hover" : "hover:bg-acode-bg-hover/50"
+                  active ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
                 }`}
               >
-                <span className="text-xs text-acode-text-muted w-4 mt-0.5 text-center flex-shrink-0">{idx + 1}.</span>
+                <span className="text-xs text-dalam-text-muted w-4 mt-0.5 text-center flex-shrink-0">{idx + 1}.</span>
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-acode-text-primary font-medium">{opt.label}</span>
-                  <span className="text-sm text-acode-text-muted ml-2">{opt.description}</span>
+                  <span className="text-sm text-dalam-text-primary font-medium">{opt.label}</span>
+                  <span className="text-sm text-dalam-text-muted ml-2">{opt.description}</span>
                 </div>
               </button>
             );
@@ -150,11 +150,11 @@ export function QuestionDialog() {
           {/* Free text input as the last "option" */}
           <div
             className={`flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-              focusedInput ? "bg-acode-bg-hover" : "hover:bg-acode-bg-hover/50"
+              focusedInput ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
             }`}
             onMouseEnter={() => { setSelected(request.options.length); setFocusedInput(true); setTimeout(() => inputRef.current?.focus(), 0); }}
           >
-            <span className="text-xs text-acode-text-muted w-4 mt-2 text-center flex-shrink-0">{request.options.length + 1}.</span>
+            <span className="text-xs text-dalam-text-muted w-4 mt-2 text-center flex-shrink-0">{request.options.length + 1}.</span>
             <input
               ref={inputRef}
               type="text"
@@ -163,21 +163,21 @@ export function QuestionDialog() {
               onFocus={() => { setSelected(request.options.length); setFocusedInput(true); }}
               onBlur={() => setFocusedInput(false)}
               placeholder="Enter your answer…"
-              className="flex-1 bg-transparent border-0 outline-none text-sm text-acode-text-primary placeholder-acode-text-muted"
+              className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted"
             />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-acode-border-primary">
-          <div className="flex items-center gap-1.5 text-[11px] text-acode-text-muted">
+        <div className="flex items-center justify-between px-4 py-3 border-t border-dalam-border-primary">
+          <div className="flex items-center gap-1.5 text-[11px] text-dalam-text-muted">
             <Info className="w-3 h-3" />
             Use Tab / arrow keys to choose, then Enter or Space to select
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => resolve(null)}
-              className="px-3 py-1.5 text-xs rounded-md text-acode-text-secondary hover:bg-acode-bg-hover transition-colors"
+              className="px-3 py-1.5 text-xs rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
             >
               Dismiss
             </button>

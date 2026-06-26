@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 
 export type ContextMenuItem =
@@ -66,41 +66,41 @@ const ContextMenuPanel = ({ ref, state, onClose }: { ref: React.RefObject<HTMLDi
   return (
     <div
       ref={ref}
-      className="fixed z-[100] min-w-[200px] bg-acode-bg-secondary border border-acode-border-primary rounded-lg shadow-2xl py-1 animate-fade-in"
+      className="fixed z-[100] min-w-[200px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl py-1 animate-fade-in"
       style={{ left: state.x, top: state.y }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       {state.items.map((item, idx) => {
-        if (item.type === "separator") return <div key={idx} className="h-px bg-acode-border-primary my-1 mx-1" />;
+        if (item.type === "separator") return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />;
         if (item.type === "submenu") return (
           <div key={idx} className="relative"
             onMouseEnter={() => setOpenSub(idx)}
             onMouseLeave={() => setOpenSub(null)}
           >
-            <button className="w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs text-acode-text-primary hover:bg-acode-accent-subtle transition-colors">
+            <button className="w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-accent-subtle transition-colors">
               <span className="flex items-center gap-2">
                 {item.icon && <span className="w-4 flex-shrink-0 flex justify-center">{item.icon}</span>}
                 {item.label}
               </span>
-              <ChevronRight className="w-3 h-3 text-acode-text-muted" />
+              <ChevronRight className="w-3 h-3 text-dalam-text-muted" />
             </button>
             {openSub === idx && (
-              <div className="absolute left-full top-0 min-w-[180px] bg-acode-bg-secondary border border-acode-border-primary rounded-lg shadow-2xl py-1">
+              <div className="absolute left-full top-0 min-w-[180px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl py-1">
                 {item.items.map((sub, si) => {
-                  if (sub.type === "separator") return <div key={si} className="h-px bg-acode-border-primary my-1 mx-1" />;
+                  if (sub.type === "separator") return <div key={si} className="h-px bg-dalam-border-primary my-1 mx-1" />;
                   if (sub.type === "item") return (
                     <button key={si} disabled={sub.disabled} onClick={() => { sub.perform(); onClose(); }}
                       className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
                         sub.destructive
                           ? "text-red-400 hover:bg-red-500/10"
-                          : "text-acode-text-primary hover:bg-acode-accent-subtle"
+                          : "text-dalam-text-primary hover:bg-dalam-accent-subtle"
                       }`}
                     >
                       <span className="flex items-center gap-2">
                         {sub.icon && <span className="w-4 flex-shrink-0 flex justify-center">{sub.icon}</span>}
                         {sub.label}
                       </span>
-                      {sub.shortcut && <kbd className="text-[10px] text-acode-text-muted">{sub.shortcut}</kbd>}
+                      {sub.shortcut && <kbd className="text-[10px] text-dalam-text-muted">{sub.shortcut}</kbd>}
                     </button>
                   );
                   return null;
@@ -115,14 +115,14 @@ const ContextMenuPanel = ({ ref, state, onClose }: { ref: React.RefObject<HTMLDi
             className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
               item.destructive
                 ? "text-red-400 hover:bg-red-500/10"
-                : "text-acode-text-primary hover:bg-acode-accent-subtle"
+                : "text-dalam-text-primary hover:bg-dalam-accent-subtle"
             }`}
           >
             <span className="flex items-center gap-2">
               {item.icon && <span className="w-4 flex-shrink-0 flex justify-center">{item.icon}</span>}
               {item.label}
             </span>
-            {item.shortcut && <kbd className="text-[10px] text-acode-text-muted">{item.shortcut}</kbd>}
+            {item.shortcut && <kbd className="text-[10px] text-dalam-text-muted">{item.shortcut}</kbd>}
           </button>
         );
       })}

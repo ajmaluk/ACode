@@ -1,5 +1,5 @@
 /**
- * ACode Agent system — the centralized definition of all agents, their
+ * Dalam Agent system — the centralized definition of all agents, their
  * permissions, and their prompts.
  *
  * Every primary agent (build / plan / yolo) and every subagent
@@ -15,13 +15,13 @@ import type {
   PermissionRule,
   PermissionRuleset,
   PrimaryAgentName,
-} from "@acode/shared-types";
+} from "@dalam/shared-types";
 
 // ============================================================================
-// Permission ruleset helpers (mirror ACode's permission merge logic)
+// Permission ruleset helpers (mirror Dalam's permission merge logic)
 // ============================================================================
 
-/** Permission keys recognised by ACode's runtime. */
+/** Permission keys recognised by Dalam's runtime. */
 export const PERMISSIONS = [
   "*",
   "bash",
@@ -47,7 +47,7 @@ export type PermissionKey = (typeof PERMISSIONS)[number];
  *   { bash: "allow" }                                   // shorthand
  *   { bash: { "git status": "allow", "*": "ask" } }    // per-pattern
  *
- * Mirrors ACode's `Permission.fromConfig` helper.
+ * Mirrors Dalam's `Permission.fromConfig` helper.
  */
 export function fromConfig(config: Record<string, PermissionAction | Record<string, PermissionAction>>): PermissionRuleset {
   const rules: PermissionRuleset = [];
@@ -68,7 +68,7 @@ export function fromConfig(config: Record<string, PermissionAction | Record<stri
  * (permission, pattern) pair. Wildcard patterns override specific patterns
  * at the same permission level.
  *
- * Mirrors ACode's `Permission.merge` helper.
+ * Mirrors Dalam's `Permission.merge` helper.
  */
 export function mergeRulesets(...rulesets: PermissionRuleset[]): PermissionRuleset {
   const merged: PermissionRuleset = [];
@@ -218,12 +218,12 @@ export function isDangerousCommand(command: string): boolean {
 }
 
 // ============================================================================
-// Default permission ruleset (mirrors ACode's defaults)
+// Default permission ruleset (mirrors Dalam's defaults)
 // ============================================================================
 
 /**
- * The default ruleset that every ACode agent starts with. Mirrors
- * ACode's `defaults` from agent.ts.
+ * The default ruleset that every Dalam agent starts with. Mirrors
+ * Dalam's `defaults` from agent.ts.
  */
 export const DEFAULT_PERMISSIONS: PermissionRuleset = fromConfig({
   "*": "allow",
@@ -266,8 +266,8 @@ const PLAN_AGENT: AgentInfo = {
     fromConfig({
       question: "allow",
       plan_exit: "allow",
-      edit: { "*": "deny", ".acode/plans/*.md": "allow" },
-      write: { "*": "deny", ".acode/plans/*.md": "allow" },
+      edit: { "*": "deny", ".dalam/plans/*.md": "allow" },
+      write: { "*": "deny", ".dalam/plans/*.md": "allow" },
     })
   ),
 };
@@ -421,7 +421,7 @@ const STOP_WORDS = new Set([
 // Auto-Agent Selection — Evolver-inspired adaptive agent routing
 // ============================================================================
 
-const AGENT_SELECTION_KEY = "acode.agentSelectionHistory.v1";
+const AGENT_SELECTION_KEY = "dalam.agentSelectionHistory.v1";
 
 interface SelectionRecord {
   prompt: string;
@@ -434,7 +434,7 @@ function loadSelectionHistory(): SelectionRecord[] {
   try {
     const raw = localStorage.getItem(AGENT_SELECTION_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { /* ignore */ }
   return [];
 }
 

@@ -1,12 +1,12 @@
-import type { AcodeAPI, AgentSessionMode, AppSettings, DiffProposal, FileNode, StreamEvent } from "@acode/shared-types";
-import { DEFAULT_SETTINGS } from "@acode/shared-types";
+import type { DalamAPI, AgentSessionMode, AppSettings, DiffProposal, FileNode, StreamEvent } from "@dalam/shared-types";
+import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
 import { hookBus } from "./hookBus";
-import { loadGenePool, expressGenes, formatGenesForPrompt, type Gene } from "./genes";
+import { loadGenePool, expressGenes, formatGenesForPrompt } from "./genes";
 
 const STORAGE_KEYS = {
-  settings: "acode.settings.v1",
+  settings: "dalam.settings.v1",
 } as const;
 
 const activeControllers = new Map<string, AbortController>();
@@ -34,7 +34,7 @@ function dirname(p: string): string {
 
 export function getRecentFiles(): string[] {
   try {
-    const raw = localStorage.getItem("acode.recentFiles.v1");
+    const raw = localStorage.getItem("dalam.recentFiles.v1");
     return raw ? JSON.parse(raw) : [];
   } catch (_e) { return []; }
 }
@@ -42,7 +42,7 @@ export function getRecentFiles(): string[] {
 function addRecentFile(path: string) {
   const recent = getRecentFiles().filter((f) => f !== path);
   recent.unshift(path);
-  localStorage.setItem("acode.recentFiles.v1", JSON.stringify(recent.slice(0, 20)));
+  localStorage.setItem("dalam.recentFiles.v1", JSON.stringify(recent.slice(0, 20)));
 }
 
 function getStoredSettings(): AppSettings {
@@ -64,10 +64,10 @@ function storeSettings(s: AppSettings) {
 function getProviderConfig(providerId: string): { baseUrl: string; apiKey: string; apiFormat: string } | null {
   try {
     // Try individual provider config first (custom providers saved by saveProviders)
-    const raw = localStorage.getItem(`acode.provider.${providerId}`);
+    const raw = localStorage.getItem(`dalam.provider.${providerId}`);
     if (raw) return JSON.parse(raw);
     // Fall back to reading from the providers array
-    const providersRaw = localStorage.getItem("acode.providers.v1");
+    const providersRaw = localStorage.getItem("dalam.providers.v1");
     if (providersRaw) {
       const providers = JSON.parse(providersRaw);
       const provider = providers.find((p: any) => p.id === providerId);
@@ -398,11 +398,11 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
   });
 }
 
-export function ensureAcodeAPI(): AcodeAPI {
-  return mockAcodeAPI;
+export function ensureDalamAPI(): DalamAPI {
+  return mockDalamAPI;
 }
 
-const mockAcodeAPI: AcodeAPI = {
+const mockDalamAPI: DalamAPI = {
   fs: {
     async readFile(path) {
       const { readFile } = await import("@tauri-apps/plugin-fs");
@@ -608,7 +608,7 @@ const mockAcodeAPI: AcodeAPI = {
         let activeSkillPrompt = "";
         if (matched) {
           if (!matched.skill.content) {
-            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockAcodeAPI.fs.readFile });
+            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockDalamAPI.fs.readFile });
           }
           activeSkillPrompt = renderSkillForPrompt(matched.skill);
         }
@@ -656,11 +656,11 @@ const mockAcodeAPI: AcodeAPI = {
         if (workspacePath) {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
-            const memoryPath = joinPath(workspacePath, ".acode/memory.json");
+            const memoryPath = joinPath(workspacePath, ".dalam/memory.json");
             if (await exists(memoryPath)) {
-              const memoryContent = await mockAcodeAPI.fs.readFile(memoryPath);
+              const memoryContent = await mockDalamAPI.fs.readFile(memoryPath);
               const memoryObj = JSON.parse(memoryContent);
-              workspaceMemoryBlock = `\n\n=== PERSISTENT WORKSPACE MEMORY ===\nACode maintains a persistent memory file for this workspace at \`.acode/memory.json\`. You can modify this file using your edit/write file tools to remember key rules, paths, build commands, or context for future turns.\n\nCurrent Contents:\n- Project Overview: ${memoryObj.projectOverview || "Not specified."}\n- Key Files/Directories: ${JSON.stringify(memoryObj.keyFiles || [])}\n- Build/Test Commands: ${JSON.stringify(memoryObj.buildCommands || [])}\n- Learned Rules:\n${(memoryObj.learnedRules || []).map((r: string) => `  * ${r}`).join("\n")}\n===================================`;
+              workspaceMemoryBlock = `\n\n=== PERSISTENT WORKSPACE MEMORY ===\nDalam maintains a persistent memory file for this workspace at \`.dalam/memory.json\`. You can modify this file using your edit/write file tools to remember key rules, paths, build commands, or context for future turns.\n\nCurrent Contents:\n- Project Overview: ${memoryObj.projectOverview || "Not specified."}\n- Key Files/Directories: ${JSON.stringify(memoryObj.keyFiles || [])}\n- Build/Test Commands: ${JSON.stringify(memoryObj.buildCommands || [])}\n- Learned Rules:\n${(memoryObj.learnedRules || []).map((r: string) => `  * ${r}`).join("\n")}\n===================================`;
             }
           } catch (e) { console.warn("Failed to load workspace memory:", e); }
         }
@@ -695,9 +695,9 @@ const mockAcodeAPI: AcodeAPI = {
         if (workspacePath) {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
-            const contextPath = joinPath(workspacePath, ".acode/context.json");
+            const contextPath = joinPath(workspacePath, ".dalam/context.json");
             if (await exists(contextPath)) {
-              const contextContent = await mockAcodeAPI.fs.readFile(contextPath);
+              const contextContent = await mockDalamAPI.fs.readFile(contextPath);
               const contextObj = JSON.parse(contextContent);
               if (contextObj.pinnedFiles && contextObj.pinnedFiles.length > 0) {
                 let pinnedBlock = "\n\n=== PINNED FILES ===\nThe following files are pinned in your context. You should keep their contents in mind:\n";
@@ -705,7 +705,7 @@ const mockAcodeAPI: AcodeAPI = {
                   try {
                     const fullPath = joinPath(workspacePath, filePath);
                     if (await exists(fullPath)) {
-                      const fileContent = await mockAcodeAPI.fs.readFile(fullPath);
+                      const fileContent = await mockDalamAPI.fs.readFile(fullPath);
                       pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${fileContent}\n`;
                     }
                   } catch (e) { console.warn(`Failed to read pinned file ${filePath}:`, e); }
@@ -723,7 +723,7 @@ const mockAcodeAPI: AcodeAPI = {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
             const instructions = await loadInstructions(workspacePath, {
-              readFile: mockAcodeAPI.fs.readFile,
+              readFile: mockDalamAPI.fs.readFile,
               exists: async (p: string) => exists(p),
               getHomeDir: async () => {
                 const { homeDir } = await import("@tauri-apps/api/path");
@@ -847,12 +847,12 @@ You are equipped with tools to interact with the workspace and operating system.
 
 22. Export Memories:
     <memory_export/>
-    Exports all memories to markdown files in .acode/memories/ for git sharing.
+    Exports all memories to markdown files in .dalam/memories/ for git sharing.
     Teammates can import these files when they clone the repo.
 
 23. Import Memories:
     <memory_import/>
-    Imports memories from markdown files in .acode/memories/ into the SQLite cache.
+    Imports memories from markdown files in .dalam/memories/ into the SQLite cache.
     Use after cloning a repo to restore shared memories.
 
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
@@ -866,10 +866,10 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const genesPrompt = formatGenesForPrompt(activeGenes);
 
         const systemPrompt = (agentName === "plan"
-          ? "You are ACode in Plan mode. You are a read-only analysis agent. Explore the codebase, understand the task, and produce a clear, actionable plan. Do NOT edit, write, or delete any files. Do NOT run shell commands that modify files. You may read files and search the codebase. When your plan is complete, write it to .acode/plans/ directory as a markdown file, then end your response with exactly: [PLAN_COMPLETE] — this signals the user to review and approve."
+          ? "You are Dalam in Plan mode. You are a read-only analysis agent. Explore the codebase, understand the task, and produce a clear, actionable plan. Do NOT edit, write, or delete any files. Do NOT run shell commands that modify files. You may read files and search the codebase. When your plan is complete, write it to .dalam/plans/ directory as a markdown file, then end your response with exactly: [PLAN_COMPLETE] — this signals the user to review and approve."
           : agentName === "yolo"
-            ? "You are ACode in YOLO mode. You have FULL unrestricted access — read, write, execute anything without asking. Be efficient and direct. Execute tasks without seeking permission."
-            : "You are ACode, an AI coding assistant. Help users write, debug, and understand code. Be concise and practical. When showing code, use markdown code blocks with the appropriate language. Always ask the user before executing shell commands or making file changes.")
+            ? "You are Dalam in YOLO mode. You have FULL unrestricted access — read, write, execute anything without asking. Be efficient and direct. Execute tasks without seeking permission."
+            : "You are Dalam, an AI coding assistant. Help users write, debug, and understand code. Be concise and practical. When showing code, use markdown code blocks with the appropriate language. Always ask the user before executing shell commands or making file changes.")
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -919,7 +919,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         let cleanPrompt = prompt;
         if (matched) {
           if (!matched.skill.content) {
-            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockAcodeAPI.fs.readFile });
+            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockDalamAPI.fs.readFile });
           }
           const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
           cleanPrompt = prompt.replace(regex, "").trim();
@@ -1261,7 +1261,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       if (pending) {
         pendingDiffProposals.delete(diffId);
         // Write the file now that the user approved the diff
-        await mockAcodeAPI.fs.writeFile(pending.filePath, pending.newContent);
+        await mockDalamAPI.fs.writeFile(pending.filePath, pending.newContent);
         const cb = streamCallbacks.get(sessionId);
         if (cb) {
           cb({
@@ -1746,7 +1746,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
       toolCalls.push({ name: fullName, args, raw: rawTag });
     } else {
       const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const closeTagName = `<\/mcp_${escapeRegex(serverName)}_${escapeRegex(toolName)}>`;
+      const closeTagName = `</mcp_${escapeRegex(serverName)}_${escapeRegex(toolName)}>`;
       const closeRegex = new RegExp(closeTagName, "i");
       const subText = text.slice(mcpMatch.index);
       const closeMatch = closeRegex.exec(subText);
@@ -1932,13 +1932,9 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     if (!original.includes(args.search)) {
       throw new Error(`Search block not found in file: ${args.path}`);
     }
-    let updated = original;
-    if (args.search) {
-      // Replace all occurrences
-      updated = original.split(args.search).join(args.replace);
-    } else {
-      updated = original;
-    }
+    const updated = args.search
+      ? original.split(args.search).join(args.replace)
+      : original;
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
     const oldLines = args.search.split("\n");
     const newLines = args.replace.split("\n");
@@ -1960,7 +1956,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "list_dir") {
-    const nodes = await mockAcodeAPI.fs.listDir(args.path);
+    const nodes = await mockDalamAPI.fs.listDir(args.path);
     return JSON.stringify(nodes.map(n => ({ name: n.name, path: n.path, type: n.type })), null, 2);
   }
 
@@ -2092,52 +2088,52 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "git_status") {
-    const status = await mockAcodeAPI.git.status(workspacePath);
+    const status = await mockDalamAPI.git.status(workspacePath);
     return JSON.stringify(status, null, 2);
   }
 
   if (name === "git_commit") {
-    const result = await mockAcodeAPI.git.commit(workspacePath, args.message);
+    const result = await mockDalamAPI.git.commit(workspacePath, args.message);
     return `Committed successfully. SHA: ${result.sha}`;
   }
 
   if (name === "git_log") {
-    const log = await mockAcodeAPI.git.log(workspacePath, 10);
+    const log = await mockDalamAPI.git.log(workspacePath, 10);
     return JSON.stringify(log, null, 2);
   }
 
   if (name === "clipboard_read") {
-    return await mockAcodeAPI.system.clipboardReadText();
+    return await mockDalamAPI.system.clipboardReadText();
   }
 
   if (name === "clipboard_write") {
-    await mockAcodeAPI.system.clipboardWriteText(args.text);
+    await mockDalamAPI.system.clipboardWriteText(args.text);
     return "Clipboard written successfully.";
   }
 
   if (name === "notify") {
-    await mockAcodeAPI.system.notify({ title: args.title, body: args.body });
+    await mockDalamAPI.system.notify({ title: args.title, body: args.body });
     return `Notification sent: ${args.title}`;
   }
 
   if (name === "system_info") {
-    const info = await mockAcodeAPI.system.getSystemInfo();
+    const info = await mockDalamAPI.system.getSystemInfo();
     return JSON.stringify(info, null, 2);
   }
 
   if (name === "open_url") {
-    await mockAcodeAPI.system.openLink(args.url);
+    await mockDalamAPI.system.openLink(args.url);
     return `Opened URL: ${args.url}`;
   }
 
   if (name === "launch_app") {
     const appArgs = args.args ? args.args.split(/\s+/).filter(Boolean) : undefined;
-    const result = await mockAcodeAPI.system.launchApp(args.name, appArgs, args.cwd || workspacePath);
+    const result = await mockDalamAPI.system.launchApp(args.name, appArgs, args.cwd || workspacePath);
     return result || `Launched app: ${args.name}`;
   }
 
   if (name === "reveal_in_finder") {
-    await mockAcodeAPI.system.revealInFinder(args.path);
+    await mockDalamAPI.system.revealInFinder(args.path);
     return `Revealed in Finder: ${args.path}`;
   }
 
@@ -2215,13 +2211,13 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   if (name === "memory_export") {
     const { exportMemories } = await import("./memoryStore");
     const count = await exportMemories(workspacePath);
-    return `Exported ${count} memories to .acode/memories/ as markdown files. Ready for git commit.`;
+    return `Exported ${count} memories to .dalam/memories/ as markdown files. Ready for git commit.`;
   }
 
   if (name === "memory_import") {
     const { importMemories } = await import("./memoryStore");
     const count = await importMemories(workspacePath);
-    return `Imported ${count} memories from .acode/memories/ markdown files into SQLite cache.`;
+    return `Imported ${count} memories from .dalam/memories/ markdown files into SQLite cache.`;
   }
 
   if (name === "memory_extract") {
@@ -2349,7 +2345,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
         const initResp = await corsFetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ACode", version: "1.0.0" } }, id: 1 }),
+          body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: 1 }),
         });
         if (!initResp.ok) throw new Error(`HTTP ${initResp.status} during MCP initialize`);
         const initJson = await initResp.json();
@@ -2438,7 +2434,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
           const initReq = JSON.stringify({
             jsonrpc: "2.0",
             method: "initialize",
-            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "ACode", version: "1.0.0" } },
+            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } },
             id: 1,
           }) + "\n";
           await child.write(initReq);
@@ -2466,7 +2462,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
         return await resultPromise;
       } catch (err) {
         const errMsg = (err as Error)?.message ?? String(err);
-        throw new Error(`MCP tool "${toolName}" on server "${serverName}" failed: ${errMsg}`);
+        throw new Error(`MCP tool "${toolName}" on server "${serverName}" failed: ${errMsg}`, { cause: err });
       }
     }
   }

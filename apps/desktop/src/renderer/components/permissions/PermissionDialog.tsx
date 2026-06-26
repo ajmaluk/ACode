@@ -28,6 +28,7 @@ export function PermissionDialog() {
 
   useEffect(() => {
     if (request) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelected(0);
       selectedRef.current = 0;
     }
@@ -84,33 +85,33 @@ export function PermissionDialog() {
         onKeyDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-acode-border-primary">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-dalam-border-primary">
           <div className="flex items-center gap-2">
-            <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-acode-bg-tertiary text-acode-text-primary border border-acode-border-primary">
+            <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-dalam-bg-tertiary text-dalam-text-primary border border-dalam-border-primary">
               {request.title}
             </span>
-            <span className="text-sm text-acode-text-secondary">command permission required</span>
+            <span className="text-sm text-dalam-text-secondary">command permission required</span>
           </div>
         </div>
 
         {/* Body */}
         <div className="px-4 py-4 space-y-3">
           {request.description && (
-            <p className="text-sm text-acode-text-primary">{request.description}</p>
+            <p className="text-sm text-dalam-text-primary">{request.description}</p>
           )}
 
           {request.kind === "bash" && (
-            <div className="flex items-center gap-2 text-xs text-acode-text-muted">
+            <div className="flex items-center gap-2 text-xs text-dalam-text-muted">
               <Terminal className="w-3.5 h-3.5" />
               <span>Awaiting approval</span>
             </div>
           )}
 
           {request.command && (
-            <div className="bg-acode-bg-primary border border-acode-border-primary rounded-lg p-3 font-mono text-[12.5px] text-acode-text-primary overflow-x-auto scrollbar-thin">
+            <div className="bg-dalam-bg-primary border border-dalam-border-primary rounded-lg p-3 font-mono text-[12.5px] text-dalam-text-primary overflow-x-auto scrollbar-thin">
               <div className="whitespace-pre-wrap break-words">{request.command}</div>
               {request.output !== undefined && (
-                <div className="mt-2 pt-2 border-t border-acode-border-primary text-acode-text-muted">
+                <div className="mt-2 pt-2 border-t border-dalam-border-primary text-dalam-text-muted">
                   {request.output || "No output."}
                 </div>
               )}
@@ -128,14 +129,14 @@ export function PermissionDialog() {
                   onClick={() => decide(idx)}
                   onMouseEnter={() => { setSelected(idx); selectedRef.current = idx; }}
                   className={`w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-3 transition-colors ${
-                    active ? "bg-acode-bg-hover border border-acode-border-primary" : "border border-transparent hover:bg-acode-bg-hover/50"
+                    active ? "bg-dalam-bg-hover border border-dalam-border-primary" : "border border-transparent hover:bg-dalam-bg-hover/50"
                   }`}
                 >
-                  <span className="text-xs text-acode-text-muted w-4 text-center mt-0.5">{idx + 1}.</span>
-                  <Icon className={`w-4 h-4 flex-shrink-0 ${opt.key === "deny" ? "text-acode-git-deleted" : opt.key === "always" ? "text-acode-git-added" : "text-acode-accent-primary"}`} />
+                  <span className="text-xs text-dalam-text-muted w-4 text-center mt-0.5">{idx + 1}.</span>
+                  <Icon className={`w-4 h-4 flex-shrink-0 ${opt.key === "deny" ? "text-dalam-git-deleted" : opt.key === "always" ? "text-dalam-git-added" : "text-dalam-accent-primary"}`} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-acode-text-primary font-medium">{opt.label}</div>
-                    <div className="text-xs text-acode-text-muted">{opt.sub}</div>
+                    <div className="text-sm text-dalam-text-primary font-medium">{opt.label}</div>
+                    <div className="text-xs text-dalam-text-muted">{opt.sub}</div>
                   </div>
                 </button>
               );
@@ -144,14 +145,14 @@ export function PermissionDialog() {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-acode-border-primary">
-          <div className="flex items-center gap-1.5 text-[11px] text-acode-text-muted">
+        <div className="flex items-center justify-between px-4 py-3 border-t border-dalam-border-primary">
+          <div className="flex items-center gap-1.5 text-[11px] text-dalam-text-muted">
             <AlertCircle className="w-3 h-3" />
             Use Tab / arrow keys to choose, then press Enter to confirm
           </div>
           <button
             onClick={() => decide(selected)}
-            className="px-3 py-1.5 text-xs rounded-md bg-acode-text-primary text-acode-bg-primary hover:opacity-90 transition-opacity font-medium"
+            className="px-3 py-1.5 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
           >
             Confirm {options[selected].label}
           </button>

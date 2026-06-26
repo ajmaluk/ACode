@@ -14,7 +14,7 @@
  * - Auto-archive agents unused for 7+ days
  */
 
-import type { PrimaryAgentName } from "@acode/shared-types";
+import type { PrimaryAgentName } from "@dalam/shared-types"; // eslint-disable-line @typescript-eslint/no-unused-vars
 
 export interface AgentDna {
   id: string;
@@ -31,11 +31,11 @@ export interface AgentDna {
   archived: boolean;
 }
 
-const MAX_AGENTS = 15;
+const MAX_AGENTS = 15; // eslint-disable-line @typescript-eslint/no-unused-vars
 const REPRODUCTION_THRESHOLD = 12;
 const MATURITY_SESSIONS = 5;
 const ARCHIVE_DAYS = 7;
-const AGENT_DNA_KEY = "acode.agentDna.v1";
+const AGENT_DNA_KEY = "dalam.agentDna.v1";
 
 /**
  * Load all agent DNA from storage.
@@ -44,7 +44,7 @@ export function loadAgentDna(): AgentDna[] {
   try {
     const raw = localStorage.getItem(AGENT_DNA_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch { /* ignore */ }
   return [];
 }
 

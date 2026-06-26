@@ -1,5 +1,5 @@
 /**
- * ACode Line Diff Engine — Myers' Algorithm
+ * Dalam Line Diff Engine — Myers' Algorithm
  *
  * Implements Myers' diff algorithm (O(ND)) which is significantly faster
  * than the naive O(m*n) LCS approach for typical code changes.

@@ -1,12 +1,12 @@
 /**
  * ============================================================
- * ACODE DATABASE — SQLite + FTS5 via @tauri-apps/plugin-sql
+ * DALAM DATABASE — SQLite + FTS5 via @tauri-apps/plugin-sql
  * ============================================================
  *
  * Initializes two logical databases:
- *   - project.db  — persistent, per-workspace (.acode/project.db)
+ *   - project.db  — persistent, per-workspace (.dalam/project.db)
  *     Stores memories with FTS5 full-text search index.
- *     Source of truth lives in .acode/memories/*.md (git-friendly).
+ *     Source of truth lives in .dalam/memories/*.md (git-friendly).
  *     project.db is a local cache rebuilt from markdown on loss.
  *
  * Schema:
@@ -20,7 +20,7 @@
  * ============================================================
  */
 
-import { joinPath } from "@/lib/pathUtils";
+import { joinPath } from "@/lib/pathUtils"; // eslint-disable-line @typescript-eslint/no-unused-vars
 
 let dbInstance: any = null;
 let currentWorkspacePath: string | null = null;
@@ -66,7 +66,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  * Creates tables and FTS5 indexes if they don't exist.
  * Returns the Database instance for queries.
  *
- * The database file is stored at <workspacePath>/.acode/project.db.
+ * The database file is stored at <workspacePath>/.dalam/project.db.
  * This file should be gitignored — it's a local cache.
  */
 export async function initDatabase(workspacePath: string): Promise<any> {
@@ -89,14 +89,14 @@ export async function initDatabase(workspacePath: string): Promise<any> {
   }
 
   const absPath = workspacePath.startsWith("/") ? workspacePath : `/${workspacePath}`;
-  const dbPath = `sqlite:${absPath}/.acode/project.db`;
+  const dbPath = `sqlite:${absPath}/.dalam/project.db`;
 
-  // Ensure .acode directory exists before opening database
+  // Ensure .dalam directory exists before opening database
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    const dotAcode = absPath + "/.acode";
-    if (!(await exists(dotAcode))) {
-      await mkdir(dotAcode, { recursive: true });
+    const dotDalam = absPath + "/.dalam";
+    if (!(await exists(dotDalam))) {
+      await mkdir(dotDalam, { recursive: true });
     }
   } catch {
     // mkdir may fail if already exists or permissions — proceed anyway
