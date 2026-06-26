@@ -149,10 +149,12 @@ function StreamingActivityPanel({
             const status = isRunning ? "running" : isCompleted ? "completed" : isFailed ? "failed" : undefined;
 
             const target = (() => {
-              if (typeof tc.args.path === "string") return tc.args.path;
-              if (typeof tc.args.command === "string") return `$ ${tc.args.command}`;
-              if (typeof tc.args.query === "string") return tc.args.query;
-              if (typeof tc.args.pattern === "string") return tc.args.pattern;
+              const args = tc.args as Record<string, any> | undefined;
+              if (!args) return "";
+              if (typeof args.path === "string") return args.path;
+              if (typeof args.command === "string") return `$ ${args.command}`;
+              if (typeof args.query === "string") return args.query;
+              if (typeof args.pattern === "string") return args.pattern;
               return "";
             })();
 

@@ -38,7 +38,7 @@ export function QuestionDialog() {
         if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
           e.preventDefault();
           focusedInputRef.current = false;
-          selectedRef.current = request.options.length - 1;
+          selectedRef.current = request.options.length > 0 ? request.options.length - 1 : 0;
           setSelected(selectedRef.current);
           inputRef.current?.blur();
           containerRef.current?.focus();
@@ -73,7 +73,7 @@ export function QuestionDialog() {
         setSelected(selectedRef.current);
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        if (selectedRef.current < request.options.length) {
+        if (selectedRef.current >= 0 && selectedRef.current < request.options.length) {
           resolve({ selectedLabel: request.options[selectedRef.current].label });
         }
       }

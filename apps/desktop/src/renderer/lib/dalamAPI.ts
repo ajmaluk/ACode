@@ -945,20 +945,29 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const workspacePath = liveSession?.workspacePath ?? "";
 
         // Build messages from LIVE currentHistory (not pre-loop snapshot)
+        // Token-budget-aware: estimates ~4 chars per token, caps at 80K tokens for conversation
         function buildMessages(): any[] {
-          const windowed = currentHistory.filter((m: any) => m.role !== "system").slice(-20);
-          const msgs: any[] = [{ role: "system", content: systemPrompt }];
-          if (compactionSummary && windowed.length > 10) {
-            msgs.push({ role: "system", content: `[COMPACTED HISTORY]\n${compactionSummary}\n` });
-            for (const m of windowed.slice(-6)) {
-              msgs.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
-            }
-          } else {
-            for (const m of windowed) {
-              msgs.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
-            }
+          const MAX_CHARS = 80000 * 4; // ~80K tokens worth of characters
+          const allMsgs = currentHistory.filter((m: any) => m.role !== "system");
+          // Always include the last message; work backward from there
+          const msgs: any[] = [];
+          let charCount = 0;
+          for (let i = allMsgs.length - 1; i >= 0; i--) {
+            const m = allMsgs[i];
+            const contentLen = typeof m.content === "string" ? m.content.length : 0;
+            if (charCount + contentLen > MAX_CHARS && msgs.length >= 2) break;
+            charCount += contentLen;
+            msgs.unshift(m);
           }
-          return msgs;
+
+          const result: any[] = [{ role: "system", content: systemPrompt }];
+          if (compactionSummary && allMsgs.length > 10) {
+            result.push({ role: "system", content: `[COMPACTED HISTORY]\n${compactionSummary}\n` });
+          }
+          for (const m of msgs) {
+            result.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
+          }
+          return result;
         }
 
         function rateLimitDelay(): Promise<void> {
@@ -1045,7 +1054,16 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           // Parse tool calls from cleaned text (code-block-stripped but tool calls extracted first)
           const parsedToolsFromText = await parseToolCalls(safeTextForParsing);
           // Merge: code block tool calls take priority (they're more explicit), then text-parsed ones
-          const parsedTools = [...parsedFromCodeBlocks, ...parsedToolsFromText];
+          // Deduplicate: if the same tool+args appears in both, keep only the code-block version
+          const parsedTools = [...parsedFromCodeBlocks];
+          const codeBlockKeys = new Set(parsedFromCodeBlocks.map((t) => `${t.name}:${JSON.stringify(t.args)}`));
+          for (const tc of parsedToolsFromText) {
+            const key = `${tc.name}:${JSON.stringify(tc.args)}`;
+            if (!codeBlockKeys.has(key)) {
+              parsedTools.push(tc);
+              codeBlockKeys.add(key);
+            }
+          }
 
           // FIX: Single parse pass for display content — strip all tool tags
           const TOOL_TAG_RE = /<(?:read_file|write_file|edit_file|list_dir|grep_file|search_files|run_command|git_status|git_commit|git_log|clipboard_read|clipboard_write|notify|system_info|open_url|launch_app|reveal_in_finder|get_env|get_screen_info|list_processes|kill_process|get_disk_space|memory_save|memory_search|memory_delete|memory_stats|memory_maintain|memory_extract|memory_export|memory_import|mcp_[\w_]+)[\s\S]*?(?:\/>|<\/[\w_]+>)/g;
@@ -1085,7 +1103,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 break;
               }
-              const decision = await waitForToolApproval(tc.id);
+              const decision = await waitForToolApproval(tc.id, ac.signal);
               if (ac.signal.aborted) {
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 break;
@@ -1140,6 +1158,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           break;
         }
 
+        // If loop exhausted all iterations without break, emit message-end
+        if (loopCount >= MAX_LOOP_HARD) {
+          emit({ type: "message-end", messageId: sessionId });
+        }
+
         // Hook: Stop (after loop exits)
         await hookBus.emit("Stop", {
           sessionId,
@@ -1177,6 +1200,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           });
         } else if ((err as Error)?.name === "AbortError") {
           emit({ type: "message-end", messageId: sessionId });
+          await hookBus.emit("SessionEnd", {
+            sessionId,
+            reason: "aborted",
+            messageCount,
+            durationMs: Date.now() - startTime,
+            timestamp: Date.now(),
+          });
         } else {
           emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
           emit({ type: "message-end", messageId: sessionId });
@@ -1200,6 +1230,14 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         mcpHttpSessions.delete(sessionId);
         // Clean up pending diff proposals
         pendingDiffProposals.delete(sessionId);
+        // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
+        try {
+          const { useChat } = await import("../store/useAppStore");
+          const state = useChat.getState();
+          if (state.isStreaming && state.activeSessionId === sessionId) {
+            useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
+          }
+        } catch { /* store not available */ }
       }
 
     },
@@ -1832,17 +1870,21 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   return toolCalls;
 }
 
-function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied"> {
+function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Promise<"approved" | "denied"> {
   const TIMEOUT_MS = 5 * 60 * 1000;
   return new Promise((resolve) => {
     let resolved = false;
     let unsubscribe: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let abortHandler: (() => void) | null = null;
     let useChatRef: any = null;
 
     const cleanup = () => {
       if (timer) { clearTimeout(timer); timer = null; }
       unsubscribe?.();
+      if (abortHandler && abortSignal) {
+        abortSignal.removeEventListener("abort", abortHandler);
+      }
     };
 
     const check = () => {
@@ -1867,6 +1909,23 @@ function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied">
         console.error("Error checking tool approval:", err);
       }
     };
+
+    // Listen for abort signal to resolve immediately
+    if (abortSignal) {
+      abortHandler = () => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve("denied");
+        }
+      };
+      if (abortSignal.aborted) {
+        resolved = true;
+        resolve("denied");
+        return;
+      }
+      abortSignal.addEventListener("abort", abortHandler, { once: true });
+    }
 
     timer = setTimeout(() => {
       if (!resolved) {
@@ -1954,6 +2013,9 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "write_file") {
+    if (typeof args.content !== "string") {
+      return "Error: write_file requires a 'content' argument (string)";
+    }
     const { writeFile, readFile: fsReadFile } = await import("@tauri-apps/plugin-fs");
     let oldContent = "";
     try {
@@ -1980,6 +2042,12 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "edit_file") {
+    if (typeof args.search !== "string") {
+      return "Error: edit_file requires a 'search' argument (string)";
+    }
+    if (typeof args.replace !== "string") {
+      return "Error: edit_file requires a 'replace' argument (string)";
+    }
     const { readFile, writeFile } = await import("@tauri-apps/plugin-fs");
     const bytes = await readFile(args.path);
     const original = new TextDecoder().decode(bytes);
@@ -2340,19 +2408,19 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "get_env") {
-    return "get_env tool is not yet implemented";
+    throw new Error("get_env tool is not yet implemented");
   }
   if (name === "get_screen_info") {
-    return "get_screen_info tool is not yet implemented";
+    throw new Error("get_screen_info tool is not yet implemented");
   }
   if (name === "list_processes") {
-    return "list_processes tool is not yet implemented";
+    throw new Error("list_processes tool is not yet implemented");
   }
   if (name === "kill_process") {
-    return "kill_process tool is not yet implemented";
+    throw new Error("kill_process tool is not yet implemented");
   }
   if (name === "get_disk_space") {
-    return "get_disk_space tool is not yet implemented";
+    throw new Error("get_disk_space tool is not yet implemented");
   }
 
   if (name.startsWith("mcp_")) {

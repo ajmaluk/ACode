@@ -59,9 +59,9 @@ const TAG_TO_TOOL: Record<string, string> = {
 };
 
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
-const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file"]);
-const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files"]);
+const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
+const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "clipboard_read", "system_info", "memory_search", "memory_stats"]);
 
 interface ParsedXmlToolCall {
   toolCall: import("@dalam/shared-types").ToolCall;
@@ -1329,6 +1329,8 @@ export const useChat = create<ChatState>((set, get) => ({
         console.error("Failed to start session:", err);
         return;
       }
+      // Re-check isStreaming after await to prevent race condition with concurrent sendMessage calls
+      if (get().isStreaming) return;
       session = get().session;
       if (!session) return;
     }
@@ -1450,10 +1452,9 @@ export const useChat = create<ChatState>((set, get) => ({
           streamingContent: "",
           thinkingContent: "",
           pendingActivities: [],
-          todos: [],
           _pendingChanges: [],
-          // Don't clear taskPlan here — it persists across turns within a session
-          // It's only cleared when starting a completely new chat
+          // Don't clear taskPlan or todos here — they persist across turns within a session
+          // They're only cleared when starting a completely new chat
           ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
           isStreaming: true,
         });
@@ -2265,31 +2266,31 @@ export const useChat = create<ChatState>((set, get) => ({
 
       // Use context manager to determine what to compact
       const stats = computeContextStats(messages, maxContext);
-      if (!stats.needsCompaction) return;
+      if (stats.needsCompaction) {
+        // Prune old tool outputs before summarization to reduce input size
+        const activeMessages = stats.shouldPrune
+          ? pruneToolOutputs(messages).pruned
+          : messages;
 
-      // Prune old tool outputs before summarization to reduce input size
-      const activeMessages = stats.shouldPrune
-        ? pruneToolOutputs(messages).pruned
-        : messages;
+        const { toCompact } = selectMessagesForCompaction(activeMessages, 6);
+        if (toCompact.length > 0) {
+          const api = createDalamAPI();
+          const previousSummary = compactionSummaries[sessionId];
 
-      const { toCompact } = selectMessagesForCompaction(activeMessages, 6);
-      if (toCompact.length === 0) return;
+          // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
+          // Pass raw ChatMessage[] directly — buildCompactionPrompt handles role mapping internally
+          const compactionMessages = buildCompactionPrompt(toCompact, previousSummary);
 
-      const api = createDalamAPI();
-      const previousSummary = compactionSummaries[sessionId];
-
-      // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
-      // Pass raw ChatMessage[] directly — buildCompactionPrompt handles role mapping internally
-      const compactionMessages = buildCompactionPrompt(toCompact, previousSummary);
-
-      const model = selectedModelId || useSettings.getState().settings.selectedModel;
-      const summary = await api.agent.summarizeMessages(model, compactionMessages);
-      if (summary) {
-        set((s) => {
-          const next = { ...s.compactionSummaries, [sessionId]: summary };
-          savePersistedCompactionSummaries(next);
-          return { compactionSummaries: next };
-        });
+          const model = selectedModelId || useSettings.getState().settings.selectedModel;
+          const summary = await api.agent.summarizeMessages(model, compactionMessages);
+          if (summary) {
+            set((s) => {
+              const next = { ...s.compactionSummaries, [sessionId]: summary };
+              savePersistedCompactionSummaries(next);
+              return { compactionSummaries: next };
+            });
+          }
+        }
       }
     } catch (e) {
       console.warn("Background compaction failed:", e);
@@ -3087,6 +3088,13 @@ function deriveTitleFromUrl(url: string): string {
 function normalizeBrowserUrl(input: string): string | null {
   const raw = input.trim();
   if (!raw) return "";
+  // SSRF protection: check private/internal addresses even for protocol-prefixed URLs
+  const privatePatterns = [
+    /^https?:\/\/(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|::1|\[::1\])/i,
+    /^https?:\/\/metadata\.google\.internal/i,
+    /^https?:\/\/instance-data\.local/i,
+  ];
+  if (privatePatterns.some((p) => p.test(raw))) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
   if (/^(localhost|127\.|10\.|192\.168\.|::1)/i.test(raw)) return "http://" + raw;
   if (/\s/.test(raw)) return "https://www.google.com/search?q=" + encodeURIComponent(raw);
@@ -3106,14 +3114,14 @@ function normalizeBrowserUrl(input: string): string | null {
   if (/^[\w-]+$/.test(host)) return "https://" + host + ".com" + tail;
   if (host.includes(".")) return "https://" + raw.replace(/^https?:\/\//i, "");
 
-  // Block SSRF-like patterns
+  // SSRF protection: check private/internal addresses without protocol
   const hostname = host || raw;
-  const privatePatterns = [
+  const privatePatternsNoProto = [
     /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./,
     /^169\.254\./, /^0\./, /^localhost$/i, /^::1$/, /^\[::1\]$/,
     /^metadata\.google\.internal$/i, /^instance-data\.local$/i,
   ];
-  if (privatePatterns.some(p => p.test(hostname))) {
+  if (privatePatternsNoProto.some(p => p.test(hostname))) {
     return null; // Block private/metadata addresses
   }
 
