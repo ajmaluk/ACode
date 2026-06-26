@@ -1033,16 +1033,23 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             emit(event);
           }
 
-          // FIX 7: Strip code blocks before parsing to prevent false MCP/tool matches
-          const safeTextForParsing = fullContent.replace(/```[\s\S]*?```/g, "[code block]").replace(/`[^`]+`/g, "[code]");
           totalFullContent += fullContent;
 
-          // FIX 4: Single parse pass — both display content and tool list from same source
+          // FIX: Extract tool calls from code blocks FIRST, then strip code blocks.
+          // Previously, code block stripping replaced tool calls with "[code block]"
+          // before they could be parsed, causing LLMs like Llama 3.3 to get stuck.
+          const parsedFromCodeBlocks = extractToolCallsFromCodeBlocks(fullContent);
+          const cleanedFromCodeBlocks = fullContent.replace(/```[\s\S]*?```/g, "").replace(/`[^`]+`/g, "");
+          const safeTextForParsing = cleanedFromCodeBlocks;
+
+          // Parse tool calls from cleaned text (code-block-stripped but tool calls extracted first)
+          const parsedToolsFromText = await parseToolCalls(safeTextForParsing);
+          // Merge: code block tool calls take priority (they're more explicit), then text-parsed ones
+          const parsedTools = [...parsedFromCodeBlocks, ...parsedToolsFromText];
+
+          // FIX: Single parse pass for display content — strip all tool tags
           const TOOL_TAG_RE = /<(?:read_file|write_file|edit_file|list_dir|grep_file|search_files|run_command|git_status|git_commit|git_log|clipboard_read|clipboard_write|notify|system_info|open_url|launch_app|reveal_in_finder|get_env|get_screen_info|list_processes|kill_process|get_disk_space|memory_save|memory_search|memory_delete|memory_stats|memory_maintain|memory_extract|memory_export|memory_import|mcp_[\w_]+)[\s\S]*?(?:\/>|<\/[\w_]+>)/g;
           const displayContent = safeTextForParsing.replace(TOOL_TAG_RE, "").replace(/\n{3,}/g, "\n\n").trim();
-
-          // Parse tool calls from safe text (code-block-stripped)
-          const parsedTools = await parseToolCalls(safeTextForParsing);
 
           // Emit display content if non-empty
           if (displayContent) {
@@ -1475,11 +1482,58 @@ function parseAttributes(tagStr: string): Record<string, string> {
   return attrs;
 }
 
+/**
+ * Extract tool calls from markdown code blocks.
+ * LLMs like Llama 3.3 70B often wrap tool calls in ```xml or ``` tags.
+ * Previously, code block stripping replaced these with "[code block]"
+ * before they could be parsed, causing the agent to get stuck.
+ */
+const KNOWN_TOOL_NAMES = new Set([
+  "read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files",
+  "run_command", "git_status", "git_commit", "git_log",
+  "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
+  "launch_app", "reveal_in_finder",
+  "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
+  "memory_save", "memory_search", "memory_delete", "memory_stats",
+  "memory_maintain", "memory_extract", "memory_export", "memory_import",
+]);
+
+function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
+  const toolCalls: ParsedToolCall[] = [];
+  const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+  let blockMatch;
+  while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
+    const blockContent = blockMatch[1];
+    // Extract all XML-like tool tags from inside the code block
+    const tagRegex = /<([a-zA-Z_][a-zA-Z0-9_-]*)(\s[^>]*)?\/?>/gi;
+    let tagMatch;
+    while ((tagMatch = tagRegex.exec(blockContent)) !== null) {
+      const tagName = tagMatch[1];
+      if (!KNOWN_TOOL_NAMES.has(tagName) && !tagName.startsWith("mcp_")) continue;
+      const attrsStr = tagMatch[2] || "";
+      const args = parseAttributes(attrsStr);
+      // For non-self-closing tags, extract content between open and close
+      const fullTag = tagMatch[0];
+      const isSelfClosing = fullTag.endsWith("/>");
+      if (!isSelfClosing) {
+        const closeTag = `</${tagName}>`;
+        const closeIdx = blockContent.indexOf(closeTag, tagMatch.index + fullTag.length);
+        if (closeIdx !== -1) {
+          const innerContent = blockContent.slice(tagMatch.index + fullTag.length, closeIdx).trim();
+          if (innerContent) args["content"] = innerContent;
+        }
+      }
+      toolCalls.push({ name: tagName, args, raw: fullTag });
+    }
+  }
+  return toolCalls;
+}
+
 async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   const toolCalls: ParsedToolCall[] = [];
 
-  // 1. read_file
-  const readFileRegex = /<read_file\s+path=["']([^"']+)["']\s*\/>/gi;
+  // 1. read_file — handle both self-closing <read_file path="..."/> and <read_file path="..."></read_file>
+  const readFileRegex = /<read_file\s+path=["']([^"']+)["']\s*\/?>/gi;
   let match;
   while ((match = readFileRegex.exec(text)) !== null) {
     toolCalls.push({ name: "read_file", args: { path: match[1] }, raw: match[0] });
@@ -1506,8 +1560,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 4. list_dir
-  const listDirRegex = /<list_dir\s+path=["']([^"']+)["']\s*\/>/gi;
+  // 4. list_dir — handle both self-closing and closing tags
+  const listDirRegex = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
   while ((match = listDirRegex.exec(text)) !== null) {
     toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
   }
@@ -1530,9 +1584,9 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 7. run_command
-  const runCommandRegex = /<run_command\s+command="([^"]*)"\s*\/>/gi;
-  const runCommandRegex2 = /<run_command\s+command='([^']*)'\s*\/>/gi;
+  // 7. run_command — handle both self-closing and closing tags
+  const runCommandRegex = /<run_command\s+command="([^"]*)"\s*\/?>/gi;
+  const runCommandRegex2 = /<run_command\s+command='([^']*)'\s*\/?>/gi;
   while ((match = runCommandRegex.exec(text)) !== null) {
     toolCalls.push({ name: "run_command", args: { command: match[1] }, raw: match[0] });
   }
@@ -1540,26 +1594,26 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "run_command", args: { command: match[1] }, raw: match[0] });
   }
 
-  // 6. git_status
-  const gitStatusRegex = /<git_status\s*\/>/gi;
+  // 6. git_status — handle both self-closing and closing tags
+  const gitStatusRegex = /<git_status\s*\/?>/gi;
   while ((match = gitStatusRegex.exec(text)) !== null) {
     toolCalls.push({ name: "git_status", args: {}, raw: match[0] });
   }
 
-  // 7. git_commit
-  const gitCommitRegex = /<git_commit\s+message=["']([^"']+)["']\s*\/>/gi;
+  // 7. git_commit — handle both self-closing and closing tags
+  const gitCommitRegex = /<git_commit\s+message=["']([^"']+)["']\s*\/?>/gi;
   while ((match = gitCommitRegex.exec(text)) !== null) {
     toolCalls.push({ name: "git_commit", args: { message: match[1] }, raw: match[0] });
   }
 
-  // 8. git_log
-  const gitLogRegex = /<git_log\s*\/>/gi;
+  // 8. git_log — handle both self-closing and closing tags
+  const gitLogRegex = /<git_log\s*\/?>/gi;
   while ((match = gitLogRegex.exec(text)) !== null) {
     toolCalls.push({ name: "git_log", args: {}, raw: match[0] });
   }
 
-  // 9. clipboard_read
-  const clipboardReadRegex = /<clipboard_read\s*\/>/gi;
+  // 9. clipboard_read — handle both self-closing and closing tags
+  const clipboardReadRegex = /<clipboard_read\s*\/?>/gi;
   while ((match = clipboardReadRegex.exec(text)) !== null) {
     toolCalls.push({ name: "clipboard_read", args: {}, raw: match[0] });
   }
@@ -1655,32 +1709,32 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 19. memory_stats
-  const memoryStatsRegex = /<memory_stats\s*\/>/gi;
+  // 19. memory_stats — handle both self-closing and closing tags
+  const memoryStatsRegex = /<memory_stats\s*\/?>/gi;
   while ((match = memoryStatsRegex.exec(text)) !== null) {
     toolCalls.push({ name: "memory_stats", args: {}, raw: match[0] });
   }
 
-  // 20. memory_maintain
-  const memoryMaintainRegex = /<memory_maintain\s*\/>/gi;
+  // 20. memory_maintain — handle both self-closing and closing tags
+  const memoryMaintainRegex = /<memory_maintain\s*\/?>/gi;
   while ((match = memoryMaintainRegex.exec(text)) !== null) {
     toolCalls.push({ name: "memory_maintain", args: {}, raw: match[0] });
   }
 
-  // 21. memory_extract
-  const memoryExtractRegex = /<memory_extract\s*\/>/gi;
+  // 21. memory_extract — handle both self-closing and closing tags
+  const memoryExtractRegex = /<memory_extract\s*\/?>/gi;
   while ((match = memoryExtractRegex.exec(text)) !== null) {
     toolCalls.push({ name: "memory_extract", args: {}, raw: match[0] });
   }
 
-  // 22. memory_export
-  const memoryExportRegex = /<memory_export\s*\/>/gi;
+  // 22. memory_export — handle both self-closing and closing tags
+  const memoryExportRegex = /<memory_export\s*\/?>/gi;
   while ((match = memoryExportRegex.exec(text)) !== null) {
     toolCalls.push({ name: "memory_export", args: {}, raw: match[0] });
   }
 
-  // 23. memory_import
-  const memoryImportRegex = /<memory_import\s*\/>/gi;
+  // 23. memory_import — handle both self-closing and closing tags
+  const memoryImportRegex = /<memory_import\s*\/?>/gi;
   while ((match = memoryImportRegex.exec(text)) !== null) {
     toolCalls.push({ name: "memory_import", args: {}, raw: match[0] });
   }

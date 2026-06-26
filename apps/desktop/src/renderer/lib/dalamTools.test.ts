@@ -22,7 +22,7 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
     while ((m = regex.exec(text)) !== null) fn(m);
   }
 
-  extract(/<read_file\s+path=["']([^"']+)["']\s*\/>/gi, (m) => {
+  extract(/<read_file\s+path=["']([^"']+)["']\s*\/?>/gi, (m) => {
     calls.push({ name: "read_file", args: { path: m[1] } });
   });
 
@@ -39,7 +39,7 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
     }
   });
 
-  extract(/<list_dir\s+path=["']([^"']+)["']\s*\/>/gi, (m) => {
+  extract(/<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi, (m) => {
     calls.push({ name: "list_dir", args: { path: m[1] } });
   });
 
@@ -57,23 +57,23 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
     }
   });
 
-  extract(/<run_command\s+command=["']([^"']+)["']\s*\/>/gi, (m) => {
+  extract(/<run_command\s+command=["']([^"']+)["']\s*\/?>/gi, (m) => {
     calls.push({ name: "run_command", args: { command: m[1] } });
   });
 
-  extract(/<git_status\s*\/>/gi, () => {
+  extract(/<git_status\s*\/?>/gi, () => {
     calls.push({ name: "git_status", args: {} });
   });
 
-  extract(/<git_commit\s+message=["']([^"']+)["']\s*\/>/gi, (m) => {
+  extract(/<git_commit\s+message=["']([^"']+)["']\s*\/?>/gi, (m) => {
     calls.push({ name: "git_commit", args: { message: m[1] } });
   });
 
-  extract(/<git_log\s*\/>/gi, () => {
+  extract(/<git_log\s*\/?>/gi, () => {
     calls.push({ name: "git_log", args: {} });
   });
 
-  extract(/<clipboard_read\s*\/>/gi, () => {
+  extract(/<clipboard_read\s*\/?>/gi, () => {
     calls.push({ name: "clipboard_read", args: {} });
   });
 
@@ -149,23 +149,23 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
     calls.push({ name: "memory_delete", args: { id: m[1] } });
   });
 
-  extract(/<memory_stats\s*\/>/gi, () => {
+  extract(/<memory_stats\s*\/?>/gi, () => {
     calls.push({ name: "memory_stats", args: {} });
   });
 
-  extract(/<memory_maintain\s*\/>/gi, () => {
+  extract(/<memory_maintain\s*\/?>/gi, () => {
     calls.push({ name: "memory_maintain", args: {} });
   });
 
-  extract(/<memory_extract\s*\/>/gi, () => {
+  extract(/<memory_extract\s*\/?>/gi, () => {
     calls.push({ name: "memory_extract", args: {} });
   });
 
-  extract(/<memory_export\s*\/>/gi, () => {
+  extract(/<memory_export\s*\/?>/gi, () => {
     calls.push({ name: "memory_export", args: {} });
   });
 
-  extract(/<memory_import\s*\/>/gi, () => {
+  extract(/<memory_import\s*\/?>/gi, () => {
     calls.push({ name: "memory_import", args: {} });
   });
 
@@ -572,6 +572,168 @@ describe("parseToolCalls", () => {
       expect(junkSet.has("build")).toBe(true);
       expect(junkSet.has("__pycache__")).toBe(true);
       expect(junkSet.size).toBeGreaterThanOrEqual(10);
+    });
+  });
+
+  describe("Non-self-closing tag support (Llama 3.3 compatibility)", () => {
+    it("parses list_dir without self-closing slash", () => {
+      const calls = parseToolCalls("<list_dir path='/Users/test/project'> </list_dir>");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("list_dir");
+      expect(calls[0].args.path).toBe("/Users/test/project");
+    });
+
+    it("parses list_dir with content between tags", () => {
+      const calls = parseToolCalls("<list_dir path='/src'>some content</list_dir>");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("list_dir");
+    });
+
+    it("parses read_file without self-closing slash", () => {
+      const calls = parseToolCalls("<read_file path='test.ts'></read_file>");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("read_file");
+      expect(calls[0].args.path).toBe("test.ts");
+    });
+
+    it("parses git_status without self-closing slash", () => {
+      const calls = parseToolCalls("<git_status></git_status>");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("git_status");
+    });
+
+    it("parses run_command without self-closing slash", () => {
+      const calls = parseToolCalls("<run_command command='ls -la'></run_command>");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("run_command");
+      expect(calls[0].args.command).toBe("ls -la");
+    });
+  });
+
+  describe("Tool calls in code blocks (Llama 3.3 fix)", () => {
+    it("extracts tool calls from xml code blocks", () => {
+      // Re-implement extractToolCallsFromCodeBlocks for testing
+      const KNOWN_TOOL_NAMES = new Set(["list_dir", "read_file", "write_file", "run_command"]);
+
+      function extractToolCallsFromCodeBlocks(text: string) {
+        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        let blockMatch;
+        while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
+          const blockContent = blockMatch[1];
+          const tagRegex = /<([a-zA-Z_][a-zA-Z0-9_-]*)(\s[^>]*)?\/?>/gi;
+          let tagMatch;
+          while ((tagMatch = tagRegex.exec(blockContent)) !== null) {
+            const tagName = tagMatch[1];
+            if (!KNOWN_TOOL_NAMES.has(tagName)) continue;
+            const attrsStr = tagMatch[2] || "";
+            const attrs: Record<string, string> = {};
+            const attrRegex = /([a-zA-Z0-9_-]+)=["']([^"']*)["']/g;
+            let attrMatch;
+            while ((attrMatch = attrRegex.exec(attrsStr)) !== null) {
+              attrs[attrMatch[1]] = attrMatch[2];
+            }
+            toolCalls.push({ name: tagName, args: attrs });
+          }
+        }
+        return toolCalls;
+      }
+
+      const text = 'I will list the files.\n\n```xml\n<list_dir path="/Users/test/project" />\n```\n\nDone.';
+      const calls = extractToolCallsFromCodeBlocks(text);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("list_dir");
+      expect(calls[0].args.path).toBe("/Users/test/project");
+    });
+
+    it("extracts multiple tool calls from code blocks", () => {
+      const text = 'Let me check the files.\n\n```xml\n<read_file path="src/index.ts" />\n<list_dir path="src" />\n```\n';
+
+      function extractToolCallsFromCodeBlocks(text: string) {
+        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        let blockMatch;
+        while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
+          const blockContent = blockMatch[1];
+          const tagRegex = /<([a-zA-Z_][a-zA-Z0-9_-]*)(\s[^>]*)?\/?>/gi;
+          let tagMatch;
+          while ((tagMatch = tagRegex.exec(blockContent)) !== null) {
+            const tagName = tagMatch[1];
+            if (!["list_dir", "read_file"].includes(tagName)) continue;
+            const attrsStr = tagMatch[2] || "";
+            const attrs: Record<string, string> = {};
+            const attrRegex = /([a-zA-Z0-9_-]+)=["']([^"']*)["']/g;
+            let attrMatch;
+            while ((attrMatch = attrRegex.exec(attrsStr)) !== null) {
+              attrs[attrMatch[1]] = attrMatch[2];
+            }
+            toolCalls.push({ name: tagName, args: attrs });
+          }
+        }
+        return toolCalls;
+      }
+
+      const calls = extractToolCallsFromCodeBlocks(text);
+      expect(calls).toHaveLength(2);
+      expect(calls[0].name).toBe("read_file");
+      expect(calls[1].name).toBe("list_dir");
+    });
+
+    it("extracts tool calls from unlabeled code blocks", () => {
+      const text = 'Here is the command:\n\n```\n<run_command command="git status" />\n```\n';
+
+      function extractToolCallsFromCodeBlocks(text: string) {
+        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        let blockMatch;
+        while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
+          const blockContent = blockMatch[1];
+          const tagRegex = /<([a-zA-Z_][a-zA-Z0-9_-]*)(\s[^>]*)?\/?>/gi;
+          let tagMatch;
+          while ((tagMatch = tagRegex.exec(blockContent)) !== null) {
+            const tagName = tagMatch[1];
+            if (!["run_command"].includes(tagName)) continue;
+            const attrsStr = tagMatch[2] || "";
+            const attrs: Record<string, string> = {};
+            const attrRegex = /([a-zA-Z0-9_-]+)=["']([^"']*)["']/g;
+            let attrMatch;
+            while ((attrMatch = attrRegex.exec(attrsStr)) !== null) {
+              attrs[attrMatch[1]] = attrMatch[2];
+            }
+            toolCalls.push({ name: tagName, args: attrs });
+          }
+        }
+        return toolCalls;
+      }
+
+      const calls = extractToolCallsFromCodeBlocks(text);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].name).toBe("run_command");
+      expect(calls[0].args.command).toBe("git status");
+    });
+
+    it("does not extract non-tool tags from code blocks", () => {
+      const text = '```xml\n<div class="container">Hello</div>\n```';
+
+      function extractToolCallsFromCodeBlocks(text: string) {
+        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        let blockMatch;
+        while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
+          const blockContent = blockMatch[1];
+          const tagRegex = /<([a-zA-Z_][a-zA-Z0-9_-]*)(\s[^>]*)?\/?>/gi;
+          let tagMatch;
+          while ((tagMatch = tagRegex.exec(blockContent)) !== null) {
+            const tagName = tagMatch[1];
+            if (!["list_dir", "read_file"].includes(tagName)) continue;
+            toolCalls.push({ name: tagName, args: {} });
+          }
+        }
+        return toolCalls;
+      }
+
+      const calls = extractToolCallsFromCodeBlocks(text);
+      expect(calls).toHaveLength(0);
     });
   });
 });
