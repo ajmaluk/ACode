@@ -215,6 +215,7 @@ export const BUNDLED_SKILLS: SkillInfo[] = [
 
 class SkillRegistry {
   private skills: Map<string, SkillInfo> = new Map();
+  private backups: Map<string, { skill: SkillInfo; timestamp: number }[]> = new Map();
   private listeners = new Set<() => void>();
 
   constructor() {
@@ -235,8 +236,50 @@ class SkillRegistry {
     return this.skills.get(name);
   }
 
-  /** Add a new skill (from a SKILL.md file or user import). */
+  /**
+   * Get backup history for a skill (most recent first).
+   * Returns empty array if no backups exist.
+   */
+  getBackups(name: string): { skill: SkillInfo; timestamp: number }[] {
+    return this.backups.get(name) ?? [];
+  }
+
+  /**
+   * Restore a skill from backup by name and timestamp.
+   * Returns the restored skill, or undefined if the backup was not found.
+   */
+  restoreFromBackup(name: string, timestamp: number): SkillInfo | undefined {
+    const backups = this.backups.get(name);
+    if (!backups) return undefined;
+    const backup = backups.find(b => b.timestamp === timestamp);
+    if (!backup) return undefined;
+    this.skills.set(name, backup.skill);
+    this.emit();
+    return backup.skill;
+  }
+
+  /**
+   * Add a new skill (from a SKILL.md file or user import).
+   * If a skill with the same name already exists, creates a timestamped backup
+   * before overwriting. Keeps up to 10 backups per skill name.
+   */
   add(skill: SkillInfo): void {
+    const existing = this.skills.get(skill.name);
+    if (existing) {
+      // Create backup before overwrite
+      if (!this.backups.has(skill.name)) {
+        this.backups.set(skill.name, []);
+      }
+      const backupList = this.backups.get(skill.name)!;
+      backupList.push({
+        skill: { ...existing },
+        timestamp: Date.now()
+      });
+      // Keep only last 10 backups per skill to prevent unbounded growth
+      if (backupList.length > 10) {
+        backupList.splice(0, backupList.length - 10);
+      }
+    }
     this.skills.set(skill.name, skill);
     this.emit();
   }
@@ -398,10 +441,30 @@ export function matchSkillInvocation(
   text: string,
   registry: SkillInfo[]
 ): { skill: SkillInfo; args: string } | null {
+  // First try explicit $skill-name invocation
   const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+))?(?=\s|$)/i);
-  if (!m) return null;
-  const name = m[1].toLowerCase();
-  const args = (m[2] ?? "").trim();
-  const skill = registry.find((s) => s.name.toLowerCase() === name);
-  return skill ? { skill, args } : null;
+  if (m) {
+    const name = m[1].toLowerCase();
+    const args = (m[2] ?? "").trim();
+    const skill = registry.find((s) => s.name.toLowerCase() === name);
+    if (skill) return { skill, args };
+  }
+
+  // Fallback: check if any skill name appears as a whole word in the prompt
+  const lowerText = text.toLowerCase();
+  // Sort by name length descending so "code-review" matches before "code"
+  const sorted = [...registry].sort((a, b) => b.name.length - a.name.length);
+  for (const skill of sorted) {
+    const skillName = skill.name.toLowerCase();
+    // Match skill name as a whole word (with optional trailing args)
+    const wordRegex = new RegExp(`(?:^|\\b)${skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "i");
+    if (wordRegex.test(lowerText)) {
+      // Extract everything after the skill name as args
+      const match = lowerText.match(new RegExp(`${skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(.*)`, "i"));
+      const args = match?.[1]?.trim() ?? "";
+      return { skill, args };
+    }
+  }
+
+  return null;
 }

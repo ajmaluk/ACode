@@ -61,7 +61,7 @@ const TAG_TO_TOOL: Record<string, string> = {
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command"]);
-const NETWORK_TOOLS = new Set(["webfetch", "websearch"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files"]);
 
 interface ParsedXmlToolCall {
   toolCall: import("@acode/shared-types").ToolCall;
@@ -350,6 +350,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         workspaces: newWorkspaces,
         activeWorkspaceId: workspace.id,
         fileTree: tree,
+        openTabs: [],
+        activeFilePath: null,
         loading: false,
       });
       savePersistedWorkspaces(newWorkspaces, workspace.id);
@@ -379,6 +381,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         workspaces: newWorkspaces,
         activeWorkspaceId: workspace.id,
         fileTree: tree,
+        openTabs: [],
+        activeFilePath: null,
         loading: false,
       });
       savePersistedWorkspaces(newWorkspaces, workspace.id);
@@ -635,7 +639,29 @@ function loadPersistedMessages(): Record<string, import("@acode/shared-types").C
 }
 
 function savePersistedMessages(messages: Record<string, import("@acode/shared-types").ChatMessage[]>) {
-  try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages)); } catch (e) { console.warn("Failed to save messages:", e); }
+  try {
+    localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages));
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+      console.warn("[Storage] Quota exceeded — pruning old tool results to free space");
+      const pruned: Record<string, import("@acode/shared-types").ChatMessage[]> = {};
+      for (const [sessionId, msgs] of Object.entries(messages)) {
+        pruned[sessionId] = msgs.map(m => {
+          if (m.toolCalls && m.toolCalls.length > 0) {
+            return { ...m, toolCalls: m.toolCalls.map(tc => ({ ...tc, result: tc.result ? tc.result.slice(0, 500) : undefined })) };
+          }
+          return m;
+        });
+      }
+      try {
+        localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned));
+      } catch {
+        console.error("[Storage] Failed to save even after pruning");
+      }
+    } else {
+      console.warn("Failed to save messages:", e);
+    }
+  }
   void saveWorkspaceData();
 }
 
@@ -746,14 +772,17 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
 
         // Merge project-scoped MCP servers from config.json with user-scoped ones from localStorage
         const currentServers = useSkillsMcp.getState().mcpServers;
-        const projectMcpServers: McpServer[] = (projConfig.mcpServers || []).map((m: any) => {
-          const existing = currentServers.find((s) => s.name === m.name && s.scope === "project");
-          return {
-            ...m,
-            scope: "project" as const,
-            status: existing ? existing.status : ("disconnected" as const),
-            tools: existing ? existing.tools : undefined,
-            error: existing ? existing.error : undefined,
+        const projectMcpServers: McpServer[] = (projConfig.mcpServers || [])
+          .filter((m: unknown) => m && typeof m === "object" && "name" in m && typeof (m as McpServer).name === "string")
+          .map((m: unknown) => {
+            const server = m as McpServer;
+            const existing = currentServers.find((s) => s.name === server.name && s.scope === "project");
+            return {
+              ...server,
+              scope: "project" as const,
+              status: existing ? existing.status : ("disconnected" as const),
+              tools: existing ? existing.tools : undefined,
+              error: existing ? existing.error : undefined,
           };
         });
 
@@ -1021,19 +1050,6 @@ export const useAgents = create<AgentStoreState>((set, get) => ({
   },
 }));
 
-export function useActiveAgent(): AgentInfo {
-  const name = useAgents((s) => s.activeAgentName);
-  return getPrimaryAgent(name);
-}
-
-export function usePermissionAction(permission: PermissionKey, pattern: string = "*") {
-  const activeAgentName = useAgents((s) => s.activeAgentName);
-  const userRules = useAgents((s) => s.userRules);
-  const agent = getPrimaryAgent(activeAgentName);
-  const merged = mergeRulesets(agent.permission, userRules);
-  return evaluate(merged, permission, pattern);
-}
-
 export type TodoStatus = TodoItem["status"];
 
 type TaskPlanItem = {
@@ -1209,6 +1225,7 @@ export const useChat = create<ChatState>((set, get) => ({
       title: "New task",
       agentName: activeAgentName,
       mode,
+      model,
       startedAt: now,
       lastActivityAt: now,
       messageCount: 0,
@@ -1304,7 +1321,10 @@ export const useChat = create<ChatState>((set, get) => ({
           )?.path
         : undefined;
       try {
-        await get().startSession(targetWs ?? "", useAgents.getState().activeAgentName as import("@acode/shared-types").AgentSessionMode);
+        const agentName = useAgents.getState().activeAgentName;
+        const validModes = ["build", "plan", "yolo"];
+        const sessionMode = validModes.includes(agentName) ? agentName as import("@acode/shared-types").AgentSessionMode : "build" as import("@acode/shared-types").AgentSessionMode;
+        await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
         console.error("Failed to start session:", err);
         return;
@@ -1356,7 +1376,7 @@ export const useChat = create<ChatState>((set, get) => ({
     get().saveVersion(session.id, content.length > 60 ? content.slice(0, 57) + "…" : content);
 
     // Safety timeout: if streaming doesn't start within 30s or never ends, force clear
-    const SAFETY_TIMEOUT_MS = 120_000; // 2 minutes
+    const SAFETY_TIMEOUT_MS = 300_000; // 5 minutes — matches agent loop timeout
     const safetyTimer = setTimeout(() => {
       const state = get();
       if (state.isStreaming) {
@@ -1430,6 +1450,8 @@ export const useChat = create<ChatState>((set, get) => ({
           streamingContent: "",
           thinkingContent: "",
           pendingActivities: [],
+          todos: [],
+          _pendingChanges: [],
           // Don't clear taskPlan here — it persists across turns within a session
           // It's only cleared when starting a completely new chat
           ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
@@ -1440,10 +1462,10 @@ export const useChat = create<ChatState>((set, get) => ({
       case "message-delta":
         set((s) => {
           const newContent = s.streamingContent + event.content;
-          // Truncate at word boundary to avoid splitting XML tags, markdown fences, etc.
-          if (newContent.length > 50000) {
-            const trimmed = newContent.slice(-50000);
-            // Find the first space to avoid cutting mid-word/mid-tag
+          // Only truncate display content if extremely large (200K+)
+          // Tool parsing uses the raw content from the API, not this field
+          if (newContent.length > 200000) {
+            const trimmed = newContent.slice(-200000);
             const spaceIdx = trimmed.indexOf(" ");
             return { streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed };
           }
@@ -1453,12 +1475,27 @@ export const useChat = create<ChatState>((set, get) => ({
       case "diff-proposed": {
         const proposal = event.proposal;
         set((s) => {
-          let idx = -1;
-          for (let i = s.pendingToolCalls.length - 1; i >= 0; i--) {
-            const tc = s.pendingToolCalls[i];
-            if (tc.status === "awaiting-approval" || tc.status === "pending") {
-              idx = i;
-              break;
+          // Try to find the tool that matches this file path first
+          let idx = s.pendingToolCalls.findIndex(
+            tc => (tc.status === "awaiting-approval" || tc.status === "pending") &&
+                  tc.args.path === proposal.filePath
+          );
+          // Fall back: try matching by tool name (write_file/edit_file) + any path arg
+          if (idx === -1) {
+            idx = s.pendingToolCalls.findIndex(
+              tc => (tc.status === "awaiting-approval" || tc.status === "pending") &&
+                    (tc.name === "write_file" || tc.name === "edit_file") &&
+                    typeof tc.args.path === "string"
+            );
+          }
+          // Last resort: pick the most recent pending tool that has no diff yet
+          if (idx === -1) {
+            for (let i = s.pendingToolCalls.length - 1; i >= 0; i--) {
+              const tc = s.pendingToolCalls[i];
+              if ((tc.status === "awaiting-approval" || tc.status === "pending") && !tc.diffId) {
+                idx = i;
+                break;
+              }
             }
           }
           if (idx === -1) return s;
@@ -1526,11 +1563,17 @@ export const useChat = create<ChatState>((set, get) => ({
         // were just executed). Save the current turn's content and clear transient
         // state so the agentic loop can continue streaming.
         if (allToolCalls.length > 0) {
+          // Find the last user message to group this assistant turn under
+          let lastUserMsgId: string | undefined;
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === "user") { lastUserMsgId = messages[i].id; break; }
+          }
           const intermediateMsg: ChatMessage = {
             id: event.messageId,
             role: "assistant",
             content: finalContent,
             timestamp: Date.now(),
+            ...(lastUserMsgId ? { parentID: lastUserMsgId } : {}),
             ...(thinkingContent ? { thinking: thinkingContent } : {}),
             ...(allToolCalls.length > 0 ? { toolCalls: allToolCalls } : {}),
             ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
@@ -1555,11 +1598,17 @@ export const useChat = create<ChatState>((set, get) => ({
         const planComplete = useAgents.getState().activeAgentName === "plan" && finalContent.includes("[PLAN_COMPLETE]");
         const currentTaskPlan = get().taskPlan;
         const currentTaskPlanSummary = get().taskPlanSummary;
+        // Find the last user message to group this assistant turn under
+        let lastUserMsgId: string | undefined;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === "user") { lastUserMsgId = messages[i].id; break; }
+        }
         const assistantMsg: ChatMessage = {
           id: event.messageId,
           role: "assistant",
           content: finalContent,
           timestamp: Date.now(),
+          ...(lastUserMsgId ? { parentID: lastUserMsgId } : {}),
           ...(thinkingContent ? { thinking: thinkingContent } : {}),
           ...(todos.length > 0 ? { todos: [...todos] } : {}),
           ...(_pendingChanges.length > 0 ? { fileChanges: [..._pendingChanges] } : {}),
@@ -1615,8 +1664,8 @@ export const useChat = create<ChatState>((set, get) => ({
           ? "edit"
           : BASH_TOOLS.has(tool.name)
             ? "bash"
-            : NETWORK_TOOLS.has(tool.name)
-              ? "network"
+            : READ_TOOLS.has(tool.name)
+              ? "read"
               : tool.name.startsWith("mcp_")
                 ? "mcp"
                 : "edit";
@@ -1717,7 +1766,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "activity-think": {
         set((s) => ({
-          pendingActivities: [...s.pendingActivities, { type: "think" as const, content: event.content }].slice(-500) as typeof s.pendingActivities,
+          pendingActivities: [...s.pendingActivities, { id: "pa-" + Math.random().toString(36).slice(2, 9), type: "think" as const, content: event.content }].slice(-500) as typeof s.pendingActivities,
           thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000),
         }));
         break;
@@ -1727,6 +1776,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
+              id: "pa-" + Math.random().toString(36).slice(2, 9),
               type: "explore" as const,
               query: event.query,
               ...(event.kind ? { kind: event.kind } : {}),
@@ -1741,6 +1791,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
+              id: "pa-" + Math.random().toString(36).slice(2, 9),
               type: "read" as const,
               path: event.path,
               content: event.content,
@@ -1755,6 +1806,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
+              id: "pa-" + Math.random().toString(36).slice(2, 9),
               type: "skill" as const,
               name: event.name,
               content: event.content,
@@ -1802,7 +1854,7 @@ export const useChat = create<ChatState>((set, get) => ({
           set((s) => ({
             pendingActivities: [
               ...s.pendingActivities,
-              { type: "bash" as const, command: event.command, result: event.result },
+              { id: "pa-" + Math.random().toString(36).slice(2, 9), type: "bash" as const, command: event.command, result: event.result },
             ].slice(-500) as typeof s.pendingActivities,
           }));
         }
@@ -1812,7 +1864,7 @@ export const useChat = create<ChatState>((set, get) => ({
         set((s) => ({
           pendingActivities: [
             ...s.pendingActivities,
-            { type: "plan" as const, plan: event.plan },
+            { id: "pa-" + Math.random().toString(36).slice(2, 9), type: "plan" as const, plan: event.plan },
           ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
@@ -1833,7 +1885,7 @@ export const useChat = create<ChatState>((set, get) => ({
         }));
         break;
       case "ask-permission": {
-        const permKind = (["bash", "edit", "network", "mcp"] as const).includes(event.kind as any) ? (event.kind as "bash" | "edit" | "network" | "mcp") : "bash";
+        const permKind = (["bash", "edit", "mcp", "read"] as const).includes(event.kind as any) ? (event.kind as "bash" | "edit" | "mcp" | "read") : "bash";
         usePermission.getState().ask({
           kind: permKind,
           title: "Permission required",
@@ -1856,11 +1908,16 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "error": {
         const sessionId = get().activeSessionId;
+        let lastUserMsgId: string | undefined;
+        for (let i = get().messages.length - 1; i >= 0; i--) {
+          if (get().messages[i].role === "user") { lastUserMsgId = get().messages[i].id; break; }
+        }
         const errorMsg: ChatMessage = {
           id: "err-" + Math.random().toString(36).slice(2, 9),
           role: "assistant",
           content: `**Error**: ${event.error}\n\nCheck your provider settings and try again.`,
           timestamp: Date.now(),
+          ...(lastUserMsgId ? { parentID: lastUserMsgId } : {}),
         };
         const newSessionMessages = sessionId
           ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), errorMsg] }
@@ -1915,6 +1972,8 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   setActiveSession(id) {
+    const timer = get()._safetyTimer;
+    if (timer) clearTimeout(timer);
     const { session, abort, sessionMessages, sessionAgentName, isStreaming } = get();
     // Only abort if the current session is actually streaming
     if (session && isStreaming) abort(session.id);
@@ -1954,7 +2013,7 @@ export const useChat = create<ChatState>((set, get) => ({
       ? {
           id: chatSession.id,
           workspacePath: chatSession.workspacePath,
-          model: useSettings.getState().settings.selectedModel,
+          model: chatSession.model ?? useSettings.getState().settings.selectedModel,
           mode: chatSession.mode,
           startedAt: chatSession.startedAt,
           messages,
@@ -2000,6 +2059,8 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   removeSession(id) {
+    const timer = get()._safetyTimer;
+    if (timer) clearTimeout(timer);
     const api = ensureAcodeAPI();
     void get().abort(id).catch(() => {});
     api.agent.cleanupStream(id);
@@ -2013,6 +2074,7 @@ export const useChat = create<ChatState>((set, get) => ({
       savePersistedMessages(restMessages);
       savePersistedAgents(restAgents);
       savePersistedSessionSummaries(newSessions);
+      savePersistedCompactionSummaries(restCompaction);
       
       const isActive = s.activeSessionId === id;
       return {
@@ -2096,6 +2158,9 @@ export const useChat = create<ChatState>((set, get) => ({
     set((s) => ({
       messages: [...s.messages, sysMsg],
       sessionMessages: newSessionMessages,
+      chatSessions: s.chatSessions.map(cs =>
+        cs.id === sessionId ? { ...cs, messageCount: (cs.messageCount ?? 0) + 1 } : cs
+      ),
     }));
     savePersistedMessages(newSessionMessages);
   },
@@ -3019,7 +3084,7 @@ function deriveTitleFromUrl(url: string): string {
   }
 }
 
-function normalizeBrowserUrl(input: string): string {
+function normalizeBrowserUrl(input: string): string | null {
   const raw = input.trim();
   if (!raw) return "";
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
@@ -3040,6 +3105,18 @@ function normalizeBrowserUrl(input: string): string {
   if (/^\d{1,3}(\.\d{1,3}){0,3}$/.test(host)) return "http://" + raw.replace(/^https?:\/\//i, "");
   if (/^[\w-]+$/.test(host)) return "https://" + host + ".com" + tail;
   if (host.includes(".")) return "https://" + raw.replace(/^https?:\/\//i, "");
+
+  // Block SSRF-like patterns
+  const hostname = host || raw;
+  const privatePatterns = [
+    /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./,
+    /^169\.254\./, /^0\./, /^localhost$/i, /^::1$/, /^\[::1\]$/,
+    /^metadata\.google\.internal$/i, /^instance-data\.local$/i,
+  ];
+  if (privatePatterns.some(p => p.test(hostname))) {
+    return null; // Block private/metadata addresses
+  }
+
   return "https://www.google.com/search?q=" + encodeURIComponent(raw);
 }
 
@@ -3081,12 +3158,12 @@ export const useUI = create<UIState>((set, get) => ({
   },
   setActiveBrowserTab: (id) => set({ activeBrowserTabId: id }),
   navigateBrowser: (id, url) => {
-    const normalized = normalizeBrowserUrl(url);
-    if (!normalized) return;
+    const normalizedUrl = normalizeBrowserUrl(url);
+    if (!normalizedUrl) return; // Invalid/blocked URL
     set((s) => ({
       browserTabs: s.browserTabs.map((t) => {
         if (t.id !== id) return t;
-        const truncated = normalized.slice(0, 200);
+        const truncated = normalizedUrl.slice(0, 200);
         return {
           ...t,
           url: truncated,
@@ -3146,7 +3223,7 @@ export const useUI = create<UIState>((set, get) => ({
 
 // ---- Permission system ----------------------------------------------------
 
-export type PermissionKind = "bash" | "edit" | "network" | "mcp";
+export type PermissionKind = "bash" | "edit" | "mcp" | "read";
 
 export type PermissionRequest = {
   id: string;

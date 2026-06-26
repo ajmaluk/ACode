@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import ReactDOM from "react-dom";
 import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, getPrimaryAgent } from "@/store/useAppStore";
-import type { PrimaryAgentName } from "@acode/shared-types";
+import type { PrimaryAgentName, FileNode } from "@acode/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
 import { TopNav } from "@/components/editor/TopNav";
@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock } from "@/components/chat/ActivityBlocks";
+import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
 import { modKey } from "@/lib/platform";
@@ -276,7 +276,7 @@ function getToolMeta(name: string): { icon: React.ElementType; label: string } {
   return meta[name] || { icon: Code2, label: name };
 }
 
-const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: any; openFile: (path: string) => Promise<void> }) {
+const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: FileNode[]; openFile: (path: string) => Promise<void> }) {
   const toast = useToast();
   const mod = modKey();
   const firstFile = useMemo(() => findFirstFile(fileTree), [fileTree]);
@@ -945,7 +945,7 @@ Add your project's common commands here so ACode knows how to build:
       <TopNav />
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-        {!hasMessages ? (
+        {!hasMessages && !isStreaming ? (
           <div className="relative h-full flex flex-col items-center justify-center px-8 -mt-10">
             {/* Large background A watermark — low opacity, behind everything */}
             <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center select-none">
@@ -1574,32 +1574,38 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
       )}
 
       {/* Activity blocks (explore / read / skill / bash / plan) */}
-      {hasActivities && (
-        <div className="my-0.5">
-          {activities.map((activity, idx) => {
-            const ak = activity.type + "-" + idx;
-            if (activity.type === "explore") {
-              return <ExploreBlock key={ak} result={activity} />;
-            }
-            if (activity.type === "read") {
-              return <ReadBlock key={ak} path={activity.path} content={activity.content} lineRange={activity.lineRange} />;
-            }
-            if (activity.type === "skill") {
-              return <SkillBlock key={ak} name={activity.name} content={activity.content} args={activity.args} />;
-            }
-            if (activity.type === "bash") {
-              return <BashActivityBlock key={ak} command={activity.command} result={activity.result} />;
-            }
-            if (activity.type === "plan") {
-              return <PlanBlock key={ak} plan={activity.plan} />;
-            }
-            if (activity.type === "think") {
-              return <ThinkingBlock key={ak} content={activity.content} />;
-            }
-            return null;
-          })}
-        </div>
-      )}
+      {hasActivities && (() => {
+        // Group context-gathering activities (explore, read) into a collapsible section
+        const CONTEXT_TYPES = new Set(["explore", "read"]);
+        const contextActivities = activities.filter(a => CONTEXT_TYPES.has(a.type));
+        const otherActivities = activities.filter(a => !CONTEXT_TYPES.has(a.type));
+
+        return (
+          <div className="my-0.5">
+            {/* Context-gathering tools: collapsible group */}
+            {contextActivities.length > 0 && (
+              <ContextGatheringGroup activities={contextActivities} />
+            )}
+            {/* Other activities: rendered individually */}
+            {otherActivities.map((activity) => {
+              const ak = activity.id;
+              if (activity.type === "skill") {
+                return <SkillBlock key={ak} name={activity.name} content={activity.content} args={activity.args} />;
+              }
+              if (activity.type === "bash") {
+                return <BashActivityBlock key={ak} command={activity.command} result={activity.result} />;
+              }
+              if (activity.type === "plan") {
+                return <PlanBlock key={ak} plan={activity.plan} />;
+              }
+              if (activity.type === "think") {
+                return <ThinkingBlock key={ak} content={activity.content} />;
+              }
+              return null;
+            })}
+          </div>
+        );
+      })()}
 
       {/* Main assistant message — rendered with markdown */}
       {hasContent && (

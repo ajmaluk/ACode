@@ -55,6 +55,11 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
         .output()
         .map_err(|e| e.to_string())?;
 
+    if !branch_output.status.success() {
+        let err = String::from_utf8_lossy(&branch_output.stderr).to_string();
+        return Err(format!("git rev-parse failed: {}", err));
+    }
+
     let branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
 
     let status_output = Command::new("git")
@@ -62,6 +67,11 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
         .current_dir(&path)
         .output()
         .map_err(|e| e.to_string())?;
+
+    if !status_output.status.success() {
+        let err = String::from_utf8_lossy(&status_output.stderr).to_string();
+        return Err(format!("git status failed: {}", err));
+    }
 
     let status_str = String::from_utf8_lossy(&status_output.stdout);
     let mut modified = Vec::new();

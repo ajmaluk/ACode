@@ -104,10 +104,12 @@ export function addGene(pool: GenePool, gene: Gene): GenePool {
     genes = genes.slice(0, 50);
   }
 
-  return {
+  const newPool = {
     ...pool,
     genes,
   };
+  saveGenePool(newPool);
+  return newPool;
 }
 
 export function removeGene(pool: GenePool, geneId: string): GenePool {
@@ -116,6 +118,23 @@ export function removeGene(pool: GenePool, geneId: string): GenePool {
     genes: pool.genes.filter(g => g.id !== geneId),
   };
 }
+
+/**
+ * Record a successful activation for a gene (increments successCount).
+ */
+export function recordGeneSuccess(pool: GenePool, geneId: string): GenePool {
+  return {
+    ...pool,
+    genes: pool.genes.map(g =>
+      g.id === geneId ? { ...g, successCount: g.successCount + 1 } : g
+    ),
+  };
+}
+
+// ─── Debounced Gene Pool Save ─────────────────────────────────
+
+let _pendingGeneSave: ReturnType<typeof setTimeout> | null = null;
+let _pendingGenePool: GenePool | null = null;
 
 // ─── Gene Expression ─────────────────────────────────────────
 
@@ -155,8 +174,15 @@ export function expressGenes(
       }
       return g;
     });
-    // Save updated pool (async-safe)
-    setTimeout(() => saveGenePool({ ...pool, genes: updatedGenes }), 0);
+    // Save updated pool (debounced to avoid race conditions)
+    if (_pendingGeneSave) clearTimeout(_pendingGeneSave);
+    _pendingGenePool = { ...pool, genes: updatedGenes };
+    _pendingGeneSave = setTimeout(() => {
+      if (_pendingGenePool) {
+        saveGenePool(_pendingGenePool);
+        _pendingGenePool = null;
+      }
+    }, 50);
   }
 
   return matched;

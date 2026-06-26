@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS } from "@acode/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
 import { hookBus } from "./hookBus";
-import { loadGenePool, expressGenes, formatGenesForPrompt, reflectOnSession, addGene, saveGenePool, evolveGenes, type Gene } from "./genes";
+import { loadGenePool, expressGenes, formatGenesForPrompt, type Gene } from "./genes";
 
 const STORAGE_KEYS = {
   settings: "acode.settings.v1",
@@ -18,11 +18,6 @@ const pendingDiffProposals = new Map<string, DiffProposal>();
 export const mcpHttpSessions = new Map<string, string>();
 
 const SETTINGS_CACHE = new Map<string, string>();
-
-/** Clear the settings cache. Used by tests to simulate fresh module state. */
-export function clearSettingsCache() {
-  SETTINGS_CACHE.clear();
-}
 
 function joinPath(...parts: string[]): string {
   return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
@@ -76,9 +71,8 @@ function getProviderConfig(providerId: string): { baseUrl: string; apiKey: strin
     if (providersRaw) {
       const providers = JSON.parse(providersRaw);
       const provider = providers.find((p: any) => p.id === providerId);
-      if (provider) {
-        return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
-      }
+      if (!provider?.baseUrl || !provider?.apiKey) return null;
+      return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
     }
   } catch (_e) { /* provider config parse failed */ }
   return null;
@@ -136,7 +130,7 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
       lastCompleteIdx = i + 1;
     } else if (line.startsWith("data:")) {
       const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
-      currentData += (currentData ? "\n" : "") + dataContent;
+      currentData += dataContent;
     }
     // Other fields (event:, id:, retry:) are silently ignored per SSE spec
   }
@@ -263,32 +257,36 @@ async function* streamOpenAI(
   if (!reader) throw new ProviderError("No response body", "network");
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const { parsed, remaining } = parseSSEEvents(buffer);
-    buffer = remaining;
-    for (const part of parsed) {
-      try {
-        const json = JSON.parse(part.data);
-        const delta = json.choices?.[0]?.delta;
-        if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
-        if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-      } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { parsed, remaining } = parseSSEEvents(buffer);
+      buffer = remaining;
+      for (const part of parsed) {
+        try {
+          const json = JSON.parse(part.data);
+          const delta = json.choices?.[0]?.delta;
+          if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
+          if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
+        } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
+      }
     }
-  }
-  // Process any remaining buffered data
-  if (buffer.trim()) {
-    const { parsed } = parseSSEEvents(buffer + "\n\n");
-    for (const part of parsed) {
-      try {
-        const json = JSON.parse(part.data);
-        const delta = json.choices?.[0]?.delta;
-        if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
-        if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-      } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
+    // Process any remaining buffered data
+    if (buffer.trim()) {
+      const { parsed } = parseSSEEvents(buffer + "\n\n");
+      for (const part of parsed) {
+        try {
+          const json = JSON.parse(part.data);
+          const delta = json.choices?.[0]?.delta;
+          if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
+          if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
+        } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
+      }
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -311,39 +309,43 @@ async function* streamAnthropic(
   const decoder = new TextDecoder();
   let buffer = "";
   let msgId = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const { parsed, remaining } = parseSSEEvents(buffer);
-    buffer = remaining;
-    for (const part of parsed) {
-      try {
-        const json = JSON.parse(part.data);
-        if (json.type === "message_start") { msgId = json.message?.id || ""; }
-        if (json.type === "content_block_delta" && json.delta?.text) {
-          yield { type: "message-delta", messageId: msgId, content: json.delta.text };
-        }
-        if (json.type === "content_block_delta" && json.delta?.thinking) {
-          yield { type: "activity-think", content: json.delta.thinking };
-        }
-      } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { parsed, remaining } = parseSSEEvents(buffer);
+      buffer = remaining;
+      for (const part of parsed) {
+        try {
+          const json = JSON.parse(part.data);
+          if (json.type === "message_start") { msgId = json.message?.id || ""; }
+          if (json.type === "content_block_delta" && json.delta?.text) {
+            yield { type: "message-delta", messageId: msgId, content: json.delta.text };
+          }
+          if (json.type === "content_block_delta" && json.delta?.thinking) {
+            yield { type: "activity-think", content: json.delta.thinking };
+          }
+        } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
+      }
     }
-  }
-  // Process any remaining buffered data
-  if (buffer.trim()) {
-    const { parsed } = parseSSEEvents(buffer + "\n\n");
-    for (const part of parsed) {
-      try {
-        const json = JSON.parse(part.data);
-        if (json.type === "content_block_delta" && json.delta?.text) {
-          yield { type: "message-delta", messageId: msgId, content: json.delta.text };
-        }
-        if (json.type === "content_block_delta" && json.delta?.thinking) {
-          yield { type: "activity-think", content: json.delta.thinking };
-        }
-      } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
+    // Process any remaining buffered data
+    if (buffer.trim()) {
+      const { parsed } = parseSSEEvents(buffer + "\n\n");
+      for (const part of parsed) {
+        try {
+          const json = JSON.parse(part.data);
+          if (json.type === "content_block_delta" && json.delta?.text) {
+            yield { type: "message-delta", messageId: msgId, content: json.delta.text };
+          }
+          if (json.type === "content_block_delta" && json.delta?.thinking) {
+            yield { type: "activity-think", content: json.delta.thinking };
+          }
+        } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
+      }
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -361,7 +363,10 @@ async function* streamChat(
 const JUNK_DIRS = new Set([".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"]);
 const JUNK_FILES = new Set([".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"]);
 
-async function readDirRecursive(dirPath: string, maxDepth: number = 20): Promise<FileNode[]> {
+async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles: number = 10000, _count: {n: number} = {n: 0}, _visited: Set<string> = new Set()): Promise<FileNode[]> {
+  if (_visited.has(dirPath)) return [];
+  _visited.add(dirPath);
+  if (_count.n >= maxFiles) return [];
   const { readDir } = await import("@tauri-apps/plugin-fs");
   let entries;
   try {
@@ -371,14 +376,16 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20): Promise
   }
   const nodes: FileNode[] = [];
   for (const entry of entries) {
+    if (_count.n >= maxFiles) break;
     if (!entry.name) continue;
     if (JUNK_FILES.has(entry.name)) continue;
     if (entry.isDirectory && JUNK_DIRS.has(entry.name)) continue;
     const fullPath = joinPath(dirPath, entry.name!);
     if (entry.isDirectory) {
-      const children = maxDepth > 1 ? await readDirRecursive(fullPath, maxDepth - 1) : [];
+      const children = maxDepth > 1 ? await readDirRecursive(fullPath, maxDepth - 1, maxFiles, _count, _visited) : [];
       nodes.push({ name: entry.name!, path: fullPath, type: "directory", gitStatus: null, children });
     } else {
+      _count.n++;
       nodes.push({ name: entry.name!, path: fullPath, type: "file", gitStatus: null });
     }
   }
@@ -583,64 +590,27 @@ const mockAcodeAPI: AcodeAPI = {
     async sendPrompt(sessionId, prompt, conversationHistory?, agentName?, attachments?) {
       const { settings, providerId, modelId, config } = getActiveProvider();
 
-      const prev = activeControllers.get(sessionId);
-      if (prev) prev.abort();
-      const ac = new AbortController();
-      activeControllers.set(sessionId, ac);
-      const emit = (event: StreamEvent) => { streamCallbacks.get(sessionId)?.(event); };
-
-      const sessionStartTime = Date.now();
-
-      // Hook: UserPromptSubmit
-      await hookBus.emit("UserPromptSubmit", {
-        sessionId,
-        prompt,
-        conversationHistory: conversationHistory ?? [],
-        agentName: agentName ?? "build",
-        attachments: (attachments ?? []).map((a) => ({ name: a.name, mimeType: a.mimeType })),
-        timestamp: Date.now(),
-      });
-
-      try {
-        // Resolve circular dependency by dynamic import of store
+      /** Assemble the system prompt and context blocks for the LLM. */
+      async function assembleContext(cleanPrompt: string): Promise<string> {
         const { useChat, useSkillsMcp, useWorkspace } = await import("../store/useAppStore");
-        const state = useChat.getState();
         const skillsState = useSkillsMcp.getState();
         const enabledSkills = skillsState.skills.filter((sk) => sk.enabled);
 
-        // Convert Skill[] to SkillInfo[] for matchSkillInvocation
         const skillInfos = enabledSkills.map((sk) => ({
           name: sk.name,
           description: sk.description,
           content: sk.prompt,
           location: sk.source === "bundled" ? `bundled://${sk.name}/SKILL.md` : `user://${sk.name}/SKILL.md`,
-          source: (sk.source === "bundled"
-            ? "bundled"
-            : sk.source === "project"
-              ? "project"
-              : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
+          source: (sk.source === "bundled" ? "bundled" : sk.source === "project" ? "project" : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
         }));
 
-        const matched = matchSkillInvocation(prompt, skillInfos);
+        const matched = matchSkillInvocation(cleanPrompt, skillInfos);
         let activeSkillPrompt = "";
-        let cleanPrompt = prompt;
-
         if (matched) {
-          // Progressive disclosure: load skill content lazily from disk if not already loaded
           if (!matched.skill.content) {
             matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockAcodeAPI.fs.readFile });
           }
           activeSkillPrompt = renderSkillForPrompt(matched.skill);
-          const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-          cleanPrompt = prompt.replace(regex, "").trim();
-
-          // Emit activity-skill stream event
-          emit({
-            type: "activity-skill",
-            name: matched.skill.name,
-            content: matched.skill.description,
-            args: matched.args
-          });
         }
 
         // Active MCP tools documentation
@@ -648,29 +618,26 @@ const mockAcodeAPI: AcodeAPI = {
         let mcpToolsDocumentation = "";
         if (mcpServers.length > 0) {
           mcpToolsDocumentation = "\n\n=== CONNECTED MCP TOOLS ===\nYou have access to external tools provided by connected MCP servers. To call an MCP tool, output an XML tag of the form:\n<mcp_<server_name>_<tool_name> [args] />\nOr if the arguments are complex or contain newlines/nested tags:\n<mcp_<server_name>_<tool_name>>\n  <argName1>value1</argName1>\n  <argName2>value2</argName2>\n</mcp_<server_name>_<tool_name>>\n\nAvailable MCP Tools:\n";
-
           mcpServers.forEach((server) => {
             if (server.tools && server.tools.length > 0) {
               mcpToolsDocumentation += `\nFrom MCP Server "${server.name}":\n`;
               server.tools.forEach((tool) => {
-                mcpToolsDocumentation += `- <mcp_${server.name}_${tool.name}/>: ${tool.description}\n`;
+                const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : "{}";
+                mcpToolsDocumentation += `- <mcp_${server.name}_${tool.name}/>: ${tool.description}\n  Arguments: ${schema}\n`;
               });
             }
           });
           mcpToolsDocumentation += "\n==========================";
         }
 
-        // Resolve active file and editor tabs context from store
+        // Active file and editor tabs context
         const workspaceState = useWorkspace.getState();
         const activeFile = workspaceState.activeFilePath;
         const openTabs = workspaceState.openTabs;
         let activeFileContext = "";
-
         if (activeFile) {
           const activeTab = openTabs.find((t) => t.path === activeFile);
-          const cursorInfo = activeTab?.cursor
-            ? ` (Cursor is at Line ${activeTab.cursor.line}, Column ${activeTab.cursor.column})`
-            : "";
+          const cursorInfo = activeTab?.cursor ? ` (Cursor is at Line ${activeTab.cursor.line}, Column ${activeTab.cursor.column})` : "";
           activeFileContext = `\n\n=== CURRENT EDITOR STATE ===\nYou are currently looking at this file: ${activeFile}${cursorInfo}\n`;
           if (activeTab && activeTab.content) {
             activeFileContext += `\n--- Active File Content ---\n${activeTab.content}\n`;
@@ -681,11 +648,10 @@ const mockAcodeAPI: AcodeAPI = {
           activeFileContext += "============================";
         }
 
-        const summaries = state.compactionSummaries || {};
-        const compactionSummary = summaries[sessionId];
-        const session = state.chatSessions.find((s) => s.id === sessionId) || state.session;
-        const workspacePath = session?.workspacePath;
+        const workspacePath = useChat.getState().chatSessions.find((s) => s.id === sessionId)?.workspacePath
+          ?? useChat.getState().session?.workspacePath;
 
+        // Workspace memory
         let workspaceMemoryBlock = "";
         if (workspacePath) {
           try {
@@ -696,11 +662,10 @@ const mockAcodeAPI: AcodeAPI = {
               const memoryObj = JSON.parse(memoryContent);
               workspaceMemoryBlock = `\n\n=== PERSISTENT WORKSPACE MEMORY ===\nACode maintains a persistent memory file for this workspace at \`.acode/memory.json\`. You can modify this file using your edit/write file tools to remember key rules, paths, build commands, or context for future turns.\n\nCurrent Contents:\n- Project Overview: ${memoryObj.projectOverview || "Not specified."}\n- Key Files/Directories: ${JSON.stringify(memoryObj.keyFiles || [])}\n- Build/Test Commands: ${JSON.stringify(memoryObj.buildCommands || [])}\n- Learned Rules:\n${(memoryObj.learnedRules || []).map((r: string) => `  * ${r}`).join("\n")}\n===================================`;
             }
-          } catch (e) {
-            console.warn("Failed to load workspace memory:", e);
-          }
+          } catch (e) { console.warn("Failed to load workspace memory:", e); }
         }
 
+        // SQLite memories
         let sqliteMemoriesBlock = "";
         if (workspacePath) {
           try {
@@ -710,11 +675,8 @@ const mockAcodeAPI: AcodeAPI = {
               const critical = await getCriticalMemories(5);
               const queryText = cleanPrompt || prompt;
               const relevant = queryText ? await searchMemories(queryText, { limit: 5 }).catch(() => []) : [];
-
-              // Deduplicate relevant memories that are already in critical
               const criticalIds = new Set(critical.map((m) => m.id));
               const uniqueRelevant = relevant.filter((m) => !criticalIds.has(m.id));
-
               const allInjected = [...critical, ...uniqueRelevant];
               if (allInjected.length > 0) {
                 sqliteMemoriesBlock = `\n\n=== RETRIEVED WORKSPACE MEMORIES ===\nThese are relevant memories retrieved from the persistent workspace memory store. Keep them in mind during the session:\n`;
@@ -725,11 +687,10 @@ const mockAcodeAPI: AcodeAPI = {
                 sqliteMemoriesBlock += `====================================`;
               }
             }
-          } catch (e) {
-            console.warn("Failed to retrieve memories for prompt injection:", e);
-          }
+          } catch (e) { console.warn("Failed to retrieve memories for prompt injection:", e); }
         }
 
+        // Pinned files
         let workspacePinnedBlock = "";
         if (workspacePath) {
           try {
@@ -747,20 +708,16 @@ const mockAcodeAPI: AcodeAPI = {
                       const fileContent = await mockAcodeAPI.fs.readFile(fullPath);
                       pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${fileContent}\n`;
                     }
-                  } catch (e) {
-                    console.warn(`Failed to read pinned file ${filePath}:`, e);
-                  }
+                  } catch (e) { console.warn(`Failed to read pinned file ${filePath}:`, e); }
                 }
                 pinnedBlock += "=====================";
                 workspacePinnedBlock = pinnedBlock;
               }
             }
-          } catch (e) {
-            console.warn("Failed to load workspace context:", e);
-          }
+          } catch (e) { console.warn("Failed to load workspace context:", e); }
         }
 
-        // Load 4-layer instructions hierarchy (global → project → local + path-scoped)
+        // 4-layer instructions hierarchy
         let workspaceRulesBlock = "";
         if (workspacePath) {
           try {
@@ -774,9 +731,7 @@ const mockAcodeAPI: AcodeAPI = {
               },
             });
             workspaceRulesBlock = formatInstructionsForPrompt(instructions, activeFile ?? undefined);
-          } catch (e) {
-            console.warn("Failed to load workspace instructions:", e);
-          }
+          } catch (e) { console.warn("Failed to load workspace instructions:", e); }
         }
 
         const toolsDocumentation = `
@@ -903,7 +858,7 @@ You are equipped with tools to interact with the workspace and operating system.
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
 `;
 
-        // Load evolved genes for this session
+        // Genes
         const genePool = loadGenePool();
         const rawHistory = conversationHistory ? [...conversationHistory] : [];
         const recentMsgs = rawHistory.filter((msg) => msg.role !== "system").slice(-5);
@@ -915,7 +870,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           : agentName === "yolo"
             ? "You are ACode in YOLO mode. You have FULL unrestricted access — read, write, execute anything without asking. Be efficient and direct. Execute tasks without seeking permission."
             : "You are ACode, an AI coding assistant. Help users write, debug, and understand code. Be concise and practical. When showing code, use markdown code blocks with the appropriate language. Always ask the user before executing shell commands or making file changes.")
-          + `\n\n=== AGENTIC TASK MANAGEMENT ===\nFor multi-step tasks, structure your work as follows:\n1. Before starting work, output a task plan:\n<task_plan>{"tasks":[{"id":"t1","title":"Step description"},...],"total_budget":8}</task_plan>\n2. After completing each step, update its status:\n<task_update id="tN" status="done"/>\n3. When all tasks are complete, output: <done reason="brief summary"/>\nFor simple single-step tasks (rename, fix typo, etc.) skip the planning and just use <done/> when finished.\nIf no <done/> signal is emitted after tool execution, the system assumes more work is needed.\n==============================`
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -926,14 +880,69 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           + workspacePinnedBlock
           + genesPrompt;
 
+        return systemPrompt;
+      }
+
+      const prev = activeControllers.get(sessionId);
+      if (prev) prev.abort();
+      const ac = new AbortController();
+      activeControllers.set(sessionId, ac);
+      const emit = (event: StreamEvent) => { streamCallbacks.get(sessionId)?.(event); };
+
+      const sessionStartTime = Date.now();
+
+      // Hook: UserPromptSubmit
+      await hookBus.emit("UserPromptSubmit", {
+        sessionId,
+        prompt,
+        conversationHistory: conversationHistory ?? [],
+        agentName: agentName ?? "build",
+        attachments: (attachments ?? []).map((a) => ({ name: a.name, mimeType: a.mimeType })),
+        timestamp: Date.now(),
+      });
+
+      try {
+        const { useChat } = await import("../store/useAppStore");
+
+        // Skill matching
+        const { useSkillsMcp } = await import("../store/useAppStore");
+        const skillsState = useSkillsMcp.getState();
+        const enabledSkills = skillsState.skills.filter((sk) => sk.enabled);
+        const skillInfos = enabledSkills.map((sk) => ({
+          name: sk.name,
+          description: sk.description,
+          content: sk.prompt,
+          location: sk.source === "bundled" ? `bundled://${sk.name}/SKILL.md` : `user://${sk.name}/SKILL.md`,
+          source: (sk.source === "bundled" ? "bundled" : sk.source === "project" ? "project" : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
+        }));
+        const matched = matchSkillInvocation(prompt, skillInfos);
+        let cleanPrompt = prompt;
+        if (matched) {
+          if (!matched.skill.content) {
+            matched.skill.content = await loadSkillContent(matched.skill, { readFile: mockAcodeAPI.fs.readFile });
+          }
+          const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+          cleanPrompt = prompt.replace(regex, "").trim();
+          emit({ type: "activity-skill", name: matched.skill.name, content: matched.skill.description, args: matched.args });
+        }
+
+        // Assemble system prompt and context
+        const systemPrompt = await assembleContext(cleanPrompt);
+
+        // Loop state
         const currentHistory: any[] = conversationHistory ? [...conversationHistory] : [];
+        let totalFullContent = "";
+        let totalToolCalls = 0;
         let loopCount = 0;
         const MAX_LOOP_HARD = 30;
         const loopStartTime = Date.now();
         const MAX_LOOP_DURATION_MS = 5 * 60 * 1000;
-        let taskPlan: { tasks: { id: string; title: string; status: string }[]; totalBudget: number } | null = null;
         let consecutiveRateLimitErrors = 0;
-        let consecutiveEmptyTurns = 0; // Detect stuck loops where LLM produces no tools and no done signal
+
+        const summaries = useChat.getState().compactionSummaries || {};
+        const compactionSummary = summaries[sessionId];
+        const liveSession = useChat.getState().chatSessions.find((s) => s.id === sessionId) || useChat.getState().session;
+        const workspacePath = liveSession?.workspacePath ?? "";
 
         // Build messages from LIVE currentHistory (not pre-loop snapshot)
         function buildMessages(): any[] {
@@ -952,13 +961,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           return msgs;
         }
 
-        // Adaptive rate limit delay: exponential backoff only on actual errors
         function rateLimitDelay(): Promise<void> {
           if (consecutiveRateLimitErrors > 0) {
             const delay = Math.min(1000 * Math.pow(2, consecutiveRateLimitErrors), 30000);
             return new Promise((r) => setTimeout(r, delay));
           }
-          // Small base delay to avoid hammering APIs
           return new Promise((r) => setTimeout(r, 300));
         }
 
@@ -967,12 +974,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           if (Date.now() - loopStartTime > MAX_LOOP_DURATION_MS) {
             emit({ type: "error", error: `Agent loop timed out after ${MAX_LOOP_DURATION_MS / 1000}s.` });
-            break;
-          }
-
-          // Check task plan budget
-          if (taskPlan && loopCount > (taskPlan.totalBudget + 2)) {
-            emit({ type: "activity-bash", command: "task budget exhausted", result: `${taskPlan.totalBudget} steps used` });
+            emit({ type: "message-end", messageId: sessionId });
             break;
           }
 
@@ -1009,6 +1011,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               }
               messages.push({ role: "user", content: fullPrompt });
             }
+            currentHistory.push({ id: "usr-" + Date.now(), role: "user" as const, content: cleanPrompt, timestamp: Date.now() });
           }
 
           // Start turn
@@ -1032,6 +1035,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           // FIX 7: Strip code blocks before parsing to prevent false MCP/tool matches
           const safeTextForParsing = fullContent.replace(/```[\s\S]*?```/g, "[code block]").replace(/`[^`]+`/g, "[code]");
+          totalFullContent += fullContent;
 
           // FIX 4: Single parse pass — both display content and tool list from same source
           const TOOL_TAG_RE = /<(?:read_file|write_file|edit_file|list_dir|grep_file|search_files|run_command|git_status|git_commit|git_log|clipboard_read|clipboard_write|notify|system_info|open_url|launch_app|reveal_in_finder|get_env|get_screen_info|list_processes|kill_process|get_disk_space|memory_save|memory_search|memory_delete|memory_stats|memory_maintain|memory_extract|memory_export|memory_import|mcp_[\w_]+)[\s\S]*?(?:\/>|<\/[\w_]+>)/g;
@@ -1039,30 +1043,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           // Parse tool calls from safe text (code-block-stripped)
           const parsedTools = await parseToolCalls(safeTextForParsing);
-
-          // FIX 1: Parse task plan
-          const planMatch = fullContent.match(/<task_plan>([\s\S]*?)<\/task_plan>/);
-          if (planMatch && !taskPlan) {
-            try {
-              taskPlan = JSON.parse(planMatch[1]);
-              emit({ type: "activity-bash", command: "task plan", result: taskPlan!.tasks.map((t) => `${t.id}: ${t.title}`).join("\n") });
-            } catch { /* ignore malformed plan */ }
-          }
-
-          // Parse done signal — match <done/> <done /> <done reason="..."/> <done reason="..." />
-          const doneMatch = fullContent.match(/<done(?:\s+reason="([^"]*)")?\s*\/?>/);
-
-          // Parse task updates — create new objects to avoid mutation
-          const taskUpdates = [...fullContent.matchAll(/<task_update\s+id="([^"]+)"\s+status="([^"]+)"\s*\/>/g)];
-          if (taskUpdates.length > 0 && taskPlan) {
-            taskPlan = {
-              ...taskPlan,
-              tasks: taskPlan.tasks.map((t) => {
-                const update = taskUpdates.find(([, id]) => id === t.id);
-                return update ? { ...t, status: update[2] } : t;
-              }),
-            };
-          }
 
           // Emit display content if non-empty
           if (displayContent) {
@@ -1099,6 +1079,10 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                 break;
               }
               const decision = await waitForToolApproval(tc.id);
+              if (ac.signal.aborted) {
+                toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                break;
+              }
               if (decision === "approved") {
                 const toolStartTime = Date.now();
                 try {
@@ -1118,41 +1102,33 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                   }
 
                   await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
-                  toolResults.push(`[TOOL RESULT: ${tc.name}]\n${result}`);
+                  toolResults.push(`[Tool result for ${tc.name}]\n${result || "(no output)"}`);
                 } catch (err) {
                   const errMsg = (err as Error)?.message ?? String(err);
                   emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
                   await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
-                  toolResults.push(`[TOOL ERROR: ${tc.name}]\nError: ${errMsg}`);
+                  toolResults.push(`[Tool error for ${tc.name}]\nError: ${errMsg}`);
                 }
               } else {
-                toolResults.push(`[TOOL RESULT: ${tc.name}]\nPermission Denied by user.`);
+                toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
               }
             }
 
             // Push combined tool results as single user message
             if (toolResults.length > 0) {
               currentHistory.push({ id: "tr-" + Math.random().toString(36).slice(2, 9), role: "user" as const, content: toolResults.join("\n\n"), timestamp: Date.now() });
+              totalToolCalls += toolResults.length;
             }
 
             // Reset streaming state
             emit({ type: "message-end", messageId: lastMessageId || sessionId });
             useChat.setState({ streamingContent: "", thinkingContent: "" });
 
-            // FIX 8: Check for done signal — if LLM says done, stop
-            if (doneMatch) {
-              emit({ type: "activity-bash", command: "completed", result: doneMatch[1] || "Task finished" });
-              break;
-            }
-
             consecutiveRateLimitErrors = 0;
             continue;
           }
 
-          // No tools parsed
-          if (doneMatch) {
-            emit({ type: "activity-bash", command: "completed", result: doneMatch[1] || "Task finished" });
-          }
+          // No tools parsed — turn is complete
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
           break;
         }
@@ -1160,9 +1136,9 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         // Hook: Stop (after loop exits)
         await hookBus.emit("Stop", {
           sessionId,
-          fullContent: "",
+          fullContent: totalFullContent,
           messageCount: currentHistory.length,
-          toolCallsExecuted: 0,
+          toolCallsExecuted: totalToolCalls,
           timestamp: Date.now(),
         });
 
@@ -1174,10 +1150,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           durationMs: Date.now() - sessionStartTime,
           timestamp: Date.now(),
         });
-        sessionStartTimes.delete(sessionId);
       } catch (err) {
         const startTime = sessionStartTimes.get(sessionId) ?? Date.now();
-        sessionStartTimes.delete(sessionId);
         let messageCount = 0;
         try {
           const { useChat } = await import("../store/useAppStore");
@@ -1207,9 +1181,19 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             timestamp: Date.now(),
           });
         }
+      } finally {
+        activeControllers.delete(sessionId);
+        sessionStartTimes.delete(sessionId);
+        const cb = streamCallbacks.get(sessionId);
+        if (cb) streamCallbacks.delete(sessionId);
+        // Clean up file watchers
+        const watcher = fileWatchers.get(sessionId);
+        if (watcher) { watcher(); fileWatchers.delete(sessionId); }
+        // Clean up MCP HTTP sessions
+        mcpHttpSessions.delete(sessionId);
+        // Clean up pending diff proposals
+        pendingDiffProposals.delete(sessionId);
       }
-      activeControllers.delete(sessionId);
-      streamCallbacks.delete(sessionId);
 
     },
     async abort(sessionId) {
@@ -1220,17 +1204,25 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const sessionMessages = useChat.getState().sessionMessages[sessionId];
         messageCount = sessionMessages?.length ?? 0;
       } catch { /* store not available */ }
-      // Hook: SessionEnd
-      await hookBus.emit("SessionEnd", {
-        sessionId,
-        reason: "aborted",
-        messageCount,
-        durationMs: Date.now() - startTime,
-        timestamp: Date.now(),
-      });
+      // Only emit SessionEnd if we're the ones cleaning up (not sendPrompt's finally)
+      if (activeControllers.has(sessionId)) {
+        hookBus.emit("SessionEnd", {
+          sessionId,
+          reason: "aborted",
+          messageCount,
+          durationMs: Date.now() - startTime,
+          timestamp: Date.now(),
+        });
+      }
       const ac = activeControllers.get(sessionId);
       if (ac) { ac.abort(); activeControllers.delete(sessionId); }
       sessionStartTimes.delete(sessionId);
+      // Emit message-end to clean up UI streaming state
+      const cb = streamCallbacks.get(sessionId);
+      if (cb) {
+        cb({ type: "message-end", messageId: sessionId });
+        streamCallbacks.delete(sessionId);
+      }
     },
     async summarizeMessages(model, messages) {
       const { settings, config } = getActiveProvider(false);
@@ -1371,11 +1363,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
   },
 
   settings: {
-    async get(key) { return (getStoredSettings() as any)[key]; },
+    async get<T = unknown>(key: keyof AppSettings): Promise<T> {
+      return (getStoredSettings() as unknown as Record<string, unknown>)[key] as T;
+    },
     async set(key, value) {
-      const s = getStoredSettings();
-      (s as any)[key] = value;
-      storeSettings(s);
+      const s = getStoredSettings() as unknown as Record<string, unknown>;
+      s[key as string] = value;
+      storeSettings(s as never);
     },
     async getAll() { return getStoredSettings(); },
   },
@@ -1694,7 +1688,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 24. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
-  const mcpTagRegex = /<mcp_([\w-]+(?:_[\w-]+)*)((?:\s+[\s\S]*?)?)(\/?)>/gi;
+  const mcpTagRegex = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
   // Hoisted dynamic import to avoid repeating per match
   let mcpServers: { name: string; enabled: boolean; transport?: string; url?: string; command?: string; args?: string[]; env?: Record<string, string> }[] = [];
   try {
@@ -1710,16 +1704,26 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     if (!afterPrefix) continue;
 
     // Try to find the split point by matching against known server names
+    // Prefer exact match, then fall back to prefix match
     let serverName = "";
     let toolName = "";
     let foundServer = false;
-    for (const srv of mcpServers) {
-      const prefix = srv.name + "_";
-      if (afterPrefix.startsWith(prefix)) {
-        serverName = srv.name;
-        toolName = afterPrefix.slice(prefix.length);
-        foundServer = true;
-        break;
+    const exactMatch = mcpServers.find(s => afterPrefix === s.name + "_");
+    if (exactMatch) {
+      serverName = exactMatch.name;
+      toolName = afterPrefix.slice(exactMatch.name.length + 1);
+      foundServer = true;
+    } else {
+      // Sort by name length descending to match longest server name first (e.g. "stitch-api" before "stitch")
+      const sortedServers = [...mcpServers].sort((a, b) => b.name.length - a.name.length);
+      for (const srv of sortedServers) {
+        const prefix = srv.name + "_";
+        if (afterPrefix.startsWith(prefix)) {
+          serverName = srv.name;
+          toolName = afterPrefix.slice(prefix.length);
+          foundServer = true;
+          break;
+        }
       }
     }
     if (!foundServer) {
@@ -1741,7 +1745,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
       }
       toolCalls.push({ name: fullName, args, raw: rawTag });
     } else {
-      const closeTagName = `<\/mcp_${serverName}_${toolName}>`;
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const closeTagName = `<\/mcp_${escapeRegex(serverName)}_${escapeRegex(toolName)}>`;
       const closeRegex = new RegExp(closeTagName, "i");
       const subText = text.slice(mcpMatch.index);
       const closeMatch = closeRegex.exec(subText);
@@ -1848,6 +1853,29 @@ function waitForToolApproval(toolCallId: string): Promise<"approved" | "denied">
 }
 
 async function executeTool(name: string, args: Record<string, any>, workspacePath: string, emit: (event: StreamEvent) => void): Promise<string> {
+  // Validate required args per tool
+  if (name === "read_file" && typeof args.path !== "string") {
+    return "Error: read_file requires a 'path' argument";
+  }
+  if (name === "write_file" && typeof args.path !== "string") {
+    return "Error: write_file requires a 'path' argument";
+  }
+  if (name === "edit_file" && typeof args.path !== "string") {
+    return "Error: edit_file requires a 'path' argument";
+  }
+  if (name === "run_command" && typeof args.command !== "string") {
+    return "Error: run_command requires a 'command' argument";
+  }
+  if (name === "grep_file" && typeof args.path !== "string") {
+    return "Error: grep_file requires a 'path' argument";
+  }
+  if (name === "search_files" && typeof args.pattern !== "string") {
+    return "Error: search_files requires a 'pattern' argument";
+  }
+  if (name === "list_dir" && typeof args.path !== "string") {
+    return "Error: list_dir requires a 'path' argument";
+  }
+
   if (name === "read_file") {
     const { readFile, stat } = await import("@tauri-apps/plugin-fs");
     const MAX_READ_SIZE = 1024 * 1024; // 1MB limit for agent reads
@@ -1904,7 +1932,13 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     if (!original.includes(args.search)) {
       throw new Error(`Search block not found in file: ${args.path}`);
     }
-    const updated = original.replace(args.search, args.replace);
+    let updated = original;
+    if (args.search) {
+      // Replace all occurrences
+      updated = original.split(args.search).join(args.replace);
+    } else {
+      updated = original;
+    }
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
     const oldLines = args.search.split("\n");
     const newLines = args.replace.split("\n");
@@ -1931,7 +1965,14 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "grep_file") {
-    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const { readFile, stat } = await import("@tauri-apps/plugin-fs");
+    try {
+      const fileInfo = await stat(args.path);
+      const fileSize = (fileInfo as any).size ?? 0;
+      if (fileSize > 5 * 1024 * 1024) {
+        return `[File too large to grep: ${(fileSize / 1024 / 1024).toFixed(1)}MB. Use run_command with grep instead.]`;
+      }
+    } catch { /* stat may fail, proceed with read */ }
     const bytes = await readFile(args.path);
     const content = new TextDecoder().decode(bytes);
     const lines = content.split("\n");
@@ -1969,10 +2010,18 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
       return "Error: Invalid regex pattern";
     }
     const globRegex = new RegExp(
-      "^" + fileGlob.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]") + "$"
+      "^" + fileGlob
+        .replace(/\*\*\//g, ".*")  // **/ → match any path prefix
+        .replace(/\*\*/g, ".*")    // ** → match anything
+        .replace(/\*/g, "[^/]*")   // * → match within segment
+        .replace(/\?/g, "[^/]") +  // ? → single char
+      "$"
     );
-    async function searchDir(dir: string, depth: number) {
+    async function searchDir(dir: string, depth: number, visited: Set<string> = new Set()) {
       if (depth > 10 || results.length >= maxResults) return;
+      // Check for symlink cycles by tracking visited directory paths
+      if (visited.has(dir)) return;
+      visited.add(dir);
       const { readDir: rd } = await import("@tauri-apps/plugin-fs");
       let entries;
       try { entries = await rd(dir); } catch { return; }
@@ -1981,9 +2030,15 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
         if (JUNK_DIRS.has(entry.name)) continue;
         const full = joinPath(dir, entry.name!);
         if (entry.isDirectory) {
-          await searchDir(full, depth + 1);
+          await searchDir(full, depth + 1, visited);
         } else {
           if (!globRegex.test(entry.name)) continue;
+          const relPath = full.startsWith(searchPath) ? full.slice(searchPath.length + 1) : full;
+          if (!globRegex.test(relPath) && !globRegex.test(entry.name)) continue;
+          // Skip binary files
+          const ext = entry.name?.split(".").pop()?.toLowerCase() ?? "";
+          const binaryExts = new Set(["png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", "webp", "mp3", "mp4", "avi", "mov", "pdf", "zip", "tar", "gz", "exe", "dll", "so", "dylib", "bin", "dat", "db", "sqlite"]);
+          if (binaryExts.has(ext)) continue;
           try {
             const bytes = await readFile(full);
             const content = new TextDecoder().decode(bytes);
@@ -2009,8 +2064,31 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const program = isWindows ? "powershell" : "bash";
     const commandArgs = isWindows ? ["-Command", args.command] : ["-c", args.command];
     const cmd = Command.create(program, commandArgs, { cwd: workspacePath });
-    const output = await cmd.execute();
-    return (output.stdout + (output.stderr ? "\n" + output.stderr : "")).slice(0, 50000);
+    const child = await cmd.spawn();
+    let killed = false;
+    const timeoutMs = 60_000;
+    const output = await Promise.race([
+      new Promise<string>((resolve) => {
+        let stdout = "";
+        let stderr = "";
+        cmd.stdout.on("data", (data: string) => { if (!killed) stdout += data; });
+        cmd.stderr.on("data", (data: string) => { if (!killed) stderr += data; });
+        cmd.on("close", () => { resolve(stdout + (stderr ? "\n" + stderr : "")); });
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          killed = true;
+          child.kill().catch(() => {});
+          reject(new Error(`Command timed out after ${timeoutMs/1000}s`));
+        }, timeoutMs)
+      ),
+    ]);
+
+    const maxLen = 50000;
+    if (output.length > maxLen) {
+      return output.slice(0, maxLen) + `\n\n[Output truncated at ${Math.round(maxLen/1024)}KB — total was ${Math.round(output.length/1024)}KB. Use head/tail to inspect portions.]`;
+    }
+    return output;
   }
 
   if (name === "git_status") {
@@ -2211,6 +2289,22 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     return lines.join("\n");
   }
 
+  if (name === "get_env") {
+    return "get_env tool is not yet implemented";
+  }
+  if (name === "get_screen_info") {
+    return "get_screen_info tool is not yet implemented";
+  }
+  if (name === "list_processes") {
+    return "list_processes tool is not yet implemented";
+  }
+  if (name === "kill_process") {
+    return "kill_process tool is not yet implemented";
+  }
+  if (name === "get_disk_space") {
+    return "get_disk_space tool is not yet implemented";
+  }
+
   if (name.startsWith("mcp_")) {
     // Parse "mcp_{serverName}_{toolName}" — server name may contain underscores
     const afterPrefix = name.slice(4); // remove "mcp_"
@@ -2290,6 +2384,9 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
       if (json.error) {
         throw new Error(json.error.message || JSON.stringify(json.error));
       }
+      if (!json || typeof json !== "object" || !("result" in json)) {
+        return `[MCP Error: Invalid response format from server "${serverName}"]`;
+      }
       const content = json.result?.content || [];
       return content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
     } else {
@@ -2316,6 +2413,8 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
                   resolved = true;
                   if (parsed.error) {
                     reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
+                  } else if (!parsed || typeof parsed !== "object" || (!("result" in parsed) && !("content" in parsed))) {
+                    resolve(`[MCP Error: Invalid response format from server "${serverName}"]`);
                   } else {
                     const content = parsed.result?.content || parsed.content || [];
                     const text = content.map((c: any) => c.text || JSON.stringify(c)).join("\n");

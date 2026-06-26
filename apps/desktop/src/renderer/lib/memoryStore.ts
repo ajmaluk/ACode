@@ -162,7 +162,13 @@ export async function searchMemories(
     FROM memories m
     JOIN memories_fts ON memories_fts.id = m.id
     WHERE memories_fts MATCH ?`;
-  const params: (string | number)[] = [query];
+  const safeQuery = query.replace(/"/g, '""');
+  // Break multi-word query into individual tokens for better search results
+  // Escape FTS5 special characters in each token
+  const escapeFts = (t: string) => t.replace(/['"*+\-()^~]/g, ' ');
+  const tokens = safeQuery.split(/\s+/).filter(Boolean);
+  const ftsQuery = tokens.map(t => `"${escapeFts(t)}"`).join(" OR ");
+  const params: (string | number)[] = [ftsQuery];
 
   if (category) {
     sql += ` AND m.category = ?`;
@@ -206,39 +212,12 @@ async function searchMemoriesFallback(
   const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
 
   let sql = `SELECT * FROM memories WHERE (content LIKE ? OR summary LIKE ? OR tags LIKE ?)`;
-  const likePattern = `%${query.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+  const likePattern = `%${query.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
   const params: (string | number)[] = [likePattern, likePattern, likePattern];
 
   if (category) {
     sql += ` AND category = ?`;
     params.push(category);
-  }
-  if (excludeStale) {
-    sql += ` AND stale = 0`;
-  }
-  sql += ` ORDER BY updated_at DESC LIMIT ?`;
-  params.push(limit);
-
-  const rows = await db.select(sql, params) as MemoryEntryRow[];
-  return rows.map(parseRow);
-}
-
-/**
- * getMemoriesByCategory() — Direct category query.
- */
-export async function getMemoriesByCategory(
-  category: MemoryCategory,
-  opts: { tier?: MemoryTier; limit?: number; excludeStale?: boolean } = {}
-): Promise<MemoryEntry[]> {
-  const db = getDb();
-  const { tier, limit = 20, excludeStale = true } = opts;
-
-  let sql = `SELECT * FROM memories WHERE category = ?`;
-  const params: (string | number)[] = [category];
-
-  if (tier) {
-    sql += ` AND tier = ?`;
-    params.push(tier);
   }
   if (excludeStale) {
     sql += ` AND stale = 0`;
@@ -458,7 +437,18 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
     tier: (fields.tier as MemoryTier) || "medium",
     content: body.trim(),
     summary: fields.summary || body.trim().slice(0, 150),
-    tags: fields.tags ? fields.tags.split(/,\s*/).map((t) => t.trim().replace(/^"|"$/g, "")).filter(Boolean) : [],
+    tags: (() => {
+      if (!fields.tags) return [];
+      try {
+        const parsed = JSON.parse(fields.tags);
+        if (Array.isArray(parsed)) {
+          return parsed.map((t: string) => String(t).trim()).filter(Boolean);
+        }
+      } catch {
+        // not JSON, fall through to comma split
+      }
+      return fields.tags.split(/,\s*/).map((t: string) => t.trim().replace(/^"|"$/g, "")).filter(Boolean);
+    })(),
     createdAt: parseInt(fields.created_at) || Date.now(),
     updatedAt: parseInt(fields.updated_at) || Date.now(),
     accessCount: 0,
@@ -733,7 +723,7 @@ function parseRow(row: MemoryEntryRow): MemoryEntry {
     tier: row.tier as MemoryTier,
     content: row.content,
     summary: row.summary,
-    tags: typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : row.tags,
+    tags: typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []),
     sourceSession: row.source_session ?? undefined,
     sourceFile: row.source_file ?? undefined,
     createdAt: row.created_at,

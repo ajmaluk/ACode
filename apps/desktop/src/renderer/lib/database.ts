@@ -152,8 +152,15 @@ export async function initDatabase(workspacePath: string): Promise<any> {
   };
 
   dbLoadingPromise = initWork();
-  const db = await dbLoadingPromise;
-  dbLoadingPromise = null;
+  let db: any;
+  try {
+    db = await dbLoadingPromise;
+  } catch (error) {
+    dbInstance = null;
+    throw error;
+  } finally {
+    dbLoadingPromise = null;
+  }
 
   if (db) {
     dbInstance = db;

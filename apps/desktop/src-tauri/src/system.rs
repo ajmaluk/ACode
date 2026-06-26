@@ -129,6 +129,19 @@ pub async fn launch_app(
     args: Option<Vec<String>>,
     cwd: Option<String>,
 ) -> Result<String, String> {
+    // Validate app_name - only allow alphanumeric, dots, hyphens, forward slashes
+    if !app_name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '/' || c == '_') {
+        return Err(format!("Invalid app name: {}", app_name));
+    }
+    // Reject args that look like shell commands
+    if let Some(ref cmd_args) = args {
+        for arg in cmd_args {
+            if arg.contains(';') || arg.contains('|') || arg.contains('&') || arg.contains('$') || arg.contains('`') {
+                return Err(format!("Invalid argument: {}", arg));
+            }
+        }
+    }
+
     let mut cmd = std::process::Command::new(&app_name);
     if let Some(ref cmd_args) = args {
         cmd.args(cmd_args);
@@ -189,12 +202,30 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
 /// Get an environment variable value.
 #[tauri::command]
 pub async fn get_env(key: String) -> Result<String, String> {
-    std::env::var(&key).map_err(|e| format!("Environment variable '{key}' not found: {e}"))
+    let blocked = ["AWS_SECRET_ACCESS_KEY", "AWS_SECRET_KEY", "AWS_ACCESS_KEY_SECRET",
+                   "GITHUB_TOKEN", "GITHUB_SECRET", "DATABASE_URL", "DATABASE_PASSWORD",
+                   "REDIS_URL", "REDIS_PASSWORD", "MONGO_URL", "MONGO_PASSWORD",
+                   "STRIPE_SECRET_KEY", "STRIPE_SECRET", "PAYPAL_CLIENT_SECRET",
+                   "JWT_SECRET", "SECRET_KEY", "PRIVATE_KEY", "API_SECRET",
+                   "ENCRYPTION_KEY", "SIGNING_KEY", "TOKEN_SECRET"];
+    let upper = key.to_uppercase();
+    if blocked.iter().any(|b| upper.contains(&b.to_uppercase())) {
+        return Err(format!("Access to sensitive environment variable '{}' is restricted", key));
+    }
+    std::env::var(&key).map_err(|e| format!("Environment variable '{}' not set: {}", key, e))
 }
 
 /// Set an environment variable (for the current process and child processes).
 #[tauri::command]
 pub async fn set_env(key: String, value: String) -> Result<(), String> {
+    let blocked = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+                   "DYLD_LIBRARY_PATH", "HOME", "USER", "SHELL", "PYTHONPATH",
+                   "NODE_OPTIONS", "BASH_ENV", "ENV", "CDPATH", "GLOBIGNORE",
+                   "HISTFILE", "HISTSIZE", "HISTFILESIZE", "PROMPT_COMMAND",
+                   "PS1", "PS2", "PS3", "PS4", "ENV", "BASH_ENV"];
+    if blocked.contains(&key.as_str()) {
+        return Err(format!("Cannot set restricted environment variable: {}", key));
+    }
     #[cfg(unix)]
     {
         // SAFETY: Used only for passing env to child processes spawned by the agent.
@@ -309,18 +340,26 @@ pub async fn list_processes() -> Result<Vec<ProcessInfo>, String> {
 pub async fn kill_process(pid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
-        std::process::Command::new("kill")
+        let output = std::process::Command::new("kill")
             .args(["-TERM", &pid.to_string()])
             .output()
             .map_err(|e| format!("Failed to kill process {pid}: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("Failed to kill process {}: {}", pid, stderr));
+        }
         Ok(())
     }
     #[cfg(windows)]
     {
-        std::process::Command::new("taskkill")
+        let output = std::process::Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .output()
             .map_err(|e| format!("Failed to kill process {pid}: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(format!("Failed to kill process {}: {}", pid, stderr));
+        }
         Ok(())
     }
     #[cfg(not(any(unix, windows)))]

@@ -169,7 +169,7 @@ export function computeContextStats(
     needsCompaction: ratio >= CTX.CHECKPOINT_HARD,
     shouldPrune: totalTokens > (usableTokens - CTX.PRUNE_PROTECT),
     nextCheckpointTrigger: getNextCheckpointTrigger(ratio),
-    shouldCompact: ratio >= CTX.CHECKPOINT_HARD,
+    shouldCompact: ratio >= 0.95,
   };
 }
 
@@ -335,13 +335,6 @@ export function pruneToolOutputs(
   messages: ChatMessage[],
   toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens
 ): { pruned: ChatMessage[]; tokensReclaimed: number } {
-  // In ACode, tool results are user messages with tool result prefixes
-  const isToolResult = (m: ChatMessage) =>
-    m.role === "user" && typeof m.content === "string" && (
-      m.content.startsWith("[TOOL RESULT:") ||
-      m.content.startsWith("[TOOL ERROR:")
-    );
-
   const toolMessages = messages.filter(isToolResult);
   const totalToolTokens = toolMessages.reduce((s, m) => s + toolTokenEstimate(m), 0);
 
@@ -384,61 +377,5 @@ export function pruneToolOutputs(
   return { pruned, tokensReclaimed };
 }
 
-/**
- * Workspace memory structure.
- */
-export type WorkspaceMemory = {
-  projectOverview: string;
-  keyFiles: string[];
-  buildCommands: string[];
-  learnedRules: string[];
-  lastUpdated: number;
-};
 
-/**
- * Default workspace memory.
- */
-export function createDefaultMemory(): WorkspaceMemory {
-  return {
-    projectOverview: "An AI-native developer desktop environment.",
-    keyFiles: [],
-    buildCommands: ["npm run dev", "npm run build"],
-    learnedRules: [
-      "Always run build checks before declaring a task complete.",
-      "Maintain typescript type safety.",
-    ],
-    lastUpdated: Date.now(),
-  };
-}
-
-/**
- * Merge a learned rule into workspace memory, avoiding duplicates.
- */
-export function addLearnedRule(memory: WorkspaceMemory, rule: string): WorkspaceMemory {
-  const trimmed = rule.trim();
-  if (!trimmed || memory.learnedRules.includes(trimmed)) {
-    return memory;
-  }
-  return {
-    ...memory,
-    learnedRules: [...memory.learnedRules, trimmed],
-    lastUpdated: Date.now(),
-  };
-}
-
-/**
- * Format workspace memory for system prompt injection.
- */
-export function formatMemoryForPrompt(memory: WorkspaceMemory): string {
-  return [
-    "\n\n=== PERSISTENT WORKSPACE MEMORY ===",
-    `Project Overview: ${memory.projectOverview}`,
-    `Key Files: ${memory.keyFiles.length > 0 ? memory.keyFiles.join(", ") : "None specified"}`,
-    `Build Commands: ${memory.buildCommands.join(", ")}`,
-    "Learned Rules:",
-    ...memory.learnedRules.map((r) => `  - ${r}`),
-    `Last Updated: ${new Date(memory.lastUpdated).toISOString()}`,
-    "===================================",
-  ].join("\n");
-}
 

@@ -90,6 +90,7 @@ export type ChatMessage = {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: number;
+  parentID?: string;
   toolCall?: ToolCall;
   toolCalls?: ToolCall[];
   thinking?: string;
@@ -103,12 +104,12 @@ export type ChatMessage = {
 };
 
 export type PendingActivity =
-  | { type: "think"; content: string }
-  | { type: "explore"; query: string; kind?: "files" | "grep" | "symbols" | "definition"; matches: { path: string; line?: number; preview?: string }[] }
-  | { type: "read"; path: string; content: string; lineRange?: [number, number] }
-  | { type: "skill"; name: string; content: string; args?: string }
-  | { type: "bash"; command: string; result: string }
-  | { type: "plan"; plan: string };
+  | { type: "think"; id: string; content: string }
+  | { type: "explore"; id: string; query: string; kind?: "files" | "grep" | "symbols" | "definition"; matches: { path: string; line?: number; preview?: string }[] }
+  | { type: "read"; id: string; path: string; content: string; lineRange?: [number, number] }
+  | { type: "skill"; id: string; name: string; content: string; args?: string }
+  | { type: "bash"; id: string; command: string; result: string }
+  | { type: "plan"; id: string; plan: string };
 
 export type ToolCall = {
   id: string;
@@ -175,7 +176,7 @@ export type McpServer = {
   enabled: boolean;
   status: "disconnected" | "connecting" | "connected" | "error";
   error?: string;
-  tools?: { name: string; description: string }[];
+  tools?: { name: string; description: string; inputSchema?: Record<string, unknown> }[];
   scope?: "user" | "project";
 };
 
@@ -206,6 +207,7 @@ export type ChatSessionSummary = {
   title: string;
   agentName: string;
   mode: AgentSessionMode;
+  model?: string;
   startedAt: number;
   lastActivityAt: number;
   messageCount: number;
@@ -320,7 +322,7 @@ export type SkillInfo = {
   content: string;
   location: string;   // absolute path to SKILL.md
   hidden?: boolean;
-  source: "bundled" | "user-global" | "user-workspace" | "project";
+  source: "bundled" | "user-global" | "user-workspace" | "user" | "project";
 };
 
 export type SkillInvocation = {

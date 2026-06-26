@@ -222,6 +222,50 @@ export function ReadBlock({ path, content, lineRange }: { path: string; content:
 }
 
 // ============================================================================
+// ContextGatheringGroup — collapsible group for explore/read activities
+// ============================================================================
+
+export function ContextGatheringGroup({ activities }: { activities: import("@acode/shared-types").PendingActivity[] }) {
+  const [open, setOpen] = useState(false);
+  if (activities.length === 0) return null;
+
+  const exploreCount = activities.filter(a => a.type === "explore").length;
+  const readCount = activities.filter(a => a.type === "read").length;
+  const parts: string[] = [];
+  if (exploreCount > 0) parts.push(`${exploreCount} search${exploreCount !== 1 ? "s" : ""}`);
+  if (readCount > 0) parts.push(`${readCount} file read${readCount !== 1 ? "s" : ""}`);
+
+  return (
+    <div className="my-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full opacity-60 hover:opacity-100 transition-opacity cursor-pointer text-acode-text-secondary"
+        title={open ? "Click to collapse context" : "Click to expand context"}
+      >
+        <ChevronDown className={`w-3 h-3 text-acode-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`} />
+        <Search className="w-3 h-3 flex-shrink-0 opacity-80" />
+        <span className="truncate">Gathered context ({parts.join(", ")})</span>
+        <span className="ml-auto text-[10px] tabular-nums opacity-70">{activities.length} items</span>
+      </button>
+      {open && (
+        <div className="ml-3.5 mt-1 pl-3 border-l border-acode-border-primary/60 text-[12px] text-acode-text-secondary/80 leading-relaxed space-y-1">
+          {activities.map((activity) => {
+            if (activity.type === "explore") {
+              return <ExploreBlock key={activity.id} result={activity} />;
+            }
+            if (activity.type === "read") {
+              return <ReadBlock key={activity.id} path={activity.path} content={activity.content} lineRange={activity.lineRange} />;
+            }
+            return null;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // SkillBlock — $skill invocation
 // ============================================================================
 
@@ -347,7 +391,7 @@ export function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
 }
 
 function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(toolCall.status === "awaiting-approval");
   const { resolveToolApproval } = useChat();
   const openDiff = useDiffView((s) => s.openFile);
   const needsApproval = toolCall.status === "awaiting-approval";

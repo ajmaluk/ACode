@@ -60,7 +60,7 @@ describe("memoryGraph", () => {
   describe("hitTest", () => {
     it("finds node at coordinates", () => {
       const nodes = [
-        { id: "1", label: "Test", type: "memory" as const, x: 100, y: 100, size: 10, color: "#fff", connections: [] },
+        { id: "1", label: "Test", type: "memory" as const, x: 100, y: 100, vx: 0, vy: 0, size: 10, color: "#fff", connections: [] },
       ];
       const result = hitTest(nodes, 100, 100);
       expect(result?.id).toBe("1");
@@ -68,7 +68,7 @@ describe("memoryGraph", () => {
 
     it("returns null when no node at coordinates", () => {
       const nodes = [
-        { id: "1", label: "Test", type: "memory" as const, x: 100, y: 100, size: 10, color: "#fff", connections: [] },
+        { id: "1", label: "Test", type: "memory" as const, x: 100, y: 100, vx: 0, vy: 0, size: 10, color: "#fff", connections: [] },
       ];
       const result = hitTest(nodes, 500, 500);
       expect(result).toBeNull();

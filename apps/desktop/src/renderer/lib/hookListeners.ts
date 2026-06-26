@@ -354,10 +354,4 @@ export function registerHookListeners(): {
   };
 }
 
-/**
- * Get accumulated tool stats for the current or all sessions.
- */
-export function getToolStats(sessionId?: string): ToolStats | Map<string, ToolStats> {
-  if (sessionId) return sessionStats.get(sessionId) ?? { calls: 0, errors: 0, totalDurationMs: 0, byTool: {} };
-  return sessionStats;
-}
+

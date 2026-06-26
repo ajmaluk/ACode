@@ -76,6 +76,9 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
   const activeMemories = await getAllMemories({ excludeStale: true });
 
   // 3. Relative date adjustments via LLM
+  // NOTE: Each memory has unique content and creation timestamp, requiring individual LLM calls.
+  // Batching is not feasible here because the prompt includes memory-specific timestamps and
+  // content that must be processed independently to produce accurate absolute date replacements.
   let dateAdjustedCount = 0;
   const relativeTimeWords = /\b(recently|yesterday|last week|currently|now|tomorrow|ago)\b/i;
 
@@ -136,6 +139,10 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
   const freshMemories = await getAllMemories({ excludeStale: true });
 
   // 4. Deduplication and merging
+  // NOTE: Each memory pair has unique content requiring individual LLM merge calls.
+  // Sequential processing is required because: (1) each pair produces a unique merged
+  // result, (2) marking memories as stale mid-loop affects subsequent comparisons,
+  // and (3) the LLM needs full context of both memories to produce a coherent merge.
   let deduplicatedCount = 0;
   const categories = Array.from(new Set(freshMemories.map(m => m.category)));
 
@@ -243,21 +250,55 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
 }
 
 /**
- * Triggers background consolidation if >= 24 hours have elapsed.
+ * Active dream cycle timeout IDs for cancellation support.
+ * Maps workspacePath to the timeout ID so each workspace can be cancelled independently.
  */
-export async function triggerDreamCycleIfNeeded(workspacePath: string) {
+const activeDreamTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Cancel a pending or running dream cycle for a specific workspace.
+ */
+export function cancelDreamCycle(workspacePath: string): void {
+  const timeoutId = activeDreamTimeouts.get(workspacePath);
+  if (timeoutId !== undefined) {
+    clearTimeout(timeoutId);
+    activeDreamTimeouts.delete(workspacePath);
+    console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${workspacePath}`);
+  }
+}
+
+/**
+ * Cancel all pending dream cycles across all workspaces.
+ */
+export function cancelAllDreamCycles(): void {
+  for (const [path, timeoutId] of activeDreamTimeouts) {
+    clearTimeout(timeoutId);
+    console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${path}`);
+  }
+  activeDreamTimeouts.clear();
+}
+
+/**
+ * Triggers background consolidation if >= 24 hours have elapsed.
+ * Returns a cancel function that can be used to abort the deferred dream cycle.
+ */
+export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
   const lastDreamStr = localStorage.getItem(`acode.lastDreamTime.${workspacePath}`);
   const now = Date.now();
   if (lastDreamStr) {
     const lastDream = parseInt(lastDreamStr, 10);
     const minMs = 24 * 60 * 60 * 1000; // 24 hours
     if (now - lastDream < minMs) {
-      return; // Not enough time passed
+      return () => {}; // Not enough time passed, return no-op cancel
     }
   }
 
-  // Run dream cycle in background
-  setTimeout(() => {
+  // Cancel any existing pending dream for this workspace
+  cancelDreamCycle(workspacePath);
+
+  // Run dream cycle in background with cancellation support
+  const timeoutId = setTimeout(() => {
+    activeDreamTimeouts.delete(workspacePath);
     runDreamCycle(workspacePath)
       .then(() => {
         localStorage.setItem(`acode.lastDreamTime.${workspacePath}`, Date.now().toString());
@@ -266,6 +307,13 @@ export async function triggerDreamCycleIfNeeded(workspacePath: string) {
         console.error("[DreamAgent] Background dream cycle failed:", err);
       });
   }, 5000); // 5s deferral to not block application startup
+
+  activeDreamTimeouts.set(workspacePath, timeoutId);
+
+  // Return a cancel function for the caller
+  return () => {
+    cancelDreamCycle(workspacePath);
+  };
 }
 
 /**

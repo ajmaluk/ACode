@@ -125,12 +125,16 @@ export function evaluate(ruleset: PermissionRuleset, permission: string, pattern
 const BASH_ARITY: Record<string, number> = {
   // 1-token commands
   cat: 1, cd: 1, chmod: 1, chown: 1, cp: 1, echo: 1, env: 1, export: 1,
-  grep: 1, kill: 1, killall: 1, ln: 1, ls: 1, mkdir: 1, mv: 1, ps: 1,
+  grep: 1, ln: 1, ls: 1, mkdir: 1, mv: 1, ps: 1,
   pwd: 1, rm: 1, rmdir: 1, sleep: 1, source: 1, tail: 1, touch: 1,
   unset: 1, which: 1, find: 1, sed: 1, awk: 1, sort: 1, uniq: 1, wc: 1,
   head: 1, diff: 1, tar: 1, zip: 1, unzip: 1, curl: 1, wget: 1,
   date: 1, whoami: 1, hostname: 1, uname: 1, df: 1, du: 1, top: 1, htop: 1,
   less: 1, more: 1, man: 1, open: 1, pbcopy: 1, pbpaste: 1,
+  // DANGEROUS: kill and killall are removed from allowed commands.
+  // These can terminate critical system processes and are blocked by default.
+  // If process termination is needed, use explicit permission rules.
+  // taskkill (Windows equivalent) is also blocked for the same reason.
   // 2-token commands
   "aws s3": 2, "brew install": 2, "bun install": 2, "cargo build": 2,
   "cmake build": 2, "composer require": 2, "deno run": 2, "docker run": 2,
@@ -170,6 +174,18 @@ const BASH_ARITY: Record<string, number> = {
 };
 
 /**
+ * Dangerous shell commands that should always require explicit permission.
+ * These commands can cause irreversible damage (process termination, data loss,
+ * system modification) and are blocked from automatic allowlisting.
+ */
+export const DANGEROUS_SHELL_COMMANDS = new Set([
+  "kill", "killall", "taskkill", "taskkill /f",
+  "rm -rf /", "rm -rf /*", "rm -rf ~",
+  "mkfs", "dd", "format",
+  ":(){:|:&};:",  // fork bomb
+]);
+
+/**
  * Given a full shell command like `git checkout main -b feature/x`, return
  * the canonical "human-readable" command using the arity dictionary
  * (e.g. `git checkout`). This is the pattern the ruleset will be evaluated
@@ -184,6 +200,21 @@ export function canonicaliseBashCommand(command: string): string {
     }
   }
   return tokens[0] ?? "";
+}
+
+/**
+ * Check if a shell command contains dangerous operations that should
+ * always require explicit permission, regardless of the permission ruleset.
+ * Returns true if the command matches a dangerous pattern.
+ */
+export function isDangerousCommand(command: string): boolean {
+  const lower = command.toLowerCase().trim();
+  for (const dangerous of DANGEROUS_SHELL_COMMANDS) {
+    if (lower.startsWith(dangerous) || lower.includes(" " + dangerous + " ")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ============================================================================
@@ -370,6 +401,23 @@ export function defaultAgentName(): PrimaryAgentName {
 }
 
 // ============================================================================
+// Stop words for prompt similarity comparison
+// ============================================================================
+
+const STOP_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "shall", "can", "need", "dare", "ought",
+  "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+  "as", "into", "through", "during", "before", "after", "above", "below",
+  "between", "out", "off", "over", "under", "again", "further", "then",
+  "once", "here", "there", "when", "where", "why", "how", "all", "both",
+  "each", "few", "more", "most", "other", "some", "such", "no", "nor",
+  "not", "only", "own", "same", "so", "than", "too", "very", "just",
+  "don", "now",
+]);
+
+// ============================================================================
 // Auto-Agent Selection — Evolver-inspired adaptive agent routing
 // ============================================================================
 
@@ -426,12 +474,6 @@ export function autoSelectAgent(prompt: string, currentAgent: PrimaryAgentName):
     return "build";
   }
 
-  // Complex multi-step → yolo agent (if user has enabled it)
-  const complexPatterns = ["refactor entire", "migrate all", "rewrite from scratch", "overhaul complete"];
-  if (complexPatterns.some(p => lower.includes(p))) {
-    return "yolo";
-  }
-
   // Default: keep current agent
   return currentAgent;
 }
@@ -444,9 +486,9 @@ function learnFromHistory(history: SelectionRecord[], prompt: string): PrimaryAg
 
   // Find similar past prompts and check which agent worked best
   const similar = history.filter(h => {
-    const hWords = new Set(h.prompt.toLowerCase().split(/\s+/));
-    const pWords = new Set(prompt.split(/\s+/));
-    const intersection = [...hWords].filter(w => pWords.has(w)).length;
+    const hWords = h.prompt.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    const pWords = prompt.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    const intersection = hWords.filter(w => pWords.includes(w)).length;
     return intersection >= 2; // At least 2 common words
   });
 
@@ -497,11 +539,6 @@ export function detectAgentNeed(prompt: string): { agent: PrimaryAgentName; reas
   // Architecture/design detection
   if (lower.includes("architecture") || lower.includes("design pattern") || lower.includes("system design")) {
     return { agent: "plan", reason: "Architecture discussion detected" };
-  }
-
-  // Refactoring detection
-  if (lower.includes("refactor") && (lower.includes("entire") || lower.includes("all") || lower.includes("complete"))) {
-    return { agent: "yolo", reason: "Large refactoring detected" };
   }
 
   return null;
