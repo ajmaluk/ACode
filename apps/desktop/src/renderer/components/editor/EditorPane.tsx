@@ -1647,7 +1647,7 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
               : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0"><MarkdownContent content={seg.content} /></div>
           )}
           {pending && (
-            <span className="inline-block w-1.5 h-3.5 bg-dalam-accent-primary ml-0.5 animate-pulse-soft rounded-sm align-middle" />
+            <span className="inline-block w-[2px] h-4 bg-dalam-accent-primary ml-0.5 animate-typing-cursor rounded-sm align-middle" />
           )}
         </div>
       )}

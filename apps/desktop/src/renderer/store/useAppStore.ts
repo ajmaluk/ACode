@@ -25,9 +25,9 @@ import type {
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
-import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection, type PermissionKey } from "@/lib/agents";
+import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
-import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, buildCompactionPrompt, parseContextWindow, type ContextStats } from "@/lib/contextManager";
+import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, buildCompactionPrompt, parseContextWindow } from "@/lib/contextManager";
 
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
@@ -62,12 +62,6 @@ const TAG_TO_TOOL: Record<string, string> = {
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
 const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "clipboard_read", "system_info", "memory_search", "memory_stats"]);
-
-interface ParsedXmlToolCall {
-  toolCall: import("@dalam/shared-types").ToolCall;
-  rawMatch: string;
-  matchIndex: number;
-}
 
 /**
  * Parse XML-style tool calls from assistant text content.
@@ -252,6 +246,7 @@ type WorkspaceState = {
   openWorkspace: () => Promise<void>;
   loadWorkspace: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
+  removeWorkspace: (id: string) => void;
   setActiveFile: (path: string | null) => void;
   openFile: (path: string) => Promise<void>;
   closeTab: (path: string) => void;
@@ -259,6 +254,7 @@ type WorkspaceState = {
   setCursor: (path: string, line: number, column: number) => void;
   markSaved: (path: string) => void;
   refreshFileTree: () => Promise<void>;
+  loadFileTree: (path: string) => Promise<void>;
   createFile: (parentPath: string, name: string) => Promise<void>;
   createDirectory: (parentPath: string, name: string) => Promise<void>;
   deletePath: (path: string) => Promise<void>;
@@ -401,6 +397,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       void loadWorkspaceConfigAndSessions(ws.path);
     }
   },
+  removeWorkspace(id) {
+    const { workspaces, activeWorkspaceId } = get();
+    const newWorkspaces = workspaces.filter((w) => w.id !== id);
+    const newActiveId = activeWorkspaceId === id
+      ? (newWorkspaces[0]?.id ?? null)
+      : activeWorkspaceId;
+    set({
+      workspaces: newWorkspaces,
+      activeWorkspaceId: newActiveId,
+      fileTree: [],
+      openTabs: [],
+      activeFilePath: null,
+    });
+    savePersistedWorkspaces(newWorkspaces, newActiveId);
+    if (newActiveId) {
+      const ws = newWorkspaces.find((w) => w.id === newActiveId);
+      if (ws) {
+        void loadWorkspaceConfigAndSessions(ws.path);
+      }
+    }
+  },
   setActiveFile(path) {
     set({ activeFilePath: path });
   },
@@ -488,6 +505,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  async loadFileTree(path) {
+    try {
+      const api = createDalamAPI();
+      const tree = await api.fs.listDir(path);
+      set({ fileTree: tree });
+    } catch (err) {
+      console.error("Failed to load file tree:", err);
+    }
+  },
+
   async createFile(parentPath, name) {
     try {
       const api = createDalamAPI();
@@ -549,20 +576,33 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 type GitState = {
   status: GitStatus | null;
   loading: boolean;
+  error: string | null;
   refresh: () => Promise<void>;
 };
 
 export const useGit = create<GitState>((set) => ({
   status: null,
   loading: false,
+  error: null,
   async refresh() {
+    const { activeWorkspaceId, workspaces } = useWorkspace.getState();
+    const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+    if (!ws) {
+      set({ status: null, error: null, loading: false });
+      return;
+    }
     const api = createDalamAPI();
-    set({ loading: true });
+    set({ loading: true, error: null });
     try {
-      const status = await api.git.status(".");
-      set({ status });
-    } catch {
-      set({ status: null });
+      const status = await api.git.status(ws.path);
+      set({ status, error: null });
+    } catch (err) {
+      const msg = (err as Error)?.message ?? "Unknown error";
+      if (msg.includes("not a git repository") || msg.includes("not found") || msg.includes("No such file")) {
+        set({ status: null, error: "not_initialized" });
+      } else {
+        set({ status: null, error: msg });
+      }
     } finally {
       set({ loading: false });
     }
@@ -958,7 +998,7 @@ async function _doSaveWorkspaceData() {
 
     const projectMcpServers = useSkillsMcp.getState().mcpServers
       .filter((m) => m.scope === "project")
-      .map(({ status, tools, error, ...rest }) => ({
+      .map(({ status: _status, tools: _tools, error: _error, ...rest }) => ({
         ...rest,
         // Preserve current connection status instead of forcing disconnected
         status: status || "disconnected",
@@ -1281,20 +1321,20 @@ export const useChat = create<ChatState>((set, get) => ({
       // don't overwrite the fresh state with stale abort data
       const currentSession = get().session;
       const isStillOurSession = currentSession && currentSession.id === sessionId;
-      set({
-        isStreaming: false,
-        streamingContent: "",
-        thinkingContent: "",
-        pendingToolCalls: [],
-        pendingActivities: [],
-        _safetyTimer: null,
-        ...(isStillOurSession ? {
+      if (isStillOurSession) {
+        set({
+          isStreaming: false,
+          streamingContent: "",
+          thinkingContent: "",
+          pendingToolCalls: [],
+          pendingActivities: [],
+          _safetyTimer: null,
           chatSessions: get().chatSessions.map((s) =>
             s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now() } : s
           ),
           session: { ...currentSession, status: "aborted" },
-        } : {}),
-      });
+        });
+      }
     }
   },
 
@@ -1378,7 +1418,7 @@ export const useChat = create<ChatState>((set, get) => ({
     get().saveVersion(session.id, content.length > 60 ? content.slice(0, 57) + "…" : content);
 
     // Safety timeout: if streaming doesn't start within 30s or never ends, force clear
-    const SAFETY_TIMEOUT_MS = 300_000; // 5 minutes — matches agent loop timeout
+    const SAFETY_TIMEOUT_MS = 60_000; // 60 seconds — detect hung streams quickly
     const safetyTimer = setTimeout(() => {
       const state = get();
       if (state.isStreaming) {
@@ -1444,6 +1484,14 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   appendStream(event) {
+    const _log = (...args: unknown[]) => {
+      try {
+        if (typeof window !== "undefined" && (window as any).__DALAM_DEBUG) {
+          console.log("[DALAM:store]", ...args);
+        }
+      } catch { /* ignore */ }
+    };
+    _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content.length}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
     switch (event.type) {
       case "message-start": {
         const pending = get().pendingToolCalls;
@@ -1478,22 +1526,22 @@ export const useChat = create<ChatState>((set, get) => ({
         set((s) => {
           // Try to find the tool that matches this file path first
           let idx = s.pendingToolCalls.findIndex(
-            tc => (tc.status === "awaiting-approval" || tc.status === "pending") &&
-                  tc.args.path === proposal.filePath
+            tc => (tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
+                  tc.args.path === proposal.filePath && !tc.diffId
           );
           // Fall back: try matching by tool name (write_file/edit_file) + any path arg
           if (idx === -1) {
             idx = s.pendingToolCalls.findIndex(
-              tc => (tc.status === "awaiting-approval" || tc.status === "pending") &&
+              tc => (tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
                     (tc.name === "write_file" || tc.name === "edit_file") &&
-                    typeof tc.args.path === "string"
+                    typeof tc.args.path === "string" && !tc.diffId
             );
           }
           // Last resort: pick the most recent pending tool that has no diff yet
           if (idx === -1) {
             for (let i = s.pendingToolCalls.length - 1; i >= 0; i--) {
               const tc = s.pendingToolCalls[i];
-              if ((tc.status === "awaiting-approval" || tc.status === "pending") && !tc.diffId) {
+              if ((tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") && !tc.diffId) {
                 idx = i;
                 break;
               }
@@ -1504,16 +1552,14 @@ export const useChat = create<ChatState>((set, get) => ({
           updated[idx] = { ...updated[idx], diffId: proposal.diffId, diff: proposal };
           return { pendingToolCalls: updated };
         });
-        // Open diff view so user can preview the proposed change,
-        // but only if not streaming to avoid hijacking the terminal tab
-        if (!get().isStreaming) {
-          useDiffView.getState().openFile({
-            path: proposal.filePath,
-            action: "modified",
-            additions: proposal.hunks.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0),
-            deletions: proposal.hunks.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0),
-          });
-        }
+        // Open diff view so user can preview the proposed change
+        // Always open — even during streaming — so the diff is visible immediately
+        useDiffView.getState().openFile({
+          path: proposal.filePath,
+          action: proposal.oldContent === "" ? "created" : "modified",
+          additions: proposal.hunks.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0),
+          deletions: proposal.hunks.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0),
+        });
         break;
       }
       case "message-end": {
@@ -1576,6 +1622,7 @@ export const useChat = create<ChatState>((set, get) => ({
             timestamp: Date.now(),
             ...(lastUserMsgId ? { parentID: lastUserMsgId } : {}),
             ...(thinkingContent ? { thinking: thinkingContent } : {}),
+            ...(_pendingChanges.length > 0 ? { fileChanges: [..._pendingChanges] } : {}),
             ...(allToolCalls.length > 0 ? { toolCalls: allToolCalls } : {}),
             ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
           };
@@ -1698,7 +1745,19 @@ export const useChat = create<ChatState>((set, get) => ({
             ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
           }).then((decision) => {
             get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied");
-          });
+            // Persist "always allow" so future tools of the same kind are auto-approved
+            if (decision === "always") {
+              usePermission.getState().allowAlways({
+                id: "perm-" + Math.random().toString(36).slice(2, 9),
+                createdAt: Date.now(),
+                kind: permissionKey,
+                title: tool.name,
+                description,
+                ...(commandStr ? { command: commandStr } : {}),
+                ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
+              });
+            }
+          }).catch((err) => console.error("Permission dialog error:", err));
         } else {
           get().resolveToolApproval(tool.id, "approved");
         }
@@ -1896,7 +1955,18 @@ export const useChat = create<ChatState>((set, get) => ({
           if (event.toolCallId) {
             get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied");
           }
-        });
+          // Persist "always allow" so future tools of the same kind are auto-approved
+          if (decision === "always") {
+            usePermission.getState().allowAlways({
+              id: "perm-" + Math.random().toString(36).slice(2, 9),
+              createdAt: Date.now(),
+              kind: permKind,
+              title: "Permission required",
+              description: event.description ?? `Dalam wants to run: ${event.kind}`,
+              ...(event.command ? { command: event.command } : {}),
+            });
+          }
+        }).catch((err) => console.error("Permission dialog error:", err));
         break;
       }
       case "ask-question": {
@@ -1923,22 +1993,28 @@ export const useChat = create<ChatState>((set, get) => ({
         const newSessionMessages = sessionId
           ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), errorMsg] }
           : get().sessionMessages;
-        set((s) => ({
-          isStreaming: false,
-          streamingContent: "",
-          thinkingContent: "",
-          pendingToolCalls: [],
-          pendingActivities: [],
-          messages: [...s.messages, errorMsg],
-          sessionMessages: newSessionMessages,
-          chatSessions: s.session
-            ? s.chatSessions.map((cs) =>
-                cs.id === s.session!.id
-                  ? { ...cs, status: "error", lastActivityAt: Date.now() }
-                  : cs
-              )
-            : s.chatSessions,
-        }));
+        set((s) => {
+          // Clear safety timer on error
+          const timer = s._safetyTimer;
+          if (timer) clearTimeout(timer);
+          return {
+            isStreaming: false,
+            streamingContent: "",
+            thinkingContent: "",
+            pendingToolCalls: [],
+            pendingActivities: [],
+            _safetyTimer: null,
+            messages: [...s.messages, errorMsg],
+            sessionMessages: newSessionMessages,
+            chatSessions: s.session
+              ? s.chatSessions.map((cs) =>
+                  cs.id === s.session!.id
+                    ? { ...cs, status: "error", lastActivityAt: Date.now() }
+                    : cs
+                )
+              : s.chatSessions,
+          };
+        });
         if (sessionId) {
           savePersistedMessages(newSessionMessages);
           savePersistedSessionSummaries(get().chatSessions);
@@ -2066,10 +2142,10 @@ export const useChat = create<ChatState>((set, get) => ({
     void get().abort(id).catch(() => {});
     api.agent.cleanupStream(id);
     set((s) => {
-      const { [id]: _, ...restVersions } = s.sessionVersions;
-      const { [id]: __, ...restMessages } = s.sessionMessages;
-      const { [id]: ___, ...restAgents } = s.sessionAgentName;
-      const { [id]: ____, ...restCompaction } = s.compactionSummaries;
+      const { [id]: _removed1, ...restVersions } = s.sessionVersions;
+      const { [id]: _removed2, ...restMessages } = s.sessionMessages;
+      const { [id]: _removed3, ...restAgents } = s.sessionAgentName;
+      const { [id]: _removed4, ...restCompaction } = s.compactionSummaries;
       const newSessions = s.chatSessions.filter((cs) => cs.id !== id);
       savePersistedVersions(restVersions);
       savePersistedMessages(restMessages);
@@ -2522,7 +2598,7 @@ const BUNDLED_SKILLS_STORAGE_KEY = "dalam.bundledSkillsStates.v1";
 function saveMcpServers(servers: McpServer[]) {
   const userServers = servers
     .filter((m) => m.scope !== "project")
-    .map(({ status, tools, error, ...rest }) => ({
+    .map(({ status: _status, tools: _tools, error: _error, ...rest }) => ({
       ...rest,
       status: "disconnected" as const,
     }));

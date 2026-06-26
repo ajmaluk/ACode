@@ -19,7 +19,7 @@
  *   - ChangesCard    — file changes (open diff, +/- stats)
  *   - TodoBlock      — todo list checklist
  */
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   CheckCircle2,
   FileText,
@@ -32,6 +32,13 @@ import {
   Search,
   FilePlus,
   Shield,
+  Folder,
+  FolderOpen,
+  File,
+  FileCode,
+  FileJson,
+  FileImage,
+  FileType,
 } from "lucide-react";
 import type {
   FileChange,
@@ -390,8 +397,201 @@ export function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
   );
 }
 
+// ============================================================================
+// Smart tool result display — renders results as nice UI instead of raw JSON
+// ============================================================================
+
+function ArgsDisplay({ toolName, args }: { toolName: string; args: Record<string, any> }) {
+  const [expanded, setExpanded] = useState(false);
+  const entries = Object.entries(args).filter(([k]) => k !== "api_key" && k !== "token");
+
+  if (entries.length === 0) {
+    return <span className="text-dalam-text-muted text-[10px] italic">No arguments</span>;
+  }
+
+  // Compact inline display for common tools
+  const compact = (() => {
+    if (toolName === "read_file" || toolName === "write_file" || toolName === "edit_file" || toolName === "list_dir") {
+      const p = args.path as string;
+      if (p) return p;
+    }
+    if (toolName === "run_command") return `$ ${args.command}`;
+    if (toolName === "grep_file") return `${args.pattern} in ${args.path ?? "."}`;
+    if (toolName === "search_files") return `"${args.pattern}" in ${args.path ?? "."}`;
+    if (toolName === "fetch_url") return args.url;
+    if (toolName === "create_file") return args.path;
+    return null;
+  })();
+
+  return (
+    <div>
+      {compact ? (
+        <div className="font-mono text-dalam-text-primary bg-dalam-bg-secondary/30 rounded-md px-2 py-1 flex items-center gap-1.5">
+          <span className="text-dalam-text-muted">{args.mode ? `[${args.mode}]` : ""}</span>
+          <span className="truncate">{compact}</span>
+        </div>
+      ) : (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="font-mono text-dalam-text-primary bg-dalam-bg-secondary/30 rounded-md px-2 py-1 w-full text-left hover:bg-dalam-bg-hover/30 transition-colors"
+        >
+          {expanded ? "Hide" : "Show"} {entries.length} params
+        </button>
+      )}
+      {expanded && (
+        <pre className="font-mono text-[10px] whitespace-pre-wrap break-words bg-dalam-bg-secondary/30 rounded-md p-2 mt-1 max-h-32 overflow-y-auto scrollbar-thin">
+          {entries.map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n")}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function getFileIconForName(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["js", "jsx", "ts", "tsx", "mjs", "cjs"].includes(ext)) return FileCode;
+  if (["json", "jsonc"].includes(ext)) return FileJson;
+  if (["png", "jpg", "jpeg", "gif", "svg", "ico", "webp"].includes(ext)) return FileImage;
+  if (["md", "txt", "rst", "log"].includes(ext)) return FileText;
+  if (["css", "scss", "less", "html", "htm"].includes(ext)) return FileType;
+  return File;
+}
+
+function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, any> }) {
+  const openFile = useWorkspace((s) => s.openFile);
+  const openDiff = useDiffView((s) => s.openFile);
+
+  // list_dir: parse JSON array of { name, path, type }
+  if (toolName === "list_dir" && result.startsWith("[")) {
+    try {
+      const items: { name: string; path: string; type: string }[] = JSON.parse(result);
+      const dirs = items.filter((i) => i.type === "directory").sort((a, b) => a.name.localeCompare(b.name));
+      const files = items.filter((i) => i.type !== "directory").sort((a, b) => a.name.localeCompare(b.name));
+      return (
+        <div className="space-y-0.5">
+          {dirs.map((item) => {
+            const Icon = Folder;
+            return (
+              <button
+                key={item.path}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-left hover:bg-dalam-bg-hover/50 transition-colors w-full group"
+                onClick={(e) => { e.stopPropagation(); openFile(item.path); }}
+              >
+                <Icon className="w-3 h-3 text-dalam-accent-primary flex-shrink-0" />
+                <span className="text-dalam-text-primary text-[11px] group-hover:text-dalam-accent-primary transition-colors">{item.name}/</span>
+              </button>
+            );
+          })}
+          {files.map((item) => {
+            const Icon = getFileIconForName(item.name);
+            return (
+              <button
+                key={item.path}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-left hover:bg-dalam-bg-hover/50 transition-colors w-full group"
+                onClick={(e) => { e.stopPropagation(); openFile(item.path); }}
+              >
+                <Icon className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
+                <span className="text-dalam-text-primary text-[11px] group-hover:text-dalam-accent-primary transition-colors">{item.name}</span>
+              </button>
+            );
+          })}
+          <div className="text-[10px] text-dalam-text-muted pt-0.5">{dirs.length} {dirs.length === 1 ? "folder" : "folders"}, {files.length} {files.length === 1 ? "file" : "files"}</div>
+        </div>
+      );
+    } catch { /* fall through to raw display */ }
+  }
+
+  // grep_file / search_files: parse "lineNum: text" or "file:lineNum: text"
+  if ((toolName === "grep_file" || toolName === "search_files") && !result.startsWith("Error")) {
+    const lines = result.split("\n").filter(Boolean);
+    if (lines.length > 0 && /^\d+:|^[\w/.-]+:\d+:/.test(lines[0])) {
+      const isSearch = toolName === "search_files";
+      return (
+        <div className="space-y-0.5 max-h-48 overflow-y-auto scrollbar-thin">
+          {lines.map((line, idx) => {
+            if (isSearch) {
+              // Format: filePath:lineNum: text
+              const match = line.match(/^(.+?):(\d+):(.*)$/);
+              if (match) {
+                const [, filePath, lineNum, text] = match;
+                const shortPath = filePath?.split("/").pop() ?? filePath;
+                return (
+                  <div key={idx} className="flex items-start gap-1 px-2 py-0.5 rounded hover:bg-dalam-bg-hover/30 text-[11px] font-mono">
+                    <button
+                      className="text-dalam-accent-primary hover:underline flex-shrink-0 truncate max-w-[120px]"
+                      onClick={(e) => { e.stopPropagation(); openFile(filePath); }}
+                      title={filePath}
+                    >
+                      {shortPath}
+                    </button>
+                    <span className="text-dalam-text-muted flex-shrink-0">:{lineNum}</span>
+                    <span className="text-dalam-text-primary truncate">{text}</span>
+                  </div>
+                );
+              }
+            }
+            // Format: lineNum: text
+            const match = line.match(/^(\d+):(.*)$/);
+            if (match) {
+              const [, lineNum, text] = match;
+              const filePath = args.path as string;
+              return (
+                <button
+                  key={idx}
+                  className="flex items-start gap-1 px-2 py-0.5 rounded hover:bg-dalam-bg-hover/30 text-[11px] font-mono w-full text-left"
+                  onClick={(e) => { e.stopPropagation(); openFile(filePath); }}
+                >
+                  <span className="text-dalam-text-muted flex-shrink-0 w-8 text-right">{lineNum}:</span>
+                  <span className="text-dalam-text-primary truncate">{text}</span>
+                </button>
+              );
+            }
+            return (
+              <div key={idx} className="px-2 py-0.5 text-[11px] font-mono text-dalam-text-primary truncate">{line}</div>
+            );
+          })}
+          {lines.length >= 50 && (
+            <div className="text-[10px] text-dalam-text-muted px-2 pt-0.5">Showing 50 of {lines.length} matches</div>
+          )}
+        </div>
+      );
+    }
+  }
+
+  // read_file: show truncated code preview
+  if (toolName === "read_file" && !result.startsWith("Error") && !result.startsWith("[")) {
+    const lines = result.split("\n");
+    const preview = lines.slice(0, 15).join("\n");
+    const totalLines = lines.length;
+    return (
+      <div>
+        <pre className="font-mono text-[11px] text-dalam-text-primary bg-dalam-bg-secondary/30 rounded-md p-2 max-h-32 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
+          {preview}
+          {totalLines > 15 && <span className="text-dalam-text-muted">{"\n"}... ({totalLines - 15} more lines)</span>}
+        </pre>
+        {args.path && (
+          <button
+            className="text-[10px] text-dalam-accent-primary hover:underline mt-1"
+            onClick={(e) => { e.stopPropagation(); openFile(args.path as string); }}
+          >
+            Open file
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // Default: raw display with truncation
+  const isLong = result.length > 500;
+  const display = isLong ? result.slice(0, 500) + "..." : result;
+  return (
+    <pre className="font-mono text-[11px] text-dalam-text-primary whitespace-pre-wrap break-words bg-dalam-bg-secondary/30 rounded-md p-2 max-h-40 overflow-y-auto scrollbar-thin">
+      {display}
+    </pre>
+  );
+}
+
 function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
-  const [open, setOpen] = useState(toolCall.status === "awaiting-approval");
   const { resolveToolApproval } = useChat();
   const openDiff = useDiffView((s) => s.openFile);
   const needsApproval = toolCall.status === "awaiting-approval";
@@ -443,9 +643,11 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
                   onClick={(e) => {
                     e.stopPropagation();
                     const isWrite = toolCall.name === "write_file" || toolCall.name === "write";
+                    // Use "created" only if old content was empty (new file)
+                    const isNewFile = isWrite && (!toolCall.diff?.oldContent || toolCall.diff.oldContent === "");
                     openDiff({
                       path: toolCall.args.path as string,
-                      action: isWrite ? "created" : "modified",
+                      action: isNewFile ? "created" : "modified",
                       additions: toolCall.diff?.hunks?.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0) ?? 0,
                       deletions: toolCall.diff?.hunks?.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0) ?? 0,
                     });
@@ -461,16 +663,12 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
       <div className="space-y-2 text-[11px]">
         <div>
           <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">Arguments</div>
-          <pre className="font-mono whitespace-pre-wrap break-words bg-dalam-bg-secondary/30 rounded-md p-2">
-            {JSON.stringify(toolCall.args, null, 2)}
-          </pre>
+          <ArgsDisplay toolName={toolCall.name} args={toolCall.args} />
         </div>
         {toolCall.result && (
           <div>
             <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">Result</div>
-            <pre className="font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto scrollbar-thin bg-dalam-bg-secondary/30 rounded-md p-2">
-              {toolCall.result}
-            </pre>
+            <ToolResultDisplay toolName={toolCall.name} result={toolCall.result} args={toolCall.args} />
           </div>
         )}
         {needsApproval && (

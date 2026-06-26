@@ -1,6 +1,6 @@
 import MonacoEditor, { loader, type OnMount } from "@monaco-editor/react";
 import { useSettings } from "@/store/useAppStore";
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect } from "react";
 
 loader.config({
   paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" },

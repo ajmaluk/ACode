@@ -1,4 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, LazyLock};
+
+/// Thread-safe process-local environment variable store.
+/// `std::env::set_var` is not thread-safe and causes UB when called
+/// concurrently from Tauri's async runtime. This map provides a safe alternative.
+static LOCAL_ENV: LazyLock<Mutex<std::collections::HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 // ---------------------------------------------------------------------------
 // Clipboard commands
@@ -129,14 +136,20 @@ pub async fn launch_app(
     args: Option<Vec<String>>,
     cwd: Option<String>,
 ) -> Result<String, String> {
-    // Validate app_name - only allow alphanumeric, dots, hyphens, forward slashes
-    if !app_name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '/' || c == '_') {
+    // Validate app_name - reject path separators to prevent arbitrary execution
+    if !app_name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_') {
         return Err(format!("Invalid app name: {}", app_name));
     }
-    // Reject args that look like shell commands
+    // Reject dangerous characters in arguments
     if let Some(ref cmd_args) = args {
         for arg in cmd_args {
-            if arg.contains(';') || arg.contains('|') || arg.contains('&') || arg.contains('$') || arg.contains('`') {
+            if arg.contains(';') || arg.contains('|') || arg.contains('&')
+                || arg.contains('$') || arg.contains('`') || arg.contains('\n')
+                || arg.contains('\r') || arg.contains('\0')
+                || arg.contains('{') || arg.contains('}') || arg.contains('~')
+                || arg.contains('*') || arg.contains('?') || arg.contains('[')
+                || arg.contains(']') || arg.contains(' ')
+            {
                 return Err(format!("Invalid argument: {}", arg));
             }
         }
@@ -200,6 +213,7 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Get an environment variable value.
+/// Checks the thread-safe local store first, then falls back to process env.
 #[tauri::command]
 pub async fn get_env(key: String) -> Result<String, String> {
     let blocked = ["AWS_SECRET_ACCESS_KEY", "AWS_SECRET_KEY", "AWS_ACCESS_KEY_SECRET",
@@ -207,38 +221,41 @@ pub async fn get_env(key: String) -> Result<String, String> {
                    "REDIS_URL", "REDIS_PASSWORD", "MONGO_URL", "MONGO_PASSWORD",
                    "STRIPE_SECRET_KEY", "STRIPE_SECRET", "PAYPAL_CLIENT_SECRET",
                    "JWT_SECRET", "SECRET_KEY", "PRIVATE_KEY", "API_SECRET",
-                   "ENCRYPTION_KEY", "SIGNING_KEY", "TOKEN_SECRET"];
+                   "ENCRYPTION_KEY", "SIGNING_KEY", "TOKEN_SECRET",
+                   "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "COHERE_API_KEY",
+                   "HF_TOKEN", "SSH_AUTH_SOCK", "GPG_PASSPHRASE", "GPG_AGENT_INFO",
+                   "KUBECONFIG", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN",
+                   "AZURE_CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS"];
     let upper = key.to_uppercase();
     if blocked.iter().any(|b| upper.contains(&b.to_uppercase())) {
         return Err(format!("Access to sensitive environment variable '{}' is restricted", key));
     }
+    // Check thread-safe local store first
+    if let Ok(map) = LOCAL_ENV.lock() {
+        if let Some(val) = map.get(&key) {
+            return Ok(val.clone());
+        }
+    }
     std::env::var(&key).map_err(|e| format!("Environment variable '{}' not set: {}", key, e))
 }
 
-/// Set an environment variable (for the current process and child processes).
+/// Set an environment variable (stored in a thread-safe local map).
 #[tauri::command]
 pub async fn set_env(key: String, value: String) -> Result<(), String> {
     let blocked = ["PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
                    "DYLD_LIBRARY_PATH", "HOME", "USER", "SHELL", "PYTHONPATH",
                    "NODE_OPTIONS", "BASH_ENV", "ENV", "CDPATH", "GLOBIGNORE",
                    "HISTFILE", "HISTSIZE", "HISTFILESIZE", "PROMPT_COMMAND",
-                   "PS1", "PS2", "PS3", "PS4", "ENV", "BASH_ENV"];
+                   "PS1", "PS2", "PS3", "PS4", "RUSTFLAGS", "CARGO_MAKEFLAGS",
+                   "MAKEFLAGS", "CXXFLAGS", "PERL5OPT", "TMPDIR", "TMP", "TEMP",
+                   "SSL_CERT_DIR", "SSL_CERT_FILE", "HTTP_PROXY", "HTTPS_PROXY",
+                   "NO_PROXY", "EDITOR", "VISUAL", "GIT_EXEC_PATH",
+                   "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"];
     if blocked.contains(&key.as_str()) {
         return Err(format!("Cannot set restricted environment variable: {}", key));
     }
-    #[cfg(unix)]
-    {
-        // SAFETY: Used only for passing env to child processes spawned by the agent.
-        // Each Tauri command runs sequentially within its execution context.
-        std::env::set_var(&key, &value);
-    }
-    #[cfg(windows)]
-    {
-        // Set environment variable for the current process.
-        // This affects child processes spawned from this process.
-        // For persistence across restarts, use setx command instead.
-        std::env::set_var(&key, &value);
-    }
+    let mut map = LOCAL_ENV.lock().map_err(|e| format!("Env lock poisoned: {e}"))?;
+    map.insert(key, value);
     Ok(())
 }
 
@@ -335,9 +352,12 @@ pub async fn list_processes() -> Result<Vec<ProcessInfo>, String> {
     Ok(processes)
 }
 
-/// Kill a process by PID.
+/// Kill a process by PID. Refuses to kill PID 0, PID 1, or the app's own PID.
 #[tauri::command]
 pub async fn kill_process(pid: u32) -> Result<(), String> {
+    if pid == 0 || pid == 1 {
+        return Err(format!("Refusing to kill critical process with PID {pid}"));
+    }
     #[cfg(unix)]
     {
         let output = std::process::Command::new("kill")

@@ -160,7 +160,6 @@ export function PromptAutocomplete({
   const [caret, setCaret] = useState(0);
   const [activeIdx, setActiveIdx] = useState(0);
   const activeIdxRef = useRef(0);
-  const keyHandlerRefInternal = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
 
   useEffect(() => {
     activeIdxRef.current = activeIdx;

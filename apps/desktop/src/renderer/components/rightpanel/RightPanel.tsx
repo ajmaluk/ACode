@@ -25,21 +25,32 @@ const TABS: { id: Tab; icon: React.ElementType; label: string }[] = [
 ];
 
 export function RightPanel() {
-  const { status, refresh } = useGit();
-  const { todos, session } = useChat();
+  const { status, refresh, error } = useGit();
+  const { session } = useChat();
   const { activeWorkspaceId } = useWorkspace();
   const { open: diffOpen, current: diffCurrent } = useDiffView();
   const { browserTabs, activeBrowserTabId, rightPanelTab: tab, setRightPanelTab: setTab } = useUI();
   const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const hasWorkspace = !!(session?.workspacePath);
+
+  const visibleTabs = useMemo(() => {
+    if (hasWorkspace) return TABS;
+    return TABS.filter((t) => t.id !== "terminal");
+  }, [hasWorkspace]);
+
+  useEffect(() => { void refresh(); }, [refresh, activeWorkspaceId]);
 
   // Unified tab-switching + panel-opening effect with priority: terminal > diff > browser > git
   // Note: `tab` is NOT in deps — it's read from the store snapshot via `useUI.getState()`
   // to avoid the infinite loop caused by setTab() re-triggering this effect.
   useEffect(() => {
     const currentTab = useUI.getState().rightPanelTab;
-    if (currentTab === "terminal") return;
+    if (currentTab === "terminal" && hasWorkspace) return;
+    // If terminal is active but workspace is gone, fall back to git
+    if (currentTab === "terminal" && !hasWorkspace) {
+      setTab("git");
+    }
     const needsOpen = !useUI.getState().rightPanelOpen;
     if (diffOpen && diffCurrent) {
       if (currentTab !== "diff") setTab("diff");
@@ -55,14 +66,14 @@ export function RightPanel() {
     if (currentTab !== "git" && currentTab !== "browser" && currentTab !== "diff" && currentTab !== "review" && currentTab !== "progress") {
       setTab(activeWorkspaceId ? "git" : "browser");
     }
-  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab]);
+  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab, hasWorkspace]);
 
   return (
     <aside className="h-full flex flex-row-reverse bg-dalam-bg-primary border-l border-dalam-border-primary">
       {/* Activity bar on the right edge */}
       <div className="w-11 flex-shrink-0 bg-dalam-bg-tertiary border-l border-dalam-border-primary flex flex-col items-center pt-2 pb-3 gap-1 select-none">
         <div className="flex-1 flex flex-col items-center gap-1">
-          {TABS.map((t) => {
+          {visibleTabs.map((t) => {
             const Icon = t.icon;
             const isActive = tab === t.id;
             const hasChanges = t.id === "git" && changeCount > 0;
@@ -112,7 +123,7 @@ export function RightPanel() {
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center justify-between px-3 py-1.5 border-b border-dalam-border-primary bg-dalam-bg-secondary/30 flex-shrink-0 min-h-[33px]">
           <span className="text-[11px] font-medium text-dalam-text-secondary uppercase tracking-wider">
-            {TABS.find((t) => t.id === tab)?.label ?? ""}
+            {visibleTabs.find((t) => t.id === tab)?.label ?? ""}
           </span>
           <div className="flex items-center gap-0.5">
             {tab === "git" && (
@@ -121,7 +132,7 @@ export function RightPanel() {
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === "git" && <GitTab status={status} onRefresh={() => void refresh()} />}
+          {tab === "git" && <GitTab status={status} error={error} onRefresh={() => void refresh()} />}
           {tab === "diff" && <DiffTab />}
           {tab === "review" && <ReviewTab />}
           {tab === "browser" && <BrowserTab />}
@@ -393,7 +404,6 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
 function ReviewTab() {
   const { messages, _pendingChanges } = useChat();
   const openDiff = useDiffView((s) => s.openFile);
-  const setDiff = useDiffView((s) => s.setOpen);
 
   const fileChanges = useMemo(() => {
     const changes: { path: string; action: string; additions: number; deletions: number }[] = [];
@@ -530,9 +540,11 @@ function ProgressTab() {
   );
 }
 
-function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: () => void }) {
+function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error: string | null; onRefresh: () => void }) {
   const [commitMsg, setCommitMsg] = useState("");
   const toast = useToast();
+  const { activeWorkspaceId, workspaces } = useWorkspace();
+  const ws = workspaces.find((w) => w.id === activeWorkspaceId);
 
   const hasChanges = status && (status.modified.length > 0 || status.added.length > 0 || status.deleted.length > 0 || status.untracked.length > 0);
 
@@ -549,6 +561,51 @@ function GitTab({ status, onRefresh }: { status: GitStatus | null; onRefresh: ()
       onRefresh();
     } catch (err) { toast.error("Error", `Failed to commit: ${(err as Error)?.message ?? "Unknown error"}`); }
   }, [commitMsg, onRefresh, toast]);
+
+  if (!status && !error) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="text-center">
+          <Loader2 className="w-6 h-6 mx-auto mb-3 text-dalam-text-muted/50 animate-spin" />
+          <p className="text-sm text-dalam-text-muted">Loading git status...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error === "not_initialized" || (!status && error)) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="text-center">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-bg-tertiary flex items-center justify-center">
+            <GitBranch className="w-7 h-7 text-dalam-text-muted/50" />
+          </div>
+          <p className="text-sm text-dalam-text-primary font-medium mb-1">No git repository</p>
+          <p className="text-xs text-dalam-text-muted max-w-[220px] leading-relaxed mb-4">
+            {ws ? `The folder "${ws.name}" is not a git repository.` : "No workspace selected."}
+          </p>
+          {ws && (
+            <button
+              onClick={async () => {
+                try {
+                  const { Command } = await import("@tauri-apps/plugin-shell");
+                  await Command.create("git", ["init"], { cwd: ws.path }).execute();
+                  toast.success("Git initialized", "Repository created successfully");
+                  onRefresh();
+                } catch (err) {
+                  toast.error("Failed to initialize git", (err as Error)?.message ?? "Unknown error");
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs font-medium rounded-lg transition-colors mx-auto"
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              Initialize Git Repository
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!status) {
     return (

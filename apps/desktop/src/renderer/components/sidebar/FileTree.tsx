@@ -16,20 +16,25 @@ import {
   Trash2,
 } from "lucide-react";
 import type { FileNode as FileNodeT } from "@dalam/shared-types";
-import { useWorkspace } from "@/store/useAppStore";
+import { useWorkspace, useDiffView } from "@/store/useAppStore";
 import { showContextMenu, type ContextMenuItem } from "@/components/ui/ContextMenu";
 import { useToast } from "@/components/ui/Toaster";
 
 function renderFileIcon(name: string, className: string) {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   const iconClass = className;
-  if (["ts", "tsx", "js", "jsx", "rs", "go", "py", "rb", "java"].includes(ext))
-    return <FileCode className={iconClass} />;
-  if (["json", "yaml", "yml", "toml", "xml"].includes(ext)) return <FileJson className={iconClass} />;
-  if (["md", "mdx", "txt", "rst"].includes(ext)) return <FileText className={iconClass} />;
-  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext)) return <ImageIcon className={iconClass} />;
-  if (["css", "scss", "less", "sass"].includes(ext)) return <FileType className={iconClass} />;
-  return <FileIcon className={iconClass} />;
+  if (["ts", "tsx"].includes(ext)) return <FileCode className={`${iconClass} text-blue-400`} />;
+  if (["js", "jsx"].includes(ext)) return <FileCode className={`${iconClass} text-yellow-400`} />;
+  if (["rs"].includes(ext)) return <FileCode className={`${iconClass} text-orange-400`} />;
+  if (["py"].includes(ext)) return <FileCode className={`${iconClass} text-green-400`} />;
+  if (["go"].includes(ext)) return <FileCode className={`${iconClass} text-cyan-400`} />;
+  if (["json"].includes(ext)) return <FileJson className={`${iconClass} text-yellow-300`} />;
+  if (["yaml", "yml", "toml", "xml"].includes(ext)) return <FileJson className={`${iconClass} text-dalam-text-muted`} />;
+  if (["md", "mdx", "txt", "rst"].includes(ext)) return <FileText className={`${iconClass} text-blue-300`} />;
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext)) return <ImageIcon className={`${iconClass} text-pink-400`} />;
+  if (["css", "scss", "less", "sass"].includes(ext)) return <FileType className={`${iconClass} text-purple-400`} />;
+  if (["html"].includes(ext)) return <FileCode className={`${iconClass} text-orange-300`} />;
+  return <FileIcon className={`${iconClass} text-dalam-text-muted`} />;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -84,9 +89,9 @@ export function FileTree() {
     );
   }
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto py-1 text-sm scrollbar-thin" onContextMenu={handleRootContextMenu}>
+    <div className="flex-1 min-h-0 overflow-y-auto py-0.5 text-[13px] scrollbar-thin" onContextMenu={handleRootContextMenu}>
       {fileTree
-        .filter((n) => n.name !== "node_modules")
+        .filter((n) => n.name !== "node_modules" && n.name !== ".git" && n.name !== ".DS_Store")
         .map((node) => (
           <TreeNode key={node.path} node={node} depth={0} />
         ))}
@@ -97,10 +102,11 @@ export function FileTree() {
 function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
   const [open, setOpen] = useState(depth < 2);
   const { setActiveFile, activeFilePath, openFile, createFile, createDirectory, deletePath, renamePath } = useWorkspace();
+  const openDiff = useDiffView((s) => s.openFile);
   const toast = useToast();
   const isDir = node.type === "directory";
   const isActive = !isDir && activeFilePath === node.path;
-  const indent = 8 + depth * 12;
+  const indent = 4 + depth * 12;
 
   const handleContextMenu = (e: React.MouseEvent) => {
     const items: ContextMenuItem[] = isDir
@@ -124,6 +130,15 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
           },
         ]
       : [
+          {
+            type: "item", label: "Open", icon: <FileCode className="w-3.5 h-3.5" />,
+            perform: () => { setActiveFile(node.path); openFile(node.path); },
+          },
+          {
+            type: "item", label: "Open Diff", icon: <FileCode className="w-3.5 h-3.5" />,
+            perform: () => openDiff({ path: node.path, action: "modified", additions: 0, deletions: 0 }),
+          },
+          { type: "separator" },
           {
             type: "item", label: "Rename", icon: <Pencil className="w-3.5 h-3.5" />,
             perform: () => promptRename(e, node.name, node.path),
@@ -166,30 +181,27 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
     return (
       <div>
         <button
-          className={`group w-full flex items-center gap-1.5 pr-2 py-0.5 text-left transition-colors
-            hover:bg-dalam-bg-hover text-dalam-text-primary
-            ${open ? "bg-dalam-bg-hover/30" : ""}`}
+          className={`group w-full flex items-center gap-1 pr-2 py-[3px] text-left transition-colors
+            hover:bg-dalam-bg-hover/60 text-dalam-text-primary`}
           style={{ paddingLeft: indent }}
           onClick={() => setOpen((o) => !o)}
           onContextMenu={handleContextMenu}
         >
-          <span className="text-dalam-text-muted flex-shrink-0 w-3 h-3 flex items-center justify-center">
+          <span className="text-dalam-text-muted flex-shrink-0 w-4 h-4 flex items-center justify-center">
             {open ? (
               <ChevronDown className="w-3 h-3" />
             ) : (
               <ChevronRight className="w-3 h-3" />
             )}
           </span>
-          {isDir
-            ? (open
-              ? <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-dalam-accent-primary" />
-              : <FolderClosed className="w-3.5 h-3.5 flex-shrink-0 text-dalam-text-secondary" />)
-            : renderFileIcon(node.name, "w-3.5 h-3.5 text-dalam-text-secondary flex-shrink-0")
+          {open
+            ? <FolderOpen className="w-4 h-4 flex-shrink-0 text-blue-400/80" />
+            : <FolderClosed className="w-4 h-4 flex-shrink-0 text-blue-400/60" />
           }
-          <span className="truncate flex-1">{node.name}</span>
+          <span className="truncate flex-1 text-[13px] font-medium text-dalam-text-primary">{node.name}</span>
           {node.gitStatus && (
             <span
-              className={`text-[10px] font-mono ${STATUS_COLOR[node.gitStatus] ?? ""}`}
+              className={`text-[9px] font-mono font-bold ${STATUS_COLOR[node.gitStatus] ?? ""}`}
               title={node.gitStatus}
             >
               {STATUS_LETTER[node.gitStatus]}
@@ -197,30 +209,32 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
           )}
         </button>
         {open &&
-          node.children?.map((c) => <TreeNode key={c.path} node={c} depth={depth + 1} />)}
+          node.children
+            ?.filter((c) => c.name !== "node_modules" && c.name !== ".git" && c.name !== ".DS_Store")
+            .map((c) => <TreeNode key={c.path} node={c} depth={depth + 1} />)}
       </div>
     );
   }
 
   return (
     <button
-      className={`group w-full flex items-center gap-1.5 pr-2 py-0.5 text-left transition-colors
+      className={`group w-full flex items-center gap-1.5 pr-2 py-[3px] text-left transition-colors
         ${isActive
-          ? "bg-dalam-accent-subtle text-dalam-text-primary ring-subtle"
-          : "hover:bg-dalam-bg-hover text-dalam-text-primary"
+          ? "bg-dalam-accent-subtle text-dalam-text-primary"
+          : "hover:bg-dalam-bg-hover/60 text-dalam-text-primary"
         }`}
-      style={{ paddingLeft: indent + 12 }}
+      style={{ paddingLeft: indent + 16 }}
       onClick={() => {
         setActiveFile(node.path);
         openFile(node.path);
       }}
       onContextMenu={handleContextMenu}
     >
-      {renderFileIcon(node.name, "w-3.5 h-3.5 text-dalam-text-secondary flex-shrink-0")}
-      <span className="truncate flex-1">{node.name}</span>
+      {renderFileIcon(node.name, "w-4 h-4 flex-shrink-0")}
+      <span className="truncate flex-1 text-[13px]">{node.name}</span>
       {node.gitStatus && (
         <span
-          className={`text-[10px] font-mono flex-shrink-0 ${STATUS_COLOR[node.gitStatus] ?? ""}`}
+          className={`text-[9px] font-mono font-bold flex-shrink-0 ${STATUS_COLOR[node.gitStatus] ?? ""}`}
           title={node.gitStatus}
         >
           {STATUS_LETTER[node.gitStatus]}

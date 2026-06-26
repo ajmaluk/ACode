@@ -30,6 +30,7 @@
     "@xterm/xterm": "^5.5.0",
     "cmdk": "^1.0.4",
     "highlight.js": "^11.11.1",
+    "js-tiktoken": "^1.0.21",
     "lucide-react": "^0.460.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

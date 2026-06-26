@@ -9,7 +9,6 @@ import {
   TerminalSquare,
   Code2,
   Search,
-  FilePlus,
   RefreshCcw,
   Keyboard,
   FileCode,

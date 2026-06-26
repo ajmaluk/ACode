@@ -6,7 +6,7 @@ import { createDalamAPI } from "@/lib/dalamAPI";
 import {
   ChevronLeft, ChevronRight, Plus, PanelLeft, PanelRight,
   FolderOpen, Code2, Sparkles, TerminalSquare, FolderTree, Settings,
-  Brain, Sun, Moon, Monitor, Loader2, Zap, ClipboardList,
+  Brain, Sun, Moon, Monitor, Zap, ClipboardList,
 } from "lucide-react";
 
 const AGENT_META: Record<string, { label: string; icon: React.ElementType; color: string }> = {

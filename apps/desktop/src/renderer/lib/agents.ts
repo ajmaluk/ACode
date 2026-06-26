@@ -8,11 +8,8 @@
  * agent's specific ruleset.
  */
 import type {
-  AgentCategory,
   AgentInfo,
-  AgentMode,
   PermissionAction,
-  PermissionRule,
   PermissionRuleset,
   PrimaryAgentName,
 } from "@dalam/shared-types";

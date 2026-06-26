@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useWorkspace,
   useSettingsView,
@@ -16,19 +16,21 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
-  Circle,
-  CheckCircle2,
-  Loader2,
+  FolderOpen,
   MessageSquare,
-  PauseCircle,
   XCircle,
   Trash2,
   Pencil,
   History,
   Undo2,
   MoreHorizontal,
+  MoreVertical,
+  List,
+  ArrowLeft,
+  MessageSquarePlus,
 } from "lucide-react";
 import type { ChatSessionSummary, ChatVersion } from "@dalam/shared-types";
+import { FileTree } from "./FileTree";
 
 function formatRelative(ts: number, now: number): string {
   const diff = Math.max(0, now - ts);
@@ -36,6 +38,39 @@ function formatRelative(ts: number, now: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
   return `${Math.floor(diff / 86_400_000)}d`;
+}
+
+interface TooltipProps {
+  content: string;
+  children: React.ReactNode;
+  side?: "top" | "bottom" | "left" | "right";
+}
+
+function Tooltip({ content, children, side = "top" }: TooltipProps) {
+  const [visible, setVisible] = useState(false);
+  const positionClasses = {
+    top: "bottom-full left-1/2 -translate-x-1/2 mb-2",
+    bottom: "top-full left-1/2 -translate-x-1/2 mt-2",
+    left: "right-full top-1/2 -translate-y-1/2 mr-2",
+    right: "left-full top-1/2 -translate-y-1/2 ml-2",
+  };
+
+  return (
+    <div
+      className="relative inline-flex"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      {children}
+      {visible && (
+        <div
+          className={`absolute z-50 px-2 py-1 text-[11px] font-medium text-dalam-text-primary bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md shadow-lg whitespace-nowrap pointer-events-none animate-in fade-in-0 ${positionClasses[side]}`}
+        >
+          {content}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface SessionRowProps {
@@ -79,7 +114,7 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
 
   return (
     <div
-      className={`group relative w-full flex items-center gap-2 pl-2 pr-1.5 py-1.5 rounded-md transition-colors cursor-pointer ${
+      className={`group relative w-full flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded transition-colors cursor-pointer ${
         isActive ? "bg-dalam-bg-active" : "hover:bg-dalam-bg-hover"
       }`}
       onClick={() => { if (!editing) { onSelect(); setMenuOpen(false); } }}
@@ -103,7 +138,7 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
           <span className="flex-1 min-w-0 truncate text-xs text-dalam-text-secondary">
             {session.title}
           </span>
-          <span className="text-[10px] text-dalam-text-muted flex-shrink-0 tabular-nums">
+          <span className="text-[10px] text-dalam-text-muted flex-shrink-0 tabular-nums mr-1">
             {formatRelative(session.lastActivityAt, now)}
           </span>
           <div className="relative" ref={menuRef}>
@@ -111,7 +146,7 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
               className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-dalam-bg-hover transition-all"
               onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
             >
-              <MoreHorizontal className="w-3 h-3 text-dalam-text-muted" />
+              <MoreVertical className="w-3 h-3 text-dalam-text-muted" />
             </button>
             {menuOpen && (
               <div className="absolute right-0 top-full mt-1 w-40 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1">
@@ -135,7 +170,7 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
 }
 
 export function Sidebar() {
-  const { openWorkspace, activeWorkspaceId, workspaces, setActiveWorkspace } = useWorkspace();
+  const { openWorkspace, activeWorkspaceId, workspaces, setActiveWorkspace, removeWorkspace } = useWorkspace();
   const { open: openSettings } = useSettingsView();
   const { newChat, chatSessions, activeSessionId, setActiveSession, isStreaming, removeSession, renameSession, sessionVersions, deleteVersion } = useChat();
   const { cancel: cancelPermission } = usePermission();
@@ -143,12 +178,24 @@ export function Sidebar() {
   const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
+  const [fileTreeView, setFileTreeView] = useState<string | null>(null);
+  const [menuOpenWorkspace, setMenuOpenWorkspace] = useState<string | null>(null);
+  const menuWorkspaceRef = useRef<HTMLDivElement>(null);
 
   const [, force] = useState(0);
   useEffect(() => {
     const t = setInterval(() => force((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!menuOpenWorkspace) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuWorkspaceRef.current && !menuWorkspaceRef.current.contains(e.target as Node)) setMenuOpenWorkspace(null);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [menuOpenWorkspace]);
 
   const sessionsByWorkspace = useMemo(() => {
     const map = new Map<string, ChatSessionSummary[]>();
@@ -210,7 +257,35 @@ export function Sidebar() {
     setDragOverId(null);
   };
 
+  const handleNewTask = (wsId: string) => {
+    setActiveWorkspace(wsId);
+    cancelPermission();
+    resolveQuestion(null);
+    newChat();
+  };
+
   const VISIBLE_LIMIT = 5;
+
+  const activeFileWorkspace = workspaces.find((w) => w.id === fileTreeView);
+
+  if (fileTreeView && activeFileWorkspace) {
+    return (
+      <aside className="h-full flex flex-col bg-dalam-bg-secondary border-r border-dalam-border-primary">
+        <div className="px-2 py-1.5 flex items-center gap-1.5 border-b border-dalam-border-primary flex-shrink-0">
+          <button
+            className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+            onClick={() => setFileTreeView(null)}
+            title="Back to tasks"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-dalam-text-secondary" />
+          </button>
+          <Folder className="w-3.5 h-3.5 text-blue-400/60 flex-shrink-0" />
+          <span className="truncate text-xs text-dalam-text-primary font-medium">{activeFileWorkspace.name}</span>
+        </div>
+        <FileTree />
+      </aside>
+    );
+  }
 
   return (
     <aside className="h-full flex flex-col bg-dalam-bg-secondary border-r border-dalam-border-primary">
@@ -260,29 +335,82 @@ export function Sidebar() {
           return (
             <div
               key={ws.id}
-              className={`mb-1 transition-colors ${dragOverId === ws.id ? "bg-dalam-accent-primary/10 border-t border-dalam-accent-primary" : ""}`}
+              className={`mb-0.5 transition-colors ${dragOverId === ws.id ? "bg-dalam-accent-primary/10 border-t border-dalam-accent-primary" : ""}`}
               draggable
               onDragStart={(e) => handleDragStart(e, ws.id)}
               onDragOver={(e) => handleDragOver(e, ws.id)}
               onDrop={(e) => handleDrop(e, ws.id)}
               onDragEnd={handleDragEnd}
             >
-              <button
-                className={`w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors ${
-                  ws.id === activeWorkspaceId ? "bg-dalam-bg-hover" : ""
+              <div
+                className={`relative w-full text-left px-2 py-1 flex items-center gap-1.5 group/workspace hover:bg-dalam-bg-hover transition-colors ${
+                  ws.id === activeWorkspaceId ? "bg-dalam-bg-secondary" : ""
                 } ${dragId === ws.id ? "opacity-50" : ""}`}
-                onClick={() => { toggleWorkspace(ws.id); setActiveWorkspace(ws.id); }}
               >
-                {isExpanded ? (
-                  <ChevronDown className="w-3.5 h-3.5 text-dalam-text-muted" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5 text-dalam-text-muted" />
-                )}
-                <Folder className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
-                <span className="truncate text-sm text-dalam-text-primary font-medium">{ws.name}</span>
-              </button>
+                <button
+                  className="flex items-center gap-1.5 flex-1 min-w-0"
+                  onClick={() => { toggleWorkspace(ws.id); setActiveWorkspace(ws.id); }}
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
+                  )}
+                  {isExpanded ? (
+                    <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
+                  ) : (
+                    <Folder className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
+                  )}
+                  <span className="truncate text-xs text-dalam-text-primary font-medium">{ws.name}</span>
+                </button>
+
+                {/* Workspace action icons - visible on hover, positioned absolute */}
+                <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5">
+                  <Tooltip content="Files" side="top">
+                    <button
+                      className="p-0.5 rounded hover:bg-dalam-bg-active transition-colors"
+                      onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
+                    >
+                      <List className="w-3 h-3 text-dalam-text-muted" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip content="New task" side="top">
+                    <button
+                      className="p-0.5 rounded hover:bg-dalam-bg-active transition-colors"
+                      onClick={() => handleNewTask(ws.id)}
+                    >
+                      <MessageSquarePlus className="w-3 h-3 text-dalam-text-muted" />
+                    </button>
+                  </Tooltip>
+                  <div className="relative" ref={menuWorkspaceRef}>
+                    <Tooltip content="More" side="top">
+                      <button
+                        className="p-0.5 rounded hover:bg-dalam-bg-active transition-colors"
+                        onClick={(e) => { e.stopPropagation(); setMenuOpenWorkspace(menuOpenWorkspace === ws.id ? null : ws.id); }}
+                      >
+                        <MoreVertical className="w-3 h-3 text-dalam-text-muted" />
+                      </button>
+                    </Tooltip>
+                    {menuOpenWorkspace === ws.id && (
+                      <div className="absolute right-0 top-full mt-1 w-36 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1">
+                        <button
+                          className="w-full text-left px-2.5 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeWorkspace(ws.id);
+                            setMenuOpenWorkspace(null);
+                          }}
+                        >
+                          <Trash2 className="w-3 h-3" /> Remove
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {isExpanded && (
-                <div className="ml-4 mb-1 flex flex-col gap-0.5">
+                <div className="ml-3 mb-0.5 flex flex-col pr-2">
                   {visibleSessions.length > 0 ? (
                     <>
                       {visibleSessions.map((s) => (
@@ -299,7 +427,7 @@ export function Sidebar() {
                       ))}
                       {hasMore && !showAllSessions && (
                         <button
-                          className="text-[11px] text-dalam-text-muted hover:text-dalam-text-secondary px-2 py-1 transition-colors"
+                          className="text-[10px] text-dalam-text-muted hover:text-dalam-text-secondary px-1.5 py-0.5 transition-colors"
                           onClick={() => setShowAll((prev) => ({ ...prev, [ws.id]: true }))}
                         >
                           Show more ({wsSessions.length - VISIBLE_LIMIT})
@@ -307,9 +435,9 @@ export function Sidebar() {
                       )}
                     </>
                   ) : (
-                    <div className="flex flex-col items-center gap-1.5 px-2 py-3 text-center">
-                      <MessageSquare className="w-4 h-4 text-dalam-text-muted" />
-                      <p className="text-[11px] text-dalam-text-muted leading-snug">
+                    <div className="flex flex-col items-center gap-1 px-1.5 py-2 text-center">
+                      <MessageSquare className="w-3.5 h-3.5 text-dalam-text-muted" />
+                      <p className="text-[10px] text-dalam-text-muted leading-snug">
                         No sessions yet.
                         <br />
                         Press <span className="font-mono text-dalam-text-secondary">{modKey()}N</span> to start.
@@ -328,9 +456,9 @@ export function Sidebar() {
         )}
       </div>
 
-      <div className="border-t border-dalam-border-primary p-3 flex-shrink-0">
+      <div className="p-3 flex-shrink-0">
         <button
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary bg-dalam-bg-tertiary/40 border border-dalam-border-primary hover:bg-dalam-bg-hover hover:text-dalam-text-primary hover:border-dalam-border-secondary transition-colors"
+          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary bg-dalam-bg-tertiary/50 shadow-sm hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
           onClick={() => openSettings()}
           title={`Open Settings (${shortcut(",")})`}
         >

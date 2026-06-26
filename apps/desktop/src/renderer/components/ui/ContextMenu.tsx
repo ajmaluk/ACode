@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, forwardRef } from "react";
 import { ChevronRight } from "lucide-react";
 
 export type ContextMenuItem =
@@ -50,22 +50,23 @@ export function ContextMenuProvider({ children }: { children: React.ReactNode })
   );
 }
 
-const ContextMenuPanel = ({ ref, state, onClose }: { ref: React.RefObject<HTMLDivElement | null>; state: ContextMenuState; onClose: () => void }) => {
+const ContextMenuPanel = forwardRef<HTMLDivElement, { state: ContextMenuState; onClose: () => void }>(({ state, onClose }, ref) => {
   const [openSub, setOpenSub] = useState<number | null>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!ref.current) return;
-    const el = ref.current;
+    const el = innerRef.current;
+    if (!el) return;
     const rect = el.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     if (rect.right > vw) el.style.left = `${state.x - rect.width}px`;
     if (rect.bottom > vh) el.style.top = `${state.y - rect.height}px`;
-  }, [state.x, state.y, ref]);
+  }, [state.x, state.y]);
 
   return (
     <div
-      ref={ref}
+      ref={(node) => { innerRef.current = node; if (typeof ref === "function") ref(node); else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
       className="fixed z-[100] min-w-[200px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl py-1 animate-fade-in"
       style={{ left: state.x, top: state.y }}
       onMouseDown={(e) => e.stopPropagation()}
@@ -128,4 +129,4 @@ const ContextMenuPanel = ({ ref, state, onClose }: { ref: React.RefObject<HTMLDi
       })}
     </div>
   );
-};
+});

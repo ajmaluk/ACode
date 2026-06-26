@@ -3,6 +3,17 @@ import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
 import { hookBus } from "./hookBus";
+
+// ---------------------------------------------------------------------------
+// Debug logging — set window.__DALAM_DEBUG = true in console to enable
+// ---------------------------------------------------------------------------
+const _debugLog = (...args: unknown[]) => {
+  try {
+    if (typeof window !== "undefined" && (window as any).__DALAM_DEBUG) {
+      console.log("[DALAM]", ...args);
+    }
+  } catch { /* ignore */ }
+};
 import { loadGenePool, expressGenes, formatGenesForPrompt } from "./genes";
 
 const STORAGE_KEYS = {
@@ -257,9 +268,19 @@ async function* streamOpenAI(
   if (!reader) throw new ProviderError("No response body", "network");
   const decoder = new TextDecoder();
   let buffer = "";
+  const STREAM_READ_TIMEOUT_MS = 60_000; // 60s per read — detect hung streams
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      // Race reader.read() against a timeout to detect hung streams
+      const readResult = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          const t = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
+          // Attach signal to clean up timer if aborted
+          signal?.addEventListener("abort", () => clearTimeout(t), { once: true });
+        }),
+      ]);
+      const { done, value } = readResult;
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const { parsed, remaining } = parseSSEEvents(buffer);
@@ -309,9 +330,18 @@ async function* streamAnthropic(
   const decoder = new TextDecoder();
   let buffer = "";
   let msgId = "";
+  const STREAM_READ_TIMEOUT_MS = 60_000; // 60s per read — detect hung streams
+  _debugLog("[streamAnthropic] Starting stream, url:", url);
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const readResult = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          const t = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
+          signal?.addEventListener("abort", () => clearTimeout(t), { once: true });
+        }),
+      ]);
+      const { done, value } = readResult;
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const { parsed, remaining } = parseSSEEvents(buffer);
@@ -972,10 +1002,12 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
         function rateLimitDelay(): Promise<void> {
           if (consecutiveRateLimitErrors > 0) {
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
             const delay = Math.min(1000 * Math.pow(2, consecutiveRateLimitErrors), 30000);
             return new Promise((r) => setTimeout(r, delay));
           }
-          return new Promise((r) => setTimeout(r, 300));
+          // Base delay between turns to avoid rate limits and give UI time to render
+          return new Promise((r) => setTimeout(r, 500));
         }
 
         while (loopCount < MAX_LOOP_HARD) {
@@ -1030,17 +1062,21 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           await rateLimitDelay();
 
           const maxTokens = settings.maxTokens ?? 4096;
+          _debugLog(`[sendPrompt] Turn ${loopCount}: starting stream, model=${modelId}, messages=${messages.length}`);
           const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, messages, ac.signal, maxTokens);
           let fullContent = "";
           let lastMessageId = "";
+          let eventCount = 0;
 
           for await (const event of stream) {
+            eventCount++;
             if (event.type === "message-delta") {
               fullContent += event.content;
               lastMessageId = event.messageId;
             }
             emit(event);
           }
+          _debugLog(`[sendPrompt] Turn ${loopCount}: stream ended, events=${eventCount}, contentLen=${fullContent.length}, contentPreview=${fullContent.slice(0, 200)}`);
 
           totalFullContent += fullContent;
 
@@ -1063,6 +1099,10 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               parsedTools.push(tc);
               codeBlockKeys.add(key);
             }
+          }
+          _debugLog(`[sendPrompt] Turn ${loopCount}: parsed tools: codeBlock=${parsedFromCodeBlocks.length}, text=${parsedToolsFromText.length}, total=${parsedTools.length}`);
+          if (parsedTools.length > 0) {
+            _debugLog(`[sendPrompt] Turn ${loopCount}: tools:`, parsedTools.map(t => `${t.name}(${JSON.stringify(t.args).slice(0, 100)})`));
           }
 
           // FIX: Single parse pass for display content — strip all tool tags
@@ -1095,23 +1135,40 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               emit({ type: "tool-call", toolCall: { id: tc.id, name: tc.name, args: tc.args, status: tc.status } });
             }
 
+            // Check which tools were auto-approved (permission already granted)
+            // by reading their status from the store right after emit
+            const autoApprovedTools = new Set<string>();
+            try {
+              const { useChat } = await import("../store/useAppStore");
+              const pending = useChat.getState().pendingToolCalls;
+              for (const tc of toolCallMetas) {
+                const stored = pending.find((t: any) => t.id === tc.id);
+                if (stored && stored.status === "completed") {
+                  autoApprovedTools.add(tc.id);
+                }
+              }
+            } catch { /* store not available */ }
+
             // Execute tools with approval
             const toolResults: string[] = [];
             for (const tc of toolCallMetas) {
+              _debugLog(`[sendPrompt] Turn ${loopCount}: executing tool ${tc.id} (${tc.name})`);
               // Check abort signal before each tool execution
               if (ac.signal.aborted) {
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 break;
               }
               const decision = await waitForToolApproval(tc.id, ac.signal);
+              _debugLog(`[sendPrompt] Turn ${loopCount}: tool ${tc.id} approval decision: ${decision}`);
               if (ac.signal.aborted) {
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 break;
               }
               if (decision === "approved") {
+                const isAutoApproved = autoApprovedTools.has(tc.id);
                 const toolStartTime = Date.now();
                 try {
-                  const result = await executeTool(tc.name, tc.args, workspacePath || ".", emit);
+                  const result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
                   const durationMs = Date.now() - toolStartTime;
                   emit({ type: "tool-result", toolCallId: tc.id, result });
 
@@ -1221,8 +1278,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       } finally {
         activeControllers.delete(sessionId);
         sessionStartTimes.delete(sessionId);
-        const cb = streamCallbacks.get(sessionId);
-        if (cb) streamCallbacks.delete(sessionId);
         // Clean up file watchers
         const watcher = fileWatchers.get(sessionId);
         if (watcher) { watcher(); fileWatchers.delete(sessionId); }
@@ -1235,9 +1290,14 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           const { useChat } = await import("../store/useAppStore");
           const state = useChat.getState();
           if (state.isStreaming && state.activeSessionId === sessionId) {
+            _debugLog(`[sendPrompt] finally: isStreaming still true for ${sessionId}, force-clearing`);
+            // Emit message-end before clearing so the UI gets the final message
+            emit({ type: "message-end", messageId: sessionId });
             useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           }
         } catch { /* store not available */ }
+        // Delete callback AFTER emitting the safety message-end
+        streamCallbacks.delete(sessionId);
       }
 
     },
@@ -1604,8 +1664,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
   }
 
-  // 5. grep_file
-  const grepFileRegex = /<grep_file\s+([\s\S]*?)\/?>/gi;
+  // 5. grep_file — use [^>]* instead of [\s\S]*? to prevent catastrophic backtracking
+  const grepFileRegex = /<grep_file\s+([^>]*)\/?>/gi;
   while ((match = grepFileRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.path && attrs.pattern) {
@@ -1613,8 +1673,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 6. search_files
-  const searchFilesRegex = /<search_files\s+([\s\S]*?)\/?>/gi;
+  // 6. search_files — use [^>]* instead of [\s\S]*? to prevent catastrophic backtracking
+  const searchFilesRegex = /<search_files\s+([^>]*)\/?>/gi;
   while ((match = searchFilesRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.pattern) {
@@ -1662,8 +1722,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "clipboard_write", args: { text: match[1] }, raw: match[0] });
   }
 
-  // 11. notify
-  const notifyRegex = /<notify\s+([\s\S]*?)\/?>/gi;
+  // 11. notify — use [^>]* to prevent catastrophic backtracking
+  const notifyRegex = /<notify\s+([^>]*)\/?>/gi;
   while ((match = notifyRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.title) {
@@ -1677,8 +1737,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "system_info", args: {}, raw: match[0] });
   }
 
-  // 13. open_url
-  const openUrlRegex = /<open_url\s+([\s\S]*?)\/?>/gi;
+  // 13. open_url — use [^>]* to prevent catastrophic backtracking
+  const openUrlRegex = /<open_url\s+([^>]*)\/?>/gi;
   while ((match = openUrlRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.url) {
@@ -1686,8 +1746,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 14. launch_app
-  const launchAppRegex = /<launch_app\s+([\s\S]*?)\/?>/gi;
+  // 14. launch_app — use [^>]* to prevent catastrophic backtracking
+  const launchAppRegex = /<launch_app\s+([^>]*)\/?>/gi;
   while ((match = launchAppRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.name) {
@@ -1695,8 +1755,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 15. reveal_in_finder
-  const revealRegex = /<reveal_in_finder\s+([\s\S]*?)\/?>/gi;
+  // 15. reveal_in_finder — use [^>]* to prevent catastrophic backtracking
+  const revealRegex = /<reveal_in_finder\s+([^>]*)\/?>/gi;
   while ((match = revealRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.path) {
@@ -1721,8 +1781,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     });
   }
 
-  // 17. memory_search
-  const memorySearchRegex = /<memory_search\s+([\s\S]*?)\/?>/gi;
+  // 17. memory_search — use [^>]* to prevent catastrophic backtracking
+  const memorySearchRegex = /<memory_search\s+([^>]*)\/?>/gi;
   while ((match = memorySearchRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.query) {
@@ -1871,7 +1931,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 }
 
 function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Promise<"approved" | "denied"> {
-  const TIMEOUT_MS = 5 * 60 * 1000;
+  const TIMEOUT_MS = 30_000; // 30 seconds — don't block agent loop too long
+  _debugLog(`waitForToolApproval: waiting for tool ${toolCallId}`);
   return new Promise((resolve) => {
     let resolved = false;
     let unsubscribe: (() => void) | null = null;
@@ -1893,6 +1954,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         const { pendingToolCalls } = useChatRef.getState();
         const tc = pendingToolCalls.find((t: any) => t.id === toolCallId);
         if (!tc) return;
+        _debugLog(`waitForToolApproval: check tool ${toolCallId}, status=${tc.status}`);
         if (tc.status === "completed") {
           resolved = true;
           cleanup();
@@ -1965,7 +2027,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
   });
 }
 
-async function executeTool(name: string, args: Record<string, any>, workspacePath: string, emit: (event: StreamEvent) => void): Promise<string> {
+async function executeTool(name: string, args: Record<string, any>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
   // Validate required args per tool
   if (name === "read_file" && typeof args.path !== "string") {
     return "Error: read_file requires a 'path' argument";
@@ -2023,6 +2085,21 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
       oldContent = new TextDecoder().decode(existingBytes);
     } catch { /* new file */ }
     const newContent = args.content;
+
+    // When auto-approved (permission already granted), write directly without diff proposal
+    if (autoApprove) {
+      await writeFile(args.path, new TextEncoder().encode(newContent));
+      const oldLines = oldContent.split("\n");
+      const newLinesArr = newContent.split("\n");
+      const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
+      for (const line of oldLines) { diffLines.push({ type: "remove", content: line }); }
+      for (const line of newLinesArr) { diffLines.push({ type: "add", content: line }); }
+      const hunks = [{ oldStart: 1, oldLines: oldLines.length, newStart: 1, newLines: newLinesArr.length, lines: diffLines }];
+      emit({ type: "diff-proposed", proposal: { diffId: "auto-" + Math.random().toString(36).slice(2, 9), filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() } });
+      return `Wrote ${args.path} (${newContent.length} bytes)`;
+    }
+
+    // Otherwise create diff proposal for user approval
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
     const oldLines = oldContent.split("\n");
     const newLinesArr = newContent.split("\n");
@@ -2057,6 +2134,23 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const updated = args.search
       ? original.split(args.search).join(args.replace)
       : original;
+
+    // When auto-approved (permission already granted), write directly without diff proposal
+    if (autoApprove) {
+      await writeFile(args.path, new TextEncoder().encode(updated));
+      const oldLines = args.search.split("\n");
+      const newLines = args.replace.split("\n");
+      const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
+      for (const line of oldLines) { diffLines.push({ type: "remove", content: line }); }
+      for (const line of newLines) { diffLines.push({ type: "add", content: line }); }
+      const searchIdx = original.indexOf(args.search);
+      const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
+      const hunks = [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
+      emit({ type: "diff-proposed", proposal: { diffId: "auto-" + Math.random().toString(36).slice(2, 9), filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() } });
+      return `Edited ${args.path} (${oldLines.length} → ${newLines.length} lines)`;
+    }
+
+    // Otherwise create diff proposal for user approval
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
     const oldLines = args.search.split("\n");
     const newLines = args.replace.split("\n");

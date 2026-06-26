@@ -6,20 +6,62 @@
   "permissions": [
     "core:default",
     "fs:default",
-    "fs:allow-read",
-    "fs:allow-read-file",
-    "fs:allow-read-text-file",
-    "fs:allow-write",
-    "fs:allow-write-file",
-    "fs:allow-write-text-file",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
-    "fs:allow-remove",
-    "fs:allow-rename",
-    "fs:allow-read-dir",
-    "fs:allow-stat",
-    "fs:allow-watch",
-    "fs:allow-copy-file",
+    {
+      "identifier": "fs:allow-read",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-write",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-rename",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-stat",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-watch",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-copy-file",
+      "allow": [{ "path": "**" }]
+    },
     "sql:default",
     "sql:allow-load",
     "sql:allow-execute",
@@ -46,22 +88,35 @@
       "identifier": "shell:allow-execute",
       "allow": [
         { "name": "git", "cmd": "git", "args": true },
-        { "name": "zsh", "cmd": "zsh", "args": true },
-        { "name": "bash", "cmd": "bash", "args": true },
-        { "name": "sh", "cmd": "sh", "args": true },
-        { "name": "powershell", "cmd": "powershell", "args": true },
-        { "name": "cmd", "cmd": "cmd", "args": true },
         { "name": "tasklist", "cmd": "tasklist", "args": true },
         { "name": "ps", "cmd": "ps", "args": true },
         { "name": "df", "cmd": "df", "args": true },
         { "name": "kill", "cmd": "kill", "args": true },
         { "name": "taskkill", "cmd": "taskkill", "args": true },
         { "name": "npx", "cmd": "npx", "args": true },
-        { "name": "node", "cmd": "node", "args": true },
-        { "name": "python", "cmd": "python", "args": true },
-        { "name": "python3", "cmd": "python3", "args": true }
+        { "name": "bash", "cmd": "bash", "args": true },
+        { "name": "zsh", "cmd": "zsh", "args": true },
+        { "name": "fish", "cmd": "fish", "args": true },
+        { "name": "sh", "cmd": "sh", "args": true },
+        { "name": "powershell", "cmd": "powershell", "args": true },
+        { "name": "pwsh", "cmd": "pwsh", "args": true },
+        { "name": "cmd", "cmd": "cmd", "args": true }
       ]
     },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "bash", "cmd": "bash", "args": true },
+        { "name": "zsh", "cmd": "zsh", "args": true },
+        { "name": "fish", "cmd": "fish", "args": true },
+        { "name": "sh", "cmd": "sh", "args": true },
+        { "name": "powershell", "cmd": "powershell", "args": true },
+        { "name": "pwsh", "cmd": "pwsh", "args": true },
+        { "name": "cmd", "cmd": "cmd", "args": true }
+      ]
+    },
+    "shell:allow-kill",
+    "shell:allow-stdin-write",
     "shell:allow-open"
   ]
 }

@@ -6,12 +6,12 @@ import {
 import { useToasts } from "@/components/ui/Toaster";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { joinPath } from "@/lib/pathUtils";
-import { modKey, shortcut, platform } from "@/lib/platform";
+import { modKey, platform } from "@/lib/platform";
 import { MemoryGraph } from "./MemoryGraph";
 import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
   Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
-  Bot, Zap, ClipboardList, FolderOpen, Shield, FileText, CheckCircle2, Network,
+  Bot, Zap, ClipboardList, FolderOpen, Shield, CheckCircle2, Network,
 } from "lucide-react";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
@@ -278,7 +278,7 @@ function ModelsTab() {
 }
 
 function ProviderDetail({ provider }: { provider: ModelProvider }) {
-  const { updateProvider, toggleProvider, addModel, removeModel } = useModelProviders();
+  const { updateProvider, toggleProvider, removeModel } = useModelProviders();
   const [apiKey, setApiKey] = useState(provider.apiKey || "");
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -443,7 +443,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
 }
 
 function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
-  const { removeProvider, updateProvider, addModel, removeModel, toggleProvider } = useModelProviders();
+  const { removeProvider, updateProvider, removeModel, toggleProvider } = useModelProviders();
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState(provider.name);
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
@@ -1521,13 +1521,6 @@ type LayerInfo = {
   exists: boolean;
   pathScopedRules: { glob: string; rules: string }[];
 };
-
-const LAYER_CONFIGS = [
-  { key: "global", label: "Global", description: "Applies to all projects", gitTracked: false },
-  { key: "org", label: "Organization", description: "Shared across team workspaces", gitTracked: true },
-  { key: "project", label: "Project", description: "Project root, checked into git", gitTracked: true },
-  { key: "local", label: "Local", description: "Personal overrides, gitignored", gitTracked: false },
-] as const;
 
 function InstructionsTab() {
   const [layers, setLayers] = useState<LayerInfo[]>([]);

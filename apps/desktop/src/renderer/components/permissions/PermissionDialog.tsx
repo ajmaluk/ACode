@@ -42,13 +42,19 @@ export function PermissionDialog() {
         cancelRef.current();
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        selectedRef.current = Math.min(selectedRef.current + 1, NUM_OPTIONS - 1);
+        const next = Math.min(selectedRef.current + 1, NUM_OPTIONS - 1);
+        selectedRef.current = next;
+        setSelected(next);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        selectedRef.current = Math.max(selectedRef.current - 1, 0);
+        const next = Math.max(selectedRef.current - 1, 0);
+        selectedRef.current = next;
+        setSelected(next);
       } else if (e.key === "Tab") {
         e.preventDefault();
-        selectedRef.current = (selectedRef.current + 1) % NUM_OPTIONS;
+        const next = (selectedRef.current + 1) % NUM_OPTIONS;
+        selectedRef.current = next;
+        setSelected(next);
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         decide(selectedRef.current);
