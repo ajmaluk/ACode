@@ -394,18 +394,18 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
           {isEdit && toolCall.status === "completed" && typeof toolCall.args.path === "string" && (
             <>
               <span>·</span>
-              <button
-                className="text-acode-accent-primary hover:underline"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const isWrite = toolCall.name === "write_file" || toolCall.name === "write";
-                  openDiff({
-                    path: toolCall.args.path as string,
-                    action: isWrite ? "created" : "modified",
-                    additions: toolCall.diff?.hunks.reduce((n, h) => n + h.newLines, 0) ?? 0,
-                    deletions: toolCall.diff?.hunks.reduce((n, h) => n + h.oldLines, 0) ?? 0,
-                  });
-                }}
+                <button
+                  className="text-[10px] text-acode-accent-primary hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const isWrite = toolCall.name === "write_file" || toolCall.name === "write";
+                    openDiff({
+                      path: toolCall.args.path as string,
+                      action: isWrite ? "created" : "modified",
+                      additions: toolCall.diff?.hunks?.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0) ?? 0,
+                      deletions: toolCall.diff?.hunks?.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0) ?? 0,
+                    });
+                  }}
               >
                 Open diff
               </button>
@@ -541,6 +541,72 @@ export function TodoBlock({ todos }: { todos: TodoItem[] }) {
                 <span className="w-3 h-3 rounded-full border border-acode-text-muted/40 flex-shrink-0 mt-0.5" />
               )}
               <span className={done ? "line-through opacity-70" : ""}>{t.content}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </ActivityRow>
+  );
+}
+
+// ============================================================================
+// TaskPlanBlock — live-updating task plan checklist
+// ============================================================================
+
+export type TaskPlanItem = {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "done" | "failed";
+};
+
+export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summary?: string | null }) {
+  const completed = tasks.filter((t) => t.status === "done").length;
+  const total = tasks.length;
+  const current = tasks.find((t) => t.status === "running");
+
+  return (
+    <ActivityRow
+      label={
+        <span className="flex items-center gap-2">
+          <span className="font-medium">Todo</span>
+          {current && (
+            <span className="text-acode-accent-primary/80 text-[11px] italic truncate max-w-[300px]">
+              {current.title}
+            </span>
+          )}
+        </span>
+      }
+      meta={
+        <span className="flex items-center gap-1.5 text-[10px] tabular-nums">
+          <span>{completed}/{total}</span>
+          {summary && completed === total && (
+            <span className="text-acode-git-added text-[10px]">{summary}</span>
+          )}
+        </span>
+      }
+      defaultOpen
+    >
+      <ul className="space-y-1">
+        {tasks.map((task) => {
+          const isDone = task.status === "done";
+          const isRunning = task.status === "running";
+          const isFailed = task.status === "failed";
+          return (
+            <li key={task.id} className="flex items-start gap-2 text-[12px]">
+              {isDone ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-acode-git-added flex-shrink-0 mt-0.5" />
+              ) : isRunning ? (
+                <span className="w-3.5 h-3.5 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <span className="text-acode-accent-primary text-sm">→</span>
+                </span>
+              ) : isFailed ? (
+                <X className="w-3.5 h-3.5 text-acode-git-deleted flex-shrink-0 mt-0.5" />
+              ) : (
+                <span className="w-3.5 h-3.5 rounded-full border border-acode-text-muted/40 flex-shrink-0 mt-0.5" />
+              )}
+              <span className={`${isDone ? "line-through opacity-70" : ""} ${isFailed ? "text-acode-git-deleted" : ""}`}>
+                {task.title}
+              </span>
             </li>
           );
         })}

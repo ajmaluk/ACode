@@ -24,6 +24,7 @@ import { joinPath } from "@/lib/pathUtils";
 
 let dbInstance: any = null;
 let currentWorkspacePath: string | null = null;
+let dbLoadingPromise: Promise<any> | null = null;
 
 // ─── Schema ──────────────────────────────────────────────────
 
@@ -70,6 +71,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  */
 export async function initDatabase(workspacePath: string): Promise<any> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
+  // Prevent concurrent init calls from leaking connections
+  if (dbLoadingPromise) {
+    await dbLoadingPromise;
+    if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
+  }
   if (dbInstance) {
     await closeDatabase();
   }
@@ -96,48 +102,63 @@ export async function initDatabase(workspacePath: string): Promise<any> {
     // mkdir may fail if already exists or permissions — proceed anyway
   }
 
-  let db: any;
-  try {
-    db = await Database.load(dbPath);
-  } catch (e) {
-    console.warn("[Database] Failed to load database at", dbPath, ":", e);
-    return null;
+  const initWork = async (): Promise<any> => {
+    let db: any;
+    try {
+      db = await Database.load(dbPath);
+    } catch (e) {
+      const errMsg = (e as Error)?.message ?? String(e);
+      if (errMsg.includes("No database driver") || errMsg.includes("driver")) {
+        console.warn("[Database] SQLite driver not enabled. Add `features = [\"sqlite\"]` to tauri-plugin-sql in Cargo.toml.");
+      } else {
+        console.warn("[Database] Failed to load database at", dbPath, ":", e);
+      }
+      return null;
+    }
+
+    // Create tables
+    await db.execute(MEMORY_TABLE);
+    await db.execute(FTS_TABLE);
+
+    // Create triggers individually
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, id, content, summary, tags, category)
+        VALUES (new.rowid, new.id, new.content, new.summary, new.tags, new.category);
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, category)
+        VALUES ('delete', old.rowid, old.id, old.content, old.summary, old.tags, old.category);
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, category)
+        VALUES ('delete', old.rowid, old.id, old.content, old.summary, old.tags, old.category);
+        INSERT INTO memories_fts(rowid, id, content, summary, tags, category)
+        VALUES (new.rowid, new.id, new.content, new.summary, new.tags, new.category);
+      END;
+    `);
+
+    // Create indexes individually
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_category ON memories(category);`);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_tier     ON memories(tier);`);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_stale    ON memories(stale);`);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`);
+
+    return db;
+  };
+
+  dbLoadingPromise = initWork();
+  const db = await dbLoadingPromise;
+  dbLoadingPromise = null;
+
+  if (db) {
+    dbInstance = db;
+    currentWorkspacePath = workspacePath;
   }
-
-  // Create tables
-  await db.execute(MEMORY_TABLE);
-  await db.execute(FTS_TABLE);
-
-  // Create triggers individually
-  await db.execute(`
-    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-      INSERT INTO memories_fts(rowid, id, content, summary, tags, category)
-      VALUES (new.rowid, new.id, new.content, new.summary, new.tags, new.category);
-    END;
-  `);
-  await db.execute(`
-    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, category)
-      VALUES ('delete', old.rowid, old.id, old.content, old.summary, old.tags, old.category);
-    END;
-  `);
-  await db.execute(`
-    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, category)
-      VALUES ('delete', old.rowid, old.id, old.content, old.summary, old.tags, old.category);
-      INSERT INTO memories_fts(rowid, id, content, summary, tags, category)
-      VALUES (new.rowid, new.id, new.content, new.summary, new.tags, new.category);
-    END;
-  `);
-
-  // Create indexes individually
-  await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_category ON memories(category);`);
-  await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_tier     ON memories(tier);`);
-  await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_stale    ON memories(stale);`);
-  await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`);
-
-  dbInstance = db;
-  currentWorkspacePath = workspacePath;
   return db;
 }
 

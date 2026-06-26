@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock } from "@/components/chat/ActivityBlocks";
+import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
 import { modKey } from "@/lib/platform";
@@ -118,8 +118,16 @@ function StreamingActivityPanel({
   thinkingContent: string;
   sessionStartTime: number;
 }) {
+  const taskPlan = useChat((s) => s.taskPlan);
+  const taskPlanSummary = useChat((s) => s.taskPlanSummary);
+
   return (
     <div className="animate-fade-in">
+      {/* Task plan (if LLM declared one) */}
+      {taskPlan && taskPlan.length > 0 && (
+        <TaskPlanBlock tasks={taskPlan} summary={taskPlanSummary} />
+      )}
+
       {/* Working timer */}
       <div className="mb-2">
         <WorkingTimer startTime={sessionStartTime} />
@@ -1615,6 +1623,11 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
       {/* Todo checklist */}
       {!pending && hasTodos && (
         <TodoBlock todos={message.todos!} />
+      )}
+
+      {/* Task plan checklist */}
+      {!pending && message.taskPlan && message.taskPlan.length > 0 && (
+        <TaskPlanBlock tasks={message.taskPlan} summary={message.taskPlanSummary} />
       )}
 
       {/* Changes card — shows file modifications from this AI turn */}

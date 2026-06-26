@@ -1036,6 +1036,12 @@ export function usePermissionAction(permission: PermissionKey, pattern: string =
 
 export type TodoStatus = TodoItem["status"];
 
+type TaskPlanItem = {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "done" | "failed";
+};
+
 type ChatState = {
   session: AgentSession | null;
   messages: ChatMessage[];
@@ -1047,6 +1053,8 @@ type ChatState = {
   activeAgentName: PrimaryAgentName;
   selectedModelId: string;
   todos: TodoItem[];
+  taskPlan: TaskPlanItem[] | null;
+  taskPlanSummary: string | null;
   _pendingChanges: FileChange[];
   _userSelectedAgent: boolean;
   chatHistory: import("@acode/shared-types").ChatMessage[][];
@@ -1105,6 +1113,8 @@ export const useChat = create<ChatState>((set, get) => ({
   activeAgentName: "build",
   selectedModelId: "",
   todos: [],
+  taskPlan: null,
+  taskPlanSummary: null,
   _pendingChanges: [],
   _userSelectedAgent: false,
   chatHistory: [],
@@ -1219,6 +1229,8 @@ export const useChat = create<ChatState>((set, get) => ({
       pendingToolCalls: [],
       pendingActivities: [],
       todos: [],
+      taskPlan: null,
+      taskPlanSummary: null,
       streamingContent: "",
       thinkingContent: "",
       _pendingChanges: [],
@@ -1412,14 +1424,14 @@ export const useChat = create<ChatState>((set, get) => ({
   appendStream(event) {
     switch (event.type) {
       case "message-start": {
-        // Only reset pendingToolCalls if they are all resolved (completed/failed/denied).
-        // Don't clear tools that are still awaiting approval from a previous turn.
         const pending = get().pendingToolCalls;
         const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
         set({
           streamingContent: "",
           thinkingContent: "",
           pendingActivities: [],
+          // Don't clear taskPlan here — it persists across turns within a session
+          // It's only cleared when starting a completely new chat
           ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
           isStreaming: true,
         });
@@ -1541,6 +1553,8 @@ export const useChat = create<ChatState>((set, get) => ({
         }
 
         const planComplete = useAgents.getState().activeAgentName === "plan" && finalContent.includes("[PLAN_COMPLETE]");
+        const currentTaskPlan = get().taskPlan;
+        const currentTaskPlanSummary = get().taskPlanSummary;
         const assistantMsg: ChatMessage = {
           id: event.messageId,
           role: "assistant",
@@ -1551,6 +1565,7 @@ export const useChat = create<ChatState>((set, get) => ({
           ...(_pendingChanges.length > 0 ? { fileChanges: [..._pendingChanges] } : {}),
           ...(allToolCalls.length > 0 ? { toolCalls: allToolCalls } : {}),
           ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
+          ...(currentTaskPlan && currentTaskPlan.length > 0 ? { taskPlan: currentTaskPlan, taskPlanSummary: currentTaskPlanSummary ?? undefined } : {}),
         };
         const sessionId = get().activeSessionId;
         if (sessionId) api.agent.cleanupStream(sessionId);
@@ -1750,12 +1765,47 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "activity-bash": {
-        set((s) => ({
-          pendingActivities: [
-            ...s.pendingActivities,
-            { type: "bash" as const, command: event.command, result: event.result },
-          ].slice(-500) as typeof s.pendingActivities,
-        }));
+        // Detect task plan and task completion events from the agent loop
+        if (event.command === "task plan") {
+          const resultText = event.result ?? "";
+          const newTasks: TaskPlanItem[] = resultText.split("\n").filter(Boolean).map((line: string) => {
+            const match = line.match(/^(\w+):\s*(.+)$/);
+            return match ? { id: match[1], title: match[2], status: "pending" as const } : null;
+          }).filter(Boolean) as TaskPlanItem[];
+          if (newTasks.length > 0) {
+            // Merge with existing task plan — preserve status of tasks that already exist
+            set((s) => {
+              const existing = s.taskPlan ?? [];
+              const existingMap = new Map(existing.map(t => [t.id, t]));
+              const merged = newTasks.map(t => existingMap.get(t.id) ?? t);
+              return { taskPlan: merged, taskPlanSummary: null };
+            });
+          }
+        } else if (event.command === "completed") {
+          set((s) => ({
+            taskPlan: s.taskPlan
+              ? s.taskPlan.map((t) => t.status !== "done" ? { ...t, status: "done" as const } : t)
+              : s.taskPlan,
+            taskPlanSummary: event.result || "Task completed",
+          }));
+        } else if (event.command === "task budget exhausted") {
+          set((s) => ({
+            taskPlan: s.taskPlan
+              ? s.taskPlan.map((t) => (t.status === "pending" || t.status === "running") ? { ...t, status: "failed" as const } : t)
+              : s.taskPlan,
+            taskPlanSummary: event.result,
+          }));
+        }
+        // Only append non-meta bash activities to the visible activity feed
+        const META_COMMANDS = new Set(["task plan", "completed", "task budget exhausted"]);
+        if (!META_COMMANDS.has(event.command)) {
+          set((s) => ({
+            pendingActivities: [
+              ...s.pendingActivities,
+              { type: "bash" as const, command: event.command, result: event.result },
+            ].slice(-500) as typeof s.pendingActivities,
+          }));
+        }
         break;
       }
       case "activity-plan": {
@@ -1883,6 +1933,8 @@ export const useChat = create<ChatState>((set, get) => ({
         pendingAttachments: [],
         restoredVersionId: null,
         preRestoreMessages: null,
+        taskPlan: null,
+        taskPlanSummary: null,
       });
       return;
     }
@@ -1922,6 +1974,8 @@ export const useChat = create<ChatState>((set, get) => ({
       restoredVersionId: null,
       planApproval: null,
       preRestoreMessages: null,
+      taskPlan: null,
+      taskPlanSummary: null,
     });
   },
 
@@ -2261,6 +2315,8 @@ export const useChat = create<ChatState>((set, get) => ({
       planApproval: null,
       restoredVersionId: null,
       preRestoreMessages: null,
+      taskPlan: null,
+      taskPlanSummary: null,
     });
     savePersistedSessionSummaries(finalizedSessions);
   },

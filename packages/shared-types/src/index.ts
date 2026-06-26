@@ -98,6 +98,8 @@ export type ChatMessage = {
   todos?: TodoItem[];
   activities?: PendingActivity[];
   attachments?: FileAttachment[];
+  taskPlan?: { id: string; title: string; status: "pending" | "running" | "done" | "failed" }[];
+  taskPlanSummary?: string;
 };
 
 export type PendingActivity =
