@@ -87,7 +87,11 @@ export function mergeRulesets(...rulesets: PermissionRuleset[]): PermissionRules
 
 function globToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|\\[\]/]/g, "\\$&");
-  const regexStr = escaped.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]");
+  const regexStr = escaped
+    .replace(/\*\*/g, "\0GLOBSTAR\0")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\0GLOBSTAR\0/g, ".*");
   return new RegExp("^" + regexStr + "$");
 }
 

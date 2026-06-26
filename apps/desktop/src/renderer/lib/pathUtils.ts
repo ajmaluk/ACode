@@ -39,7 +39,8 @@ export function dirname(p: string): string {
   const idx = posix.lastIndexOf("/");
   if (idx < 0) return ".";
   if (idx === 0) return "/";
-  return posix.slice(0, idx);
+  const result = posix.slice(0, idx);
+  return result.endsWith("/") && result !== "/" ? result.slice(0, -1) : result;
 }
 
 /** Join segments with a forward slash. Ignores empty segments. Preserves leading `/` for absolute paths. */
@@ -66,13 +67,15 @@ export function joinPath(...segments: string[]): string {
 export function shortPath(p: string, segmentsToShow = 3): string {
   const parts = splitPath(p);
   if (parts.length <= segmentsToShow) return toPosix(p);
-  return "…/" + parts.slice(-segmentsToShow).join("/");
+  const prefix = toPosix(p).startsWith("/") ? "/" : "";
+  return prefix + "…/" + parts.slice(-segmentsToShow).join("/");
 }
 
 /** True when two paths point to the same file, ignoring case on Windows/macOS. */
 export function pathsEqual(a: string, b: string, caseInsensitive = false): boolean {
-  const aa = toPosix(a);
-  const bb = toPosix(b);
+  const stripTrailing = (p: string) => p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+  const aa = stripTrailing(toPosix(a));
+  const bb = stripTrailing(toPosix(b));
   if (caseInsensitive) return aa.toLowerCase() === bb.toLowerCase();
   return aa === bb;
 }

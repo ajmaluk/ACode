@@ -20,10 +20,9 @@
  * ============================================================
  */
 
-import Database from "@tauri-apps/plugin-sql";
 import { joinPath } from "@/lib/pathUtils";
 
-let dbInstance: Database | null = null;
+let dbInstance: any = null;
 let currentWorkspacePath: string | null = null;
 
 // ─── Schema ──────────────────────────────────────────────────
@@ -69,18 +68,41 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  * The database file is stored at <workspacePath>/.acode/project.db.
  * This file should be gitignored — it's a local cache.
  */
-export async function initDatabase(workspacePath: string): Promise<Database> {
+export async function initDatabase(workspacePath: string): Promise<any> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
-  // Close existing connection before switching workspaces
   if (dbInstance) {
     await closeDatabase();
   }
 
-  // Ensure absolute path with leading slash for Tauri v2 SQL plugin
+  let Database: any;
+  try {
+    Database = (await import("@tauri-apps/plugin-sql")).default;
+  } catch (e) {
+    console.warn("[Database] SQLite plugin not available, memory search disabled:", e);
+    return null;
+  }
+
   const absPath = workspacePath.startsWith("/") ? workspacePath : `/${workspacePath}`;
   const dbPath = `sqlite:${absPath}/.acode/project.db`;
 
-  const db = await Database.load(dbPath);
+  // Ensure .acode directory exists before opening database
+  try {
+    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const dotAcode = absPath + "/.acode";
+    if (!(await exists(dotAcode))) {
+      await mkdir(dotAcode, { recursive: true });
+    }
+  } catch {
+    // mkdir may fail if already exists or permissions — proceed anyway
+  }
+
+  let db: any;
+  try {
+    db = await Database.load(dbPath);
+  } catch (e) {
+    console.warn("[Database] Failed to load database at", dbPath, ":", e);
+    return null;
+  }
 
   // Create tables
   await db.execute(MEMORY_TABLE);
@@ -128,9 +150,9 @@ export function isDatabaseReady(): boolean {
 
 /**
  * Get the current database instance.
- * Throws if not initialized.
+ * Returns null if not initialized (instead of throwing).
  */
-export function getDb(): Database {
+export function getDb(): any {
   if (!dbInstance) {
     throw new Error("Database not initialized. Call initDatabase() first.");
   }
@@ -143,8 +165,12 @@ export function getDb(): Database {
  */
 export async function closeDatabase(): Promise<void> {
   if (dbInstance) {
-    // @tauri-apps/plugin-sql doesn't expose a close method directly,
-    // but setting to null allows re-init on next workspace open.
+    try {
+      await dbInstance.close();
+    } catch {
+      // close() may not exist on older plugin versions
+    }
     dbInstance = null;
+    currentWorkspacePath = null;
   }
 }

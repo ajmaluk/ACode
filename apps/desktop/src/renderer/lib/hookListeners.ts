@@ -184,6 +184,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
         const { getActiveProvider } = await import("./acodeAPI");
         const { settings, config } = getActiveProvider();
         const isAnthropic = config.apiFormat === "anthropic";
+        const { corsFetch: corsFetchFn } = await import("./acodeAPI");
         const fetchLLM = async (prompt: string): Promise<string> => {
           const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
           const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -196,7 +197,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
           const body = isAnthropic
             ? { model: settings.selectedModel, system: "You are a memory extraction assistant.", messages: [{ role: "user", content: prompt }], max_tokens: 1000 }
             : { model: settings.selectedModel, messages: [{ role: "system", content: "You are a memory extraction assistant." }, { role: "user", content: prompt }], max_tokens: 1000 };
-          const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+          const resp = await corsFetchFn(url, { method: "POST", headers, body: JSON.stringify(body) });
           if (!resp.ok) throw new Error(`LLM extraction failed: HTTP ${resp.status}`);
           const json = await resp.json();
           return isAnthropic ? (json.content?.[0]?.text || "") : (json.choices?.[0]?.message?.content || "");

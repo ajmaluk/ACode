@@ -109,21 +109,30 @@ export function buildMemoryGraph(
     }
   }
 
-  // Connect agents to their sessions
+  // Connect agents to memories (deduplicated — one edge per agent→memory pair)
+  const seenAgentMemEdges = new Set<string>();
   for (const session of agentSessions) {
     const agentId = `agent-${session.agentName}`;
     if (nodes.find(n => n.id === agentId)) {
-      // Connect agent to memories created in its sessions
       for (const mem of memories) {
-        edges.push({ source: agentId, target: `mem-${mem.id}`, type: "created_by", weight: 0.3 });
+        const key = `${agentId}->mem-${mem.id}`;
+        if (!seenAgentMemEdges.has(key)) {
+          seenAgentMemEdges.add(key);
+          edges.push({ source: agentId, target: `mem-${mem.id}`, type: "created_by", weight: 0.3 });
+        }
       }
     }
   }
 
-  // Connect genes to agents by category
+  // Connect genes to agents by category (deduplicated)
+  const seenGeneAgentEdges = new Set<string>();
   for (const gene of genes) {
     for (const [agentName] of agentGroups) {
-      edges.push({ source: `gene-${gene.id}`, target: `agent-${agentName}`, type: "uses", weight: 0.2 });
+      const key = `gene-${gene.id}->agent-${agentName}`;
+      if (!seenGeneAgentEdges.has(key)) {
+        seenGeneAgentEdges.add(key);
+        edges.push({ source: `gene-${gene.id}`, target: `agent-${agentName}`, type: "uses", weight: 0.2 });
+      }
     }
   }
 
@@ -199,7 +208,8 @@ export function hitTest(nodes: GraphNode[], x: number, y: number): GraphNode | n
   for (const node of nodes) {
     const dx = x - node.x;
     const dy = y - node.y;
-    if (dx * dx + dy * dy < node.size * node.size) {
+    const hitRadius = node.size + 4;
+    if (dx * dx + dy * dy < hitRadius * hitRadius) {
       return node;
     }
   }

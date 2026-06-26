@@ -175,12 +175,12 @@ export async function searchMemories(
   params.push(limit);
 
   try {
-    const rows = await db.select<MemoryEntryRow[]>(sql, params);
+    const rows = await db.select(sql, params) as MemoryEntryRow[];
 
     // Update access tracking for returned results
     if (rows.length > 0) {
       const now = Date.now();
-      const ids = rows.map((r) => r.id);
+      const ids = rows.map((r: MemoryEntryRow) => r.id);
       const placeholders = ids.map(() => "?").join(",");
       await db.execute(
         `UPDATE memories SET access_count=access_count+1, last_accessed=? WHERE id IN (${placeholders})`,
@@ -219,7 +219,7 @@ async function searchMemoriesFallback(
   sql += ` ORDER BY updated_at DESC LIMIT ?`;
   params.push(limit);
 
-  const rows = await db.select<MemoryEntryRow[]>(sql, params);
+  const rows = await db.select(sql, params) as MemoryEntryRow[];
   return rows.map(parseRow);
 }
 
@@ -246,7 +246,7 @@ export async function getMemoriesByCategory(
   sql += ` ORDER BY updated_at DESC LIMIT ?`;
   params.push(limit);
 
-  const rows = await db.select<MemoryEntryRow[]>(sql, params);
+  const rows = await db.select(sql, params) as MemoryEntryRow[];
   return rows.map(parseRow);
 }
 
@@ -255,10 +255,10 @@ export async function getMemoriesByCategory(
  */
 export async function getCriticalMemories(limit = 10): Promise<MemoryEntry[]> {
   const db = getDb();
-  const rows = await db.select<MemoryEntryRow[]>(
+  const rows = await db.select(
     `SELECT * FROM memories WHERE tier = 'critical' AND stale = 0 ORDER BY last_accessed DESC LIMIT ?`,
     [limit]
-  );
+  ) as MemoryEntryRow[];
   return rows.map(parseRow);
 }
 
@@ -271,7 +271,7 @@ export async function getAllMemories(opts: { excludeStale?: boolean } = {}): Pro
   const sql = excludeStale
     ? `SELECT * FROM memories WHERE stale = 0 ORDER BY updated_at DESC`
     : `SELECT * FROM memories ORDER BY updated_at DESC`;
-  const rows = await db.select<MemoryEntryRow[]>(sql);
+  const rows = await db.select(sql) as MemoryEntryRow[];
   return rows.map(parseRow);
 }
 
@@ -291,36 +291,36 @@ export async function getMemoryStats(): Promise<{
 }> {
   const db = getDb();
 
-  const totalRows = await db.select<{ count: number }[]>(
+  const totalRows = await db.select(
     `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
-  );
+  ) as { count: number }[];
   const total = totalRows[0]?.count ?? 0;
 
-  const catRows = await db.select<{ category: string; count: number }[]>(
+  const catRows = await db.select(
     `SELECT category, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY category`
-  );
+  ) as { category: string; count: number }[];
   const byCategory: Record<string, number> = {};
   for (const row of catRows) byCategory[row.category] = row.count;
 
-  const tierRows = await db.select<{ tier: string; count: number }[]>(
+  const tierRows = await db.select(
     `SELECT tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY tier`
-  );
+  ) as { tier: string; count: number }[];
   const byTier: Record<string, number> = {};
   for (const row of tierRows) byTier[row.tier] = row.count;
 
   // Per-category tier breakdown
-  const catTierRows = await db.select<{ category: string; tier: string; count: number }[]>(
+  const catTierRows = await db.select(
     `SELECT category, tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY category, tier`
-  );
+  ) as { category: string; tier: string; count: number }[];
   const byCategoryTier: Record<string, Record<string, number>> = {};
   for (const row of catTierRows) {
     if (!byCategoryTier[row.category]) byCategoryTier[row.category] = {};
     byCategoryTier[row.category][row.tier] = row.count;
   }
 
-  const staleRows = await db.select<{ count: number }[]>(
+  const staleRows = await db.select(
     `SELECT COUNT(*) as count FROM memories WHERE stale = 1`
-  );
+  ) as { count: number }[];
   const staleCount = staleRows[0]?.count ?? 0;
 
   return { total, byCategory, byTier, byCategoryTier, staleCount };
@@ -395,10 +395,10 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
       if (!parsed) continue;
 
       // Upsert into SQLite
-      const existing = await db.select<MemoryEntryRow[]>(
+      const existing = await db.select(
         `SELECT id FROM memories WHERE id = ?`,
         [parsed.id]
-      );
+      ) as MemoryEntryRow[];
 
       if (existing.length > 0) {
         await db.execute(
@@ -861,20 +861,20 @@ export async function detectStaleMemories(): Promise<string[]> {
   const staleIds: string[] = [];
 
   // 1. Not accessed in >30 days, low/medium tier
-  const oldAccess = await db.select<MemoryEntryRow[]>(
+  const oldAccess = await db.select(
     `SELECT * FROM memories WHERE stale = 0 AND last_accessed > 0
      AND last_accessed < ? AND tier IN ('low', 'medium')`,
     [now - 30 * DAY]
-  );
-  staleIds.push(...oldAccess.map((r) => r.id));
+  ) as MemoryEntryRow[];
+  staleIds.push(...oldAccess.map((r: MemoryEntryRow) => r.id));
 
   // 2. Never accessed, created >14 days ago, low tier
-  const neverAccessed = await db.select<MemoryEntryRow[]>(
+  const neverAccessed = await db.select(
     `SELECT * FROM memories WHERE stale = 0 AND access_count = 0
      AND created_at < ? AND tier = 'low'`,
     [now - 14 * DAY]
-  );
-  staleIds.push(...neverAccessed.map((r) => r.id));
+  ) as MemoryEntryRow[];
+  staleIds.push(...neverAccessed.map((r: MemoryEntryRow) => r.id));
 
   return [...new Set(staleIds)];
 }
@@ -906,26 +906,26 @@ export async function enforceMemoryBudget(
   budget: number = CTX.MEMORY_BUDGET
 ): Promise<number> {
   const db = getDb();
-  const total = await db.select<{ count: number }[]>(
+  const total = await db.select(
     `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
-  );
+  ) as { count: number }[];
   const currentCount = total[0]?.count ?? 0;
   if (currentCount <= budget) return 0;
 
   const excess = currentCount - budget;
 
   // Get all non-critical memories ordered by quality score (lowest first)
-  const rows = await db.select<MemoryEntryRow[]>(
+  const rows = await db.select(
     `SELECT * FROM memories WHERE stale = 0 AND tier != 'critical'
      ORDER BY access_count ASC, updated_at ASC LIMIT ?`,
     [excess + 10] // fetch a few extra for scoring
-  );
+  ) as MemoryEntryRow[];
 
   // Score and sort to find the worst candidates
-  const candidates = rows.map(parseRow).map((m) => ({ entry: m, score: scoreMemory(m) }));
-  candidates.sort((a, b) => a.score - b.score);
+  const candidates = rows.map(parseRow).map((m: MemoryEntry) => ({ entry: m, score: scoreMemory(m) }));
+  candidates.sort((a: { entry: MemoryEntry; score: number }, b: { entry: MemoryEntry; score: number }) => a.score - b.score);
 
-  const toPrune = candidates.slice(0, excess).map((c) => c.entry.id);
+  const toPrune = candidates.slice(0, excess).map((c: { entry: MemoryEntry; score: number }) => c.entry.id);
   if (toPrune.length === 0) return 0;
 
   const placeholders = toPrune.map(() => "?").join(",");

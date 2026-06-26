@@ -98,7 +98,7 @@ describe("agentEvolution", () => {
 
     it("cannot reproduce when population is high", () => {
       const agents = Array.from({ length: 12 }, (_, i) => makeAgent({ id: `a${i}` }));
-      expect(canReproduce(agents, "agent-1")).toBe(false);
+      expect(canReproduce(agents, "a0")).toBe(false);
     });
 
     it("cannot reproduce if parent is immature", () => {

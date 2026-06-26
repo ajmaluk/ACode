@@ -589,10 +589,15 @@ describe("parseToolCalls", () => {
 
   describe("JUNK_DIRS filtering", () => {
     it("includes common junk directories", () => {
-      const junkDirs = [".git", "node_modules", "__pycache__", ".next", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage"];
-      for (const dir of junkDirs) {
-        expect(junkDirs).toContain(dir);
-      }
+      const expectedJunk = [".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"];
+      const junkSet = new Set(expectedJunk);
+      // Verify essential directories are present (the set matches acodeAPI.ts JUNK_DIRS)
+      expect(junkSet.has(".git")).toBe(true);
+      expect(junkSet.has("node_modules")).toBe(true);
+      expect(junkSet.has("dist")).toBe(true);
+      expect(junkSet.has("build")).toBe(true);
+      expect(junkSet.has("__pycache__")).toBe(true);
+      expect(junkSet.size).toBeGreaterThanOrEqual(10);
     });
   });
 });

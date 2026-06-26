@@ -42,7 +42,12 @@
       "open": true
     },
     "fs": {
-      "requireLiteralLeadingDot": false
+      "requireLiteralLeadingDot": false,
+      "scope": {
+        "allow": [
+          { "path": "/**" }
+        ]
+      }
     }
   }
 }

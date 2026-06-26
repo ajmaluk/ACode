@@ -20,6 +20,8 @@ import {
   useUI,
   useChat,
   useSkillsMcp,
+  useWorkspace,
+  loadWorkspaceConfigAndSessions,
 } from "@/store/useAppStore";
 
 export function App() {
@@ -92,6 +94,19 @@ export function App() {
   useEffect(() => {
     void loadSettings().catch((err) => console.error("Failed to load settings:", err));
   }, [loadSettings]);
+
+  // Auto-restore last workspace on startup
+  useEffect(() => {
+    const { workspaces, activeWorkspaceId } = useWorkspace.getState();
+    if (activeWorkspaceId) {
+      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+      if (ws) {
+        void loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
+          console.error("Failed to restore workspace:", err)
+        );
+      }
+    }
+  }, []);
 
 
   useEffect(() => {

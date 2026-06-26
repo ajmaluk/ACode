@@ -136,6 +136,7 @@ export function computePressure(
   usedTokens: number,
   maxTokens: number = 128000
 ): { pressure: ContextPressure; ratio: number } {
+  if (maxTokens <= 0) return { pressure: "high", ratio: Infinity };
   const ratio = usedTokens / maxTokens;
   let pressure: ContextPressure = "none";
   if (ratio >= 0.85) pressure = "high";

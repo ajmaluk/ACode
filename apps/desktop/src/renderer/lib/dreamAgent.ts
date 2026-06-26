@@ -274,11 +274,11 @@ export async function triggerDreamCycleIfNeeded(workspacePath: string) {
 function calculateTokenSimilarity(textA: string, textB: string): number {
   const tokensA = new Set(textA.toLowerCase().split(/[\s,.\-\/:\(\)]+/));
   const tokensB = new Set(textB.toLowerCase().split(/[\s,.\-\/:\(\)]+/));
-  
+
   const intersection = new Set([...tokensA].filter(x => tokensB.has(x)));
   const union = new Set([...tokensA, ...tokensB]);
-  
-  return union.size === 0 ? 0 : intersection.size / union.size; // Returns coefficient between 0.0 and 1.0
+
+  return union.size === 0 ? 0 : intersection.size / union.size;
 }
 
 /**
@@ -312,6 +312,9 @@ export async function executeWorkspaceDreamOptimization(workspacePath: string): 
         const skillA = discoveredSkills[i];
         const skillB = discoveredSkills[j];
         
+        // Skip entries whose files were deleted by a prior merge
+        if (!skillA || !skillB) continue;
+        
         const coefficientScore = calculateTokenSimilarity(skillA.rawContent, skillB.rawContent);
         
         // Threshold triggering context merging via background LLM pass
@@ -339,6 +342,12 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           // Drop redundant micro-skill directories
           const oldTargetDir = joinPath(skillsPath, skillB.name);
           await remove(oldTargetDir, { recursive: true });
+
+          // Update skillA content in-memory so subsequent comparisons use merged version
+          discoveredSkills[i] = { ...skillA, rawContent: response };
+
+          // Null out skillB so subsequent comparisons skip it
+          discoveredSkills[j] = null as any;
 
           // Reload skills registry so UI updates
           const { loadProjectSkills, refreshProjectSkills } = await import("./skills");

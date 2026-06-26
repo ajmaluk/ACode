@@ -75,7 +75,7 @@ export function getPopulation(agents: AgentDna[]): number {
 export function canReproduce(agents: AgentDna[], parentId: string): boolean {
   if (getPopulation(agents) >= REPRODUCTION_THRESHOLD) return false;
   const parent = agents.find(a => a.id === parentId);
-  if (!parent) return false;
+  if (!parent || parent.archived) return false;
   return isMature(parent);
 }
 
@@ -119,7 +119,7 @@ export function autoArchive(agents: AgentDna[]): AgentDna[] {
   const threshold = ARCHIVE_DAYS * 24 * 60 * 60 * 1000;
 
   return agents.map(agent => {
-    if (!agent.archived && now - agent.lastUsedAt > threshold && agent.sessionCount > 0) {
+    if (!agent.archived && now - agent.lastUsedAt > threshold && (agent.sessionCount > 0 || agent.parentId !== null)) {
       return { ...agent, archived: true };
     }
     return agent;

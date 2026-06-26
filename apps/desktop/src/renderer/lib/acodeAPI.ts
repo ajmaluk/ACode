@@ -171,7 +171,7 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDel
  * CORS-free fetch using Tauri's HTTP plugin (bypasses browser CORS restrictions).
  * Falls back to browser fetch if the plugin is unavailable.
  */
-async function corsFetch(url: string, options: RequestInit): Promise<Response> {
+export async function corsFetch(url: string, options: RequestInit): Promise<Response> {
   try {
     const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
     const resp = await tauriFetch(url, {
@@ -487,6 +487,7 @@ const mockAcodeAPI: AcodeAPI = {
   terminal: (() => {
     const processes = new Map<string, { child: any; command: any }>();
     const listeners = new Map<string, Set<(data: string) => void>>();
+    const pendingErrors = new Map<string, string>();
 
     return {
       async create(cwd?: string, title?: string) {
@@ -526,7 +527,7 @@ const mockAcodeAPI: AcodeAPI = {
           const termListeners = new Set<(data: string) => void>();
           listeners.set(id, termListeners);
           const errMsg = `\x1b[31mFailed to start shell: ${(err as Error)?.message ?? String(err)}\x1b[0m\r\n`;
-          for (const l of termListeners) l(errMsg);
+          pendingErrors.set(id, errMsg);
         }
         return id;
       },
@@ -553,6 +554,12 @@ const mockAcodeAPI: AcodeAPI = {
       onData(id: string, cb: (data: string) => void): () => void {
         if (!listeners.has(id)) listeners.set(id, new Set());
         listeners.get(id)!.add(cb);
+        // Replay buffered error message if terminal failed before listener was registered
+        const pending = pendingErrors.get(id);
+        if (pending) {
+          cb(pending);
+          pendingErrors.delete(id);
+        }
         return () => { listeners.get(id)?.delete(cb); };
       },
     };
@@ -922,11 +929,15 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const filteredHistory = currentHistory.filter((msg) => msg.role !== "system");
         let loopCount = 0;
         const MAX_LOOP = 10;
+        const loopStartTime = Date.now();
+        const MAX_LOOP_DURATION_MS = 5 * 60 * 1000; // 5 minutes max total loop time
+        const REQUEST_DELAY_MS = 1500; // Rate limit delay between API requests
 
         while (loopCount < MAX_LOOP) {
           loopCount++;
-          if (loopCount >= MAX_LOOP) {
-            emit({ type: "error", error: `Agent loop limit (${MAX_LOOP}) reached. Stopping to prevent infinite loop.` });
+          // Check total loop duration to prevent indefinite spinning
+          if (Date.now() - loopStartTime > MAX_LOOP_DURATION_MS) {
+            emit({ type: "error", error: `Agent loop timed out after ${MAX_LOOP_DURATION_MS / 1000}s. Stopping to prevent indefinite processing.` });
             break;
           }
 
@@ -998,6 +1009,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           // Start Turn streaming
           emit({ type: "message-start", messageId: sessionId });
           useChat.setState({ isStreaming: true });
+
+          // Rate limit: small initial delay on first turn, longer delay on tool-result turns
+          if (loopCount === 1) {
+            await new Promise((r) => setTimeout(r, 500));
+          } else if (loopCount > 1) {
+            await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS));
+          }
 
           const maxTokens = settings.maxTokens ?? 4096;
           const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, messages, ac.signal, maxTokens);
@@ -1173,6 +1191,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               emit({ type: "message-end", messageId: lastMessageId || sessionId });
               // Reset streaming state for the next turn
               useChat.setState({ streamingContent: "", thinkingContent: "" });
+              // Rate limit delay between API requests to avoid 429 errors
+              if (loopCount < MAX_LOOP) {
+                emit({ type: "activity-bash", command: `rate-limit delay (${REQUEST_DELAY_MS}ms)`, result: "" });
+                await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS));
+              }
               continue; // Run next LLM turn
             }
           }

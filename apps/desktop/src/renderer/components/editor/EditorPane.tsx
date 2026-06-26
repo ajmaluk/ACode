@@ -8,8 +8,8 @@ import { TopNav } from "@/components/editor/TopNav";
 import {
   X, FileCode, FilePlus, Circle, MoreHorizontal, Columns, ArrowUp,
   ChevronDown, ChevronUp, ChevronRight, Shield, Loader2, Sparkles,
-  FileText, GitBranch, Clock,
-  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy,
+  FileText, GitBranch, Clock, Terminal, Search,
+  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy, Code2,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
@@ -20,6 +20,253 @@ import { modKey } from "@/lib/platform";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "highlight.js";
+
+// ============================================================================
+// WorkingTimer — shows elapsed time since streaming started
+// ============================================================================
+function WorkingTimer({ startTime }: { startTime: number }) {
+  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  return (
+    <span className="text-[12px] text-acode-text-muted/60 tabular-nums">
+      Working for {timeStr}
+    </span>
+  );
+}
+
+// ============================================================================
+// InlineActivityRow — shows a single tool/activity in progress (Cursor-style)
+// ============================================================================
+function InlineActivityRow({
+  icon,
+  label,
+  target,
+  status,
+  duration,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  target?: string;
+  status?: "running" | "completed" | "failed";
+  duration?: string;
+  children?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasDetail = !!children;
+  return (
+    <div className="my-0.5">
+      <button
+        type="button"
+        onClick={() => hasDetail && setOpen((o) => !o)}
+        className={`group flex items-center gap-1.5 text-left text-[12px] leading-relaxed w-full opacity-70 hover:opacity-100 transition-opacity ${
+          hasDetail ? "cursor-pointer" : "cursor-default"
+        } text-acode-text-secondary`}
+      >
+        {status === "running" ? (
+          <Loader2 className="w-3 h-3 text-acode-accent-primary animate-spin flex-shrink-0" />
+        ) : status === "completed" ? (
+          <Check className="w-3 h-3 text-acode-git-added flex-shrink-0" />
+        ) : status === "failed" ? (
+          <X className="w-3 h-3 text-acode-git-deleted flex-shrink-0" />
+        ) : (
+          icon
+        )}
+        <span className="opacity-80">{label}</span>
+        {target && (
+          <span className="font-mono text-[11px] text-acode-text-muted/60 truncate max-w-[400px]">
+            {target}
+          </span>
+        )}
+        {duration && (
+          <span className="text-[10px] text-acode-text-muted/50 tabular-nums ml-auto">{duration}</span>
+        )}
+        {hasDetail && (
+          <ChevronDown
+            className={`w-2.5 h-2.5 text-acode-text-muted/50 transition-transform flex-shrink-0 ml-1 ${open ? "" : "-rotate-90"}`}
+          />
+        )}
+      </button>
+      {hasDetail && open && (
+        <div className="ml-5 mt-0.5 pl-2 border-l border-acode-border-primary/40 text-[11px] text-acode-text-secondary/70 leading-relaxed max-h-60 overflow-y-auto scrollbar-thin">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// StreamingActivityPanel — shows all activities inline during streaming
+// ============================================================================
+function StreamingActivityPanel({
+  activities,
+  toolCalls,
+  thinkingContent,
+  sessionStartTime,
+}: {
+  activities: import("@acode/shared-types").PendingActivity[];
+  toolCalls: import("@acode/shared-types").ToolCall[];
+  thinkingContent: string;
+  sessionStartTime: number;
+}) {
+  return (
+    <div className="animate-fade-in">
+      {/* Working timer */}
+      <div className="mb-2">
+        <WorkingTimer startTime={sessionStartTime} />
+      </div>
+
+      {/* Thinking block (if any) */}
+      {thinkingContent && (
+        <ThinkingBlock content={thinkingContent} streaming />
+      )}
+
+      {/* Tool calls */}
+      {toolCalls.length > 0 && (
+        <div className="space-y-0.5">
+          {toolCalls.map((tc) => {
+            const meta = getToolMeta(tc.name);
+            const isRunning = tc.status === "running" || tc.status === "pending";
+            const isCompleted = tc.status === "completed";
+            const isFailed = tc.status === "failed";
+            const status = isRunning ? "running" : isCompleted ? "completed" : isFailed ? "failed" : undefined;
+
+            const target = (() => {
+              if (typeof tc.args.path === "string") return tc.args.path;
+              if (typeof tc.args.command === "string") return `$ ${tc.args.command}`;
+              if (typeof tc.args.query === "string") return tc.args.query;
+              if (typeof tc.args.pattern === "string") return tc.args.pattern;
+              return "";
+            })();
+
+            return (
+              <InlineActivityRow
+                key={tc.id}
+                icon={React.createElement(meta.icon, { className: "w-3 h-3 flex-shrink-0" })}
+                label={meta.label}
+                target={target}
+                status={status}
+              >
+                {tc.result && (
+                  <pre className="font-mono text-[10px] bg-acode-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                    {tc.result.slice(0, 2000)}
+                  </pre>
+                )}
+              </InlineActivityRow>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pending activities (explore, read, bash, skill, plan) */}
+      {activities.length > 0 && (
+        <div className="space-y-0.5">
+          {activities.map((activity, idx) => {
+            if (activity.type === "explore") {
+              return (
+                <InlineActivityRow
+                  key={`explore-${idx}`}
+                  icon={<Search className="w-3 h-3 flex-shrink-0" />}
+                  label="Searched"
+                  target={activity.query}
+                  status="completed"
+                />
+              );
+            }
+            if (activity.type === "read") {
+              const fileName = activity.path.split("/").pop() || activity.path;
+              const ext = fileName.split(".").pop()?.toLowerCase() || "";
+              return (
+                <InlineActivityRow
+                  key={`read-${idx}`}
+                  icon={React.createElement(getFileIcon(ext), { className: "w-3 h-3 flex-shrink-0" })}
+                  label="Read"
+                  target={fileName}
+                  status="completed"
+                />
+              );
+            }
+            if (activity.type === "bash") {
+              return (
+                <InlineActivityRow
+                  key={`bash-${idx}`}
+                  icon={<Terminal className="w-3 h-3 flex-shrink-0" />}
+                  label="Ran"
+                  target={`$ ${activity.command}`}
+                  status="completed"
+                >
+                  <pre className="font-mono text-[10px] bg-acode-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                    {activity.result.slice(0, 2000)}
+                  </pre>
+                </InlineActivityRow>
+              );
+            }
+            if (activity.type === "skill") {
+              return (
+                <InlineActivityRow
+                  key={`skill-${idx}`}
+                  icon={<Zap className="w-3 h-3 flex-shrink-0" />}
+                  label="Invoked"
+                  target={`$${activity.name}`}
+                  status="completed"
+                />
+              );
+            }
+            return null;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Helper to get file icon based on extension
+function getFileIcon(ext: string): React.ElementType {
+  const iconMap: Record<string, React.ElementType> = {
+    ts: FileCode,
+    tsx: FileCode,
+    js: FileCode,
+    jsx: FileCode,
+    json: FileCode,
+    html: FileCode,
+    css: FileCode,
+    md: FileText,
+    py: FileCode,
+    rs: FileCode,
+    go: FileCode,
+  };
+  return iconMap[ext] || FileText;
+}
+
+// Tool metadata for display
+function getToolMeta(name: string): { icon: React.ElementType; label: string } {
+  const meta: Record<string, { icon: React.ElementType; label: string }> = {
+    read_file: { icon: FileText, label: "Read" },
+    read: { icon: FileText, label: "Read" },
+    edit_file: { icon: FileCode, label: "Edited" },
+    edit: { icon: FileCode, label: "Edited" },
+    write_file: { icon: FilePlus, label: "Wrote" },
+    write: { icon: FilePlus, label: "Wrote" },
+    bash: { icon: Terminal, label: "Ran" },
+    shell: { icon: Terminal, label: "Ran" },
+    run_command: { icon: Terminal, label: "Ran" },
+    list_dir: { icon: FolderOpen, label: "Listed" },
+    grep_file: { icon: Search, label: "Searched" },
+    search_files: { icon: Search, label: "Searched" },
+    git_status: { icon: GitBranch, label: "Git Status" },
+    git_commit: { icon: GitBranch, label: "Git Commit" },
+  };
+  return meta[name] || { icon: Code2, label: name };
+}
 
 const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: any; openFile: (path: string) => Promise<void> }) {
   const toast = useToast();
@@ -227,7 +474,7 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
 function ChatView() {
   const { workspaces, activeWorkspaceId, setActiveWorkspace, openWorkspace, fileTree } = useWorkspace();
   const { settings } = useSettings();
-  const { sendMessage, isStreaming, messages, streamingContent, thinkingContent, selectedModelId, setSelectedModel, pendingToolCalls, resolveToolApproval, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment } = useChat();
+  const { sendMessage, isStreaming, messages, streamingContent, thinkingContent, selectedModelId, setSelectedModel, pendingToolCalls, resolveToolApproval, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment, pendingActivities, session } = useChat();
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
   const { activeAgentName, setActiveAgent, agents } = useAgents();
@@ -1030,8 +1277,13 @@ Add your project's common commands here so ACode knows how to build:
                 </div>
               </div>
             )}
-            {isStreaming && pendingToolCalls.length > 0 && (
-              <RunningToolsSection toolCalls={pendingToolCalls} />
+            {isStreaming && (
+              <StreamingActivityPanel
+                activities={pendingActivities}
+                toolCalls={pendingToolCalls}
+                thinkingContent={thinkingContent}
+                sessionStartTime={session?.startedAt ?? Date.now()}
+              />
             )}
             {isStreaming && streamingContent && (
               <ChatMessage
@@ -1046,17 +1298,15 @@ Add your project's common commands here so ACode knows how to build:
                 activeAgentName={activeAgentName}
               />
             )}
-            {isStreaming && !streamingContent && (
-              <div className="py-3 animate-fade-in">
-                {thinkingContent ? (
-                  <ThinkingBlock content={thinkingContent} streaming />
-                ) : (
-                  <div className="flex items-center gap-2 text-[13px] text-acode-text-secondary">
-                    <Loader2 className="w-3.5 h-3.5 text-acode-accent-primary animate-spin" />
-                    <span>Thinking</span>
-                    <Dots />
+            {isStreaming && !streamingContent && pendingToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent && (
+              <div className="py-3 animate-fade-in-up">
+                <div className="flex items-center gap-3 text-[13px] text-acode-text-secondary">
+                  <div className="animate-thinking-wave">
+                    <span /><span /><span /><span /><span />
                   </div>
-                )}
+                  <span className="opacity-70">Thinking</span>
+                  <Dots />
+                </div>
               </div>
             )}
           </div>
@@ -1268,9 +1518,6 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
       <div className="py-2 animate-fade-in">
         <div className="flex justify-end">
           <div className="max-w-[80%]">
-            <div className="flex items-center gap-1.5 mb-1 justify-end">
-              <span className="text-[10px] text-acode-text-muted font-medium uppercase tracking-wider">You</span>
-            </div>
             {message.attachments && message.attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-2 justify-end">
                 {message.attachments.map((att) => (
@@ -1312,16 +1559,6 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
 
   return (
     <div className="py-2 animate-fade-in">
-      {/* Assistant label */}
-      {!pending && (
-        <div className="flex items-center gap-1.5 mb-1">
-          <div className="w-1.5 h-1.5 rounded-full bg-acode-accent-primary" />
-          <span className="text-[10px] text-acode-text-muted font-medium uppercase tracking-wider">Assistant</span>
-          {activeAgentName && (
-            <span className="text-[9px] text-acode-text-muted/60 ml-1">({activeAgentName})</span>
-          )}
-        </div>
-      )}
 
       {/* Thinking block — model's reasoning, collapsed by default */}
       {!pending && message.thinking && (
@@ -1386,9 +1623,8 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
       )}
 
       {/* Message meta footer — only when the message is settled. */}
-      {!pending && (
+      {!pending && message.content && (
         <div className="flex items-center gap-2 mt-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity">
-          <span className="text-[10px] text-acode-text-muted">{activeAgentName}</span>
           <div className="ml-auto flex items-center gap-0.5">
             <button
               className="p-1 rounded hover:bg-acode-bg-hover text-acode-text-muted hover:text-acode-text-primary transition-colors"

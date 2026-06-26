@@ -45,33 +45,21 @@ const BANNER = `${ANSI.cyan}╭────────────────�
 Type ${ANSI.bold}help${ANSI.reset} to see available commands. Try ${ANSI.bold}ls${ANSI.reset}, ${ANSI.bold}cat src/App.tsx${ANSI.reset}, or ${ANSI.bold}git status${ANSI.reset}.
 `;
 
-export function TerminalPanel() {
-  const { tabs, activeTabId, addTab, closeTab, setActiveTab } = useTerminal();
-  const { activeWorkspaceId, workspaces } = useWorkspace();
-  const isStreaming = useChat((s) => s.isStreaming);
+interface TerminalTabContentProps {
+  tabId: string;
+  cwd: string;
+  active: boolean;
+  terminalsMapRef: React.MutableRefObject<Map<string, Terminal>>;
+}
+
+function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTabContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const procIdsRef = useRef<Map<string, string>>(new Map());
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const procIdRef = useRef<string | null>(null);
 
-  const terminalsRef = useRef<Map<string, Terminal>>(new Map());
-  const fitAddonsRef = useRef<Map<string, FitAddon>>(new Map());
-  const termCleanupsRef = useRef<Map<string, () => void>>(new Map());
-
-  const activeTabIdRef = useRef(activeTabId);
   useEffect(() => {
-    activeTabIdRef.current = activeTabId;
-  }, [activeTabId]);
-
-  const cwd = workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ".";
-
-  const initializeTerminal = useCallback((tabId: string, element: HTMLDivElement) => {
-    if (terminalsRef.current.has(tabId)) {
-      if (tabId === activeTabId) {
-        setTimeout(() => {
-          fitAddonsRef.current.get(tabId)?.fit();
-        }, 0);
-      }
-      return;
-    }
+    const element = containerRef.current;
+    if (!element) return;
 
     const term = new Terminal({
       theme: ACODE_TERM_THEME,
@@ -85,40 +73,44 @@ export function TerminalPanel() {
       macOptionIsMeta: true,
       convertEol: true,
     });
+
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
     term.loadAddon(fit);
     term.loadAddon(webLinks);
     term.open(element);
-    setTimeout(() => {
-      fit.fit();
-    }, 0);
 
     term.writeln(BANNER);
     term.write(ANSI.prompt);
 
-    terminalsRef.current.set(tabId, term);
-    fitAddonsRef.current.set(tabId, fit);
+    terminalsMapRef.current.set(tabId, term);
+    fitAddonRef.current = fit;
 
-    // Spawn process and wire I/O
+    // Trigger initial fit
+    setTimeout(() => {
+      fit.fit();
+    }, 50);
+
     const api = ensureAcodeAPI();
-    
+    let isCleanedUp = false;
+    let unsubData: (() => void) | null = null;
+    let inputDisposable: { dispose: () => void } | null = null;
+
     const startIO = async () => {
       try {
         const procId = await api.terminal.create(cwd);
-        procIdsRef.current.set(tabId, procId);
+        if (isCleanedUp) {
+          api.terminal.kill(procId).catch(() => {});
+          return;
+        }
+        procIdRef.current = procId;
 
-        const unsub = api.terminal.onData(procId, (data) => {
+        unsubData = api.terminal.onData(procId, (data) => {
           term.write(data);
         });
 
-        const inputDisposable = term.onData((data) => {
+        inputDisposable = term.onData((data) => {
           api.terminal.writeInput(procId, data).catch(() => {});
-        });
-
-        termCleanupsRef.current.set(tabId, () => {
-          unsub();
-          inputDisposable.dispose();
         });
       } catch (err) {
         term.writeln(`\r\n\x1b[31mError spawning terminal process: ${String(err)}\x1b[0m`);
@@ -126,66 +118,64 @@ export function TerminalPanel() {
     };
 
     void startIO();
-  }, [cwd, activeTabId]);
 
-  // Master resize observer and cleanup on unmount
-  useEffect(() => {
-    const onResize = () => {
-      const activeId = activeTabIdRef.current;
-      if (activeId) {
-        fitAddonsRef.current.get(activeId)?.fit();
+    const handleResize = () => {
+      fit.fit();
+    };
+
+    const ro = new ResizeObserver(() => {
+      if (active) {
+        handleResize();
       }
-    };
-    window.addEventListener("resize", onResize);
-    const ro = new ResizeObserver(onResize);
-    if (containerRef.current) {
-      ro.observe(containerRef.current);
-    }
-    return () => {
-      window.removeEventListener("resize", onResize);
-      ro.disconnect();
-      // Dispose all terminals
-      terminalsRef.current.forEach((term) => term.dispose());
-      terminalsRef.current.clear();
-      fitAddonsRef.current.clear();
-      // Clean up subscriptions
-      termCleanupsRef.current.forEach((cleanup) => cleanup());
-      termCleanupsRef.current.clear();
-      // Kill all processes
-      const api = ensureAcodeAPI();
-      procIdsRef.current.forEach((procId) => {
-        api.terminal.kill(procId).catch(() => {});
-      });
-      procIdsRef.current.clear();
-    };
-  }, []);
+    });
+    ro.observe(element);
 
-  // Handle new tab creation
-  const handleAddTab = useCallback(async () => {
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      isCleanedUp = true;
+      window.removeEventListener("resize", handleResize);
+      ro.disconnect();
+
+      terminalsMapRef.current.delete(tabId);
+
+      if (unsubData) unsubData();
+      if (inputDisposable) inputDisposable.dispose();
+
+      const procId = procIdRef.current;
+      if (procId) {
+        api.terminal.kill(procId).catch(() => {});
+      }
+
+      term.dispose();
+    };
+  }, [tabId, cwd]);
+
+  useEffect(() => {
+    if (active) {
+      const t = setTimeout(() => {
+        fitAddonRef.current?.fit();
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [active]);
+
+  return <div ref={containerRef} className="w-full h-full" />;
+}
+
+export function TerminalPanel() {
+  const { tabs, activeTabId, addTab, closeTab, setActiveTab } = useTerminal();
+  const { activeWorkspaceId, workspaces } = useWorkspace();
+  const isStreaming = useChat((s) => s.isStreaming);
+  const session = useChat((s) => s.session);
+
+  const cwd = session?.workspacePath ?? workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ".";
+
+  const terminalsRef = useRef<Map<string, Terminal>>(new Map());
+
+  const handleAddTab = useCallback(() => {
     addTab(cwd);
   }, [addTab, cwd]);
-
-  // Handle tab close
-  const handleCloseTab = useCallback((tabId: string) => {
-    const procId = procIdsRef.current.get(tabId);
-    if (procId) {
-      ensureAcodeAPI().terminal.kill(procId).catch(() => {});
-      procIdsRef.current.delete(tabId);
-    }
-    const cleanup = termCleanupsRef.current.get(tabId);
-    if (cleanup) {
-      cleanup();
-      termCleanupsRef.current.delete(tabId);
-    }
-    const term = terminalsRef.current.get(tabId);
-    if (term) {
-      term.dispose();
-      terminalsRef.current.delete(tabId);
-    }
-    fitAddonsRef.current.delete(tabId);
-
-    closeTab(tabId);
-  }, [closeTab]);
 
   return (
     <div className="h-full flex flex-col bg-acode-bg-primary">
@@ -207,7 +197,7 @@ export function TerminalPanel() {
                 className="ml-1 opacity-0 group-hover:opacity-100 hover:bg-acode-bg-active rounded p-0.5"
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleCloseTab(t.id);
+                  closeTab(t.id);
                 }}
               >
                 <X className="w-3 h-3" />
@@ -255,18 +245,20 @@ export function TerminalPanel() {
         </button>
       </div>
 
-      <div ref={containerRef} className="flex-1 min-h-0 relative">
+      <div className="flex-1 min-h-0 relative">
         {tabs.map((t) => (
           <div
-            key={t.id}
-            ref={(el) => {
-              if (el) {
-                initializeTerminal(t.id, el);
-              }
-            }}
+            key={`${t.id}-${t.cwd}`}
             className="absolute inset-0"
             style={{ display: t.id === activeTabId ? "block" : "none" }}
-          />
+          >
+            <TerminalTabContent
+              tabId={t.id}
+              cwd={t.cwd}
+              active={t.id === activeTabId}
+              terminalsMapRef={terminalsRef}
+            />
+          </div>
         ))}
       </div>
     </div>

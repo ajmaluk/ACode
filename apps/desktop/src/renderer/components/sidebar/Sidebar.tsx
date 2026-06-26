@@ -154,7 +154,7 @@ export function Sidebar() {
   const { cancel: cancelPermission } = usePermission();
   const { resolve: resolveQuestion } = useQuestion();
   const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
-  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
 
   const [, force] = useState(0);
@@ -178,12 +178,49 @@ export function Sidebar() {
   }, [chatSessions]);
 
   const toggleWorkspace = (wsId: string) => {
-    setExpandedWorkspaces((prev) => {
+    setCollapsedWorkspaces((prev) => {
       const next = new Set(prev);
       if (next.has(wsId)) next.delete(wsId);
       else next.add(wsId);
       return next;
     });
+  };
+
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, wsId: string) => {
+    setDragId(wsId);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, wsId: string) => {
+    e.preventDefault();
+    if (dragId && dragId !== wsId) {
+      setDragOverId(wsId);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    if (dragId && dragId !== targetId) {
+      const { workspaces } = useWorkspace.getState();
+      const fromIdx = workspaces.findIndex((w) => w.id === dragId);
+      const toIdx = workspaces.findIndex((w) => w.id === targetId);
+      if (fromIdx !== -1 && toIdx !== -1) {
+        const reordered = [...workspaces];
+        const [moved] = reordered.splice(fromIdx, 1);
+        reordered.splice(toIdx, 0, moved);
+        useWorkspace.setState({ workspaces: reordered });
+      }
+    }
+    setDragId(null);
+    setDragOverId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragId(null);
+    setDragOverId(null);
   };
 
   const VISIBLE_LIMIT = 5;
@@ -227,18 +264,26 @@ export function Sidebar() {
       {/* Workspace + session list */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {workspaces.map((ws) => {
-          const isExpanded = expandedWorkspaces.has(ws.id) || ws.id === activeWorkspaceId;
+          const isExpanded = !collapsedWorkspaces.has(ws.id);
           const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
           const showAllSessions = showAll[ws.id] ?? false;
           const visibleSessions = showAllSessions ? wsSessions : wsSessions.slice(0, VISIBLE_LIMIT);
           const hasMore = wsSessions.length > VISIBLE_LIMIT;
 
           return (
-            <div key={ws.id} className="mb-1">
+            <div
+              key={ws.id}
+              className={`mb-1 transition-colors ${dragOverId === ws.id ? "bg-acode-accent-primary/10 border-t border-acode-accent-primary" : ""}`}
+              draggable
+              onDragStart={(e) => handleDragStart(e, ws.id)}
+              onDragOver={(e) => handleDragOver(e, ws.id)}
+              onDrop={(e) => handleDrop(e, ws.id)}
+              onDragEnd={handleDragEnd}
+            >
               <button
                 className={`w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-acode-bg-hover transition-colors ${
                   ws.id === activeWorkspaceId ? "bg-acode-bg-hover" : ""
-                }`}
+                } ${dragId === ws.id ? "opacity-50" : ""}`}
                 onClick={() => { toggleWorkspace(ws.id); setActiveWorkspace(ws.id); }}
               >
                 {isExpanded ? (

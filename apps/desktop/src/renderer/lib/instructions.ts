@@ -312,6 +312,32 @@ function matchGlob(glob: string, filePath: string): boolean {
   const normalizedGlob = glob.replace(/\\/g, "/");
   const normalizedPath = filePath.replace(/\\/g, "/");
 
+  // Pre-expand brace patterns {a,b,c} into alternation
+  const expandedGlobs = expandBraces(normalizedGlob);
+  return expandedGlobs.some(g => matchSingleGlob(g, normalizedPath));
+}
+
+function expandBraces(glob: string): string[] {
+  const braceStart = glob.indexOf("{");
+  if (braceStart === -1) return [glob];
+
+  const braceEnd = glob.indexOf("}", braceStart);
+  if (braceEnd === -1) return [glob];
+
+  const prefix = glob.slice(0, braceStart);
+  const suffix = glob.slice(braceEnd + 1);
+  const alternatives = glob.slice(braceStart + 1, braceEnd).split(",");
+
+  const results: string[] = [];
+  for (const alt of alternatives) {
+    const expanded = expandBraces(prefix + alt.trim() + suffix);
+    results.push(...expanded);
+  }
+  return results;
+}
+
+function matchSingleGlob(normalizedGlob: string, normalizedPath: string): boolean {
+
   // Step 1: Use unique placeholders for glob wildcards to prevent subsequent replacement clashes
   let regexStr = normalizedGlob
     .replace(/\*\*\//g, "__GLOBSTAR_SLASH__")

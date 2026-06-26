@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { useGit, useChat, useWorkspace, useDiffView, useUI } from "@/store/useAppStore";
+import { useGit, useChat, useWorkspace, useDiffView, useUI, useTerminal } from "@/store/useAppStore";
 import type { GitStatus } from "@acode/shared-types";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
 import { computeDiff } from "@/lib/diff";
@@ -26,7 +26,7 @@ const TABS: { id: Tab; icon: React.ElementType; label: string }[] = [
 
 export function RightPanel() {
   const { status, refresh } = useGit();
-  const { todos } = useChat();
+  const { todos, session } = useChat();
   const { activeWorkspaceId } = useWorkspace();
   const { open: diffOpen, current: diffCurrent } = useDiffView();
   const { browserTabs, activeBrowserTabId, rightPanelTab: tab, setRightPanelTab: setTab } = useUI();
@@ -69,7 +69,13 @@ export function RightPanel() {
             return (
               <button
                 key={t.id}
-                onClick={() => { setTab(t.id); if (!useUI.getState().rightPanelOpen) useUI.getState().setRightPanelOpen(true); }}
+                onClick={() => {
+                  if (t.id === "terminal" && session?.workspacePath) {
+                    useTerminal.getState().ensureTabForCwd(session.workspacePath);
+                  }
+                  setTab(t.id);
+                  if (!useUI.getState().rightPanelOpen) useUI.getState().setRightPanelOpen(true);
+                }}
                 title={t.label}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-100 relative group ${
                   isActive

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents } from "@/store/useAppStore";
+import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents, useTerminal } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
 import { modKey } from "@/lib/platform";
 import { ensureAcodeAPI } from "@/lib/acodeAPI";
@@ -17,7 +17,7 @@ const AGENT_META: Record<string, { label: string; icon: React.ElementType; color
 
 export function TopNav() {
   const { sidebarOpen, toggleSidebar, rightPanelOpen, toggleRightPanel } = useUI();
-  const { goBackChat, goForwardChat, newChat, chatHistory, chatHistoryIdx, messages } = useChat();
+  const { goBackChat, goForwardChat, newChat, chatHistory, chatHistoryIdx, messages, session } = useChat();
   const { activeWorkspaceId, workspaces, openWorkspace } = useWorkspace();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const { open: openSettings } = useSettingsView();
@@ -76,6 +76,9 @@ export function TopNav() {
       if (app === "finder") {
         await api.system.revealInFinder(path);
       } else if (app === "terminal") {
+        if (session?.workspacePath) {
+          useTerminal.getState().ensureTabForCwd(session.workspacePath);
+        }
         useUI.getState().setRightPanelTab("terminal");
         useUI.getState().setRightPanelOpen(true);
       } else {
@@ -238,11 +241,14 @@ export function TopNav() {
            <Monitor className="w-4 h-4" />}
         </button>
 
-        {inChat && activeWorkspace && (
+        {session && session.workspacePath && (
           <button
             className="w-7 h-7 flex items-center justify-center rounded-md text-acode-text-secondary hover:text-acode-text-primary hover:bg-acode-bg-hover transition-colors"
             title="Open terminal"
             onClick={() => {
+              if (session.workspacePath) {
+                useTerminal.getState().ensureTabForCwd(session.workspacePath);
+              }
               useUI.getState().setRightPanelTab("terminal");
               useUI.getState().setRightPanelOpen(true);
             }}

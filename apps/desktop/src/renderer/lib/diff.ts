@@ -204,58 +204,37 @@ function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: numb
 function patienceLCS(anchors: [number, number][]): [number, number][] {
   if (anchors.length === 0) return [];
 
-  // patience sorting for LIS
-  const piles: [number, number][][] = [];
-  const backptrs: number[] = [];
+  // Standard patience-sorting LIS on the newIdx values
+  // tails[i] = smallest tail value for an increasing subsequence of length i+1
+  const tails: number[] = [];
+  // For each anchor, which pile it was placed on (= LIS length ending at this element)
+  const pileOf: number[] = [];
 
   for (const anchor of anchors) {
-    let lo = 0, hi = piles.length;
+    const val = anchor[1];
+    let lo = 0, hi = tails.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (piles[mid][piles[mid].length - 1][1] < anchor[1]) lo = mid + 1;
+      if (tails[mid] < val) lo = mid + 1;
       else hi = mid;
     }
-
-    backptrs.push(lo > 0 ? (piles[lo - 1].length - 1 + (lo > 1 ? piles.slice(0, lo - 1).reduce((s, p) => s + p.length, 0) : 0)) : -1);
-    if (lo === piles.length) piles.push([anchor]);
-    else piles[lo].push(anchor);
+    pileOf.push(lo);
+    if (lo === tails.length) tails.push(val);
+    else tails[lo] = val;
   }
 
-  // Reconstruct LIS using back pointers
-  const totalElements = piles.reduce((s, p) => s + p.length, 0);
-  const flatAnchors: [number, number][] = [];
-  const flatBackptrs: number[] = [];
-  for (const pile of piles) {
-    for (const a of pile) flatAnchors.push(a);
-  }
-  // Rebuild backptrs for flat array
-  const flatBack: number[] = new Array(totalElements).fill(-1);
-  let flatIdx = 0;
-  for (let p = 0; p < piles.length; p++) {
-    for (let j = 0; j < piles[p].length; j++) {
-      // Find which previous flat index has smaller newIdx
-      let bestPrev = -1;
-      for (let k = flatIdx - 1; k >= 0; k--) {
-        if (flatAnchors[k][1] < flatAnchors[flatIdx][1]) {
-          bestPrev = k;
-          break;
-        }
-      }
-      flatBack[flatIdx] = bestPrev;
-      flatIdx++;
+  // Trace back: pick one element per pile level in reverse
+  const lisLength = tails.length;
+  const result: [number, number][] = [];
+  let currentLevel = lisLength - 1;
+  for (let i = anchors.length - 1; i >= 0 && currentLevel >= 0; i--) {
+    if (pileOf[i] === currentLevel) {
+      result.unshift(anchors[i]);
+      currentLevel--;
     }
   }
 
-  // Trace back to reconstruct LIS
-  const lastIdx = totalElements - 1;
-  const lisIndices: number[] = [];
-  let curr = lastIdx;
-  while (curr >= 0) {
-    lisIndices.unshift(curr);
-    curr = flatBack[curr];
-  }
-
-  return lisIndices.map(i => flatAnchors[i]);
+  return result;
 }
 
 /**

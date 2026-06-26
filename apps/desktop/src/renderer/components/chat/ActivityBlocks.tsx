@@ -113,8 +113,17 @@ export function ThinkingBlock({ content, streaming }: { content: string; streami
   return (
     <ActivityRow
       label={
-        <span className="italic">
-          {streaming ? "Thinking…" : "Reasoned step-by-step"}
+        <span className="italic flex items-center gap-2">
+          {streaming ? (
+            <>
+              <span className="flex items-center gap-0.5">
+                <span className="w-1 h-1 rounded-full bg-acode-accent-primary animate-thinking-wave" style={{ animationDelay: "0s" }} />
+                <span className="w-1 h-1 rounded-full bg-acode-accent-primary animate-thinking-wave" style={{ animationDelay: "0.15s" }} />
+                <span className="w-1 h-1 rounded-full bg-acode-accent-primary animate-thinking-wave" style={{ animationDelay: "0.3s" }} />
+              </span>
+              Thinking…
+            </>
+          ) : "Reasoned step-by-step"}
         </span>
       }
       meta={streaming ? undefined : `${content.length} chars`}

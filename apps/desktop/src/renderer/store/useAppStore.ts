@@ -219,6 +219,29 @@ export type OpenTab = {
   cursor?: { line: number; column: number };
 };
 
+// ─── Workspace Persistence ────────────────────────────────────
+const WORKSPACES_STORAGE_KEY = "acode.workspaces.v1";
+
+function loadPersistedWorkspaces(): { workspaces: Workspace[]; activeId: string | null } {
+  try {
+    const raw = localStorage.getItem(WORKSPACES_STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      return {
+        workspaces: data.workspaces ?? [],
+        activeId: data.activeId ?? null,
+      };
+    }
+  } catch { /* ignore */ }
+  return { workspaces: [], activeId: null };
+}
+
+function savePersistedWorkspaces(workspaces: Workspace[], activeId: string | null) {
+  try {
+    localStorage.setItem(WORKSPACES_STORAGE_KEY, JSON.stringify({ workspaces, activeId }));
+  } catch { /* ignore */ }
+}
+
 type WorkspaceState = {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
@@ -297,9 +320,11 @@ async function initWorkspaceMemory(api: AcodeAPI, workspacePath: string) {
   }
 }
 
+const _initialWorkspaces = loadPersistedWorkspaces();
+
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  workspaces: [],
-  activeWorkspaceId: null,
+  workspaces: _initialWorkspaces.workspaces,
+  activeWorkspaceId: _initialWorkspaces.activeId,
   activeFilePath: null,
   fileTree: [],
   openTabs: [],
@@ -320,12 +345,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         name,
         tasks: [],
       };
-      set((s) => ({
-        workspaces: [...s.workspaces.filter((w) => w.id !== workspace.id), workspace],
+      const newWorkspaces = [...get().workspaces.filter((w) => w.id !== workspace.id), workspace];
+      set({
+        workspaces: newWorkspaces,
         activeWorkspaceId: workspace.id,
         fileTree: tree,
         loading: false,
-      }));
+      });
+      savePersistedWorkspaces(newWorkspaces, workspace.id);
       await loadWorkspaceConfigAndSessions(path);
     } catch (err) {
       set({ loading: false });
@@ -347,12 +374,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         name: basename(path) || "workspace",
         tasks: [],
       };
-      set((s) => ({
-        workspaces: [...s.workspaces.filter((w) => w.path !== path), workspace],
+      const newWorkspaces = [...get().workspaces.filter((w) => w.path !== path), workspace];
+      set({
+        workspaces: newWorkspaces,
         activeWorkspaceId: workspace.id,
         fileTree: tree,
         loading: false,
-      }));
+      });
+      savePersistedWorkspaces(newWorkspaces, workspace.id);
       await loadWorkspaceConfigAndSessions(path);
     } catch (err) {
       set({ loading: false });
@@ -362,6 +391,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   setActiveWorkspace(id) {
     set({ activeWorkspaceId: id });
+    savePersistedWorkspaces(get().workspaces, id);
     const ws = get().workspaces.find((w) => w.id === id);
     if (ws) {
       void loadWorkspaceConfigAndSessions(ws.path);
@@ -379,6 +409,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
     try {
       const api = ensureAcodeAPI();
+      // Check if path is a directory — don't try to open directories as files
+      const { stat } = await import("@tauri-apps/plugin-fs");
+      try {
+        const fileStat = await stat(path);
+        if (fileStat.isDirectory) {
+          console.warn("Cannot open directory as file:", path);
+          return;
+        }
+      } catch {
+        // stat failed — file might not exist, try reading anyway for a clearer error
+      }
       const content = await api.fs.readFile(path);
       const tab: OpenTab = {
         path,
@@ -1021,6 +1062,7 @@ type ChatState = {
   pendingAttachments: FileAttachment[];
   compactionSummaries: Record<string, string>;
   _compactingSessions: Set<string>;
+  _safetyTimer: ReturnType<typeof setTimeout> | null;
   compactSessionHistory: (sessionId: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
   startSession: (workspacePath: string, mode: import("@acode/shared-types").AgentSessionMode) => Promise<void>;
@@ -1078,6 +1120,7 @@ export const useChat = create<ChatState>((set, get) => ({
   pendingAttachments: [],
   compactionSummaries: loadPersistedCompactionSummaries(),
   _compactingSessions: new Set<string>(),
+  _safetyTimer: null,
 
   async setSelectedModel(id) {
     set({ selectedModelId: id });
@@ -1198,6 +1241,9 @@ export const useChat = create<ChatState>((set, get) => ({
 
   async abort(sessionId) {
     const api = ensureAcodeAPI();
+    // Clear safety timer on abort
+    const currentTimer = get()._safetyTimer;
+    if (currentTimer) clearTimeout(currentTimer);
     try {
       await api.agent.abort(sessionId);
     } finally {
@@ -1212,6 +1258,7 @@ export const useChat = create<ChatState>((set, get) => ({
         thinkingContent: "",
         pendingToolCalls: [],
         pendingActivities: [],
+        _safetyTimer: null,
         ...(isStillOurSession ? {
           chatSessions: get().chatSessions.map((s) =>
             s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now() } : s
@@ -1295,10 +1342,40 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     // Save version AFTER user message is added so the snapshot includes it
     get().saveVersion(session.id, content.length > 60 ? content.slice(0, 57) + "…" : content);
+
+    // Safety timeout: if streaming doesn't start within 30s or never ends, force clear
+    const SAFETY_TIMEOUT_MS = 120_000; // 2 minutes
+    const safetyTimer = setTimeout(() => {
+      const state = get();
+      if (state.isStreaming) {
+        console.warn("[Chat] Safety timeout triggered — forcing streaming to stop");
+        const sid = state.activeSessionId;
+        if (sid) api.agent.cleanupStream(sid);
+        set({
+          isStreaming: false,
+          streamingContent: "",
+          thinkingContent: "",
+          pendingToolCalls: [],
+          pendingActivities: [],
+          _safetyTimer: null,
+          chatSessions: state.session
+            ? state.chatSessions.map((cs) =>
+                cs.id === state.session!.id
+                  ? { ...cs, status: "completed", lastActivityAt: Date.now() }
+                  : cs
+              )
+            : state.chatSessions,
+        });
+      }
+    }, SAFETY_TIMEOUT_MS);
+    set({ _safetyTimer: safetyTimer });
+
     try {
       const agentName = useAgents.getState().activeAgentName;
       await api.agent.sendPrompt(session.id, content, get().messages, agentName, pendingAttachments);
     } catch (err: unknown) {
+      clearTimeout(safetyTimer);
+      set({ _safetyTimer: null });
       const { isStreaming, session: currentSession } = get();
       // If appendStream already handled the error (streaming ended), don't add duplicate error message
       if (!isStreaming) return;
@@ -1327,6 +1404,9 @@ export const useChat = create<ChatState>((set, get) => ({
       savePersistedMessages(newSessionMessages);
       savePersistedSessionSummaries(get().chatSessions);
     }
+    // Clear safety timer on normal completion (message-end handles this)
+    // Timer is cleared by the catch block on error; on success it's cleared
+    // when streaming ends normally via the message-end handler
   },
 
   appendStream(event) {
@@ -1388,6 +1468,14 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "message-end": {
         const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
+        const api = ensureAcodeAPI();
+
+        // Clear safety timeout if it exists
+        const existingTimer = get()._safetyTimer;
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          set({ _safetyTimer: null });
+        }
 
         // Tools are already populated in pendingToolCalls via tool-call events
         // emitted by the API layer. Use them as the single source of truth.
@@ -1402,7 +1490,23 @@ export const useChat = create<ChatState>((set, get) => ({
         // Skip creating a message if there's nothing to show (e.g., error already
         // handled the turn and cleared streamingContent)
         if (!finalContent && allToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent) {
-          set({ isStreaming: false, pendingToolCalls: [], pendingActivities: [], streamingContent: "", thinkingContent: "" });
+          // Even with empty content, we need to update session status to prevent stuck loading
+          const sessionId = get().activeSessionId;
+          if (sessionId) api.agent.cleanupStream(sessionId);
+          set({
+            isStreaming: false,
+            pendingToolCalls: [],
+            pendingActivities: [],
+            streamingContent: "",
+            thinkingContent: "",
+            chatSessions: liveSession
+              ? get().chatSessions.map((cs) =>
+                  cs.id === liveSession.id
+                    ? { ...cs, status: "completed", lastActivityAt: Date.now() }
+                    : cs
+                )
+              : get().chatSessions,
+          });
           break;
         }
 
@@ -1448,7 +1552,6 @@ export const useChat = create<ChatState>((set, get) => ({
           ...(allToolCalls.length > 0 ? { toolCalls: allToolCalls } : {}),
           ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
         };
-        const api = ensureAcodeAPI();
         const sessionId = get().activeSessionId;
         if (sessionId) api.agent.cleanupStream(sessionId);
         const newSessionMessages = sessionId
@@ -1741,6 +1844,9 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   reset() {
+    // Clear safety timer on reset
+    const currentTimer = get()._safetyTimer;
+    if (currentTimer) clearTimeout(currentTimer);
     set({
       session: null,
       messages: [],
@@ -1754,6 +1860,7 @@ export const useChat = create<ChatState>((set, get) => ({
       activeSessionId: null,
       restoredVersionId: null,
       preRestoreMessages: null,
+      _safetyTimer: null,
     });
   },
 
@@ -1762,6 +1869,9 @@ export const useChat = create<ChatState>((set, get) => ({
     // Only abort if the current session is actually streaming
     if (session && isStreaming) abort(session.id);
     if (!id) {
+      if (useUI.getState().rightPanelTab === "terminal") {
+        useUI.getState().setRightPanelOpen(false);
+      }
       set({
         activeSessionId: null,
         messages: [],
@@ -1781,6 +1891,13 @@ export const useChat = create<ChatState>((set, get) => ({
     useAgents.getState().setActiveAgent(agent);
     // Reconstruct the AgentSession object from stored data
     const chatSession = get().chatSessions.find((cs) => cs.id === id);
+    if (!chatSession || !chatSession.workspacePath) {
+      if (useUI.getState().rightPanelTab === "terminal") {
+        useUI.getState().setRightPanelOpen(false);
+      }
+    } else {
+      useTerminal.getState().ensureTabForCwd(chatSession.workspacePath);
+    }
     const restoredSession: AgentSession | null = chatSession
       ? {
           id: chatSession.id,
@@ -2124,6 +2241,9 @@ export const useChat = create<ChatState>((set, get) => ({
             : cs
         )
       : chatSessions;
+    if (useUI.getState().rightPanelTab === "terminal") {
+      useUI.getState().setRightPanelOpen(false);
+    }
     set({
       chatHistory: newHistory,
       chatHistoryIdx: -1,
@@ -2208,17 +2328,19 @@ type TerminalState = {
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   appendOutput: (id: string, data: string) => void;
+  ensureTabForCwd: (cwd: string) => void;
 };
 
-export const useTerminal = create<TerminalState>((set) => ({
+export const useTerminal = create<TerminalState>((set, get) => ({
   tabs: [{ id: "t-1", title: "zsh", cwd: "." }],
   activeTabId: "t-1",
   output: {},
   addTab(cwd) {
     set((s) => {
       const id = "t-" + Math.random().toString(36).slice(2, 9);
+      const title = basename(cwd) || "zsh";
       return {
-        tabs: [...s.tabs, { id, title: "zsh", cwd }],
+        tabs: [...s.tabs, { id, title, cwd }],
         activeTabId: id,
       };
     });
@@ -2239,6 +2361,22 @@ export const useTerminal = create<TerminalState>((set) => ({
     set((s) => ({
       output: { ...s.output, [id]: ((s.output[id] ?? "") + data).slice(-102400) },
     }));
+  },
+  ensureTabForCwd(cwd) {
+    const { tabs, setActiveTab, addTab } = get();
+    const existing = tabs.find((t) => t.cwd === cwd);
+    if (existing) {
+      setActiveTab(existing.id);
+    } else {
+      if (tabs.length === 1 && tabs[0].id === "t-1" && tabs[0].cwd === ".") {
+        set({
+          tabs: [{ id: "t-1", title: basename(cwd) || "zsh", cwd }],
+          activeTabId: "t-1",
+        });
+      } else {
+        addTab(cwd);
+      }
+    }
   },
 }));
 
