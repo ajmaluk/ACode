@@ -13,9 +13,9 @@
 :root,
 [data-theme="dark"] {
   /* Surfaces (soft gray — matching Z Code aesthetic) */
-  --dalam-bg-primary:   #1E1E1E;
-  --dalam-bg-secondary: #3C3C3C;
-  --dalam-bg-tertiary:  #4A4A4A;
+  --dalam-bg-primary: #1E1E1E;
+  --dalam-bg-secondary: #252526;
+  --dalam-bg-tertiary: #2d2d2d;
   --dalam-bg-hover: #383838;
   --dalam-bg-active: #444444;
   --dalam-bg-overlay: rgba(30, 30, 30, 0.88);
@@ -114,7 +114,10 @@
 }
 
 @layer base {
-  html, body, #root {
+
+  html,
+  body,
+  #root {
     height: 100%;
     width: 100%;
     margin: 0;
@@ -135,22 +138,35 @@
     transition: background-color 200ms ease, color 200ms ease;
   }
 
-  * { box-sizing: border-box; }
+  * {
+    box-sizing: border-box;
+  }
 
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
   ::-webkit-scrollbar-thumb {
     background: var(--dalam-bg-hover);
     border-radius: 6px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
+
   ::-webkit-scrollbar-thumb:hover {
     background: var(--dalam-border-secondary);
     background-clip: padding-box;
     border: 2px solid transparent;
   }
-  ::-webkit-scrollbar-corner { background: transparent; }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 
   ::selection {
     background: var(--dalam-accent-subtle);
@@ -169,6 +185,7 @@
     -webkit-app-region: drag;
     user-select: none;
   }
+
   .titlebar button,
   .titlebar a,
   .titlebar input,
@@ -187,16 +204,26 @@
     transition: background 150ms ease;
     position: relative;
   }
-  .panel-resizer[data-panel-resize-handle-enabled] { background: transparent; }
+
+  .panel-resizer[data-panel-resize-handle-enabled] {
+    background: transparent;
+  }
+
   .panel-resizer:hover,
   .panel-resizer[data-resize-handle-active] {
     background: var(--dalam-accent-primary);
   }
+
   .panel-resizer.horizontal::after {
-    content: ""; position: absolute; inset: 0 -3px;
+    content: "";
+    position: absolute;
+    inset: 0 -3px;
   }
+
   .panel-resizer.vertical::after {
-    content: ""; position: absolute; inset: -3px 0;
+    content: "";
+    position: absolute;
+    inset: -3px 0;
   }
 
   .skeleton {
@@ -211,11 +238,16 @@
     color: var(--dalam-text-secondary);
     transition: color 120ms ease, background-color 120ms ease, transform 80ms ease;
   }
+
   .btn-icon:hover {
     color: var(--dalam-text-primary);
     background-color: var(--dalam-bg-hover);
   }
-  .btn-icon:active { transform: scale(0.95); }
+
+  .btn-icon:active {
+    transform: scale(0.95);
+  }
+
   .btn-icon.active {
     background-color: var(--dalam-bg-active);
     color: var(--dalam-text-primary);
@@ -230,7 +262,11 @@
     color: var(--dalam-text-primary);
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
-  .input-base::placeholder { color: var(--dalam-text-muted); }
+
+  .input-base::placeholder {
+    color: var(--dalam-text-muted);
+  }
+
   .input-base:focus {
     outline: none;
     border-color: var(--dalam-accent-primary);
@@ -238,17 +274,22 @@
   }
 
   .chip {
-    display: inline-flex; align-items: center; gap: 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     padding: 0.125rem 0.375rem;
     border-radius: 0.25rem;
-    font-size: 0.625rem; font-weight: 500;
+    font-size: 0.625rem;
+    font-weight: 500;
     background: var(--dalam-bg-tertiary);
     color: var(--dalam-text-secondary);
     border: 1px solid var(--dalam-border-primary);
   }
 
   .menu-item {
-    display: flex; align-items: center; gap: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.875rem;
@@ -256,7 +297,10 @@
     cursor: pointer;
     transition: background-color 120ms ease;
   }
-  .menu-item:hover { background: var(--dalam-bg-hover); }
+
+  .menu-item:hover {
+    background: var(--dalam-bg-hover);
+  }
 
   .surface {
     background: var(--dalam-bg-secondary);
@@ -268,6 +312,7 @@
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06) 50%, transparent);
     height: 1px;
   }
+
   [data-theme="light"] .divider {
     background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.06) 50%, transparent);
   }
@@ -277,81 +322,281 @@
   .text-mono {
     font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
   }
-  .no-drag { -webkit-app-region: no-drag; }
-  .drag { -webkit-app-region: drag; }
-  .scrollbar-thin { scrollbar-width: thin; }
-  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
-  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--dalam-bg-hover); border-radius: 999px; }
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: var(--dalam-text-muted); }
-  .text-balance { text-wrap: balance; }
-  .ring-subtle { box-shadow: 0 0 0 1px var(--dalam-accent-subtle); }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  .drag {
+    -webkit-app-region: drag;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--dalam-bg-hover);
+    border-radius: 999px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: var(--dalam-text-muted);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .ring-subtle {
+    box-shadow: 0 0 0 1px var(--dalam-accent-subtle);
+  }
 }
 
 @layer utilities {
-  .bg-dalam-bg-primary { background-color: var(--dalam-bg-primary); }
-  .bg-dalam-bg-secondary { background-color: var(--dalam-bg-secondary); }
-  .bg-dalam-bg-tertiary { background-color: var(--dalam-bg-tertiary); }
-  .bg-dalam-bg-hover { background-color: var(--dalam-bg-hover); }
-  .bg-dalam-bg-active { background-color: var(--dalam-bg-active); }
-  .bg-dalam-bg-overlay { background-color: var(--dalam-bg-overlay); }
-  .bg-dalam-bg-input { background-color: var(--dalam-bg-input); }
-  .bg-dalam-accent-primary { background-color: var(--dalam-accent-primary); }
-  .bg-dalam-accent-hover { background-color: var(--dalam-accent-hover); }
-  .bg-dalam-accent-subtle { background-color: var(--dalam-accent-subtle); }
-  .text-dalam-text-primary { color: var(--dalam-text-primary); }
-  .text-dalam-text-secondary { color: var(--dalam-text-secondary); }
-  .text-dalam-text-muted { color: var(--dalam-text-muted); }
-  .text-dalam-text-disabled { color: var(--dalam-text-disabled); }
-  .text-dalam-accent-primary { color: var(--dalam-accent-primary); }
-  .text-dalam-accent-hover { color: var(--dalam-accent-hover); }
-  .text-dalam-git-added { color: var(--dalam-git-added); }
-  .text-dalam-git-deleted { color: var(--dalam-git-deleted); }
-  .text-dalam-git-modified { color: var(--dalam-git-modified); }
-  .text-dalam-git-untracked { color: var(--dalam-git-untracked); }
-  .border-dalam-border-primary { border-color: var(--dalam-border-primary); }
-  .border-dalam-border-secondary { border-color: var(--dalam-border-secondary); }
-  .border-dalam-border-focus { border-color: var(--dalam-border-focus); }
-  .border-dalam-accent-primary { border-color: var(--dalam-accent-primary); }
-  .bg-dalam-git-added { background-color: var(--dalam-git-added-bg); }
-  .bg-dalam-git-deleted { background-color: var(--dalam-git-deleted-bg); }
-  .bg-dalam-git-modified { background-color: var(--dalam-git-modified-bg); }
+  .bg-dalam-bg-primary {
+    background-color: var(--dalam-bg-primary);
+  }
+
+  .bg-dalam-bg-secondary {
+    background-color: var(--dalam-bg-secondary);
+  }
+
+  .bg-dalam-bg-tertiary {
+    background-color: var(--dalam-bg-tertiary);
+  }
+
+  .bg-dalam-bg-hover {
+    background-color: var(--dalam-bg-hover);
+  }
+
+  .bg-dalam-bg-active {
+    background-color: var(--dalam-bg-active);
+  }
+
+  .bg-dalam-bg-overlay {
+    background-color: var(--dalam-bg-overlay);
+  }
+
+  .bg-dalam-bg-input {
+    background-color: var(--dalam-bg-input);
+  }
+
+  .bg-dalam-accent-primary {
+    background-color: var(--dalam-accent-primary);
+  }
+
+  .bg-dalam-accent-hover {
+    background-color: var(--dalam-accent-hover);
+  }
+
+  .bg-dalam-accent-subtle {
+    background-color: var(--dalam-accent-subtle);
+  }
+
+  .text-dalam-text-primary {
+    color: var(--dalam-text-primary);
+  }
+
+  .text-dalam-text-secondary {
+    color: var(--dalam-text-secondary);
+  }
+
+  .text-dalam-text-muted {
+    color: var(--dalam-text-muted);
+  }
+
+  .text-dalam-text-disabled {
+    color: var(--dalam-text-disabled);
+  }
+
+  .text-dalam-accent-primary {
+    color: var(--dalam-accent-primary);
+  }
+
+  .text-dalam-accent-hover {
+    color: var(--dalam-accent-hover);
+  }
+
+  .text-dalam-git-added {
+    color: var(--dalam-git-added);
+  }
+
+  .text-dalam-git-deleted {
+    color: var(--dalam-git-deleted);
+  }
+
+  .text-dalam-git-modified {
+    color: var(--dalam-git-modified);
+  }
+
+  .text-dalam-git-untracked {
+    color: var(--dalam-git-untracked);
+  }
+
+  .border-dalam-border-primary {
+    border-color: var(--dalam-border-primary);
+  }
+
+  .border-dalam-border-secondary {
+    border-color: var(--dalam-border-secondary);
+  }
+
+  .border-dalam-border-focus {
+    border-color: var(--dalam-border-focus);
+  }
+
+  .border-dalam-accent-primary {
+    border-color: var(--dalam-accent-primary);
+  }
+
+  .bg-dalam-git-added {
+    background-color: var(--dalam-git-added-bg);
+  }
+
+  .bg-dalam-git-deleted {
+    background-color: var(--dalam-git-deleted-bg);
+  }
+
+  .bg-dalam-git-modified {
+    background-color: var(--dalam-git-modified-bg);
+  }
 }
 
 /* Color-mix helpers for opacity variants */
-.text-dalam-text-muted\/30 { color: color-mix(in srgb, var(--dalam-text-muted) 30%, transparent); }
-.text-dalam-text-muted\/40 { color: color-mix(in srgb, var(--dalam-text-muted) 40%, transparent); }
-.text-dalam-text-muted\/50 { color: color-mix(in srgb, var(--dalam-text-muted) 50%, transparent); }
-.text-dalam-text-muted\/60 { color: color-mix(in srgb, var(--dalam-text-muted) 60%, transparent); }
-.border-dalam-border-primary\/30 { border-color: color-mix(in srgb, var(--dalam-border-primary) 30%, transparent); }
-.text-dalam-text-primary\/50 { color: color-mix(in srgb, var(--dalam-text-primary) 50%, transparent); }
-.bg-black\/60 { background-color: rgba(0, 0, 0, 0.6); }
-[data-theme="light"] .bg-black\/60 { background-color: rgba(15, 23, 42, 0.4); }
-.bg-black\/55 { background-color: rgba(0, 0, 0, 0.55); }
-[data-theme="light"] .bg-black\/55 { background-color: rgba(15, 23, 42, 0.35); }
-.bg-black\/50 { background-color: rgba(0, 0, 0, 0.5); }
-[data-theme="light"] .bg-black\/50 { background-color: rgba(15, 23, 42, 0.3); }
+.text-dalam-text-muted\/30 {
+  color: color-mix(in srgb, var(--dalam-text-muted) 30%, transparent);
+}
+
+.text-dalam-text-muted\/40 {
+  color: color-mix(in srgb, var(--dalam-text-muted) 40%, transparent);
+}
+
+.text-dalam-text-muted\/50 {
+  color: color-mix(in srgb, var(--dalam-text-muted) 50%, transparent);
+}
+
+.text-dalam-text-muted\/60 {
+  color: color-mix(in srgb, var(--dalam-text-muted) 60%, transparent);
+}
+
+.border-dalam-border-primary\/30 {
+  border-color: color-mix(in srgb, var(--dalam-border-primary) 30%, transparent);
+}
+
+.text-dalam-text-primary\/50 {
+  color: color-mix(in srgb, var(--dalam-text-primary) 50%, transparent);
+}
+
+.bg-black\/60 {
+  background-color: rgba(0, 0, 0, 0.6);
+}
+
+[data-theme="light"] .bg-black\/60 {
+  background-color: rgba(15, 23, 42, 0.4);
+}
+
+.bg-black\/55 {
+  background-color: rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="light"] .bg-black\/55 {
+  background-color: rgba(15, 23, 42, 0.35);
+}
+
+.bg-black\/50 {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] .bg-black\/50 {
+  background-color: rgba(15, 23, 42, 0.3);
+}
 
 /* Tailwind palette colors used in components — override for light theme */
-[data-theme="light"] .text-amber-400 { color: #b45309; }
-[data-theme="light"] .text-amber-300 { color: #b45309; }
-[data-theme="light"] .text-amber-200 { color: #92400e; }
-[data-theme="light"] .text-emerald-400 { color: #047857; }
-[data-theme="light"] .text-blue-400 { color: #1d4ed8; }
-[data-theme="light"] .text-blue-300 { color: #1d4ed8; }
-[data-theme="light"] .text-violet-400 { color: #6d28d9; }
-[data-theme="light"] .text-orange-400 { color: #c2410c; }
-[data-theme="light"] .text-orange-300 { color: #c2410c; }
-[data-theme="light"] .text-rose-400 { color: #be123c; }
-[data-theme="light"] .text-cyan-400 { color: #0e7490; }
-[data-theme="light"] .text-cyan-300 { color: #0e7490; }
-[data-theme="light"] .text-fuchsia-300 { color: #a21caf; }
-[data-theme="light"] .text-yellow-300 { color: #a16207; }
-[data-theme="light"] .text-slate-300 { color: #475569; }
-[data-theme="light"] .bg-amber-400\/10 { background-color: rgba(180, 83, 9, 0.10); }
-[data-theme="light"] .text-dalam-git-modified { color: #b58800; }
-[data-theme="light"] .text-dalam-git-added { color: #1a7f37; }
-[data-theme="light"] .text-dalam-git-deleted { color: #cf222e; }
+[data-theme="light"] .text-amber-400 {
+  color: #b45309;
+}
+
+[data-theme="light"] .text-amber-300 {
+  color: #b45309;
+}
+
+[data-theme="light"] .text-amber-200 {
+  color: #92400e;
+}
+
+[data-theme="light"] .text-emerald-400 {
+  color: #047857;
+}
+
+[data-theme="light"] .text-blue-400 {
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .text-blue-300 {
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .text-violet-400 {
+  color: #6d28d9;
+}
+
+[data-theme="light"] .text-orange-400 {
+  color: #c2410c;
+}
+
+[data-theme="light"] .text-orange-300 {
+  color: #c2410c;
+}
+
+[data-theme="light"] .text-rose-400 {
+  color: #be123c;
+}
+
+[data-theme="light"] .text-cyan-400 {
+  color: #0e7490;
+}
+
+[data-theme="light"] .text-cyan-300 {
+  color: #0e7490;
+}
+
+[data-theme="light"] .text-fuchsia-300 {
+  color: #a21caf;
+}
+
+[data-theme="light"] .text-yellow-300 {
+  color: #a16207;
+}
+
+[data-theme="light"] .text-slate-300 {
+  color: #475569;
+}
+
+[data-theme="light"] .bg-amber-400\/10 {
+  background-color: rgba(180, 83, 9, 0.10);
+}
+
+[data-theme="light"] .text-dalam-git-modified {
+  color: #b58800;
+}
+
+[data-theme="light"] .text-dalam-git-added {
+  color: #1a7f37;
+}
+
+[data-theme="light"] .text-dalam-git-deleted {
+  color: #cf222e;
+}
 
 /* Monaco editor background fix for light theme */
 [data-theme="light"] .monaco-editor,
@@ -360,32 +605,91 @@
 }
 
 /* xterm overrides */
-.xterm-viewport { background-color: transparent !important; }
-.xterm .xterm-screen { padding: 4px 8px; }
+.xterm-viewport {
+  background-color: transparent !important;
+}
+
+.xterm .xterm-screen {
+  padding: 4px 8px;
+}
+
 .xterm .xterm-cursor-layer .xterm-cursor {
   box-shadow: 0 0 0 1px var(--dalam-accent-subtle);
 }
 
-button, [role="button"], a {
+button,
+[role="button"],
+a {
   transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, transform 80ms ease, box-shadow 120ms ease;
 }
 
-kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
+kbd {
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
 
 /* Markdown prose styles for chat */
-.prose-dalam { color: var(--dalam-text-primary); }
-.prose-dalam p { margin: 0.5em 0; }
-.prose-dalam p:first-child { margin-top: 0; }
-.prose-dalam p:last-child { margin-bottom: 0; }
-.prose-dalam strong { font-weight: 600; color: var(--dalam-text-primary); }
-.prose-dalam em { font-style: italic; }
-.prose-dalam a { color: var(--dalam-accent-primary); text-decoration: none; }
-.prose-dalam a:hover { text-decoration: underline; }
-.prose-dalam ul, .prose-dalam ol { padding-left: 1.5em; margin: 0.5em 0; }
-.prose-dalam li { margin: 0.15em 0; }
-.prose-dalam h1 { font-size: 1.125rem; font-weight: 700; margin: 0.75em 0 0.25em; }
-.prose-dalam h2 { font-size: 1rem; font-weight: 700; margin: 0.75em 0 0.25em; }
-.prose-dalam h3 { font-size: 0.875rem; font-weight: 700; margin: 0.5em 0 0.25em; }
+.prose-dalam {
+  color: var(--dalam-text-primary);
+}
+
+.prose-dalam p {
+  margin: 0.5em 0;
+}
+
+.prose-dalam p:first-child {
+  margin-top: 0;
+}
+
+.prose-dalam p:last-child {
+  margin-bottom: 0;
+}
+
+.prose-dalam strong {
+  font-weight: 600;
+  color: var(--dalam-text-primary);
+}
+
+.prose-dalam em {
+  font-style: italic;
+}
+
+.prose-dalam a {
+  color: var(--dalam-accent-primary);
+  text-decoration: none;
+}
+
+.prose-dalam a:hover {
+  text-decoration: underline;
+}
+
+.prose-dalam ul,
+.prose-dalam ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.prose-dalam li {
+  margin: 0.15em 0;
+}
+
+.prose-dalam h1 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin: 0.75em 0 0.25em;
+}
+
+.prose-dalam h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0.75em 0 0.25em;
+}
+
+.prose-dalam h3 {
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin: 0.5em 0 0.25em;
+}
+
 .prose-dalam code {
   font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
   font-size: 0.8em;
@@ -394,6 +698,7 @@ kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
   border-radius: 0.25rem;
   color: var(--dalam-accent-primary);
 }
+
 .prose-dalam pre code {
   background: none;
   padding: 0;
@@ -401,6 +706,7 @@ kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
   color: inherit;
   font-size: 1em;
 }
+
 .prose-dalam blockquote {
   border-left: 3px solid var(--dalam-accent-primary);
   padding-left: 0.75em;
@@ -408,60 +714,134 @@ kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
   color: var(--dalam-text-muted);
   font-style: italic;
 }
+
 .prose-dalam hr {
   border: none;
   border-top: 1px solid var(--dalam-border-primary);
   margin: 0.75em 0;
 }
-.prose-dalam table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
-.prose-dalam th, .prose-dalam td {
+
+.prose-dalam table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+}
+
+.prose-dalam th,
+.prose-dalam td {
   border: 1px solid var(--dalam-border-primary);
   padding: 0.35em 0.65em;
   text-align: left;
   font-size: 0.8em;
 }
-.prose-dalam th { font-weight: 600; background: var(--dalam-bg-tertiary); }
-.prose-dalam img { max-width: 100%; border-radius: 0.375rem; margin: 0.5em 0; }
-.prose-dalam del { text-decoration: line-through; opacity: 0.7; }
-.prose-dalam input[type="checkbox"] { margin-right: 0.35em; accent-color: var(--dalam-accent-primary); }
+
+.prose-dalam th {
+  font-weight: 600;
+  background: var(--dalam-bg-tertiary);
+}
+
+.prose-dalam img {
+  max-width: 100%;
+  border-radius: 0.375rem;
+  margin: 0.5em 0;
+}
+
+.prose-dalam del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.prose-dalam input[type="checkbox"] {
+  margin-right: 0.35em;
+  accent-color: var(--dalam-accent-primary);
+}
 
 /* ============================================================================
    Thinking / Streaming animations
    ============================================================================ */
 
 @keyframes thinking-wave {
-  0%, 100% { opacity: 0.3; transform: scaleY(0.6); }
-  50% { opacity: 1; transform: scaleY(1); }
+
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scaleY(0.6);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 
 @keyframes thinking-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 @keyframes text-reveal {
-  from { opacity: 0; filter: blur(2px); }
-  to { opacity: 1; filter: blur(0); }
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
 }
 
 @keyframes typing-cursor {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
 }
 
 @keyframes stream-line {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
+  0% {
+    background-position: -200% center;
+  }
+
+  100% {
+    background-position: 200% center;
+  }
 }
 
 @keyframes fade-in-up {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .animate-thinking-wave {
@@ -480,10 +860,21 @@ kbd { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
   animation: thinking-wave 1.2s ease-in-out infinite;
 }
 
-.animate-thinking-wave span:nth-child(2) { animation-delay: 0.15s; }
-.animate-thinking-wave span:nth-child(3) { animation-delay: 0.3s; }
-.animate-thinking-wave span:nth-child(4) { animation-delay: 0.45s; }
-.animate-thinking-wave span:nth-child(5) { animation-delay: 0.6s; }
+.animate-thinking-wave span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.animate-thinking-wave span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.animate-thinking-wave span:nth-child(4) {
+  animation-delay: 0.45s;
+}
+
+.animate-thinking-wave span:nth-child(5) {
+  animation-delay: 0.6s;
+}
 
 .animate-text-reveal {
   animation: text-reveal 0.4s ease-out forwards;

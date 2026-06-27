@@ -454,7 +454,7 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
   const ver = versions.find((v) => v.id === restoredVersionId);
   if (!ver) return null;
   return (
-    <div className="border-t border-dalam-border-primary px-3 pt-1.5 pb-0 flex-shrink-0 bg-dalam-bg-primary">
+    <div className="px-3 pt-1.5 pb-0 flex-shrink-0 bg-dalam-bg-primary">
       <div className="flex items-center gap-2 px-3 py-1.5 bg-dalam-accent-subtle/40 border border-dalam-accent-primary/20 rounded-lg text-xs">
         <History className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
         <div className="flex-1 min-w-0">
@@ -1330,7 +1330,7 @@ Add your project's common commands here so Dalam knows how to build:
 
       {/* Only show follow-up input when there are actual messages */}
       {hasMessages && (
-        <div className="border-t border-dalam-border-primary p-3 flex-shrink-0 bg-dalam-bg-primary">
+        <div className="p-3 flex-shrink-0 bg-dalam-bg-primary">
           <div className="max-w-2xl w-full mx-auto bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
             <div className="px-4 py-3 relative">
               {pendingAttachments.length > 0 && (
