@@ -175,7 +175,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const api = createDalamAPI();
     try {
       const all = await api.settings.getAll();
-      set({ settings: all, loaded: true });
+      // Merge with existing settings (workspace-specific settings take priority)
+      set((s) => ({
+        settings: { ...all, ...s.settings },
+        loaded: true,
+      }));
       if (all.selectedModel) {
         useChat.getState().setSelectedModel(all.selectedModel);
       }
@@ -683,26 +687,78 @@ function savePersistedMessages(messages: Record<string, import("@dalam/shared-ty
     localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages));
   } catch (e) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-      console.warn("[Storage] Quota exceeded — pruning old tool results to free space");
-      const pruned: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
-      for (const [sessionId, msgs] of Object.entries(messages)) {
-        pruned[sessionId] = msgs.map(m => {
-          if (m.toolCalls && m.toolCalls.length > 0) {
-            return { ...m, toolCalls: m.toolCalls.map(tc => ({ ...tc, result: tc.result ? tc.result.slice(0, 500) : undefined })) };
-          }
-          return m;
-        });
-      }
+      // Level 1: truncate tool results
+      console.warn("[Storage] Quota exceeded — level 1: truncating tool results");
+      const pruned = truncateToolResults(messages);
       try {
         localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned));
       } catch {
-        console.error("[Storage] Failed to save even after pruning");
+        // Level 2: also trim message content in older messages
+        console.warn("[Storage] Quota exceeded — level 2: trimming old message content");
+        const pruned2 = trimOldMessages(pruned);
+        try {
+          localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned2));
+        } catch {
+          // Level 3: drop oldest sessions entirely
+          console.warn("[Storage] Quota exceeded — level 3: dropping oldest sessions");
+          const pruned3 = dropOldestSessions(pruned2, 3);
+          try {
+            localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3));
+          } catch {
+            console.error("[Storage] Failed to save messages even after aggressive pruning");
+          }
+        }
       }
     } else {
       console.warn("Failed to save messages:", e);
     }
   }
   void saveWorkspaceData();
+}
+
+function truncateToolResults(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>): Record<string, import("@dalam/shared-types").ChatMessage[]> {
+  const result: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
+  for (const [sessionId, msgs] of Object.entries(messages)) {
+    result[sessionId] = msgs.map(m => {
+      if (m.toolCalls && m.toolCalls.length > 0) {
+        return { ...m, toolCalls: m.toolCalls.map(tc => ({ ...tc, result: tc.result ? tc.result.slice(0, 500) : undefined })) };
+      }
+      return m;
+    });
+  }
+  return result;
+}
+
+function trimOldMessages(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>): Record<string, import("@dalam/shared-types").ChatMessage[]> {
+  const result: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
+  const sessionIds = Object.keys(messages);
+  for (const sessionId of sessionIds) {
+    const msgs = messages[sessionId];
+    const cutoff = msgs.length > 20 ? msgs.length - 20 : 0;
+    result[sessionId] = msgs.map((m, i) => {
+      if (i < cutoff && m.content && m.content.length > 2000) {
+        return { ...m, content: m.content.slice(0, 2000) + "\n... [trimmed for storage]" };
+      }
+      return m;
+    });
+  }
+  return result;
+}
+
+function dropOldestSessions(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>, keepCount: number): Record<string, import("@dalam/shared-types").ChatMessage[]> {
+  const entries = Object.entries(messages);
+  if (entries.length <= keepCount) return messages;
+  // Keep the most recent sessions (by last message timestamp)
+  const sorted = entries.sort((a, b) => {
+    const aLast = a[1][a[1].length - 1]?.timestamp ?? 0;
+    const bLast = b[1][b[1].length - 1]?.timestamp ?? 0;
+    return bLast - aLast;
+  });
+  const result: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
+  for (const [id, msgs] of sorted.slice(0, keepCount)) {
+    result[id] = msgs;
+  }
+  return result;
 }
 
 function loadPersistedAgents(): Record<string, PrimaryAgentName> {
@@ -905,6 +961,8 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
       try {
         const content = await api.fs.readFile(sessionsPath);
         const data = JSON.parse(content);
+        // Guard: bail if a different workspace loaded while we were reading
+        if (_workspaceLoadPath !== workspacePath) return;
         useChat.setState({
           chatSessions: data.chatSessions || [],
           sessionMessages: data.sessionMessages || {},
@@ -1127,6 +1185,7 @@ type ChatState = {
   compactionSummaries: Record<string, string>;
   _compactingSessions: Set<string>;
   _safetyTimer: ReturnType<typeof setTimeout> | null;
+  _sendInProgress: boolean;
   compactSessionHistory: (sessionId: string) => Promise<void>;
   setSelectedModel: (id: string) => void;
   startSession: (workspacePath: string, mode: import("@dalam/shared-types").AgentSessionMode) => Promise<void>;
@@ -1187,6 +1246,7 @@ export const useChat = create<ChatState>((set, get) => ({
   compactionSummaries: loadPersistedCompactionSummaries(),
   _compactingSessions: new Set<string>(),
   _safetyTimer: null,
+  _sendInProgress: false,
 
   async setSelectedModel(id) {
     set({ selectedModelId: id });
@@ -1339,8 +1399,9 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async sendMessage(content) {
-    const { isStreaming } = get();
-    if (isStreaming) return;
+    const { isStreaming, _sendInProgress } = get();
+    if (isStreaming || _sendInProgress) return;
+    set({ _sendInProgress: true });
 
     // Auto-select agent based on prompt content (evolver-inspired adaptive routing)
     // Only auto-select if user hasn't explicitly chosen an agent for this session
@@ -1417,21 +1478,30 @@ export const useChat = create<ChatState>((set, get) => ({
     // Save version AFTER user message is added so the snapshot includes it
     get().saveVersion(session.id, content.length > 60 ? content.slice(0, 57) + "…" : content);
 
-    // Safety timeout: if streaming doesn't start within 30s or never ends, force clear
-    const SAFETY_TIMEOUT_MS = 60_000; // 60 seconds — detect hung streams quickly
+    // Safety timeout: fires 120s after the LAST stream event (reset on each event in appendStream).
+    // This catches truly hung streams without killing active multi-turn agent loops.
+    const SAFETY_TIMEOUT_MS = 120_000;
     const safetyTimer = setTimeout(() => {
       const state = get();
       if (state.isStreaming) {
-        console.warn("[Chat] Safety timeout triggered — forcing streaming to stop");
+        console.warn("[Chat] Safety timeout triggered — no stream events for 120s");
         const sid = state.activeSessionId;
         if (sid) api.agent.cleanupStream(sid);
+        const systemMsg: ChatMessage = {
+          id: "msg-" + Math.random().toString(36).slice(2, 9),
+          role: "system",
+          content: "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+          timestamp: Date.now(),
+        };
         set({
           isStreaming: false,
+          _sendInProgress: false,
           streamingContent: "",
           thinkingContent: "",
           pendingToolCalls: [],
           pendingActivities: [],
           _safetyTimer: null,
+          messages: [...state.messages, systemMsg],
           chatSessions: state.session
             ? state.chatSessions.map((cs) =>
                 cs.id === state.session!.id
@@ -1481,6 +1551,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on normal completion (message-end handles this)
     // Timer is cleared by the catch block on error; on success it's cleared
     // when streaming ends normally via the message-end handler
+    set({ _sendInProgress: false });
   },
 
   appendStream(event) {
@@ -1492,6 +1563,47 @@ export const useChat = create<ChatState>((set, get) => ({
       } catch { /* ignore */ }
     };
     _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content.length}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
+    // Reset safety timer on every stream event — the agent loop is alive
+    // as long as events keep flowing. This prevents the timer from killing
+    // active multi-turn agent loops (tool approval waits, sequential LLM calls).
+    const existingTimer = get()._safetyTimer;
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      const SAFETY_TIMEOUT_MS = 120_000;
+      const newTimer = setTimeout(() => {
+        const state = get();
+        if (state.isStreaming) {
+          console.warn("[Chat] Safety timeout triggered — no stream events for 120s");
+          const api = createDalamAPI();
+          const sid = state.activeSessionId;
+          if (sid) api.agent.cleanupStream(sid);
+          const systemMsg: ChatMessage = {
+            id: "msg-" + Math.random().toString(36).slice(2, 9),
+            role: "system",
+            content: "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+            timestamp: Date.now(),
+          };
+          set({
+            isStreaming: false,
+            _sendInProgress: false,
+            streamingContent: "",
+            thinkingContent: "",
+            pendingToolCalls: [],
+            pendingActivities: [],
+            _safetyTimer: null,
+            messages: [...state.messages, systemMsg],
+            chatSessions: state.session
+              ? state.chatSessions.map((cs) =>
+                  cs.id === state.session!.id
+                    ? { ...cs, status: "completed", lastActivityAt: Date.now() }
+                    : cs
+                )
+              : state.chatSessions,
+          });
+        }
+      }, SAFETY_TIMEOUT_MS);
+      set({ _safetyTimer: newTimer });
+    }
     switch (event.type) {
       case "message-start": {
         const pending = get().pendingToolCalls;
@@ -1506,6 +1618,36 @@ export const useChat = create<ChatState>((set, get) => ({
           ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
           isStreaming: true,
         });
+        // Re-create safety timer for subsequent agent loop turns (tool results
+        // delivered → message-end clears the timer → next turn needs protection).
+        if (!get()._safetyTimer) {
+          const SAFETY_TIMEOUT_MS = 120_000;
+          const newTimer = setTimeout(() => {
+            const state = get();
+            if (state.isStreaming) {
+              console.warn("[Chat] Safety timeout triggered during turn — no events for 120s");
+              const api = createDalamAPI();
+              const sid = state.activeSessionId;
+              if (sid) api.agent.cleanupStream(sid);
+              const systemMsg: ChatMessage = {
+                id: "msg-" + Math.random().toString(36).slice(2, 9),
+                role: "system",
+                content: "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+                timestamp: Date.now(),
+              };
+              set({
+                isStreaming: false,
+                streamingContent: "",
+                thinkingContent: "",
+                pendingToolCalls: [],
+                pendingActivities: [],
+                _safetyTimer: null,
+                messages: [...state.messages, systemMsg],
+              });
+            }
+          }, SAFETY_TIMEOUT_MS);
+          set({ _safetyTimer: newTimer });
+        }
         break;
       }
       case "message-delta":
@@ -1566,11 +1708,46 @@ export const useChat = create<ChatState>((set, get) => ({
         const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
         const api = createDalamAPI();
 
-        // Clear safety timeout if it exists
+        // Clear safety timeout if it exists — but ONLY when the turn is truly done.
+        // During intermediate turns (tool calls just executed, agentic loop continues
+        // with tool approval waits), extend the timer to 10 minutes so the agent
+        // loop isn't killed while waiting for user approval.
         const existingTimer = get()._safetyTimer;
         if (existingTimer) {
           clearTimeout(existingTimer);
-          set({ _safetyTimer: null });
+          const hasActiveToolCalls = pendingToolCalls.some(
+            (tc) => tc.status === "awaiting-approval" || tc.status === "pending"
+          );
+          if (hasActiveToolCalls) {
+            const TOOL_APPROVAL_TIMEOUT_MS = 600_000; // 10 min during tool approval
+            const extendedTimer = setTimeout(() => {
+              const state = get();
+              if (state.isStreaming) {
+                console.warn("[Chat] Safety timeout triggered during tool approval — no events for 10min");
+                const api = createDalamAPI();
+                const sid = state.activeSessionId;
+                if (sid) api.agent.cleanupStream(sid);
+                const systemMsg: ChatMessage = {
+                  id: "msg-" + Math.random().toString(36).slice(2, 9),
+                  role: "system",
+                  content: "Agent loop timed out — no activity for 10 minutes during tool approval.",
+                  timestamp: Date.now(),
+                };
+                set({
+                  isStreaming: false,
+                  streamingContent: "",
+                  thinkingContent: "",
+                  pendingToolCalls: [],
+                  pendingActivities: [],
+                  _safetyTimer: null,
+                  messages: [...state.messages, systemMsg],
+                });
+              }
+            }, TOOL_APPROVAL_TIMEOUT_MS);
+            set({ _safetyTimer: extendedTimer });
+          } else {
+            set({ _safetyTimer: null });
+          }
         }
 
         // Tools are already populated in pendingToolCalls via tool-call events
@@ -1826,8 +2003,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "activity-think": {
         set((s) => ({
-          pendingActivities: [...s.pendingActivities, { id: "pa-" + Math.random().toString(36).slice(2, 9), type: "think" as const, content: event.content }].slice(-500) as typeof s.pendingActivities,
-          thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000),
+          thinkingContent: (s.thinkingContent + event.content).slice(-100000),
         }));
         break;
       }
@@ -2269,7 +2445,8 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   restoreVersion(sessionId, versionId) {
-    const { messages, sessionVersions, sessionMessages } = get();
+    const { messages, sessionVersions, sessionMessages, isStreaming } = get();
+    if (isStreaming) return; // Don't restore while streaming
     const versions = sessionVersions[sessionId];
     if (!versions) return;
     const version = versions.find((v) => v.id === versionId);
@@ -2343,19 +2520,19 @@ export const useChat = create<ChatState>((set, get) => ({
       // Use context manager to determine what to compact
       const stats = computeContextStats(messages, maxContext);
       if (stats.needsCompaction) {
-        // Prune old tool outputs before summarization to reduce input size
-        const activeMessages = stats.shouldPrune
-          ? pruneToolOutputs(messages).pruned
-          : messages;
-
-        const { toCompact } = selectMessagesForCompaction(activeMessages, 6);
+        // Select messages for compaction FIRST from original (un-pruned) messages
+        const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
         if (toCompact.length > 0) {
+          // Only prune tool outputs in the messages being compacted (preserve full outputs in kept messages)
+          const prunedToCompact = stats.shouldPrune
+            ? pruneToolOutputs(toCompact).pruned
+            : toCompact;
+
           const api = createDalamAPI();
           const previousSummary = compactionSummaries[sessionId];
 
           // Use the structured SUMMARY_TEMPLATE format (Goal/Instructions/Discoveries/Accomplished)
-          // Pass raw ChatMessage[] directly — buildCompactionPrompt handles role mapping internally
-          const compactionMessages = buildCompactionPrompt(toCompact, previousSummary);
+          const compactionMessages = buildCompactionPrompt(prunedToCompact, previousSummary);
 
           const model = selectedModelId || useSettings.getState().settings.selectedModel;
           const summary = await api.agent.summarizeMessages(model, compactionMessages);
@@ -2670,6 +2847,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
 
   return new Promise<{ name: string; description: string }[]>((resolve, reject) => {
     let resolved = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const stdoutHandler = (data: string) => {
       outputBuffer += data;
@@ -2681,6 +2859,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
           const parsed = JSON.parse(trimmed);
           if (parsed.result?.tools || parsed.tools) {
             resolved = true;
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
             cleanup();
             resolve(parsed.result?.tools || parsed.tools);
             outputBuffer = "";
@@ -2707,7 +2886,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
       const req = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", params: {}, id: 1 }) + "\n";
       await child.write(req);
 
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true;
           cleanup();
@@ -2716,6 +2895,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
         }
       }, 15000);
     }).catch((err) => {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
       cleanup();
       reject(err);
     });

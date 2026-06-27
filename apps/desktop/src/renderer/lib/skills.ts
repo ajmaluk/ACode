@@ -442,7 +442,7 @@ export function matchSkillInvocation(
   registry: SkillInfo[]
 ): { skill: SkillInfo; args: string } | null {
   // First try explicit $skill-name invocation
-  const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+))?(?=\s|$)/i);
+  const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+))?(?=[\s,.;:!?)}\]]|$)/i);
   if (m) {
     const name = m[1].toLowerCase();
     const args = (m[2] ?? "").trim();
@@ -450,7 +450,12 @@ export function matchSkillInvocation(
     if (skill) return { skill, args };
   }
 
-  // Fallback: check if any skill name appears as a whole word in the prompt
+  // Fallback: only match skill name as a whole word if the prompt is short
+  // enough to look like a direct invocation (≤6 words). This prevents
+  // false positives on common words like "explain", "plan", "debug".
+  const words = text.trim().split(/\s+/);
+  if (words.length > 6) return null;
+
   const lowerText = text.toLowerCase();
   // Sort by name length descending so "code-review" matches before "code"
   const sorted = [...registry].sort((a, b) => b.name.length - a.name.length);

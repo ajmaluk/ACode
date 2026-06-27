@@ -175,11 +175,7 @@ export function Sidebar() {
   const [fileTreeView, setFileTreeView] = useState<string | null>(null);
   const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{ id: string; top: number; left: number } | null>(null);
 
-  const [, force] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => force((n) => n + 1), 30_000);
-    return () => clearInterval(t);
-  }, []);
+  // No need for force re-render — SessionRow manages its own timestamp interval
 
   useEffect(() => {
     if (!workspaceMenuPosition) return;

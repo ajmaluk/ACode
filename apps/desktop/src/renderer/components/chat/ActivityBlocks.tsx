@@ -134,7 +134,7 @@ export function ThinkingBlock({ content, streaming }: { content: string; streami
         </span>
       }
       meta={streaming ? undefined : `${content.length} chars`}
-      defaultOpen={false}
+      defaultOpen={streaming}
     >
       <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-dalam-text-secondary/90">
         {content}
@@ -595,15 +595,16 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
   const needsApproval = toolCall.status === "awaiting-approval";
 
   const meta = getToolMeta(toolCall.name);
+  const args = toolCall.args ?? {};
 
   const target = (() => {
-    if (typeof toolCall.args.path === "string") return toolCall.args.path;
-    if (typeof toolCall.args.command === "string") return `$ ${toolCall.args.command}`;
-    if (typeof toolCall.args.query === "string") return toolCall.args.query;
-    if (typeof toolCall.args.pattern === "string") return toolCall.args.pattern;
-    if (typeof toolCall.args.skill === "string") return toolCall.args.skill;
-    if (typeof toolCall.args.url === "string") return toolCall.args.url;
-    if (typeof toolCall.args.dir === "string") return toolCall.args.dir;
+    if (typeof args.path === "string") return args.path;
+    if (typeof args.command === "string") return `$ ${args.command}`;
+    if (typeof args.query === "string") return args.query;
+    if (typeof args.pattern === "string") return args.pattern;
+    if (typeof args.skill === "string") return args.skill;
+    if (typeof args.url === "string") return args.url;
+    if (typeof args.dir === "string") return args.dir;
     return "";
   })();
 
@@ -633,7 +634,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
             <Shield className="w-2.5 h-2.5 text-amber-400" />
           ) : null}
           <span>{statusText}</span>
-          {isEdit && toolCall.status === "completed" && typeof toolCall.args.path === "string" && (
+          {isEdit && toolCall.status === "completed" && typeof args.path === "string" && (
             <>
               <span>·</span>
                 <button
@@ -644,7 +645,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
                     // Use "created" only if old content was empty (new file)
                     const isNewFile = isWrite && (!toolCall.diff?.oldContent || toolCall.diff.oldContent === "");
                     openDiff({
-                      path: toolCall.args.path as string,
+                      path: args.path as string,
                       action: isNewFile ? "created" : "modified",
                       additions: toolCall.diff?.hunks?.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0) ?? 0,
                       deletions: toolCall.diff?.hunks?.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0) ?? 0,
@@ -661,12 +662,12 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
       <div className="space-y-2 text-[11px]">
         <div>
           <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">Arguments</div>
-          <ArgsDisplay toolName={toolCall.name} args={toolCall.args} />
+          <ArgsDisplay toolName={toolCall.name} args={args} />
         </div>
         {toolCall.result && (
           <div>
             <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">Result</div>
-            <ToolResultDisplay toolName={toolCall.name} result={toolCall.result} args={toolCall.args} />
+            <ToolResultDisplay toolName={toolCall.name} result={toolCall.result} args={args} />
           </div>
         )}
         {needsApproval && (

@@ -186,8 +186,20 @@ export function validateToolArgs(
   const entry = TOOL_SCHEMAS[toolName];
 
   if (!entry) {
-    // Unknown tool — allow MCP tools and dynamic tools to pass through
+    // Unknown tool — validate MCP tools against a generic schema
     if (toolName.startsWith("mcp_")) {
+      if (typeof args !== "object" || args === null || Array.isArray(args)) {
+        return { valid: false, error: `MCP tool ${toolName}: args must be a plain object` };
+      }
+      // Validate all arg values are JSON-serializable primitives or simple objects
+      for (const [key, val] of Object.entries(args)) {
+        if (typeof key !== "string") {
+          return { valid: false, error: `MCP tool ${toolName}: arg keys must be strings` };
+        }
+        if (val !== null && typeof val === "function") {
+          return { valid: false, error: `MCP tool ${toolName}: arg '${key}' cannot be a function` };
+        }
+      }
       return { valid: true, args };
     }
     return { valid: false, error: `Unknown tool: ${toolName}` };

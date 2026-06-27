@@ -168,5 +168,6 @@ export function useProgressKeyframes() {
       }
     `;
     document.head.appendChild(style);
+    return () => { style.remove(); };
   }, []);
 }

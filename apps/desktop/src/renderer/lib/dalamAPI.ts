@@ -27,6 +27,7 @@ const streamCleanups = new Map<string, () => void>();
 const fileWatchers = new Map<string, () => void>();
 const pendingDiffProposals = new Map<string, DiffProposal>();
 export const mcpHttpSessions = new Map<string, string>();
+const emittedSessionEnds = new Set<string>();
 
 const SETTINGS_CACHE = new Map<string, string>();
 
@@ -141,7 +142,7 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
       lastCompleteIdx = i + 1;
     } else if (line.startsWith("data:")) {
       const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
-      currentData += dataContent;
+      currentData += (currentData ? "\n" : "") + dataContent;
     }
     // Other fields (event:, id:, retry:) are silently ignored per SSE spec
   }
@@ -183,6 +184,7 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
       method: options.method as string || "GET",
       headers: options.headers as Record<string, string> || {},
       body: options.body as string | undefined,
+      signal: options.signal,
     });
     // Wrap Tauri response as a standard Response-like object
     const respHeaders = new Headers();
@@ -269,15 +271,45 @@ async function* streamOpenAI(
   const decoder = new TextDecoder();
   let buffer = "";
   const STREAM_READ_TIMEOUT_MS = 60_000; // 60s per read — detect hung streams
+  let lastTimeout: ReturnType<typeof setTimeout> | undefined;
+  const clearLastTimeout = () => { if (lastTimeout !== undefined) { clearTimeout(lastTimeout); lastTimeout = undefined; } };
+
+  // Tool call argument accumulation: OpenAI-compatible providers stream
+  // function.arguments incrementally across SSE chunks (e.g. "{\"path\": \"/" then "etc/file\"}").
+  // We must accumulate partial JSON by tool_call index before parsing.
+  const _tcArgBuffers = new Map<number, { name: string; args: string }>();
+
+  /** Build an XML tag from a completed tool call name + parsed JSON args */
+  function _emitToolCallXml(tcName: string, parsedArgs: Record<string, any>): string {
+    const attrs = Object.entries(parsedArgs)
+      .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+      .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
+      .join(" ");
+    const bodyTools = ["write_file", "edit_file", "clipboard_write", "memory_save"];
+    if (bodyTools.includes(tcName) && parsedArgs.content) {
+      const contentStr = typeof parsedArgs.content === "string" ? parsedArgs.content : "";
+      const bodyAttrs = Object.entries(parsedArgs)
+        .filter(([k, v]) => k !== "content" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
+        .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
+        .join(" ");
+      return `<${tcName} ${bodyAttrs}>${contentStr}</${tcName}>`;
+    }
+    if (tcName === "edit_file" && parsedArgs.search && parsedArgs.replace !== undefined) {
+      return `<${tcName} path="${parsedArgs.path || ''}">\n<search>${parsedArgs.search}</search>\n<replace>${parsedArgs.replace}</replace>\n</${tcName}>`;
+    }
+    return attrs ? `<${tcName} ${attrs}/>` : `<${tcName}/>`;
+  }
+
   try {
     while (true) {
+      clearLastTimeout();
       // Race reader.read() against a timeout to detect hung streams
       const readResult = await Promise.race([
         reader.read(),
         new Promise<never>((_, reject) => {
-          const t = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
+          lastTimeout = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
           // Attach signal to clean up timer if aborted
-          signal?.addEventListener("abort", () => clearTimeout(t), { once: true });
+          signal?.addEventListener("abort", () => clearLastTimeout(), { once: true });
         }),
       ]);
       const { done, value } = readResult;
@@ -288,10 +320,46 @@ async function* streamOpenAI(
       for (const part of parsed) {
         try {
           const json = JSON.parse(part.data);
+          if (json.error) {
+            throw new ProviderError(json.error.message || JSON.stringify(json.error), "provider");
+          }
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
           if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-        } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
+          // Native function calling: accumulate delta.tool_calls into XML tags.
+          // Arguments arrive incrementally — we buffer partial JSON by index
+          // and only emit once parsing succeeds.
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const tcIdx = tc.index ?? 0;
+              const fn = tc.function;
+              if (fn?.name) {
+                // Record or update the buffer for this tool call index
+                const existing = _tcArgBuffers.get(tcIdx);
+                if (existing) {
+                  // Accumulate: new arguments are appended
+                  existing.args += fn.arguments || "";
+                } else {
+                  _tcArgBuffers.set(tcIdx, { name: fn.name, args: fn.arguments || "" });
+                }
+                // Try to parse the accumulated args
+                const buf = _tcArgBuffers.get(tcIdx)!;
+                try {
+                  const parsedArgs = JSON.parse(buf.args);
+                  // Success — emit XML and remove from buffer
+                  _tcArgBuffers.delete(tcIdx);
+                  const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+                  yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
+                } catch {
+                  // Incomplete JSON — keep buffering, will try on next chunk
+                }
+              }
+            }
+          }
+        } catch (e) {
+          if (e instanceof ProviderError) throw e;
+          console.warn("SSE parse error (OpenAI):", e);
+        }
       }
     }
     // Process any remaining buffered data
@@ -300,12 +368,53 @@ async function* streamOpenAI(
       for (const part of parsed) {
         try {
           const json = JSON.parse(part.data);
+          if (json.error) {
+            throw new ProviderError(json.error.message || JSON.stringify(json.error), "provider");
+          }
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
           if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-        } catch (e) { console.warn("SSE parse error (OpenAI):", e); }
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const tcIdx = tc.index ?? 0;
+              const fn = tc.function;
+              if (fn?.name) {
+                const existing = _tcArgBuffers.get(tcIdx);
+                if (existing) {
+                  existing.args += fn.arguments || "";
+                } else {
+                  _tcArgBuffers.set(tcIdx, { name: fn.name, args: fn.arguments || "" });
+                }
+                const buf = _tcArgBuffers.get(tcIdx)!;
+                try {
+                  const parsedArgs = JSON.parse(buf.args);
+                  _tcArgBuffers.delete(tcIdx);
+                  const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+                  yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
+                } catch {
+                  // Still incomplete
+                }
+              }
+            }
+          }
+        } catch (e) {
+          if (e instanceof ProviderError) throw e;
+          console.warn("SSE parse error (OpenAI):", e);
+        }
       }
     }
+    // Flush any remaining incomplete tool call buffers (emit with whatever args we have)
+    for (const [idx, buf] of _tcArgBuffers) {
+      try {
+        const parsedArgs = JSON.parse(buf.args || "{}")
+        const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+        yield { type: "message-delta", messageId: "", content: "\n" + xmlTag + "\n" };
+      } catch {
+        // Emit as raw text fallback so the tool call isn't silently dropped
+        yield { type: "message-delta", messageId: "", content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
+      }
+    }
+    _tcArgBuffers.clear();
   } finally {
     reader.releaseLock();
   }
@@ -349,6 +458,9 @@ async function* streamAnthropic(
       for (const part of parsed) {
         try {
           const json = JSON.parse(part.data);
+          if (json.type === "error") {
+            throw new ProviderError(json.error?.message || "Anthropic stream error", "provider");
+          }
           if (json.type === "message_start") { msgId = json.message?.id || ""; }
           if (json.type === "content_block_delta" && json.delta?.text) {
             yield { type: "message-delta", messageId: msgId, content: json.delta.text };
@@ -356,7 +468,10 @@ async function* streamAnthropic(
           if (json.type === "content_block_delta" && json.delta?.thinking) {
             yield { type: "activity-think", content: json.delta.thinking };
           }
-        } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
+        } catch (e) {
+          if (e instanceof ProviderError) throw e;
+          console.warn("SSE parse error (Anthropic):", e);
+        }
       }
     }
     // Process any remaining buffered data
@@ -365,13 +480,19 @@ async function* streamAnthropic(
       for (const part of parsed) {
         try {
           const json = JSON.parse(part.data);
+          if (json.type === "error") {
+            throw new ProviderError(json.error?.message || "Anthropic stream error", "provider");
+          }
           if (json.type === "content_block_delta" && json.delta?.text) {
             yield { type: "message-delta", messageId: msgId, content: json.delta.text };
           }
           if (json.type === "content_block_delta" && json.delta?.thinking) {
             yield { type: "activity-think", content: json.delta.thinking };
           }
-        } catch (e) { console.warn("SSE parse error (Anthropic):", e); }
+        } catch (e) {
+          if (e instanceof ProviderError) throw e;
+          console.warn("SSE parse error (Anthropic):", e);
+        }
       }
     }
   } finally {
@@ -688,7 +809,12 @@ const dalamAPI: DalamAPI = {
           const cursorInfo = activeTab?.cursor ? ` (Cursor is at Line ${activeTab.cursor.line}, Column ${activeTab.cursor.column})` : "";
           activeFileContext = `\n\n=== CURRENT EDITOR STATE ===\nYou are currently looking at this file: ${activeFile}${cursorInfo}\n`;
           if (activeTab && activeTab.content) {
-            activeFileContext += `\n--- Active File Content ---\n${activeTab.content}\n`;
+            const MAX_ACTIVE_FILE_CHARS = 30000; // ~7500 tokens
+            if (activeTab.content.length > MAX_ACTIVE_FILE_CHARS) {
+              activeFileContext += `\n--- Active File Content (truncated, ${activeTab.content.length} chars total) ---\n${activeTab.content.slice(0, MAX_ACTIVE_FILE_CHARS)}\n... [truncated]\n`;
+            } else {
+              activeFileContext += `\n--- Active File Content ---\n${activeTab.content}\n`;
+            }
           }
           if (openTabs.length > 1) {
             activeFileContext += `- Other open tabs: ${openTabs.filter(t => t.path !== activeFile).map(t => t.name).join(", ")}\n`;
@@ -835,8 +961,8 @@ You are equipped with tools to interact with the workspace and operating system.
 
 --- Desktop / System Tools ---
 9. Clipboard Read:
-   <clipboard_read/>
-   Reads text from the system clipboard.
+    <clipboard_read/>
+    Reads text from the system clipboard.
 
 10. Clipboard Write:
     <clipboard_write>text to copy</clipboard_write>
@@ -949,6 +1075,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         timestamp: Date.now(),
       });
 
+      let consecutiveRateLimitErrors = 0;
+
       try {
         const { useChat } = await import("../store/useAppStore");
 
@@ -985,7 +1113,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const MAX_LOOP_HARD = 30;
         const loopStartTime = Date.now();
         const MAX_LOOP_DURATION_MS = 5 * 60 * 1000;
-        let consecutiveRateLimitErrors = 0;
 
         const summaries = useChat.getState().compactionSummaries || {};
         const compactionSummary = summaries[sessionId];
@@ -993,18 +1120,30 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const workspacePath = liveSession?.workspacePath ?? "";
 
         // Build messages from LIVE currentHistory (not pre-loop snapshot)
-        // Token-budget-aware: estimates ~4 chars per token, caps at 80K tokens for conversation
-        function buildMessages(): any[] {
-          const MAX_CHARS = 80000 * 4; // ~80K tokens worth of characters
+        // Token-budget-aware: uses estimateTokens for accurate counting
+        async function buildMessages(): Promise<any[]> {
+          const { estimateTokens: estTokens } = await import("./contextManager");
+          const MAX_TOKENS = 80000;
+          // Reserve tokens for system prompt, compaction summary, and output
+          const systemTokenEst = estTokens(systemPrompt);
+          const OUTPUT_RESERVE = 8000;
           const allMsgs = currentHistory.filter((m: any) => m.role !== "system");
+          const COMPACT_RESERVE = compactionSummary && allMsgs.length > 10 ? estTokens(compactionSummary) + 100 : 0;
+          const availableForHistory = MAX_TOKENS - systemTokenEst - OUTPUT_RESERVE - COMPACT_RESERVE;
+          if (availableForHistory <= 0) {
+            // System prompt alone exceeds budget — send minimal context
+            return [{ role: "system", content: systemPrompt }];
+          }
+
           // Always include the last message; work backward from there
           const msgs: any[] = [];
-          let charCount = 0;
+          let tokenCount = 0;
           for (let i = allMsgs.length - 1; i >= 0; i--) {
             const m = allMsgs[i];
-            const contentLen = typeof m.content === "string" ? m.content.length : 0;
-            if (charCount + contentLen > MAX_CHARS && msgs.length >= 2) break;
-            charCount += contentLen;
+            const content = typeof m.content === "string" ? m.content : "";
+            const contentTokens = estTokens(content);
+            if (tokenCount + contentTokens > availableForHistory && msgs.length >= 2) break;
+            tokenCount += contentTokens;
             msgs.unshift(m);
           }
 
@@ -1037,40 +1176,44 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             break;
           }
 
-          const messages = buildMessages();
+          const messages = await buildMessages();
 
-          // Add user's message/files on the first turn
+          // Enrich the user's message with attachments on the first turn
+          // (images as base64, file content appended to text)
           if (loopCount === 1) {
             const hasImages = attachments?.some((a) => a.mimeType.startsWith("image/"));
-            if (hasImages && config.apiFormat === "openai") {
-              const parts: any[] = [{ type: "text", text: cleanPrompt }];
-              for (const att of attachments ?? []) {
-                if (att.mimeType.startsWith("image/")) {
-                  parts.push({ type: "image_url", image_url: { url: `data:${att.mimeType};base64,${att.content}` } });
-                } else if (att.content) {
-                  parts.push({ type: "text", text: `\n\n--- File: ${att.name} ---\n${att.content}` });
+            // Find the user message in the messages array and enrich it
+            const userMsgIdx = messages.map((m: any) => m.role).lastIndexOf("user");
+            if (userMsgIdx >= 0) {
+              if (hasImages && config.apiFormat === "openai") {
+                const parts: any[] = [{ type: "text", text: messages[userMsgIdx].content }];
+                for (const att of attachments ?? []) {
+                  if (att.mimeType.startsWith("image/")) {
+                    parts.push({ type: "image_url", image_url: { url: `data:${att.mimeType};base64,${att.content}` } });
+                  } else if (att.content) {
+                    parts.push({ type: "text", text: `\n\n--- File: ${att.name} ---\n${att.content}` });
+                  }
                 }
-              }
-              messages.push({ role: "user", content: parts });
-            } else if (hasImages && config.apiFormat === "anthropic") {
-              const parts: any[] = [{ type: "text", text: cleanPrompt }];
-              for (const att of attachments ?? []) {
-                if (att.mimeType.startsWith("image/")) {
-                  parts.push({ type: "image", source: { type: "base64", media_type: att.mimeType, data: att.content } });
-                } else if (att.content) {
-                  parts.push({ type: "text", text: `\n\n--- File: ${att.name} ---\n${att.content}` });
+                messages[userMsgIdx] = { role: "user", content: parts };
+              } else if (hasImages && config.apiFormat === "anthropic") {
+                const parts: any[] = [{ type: "text", text: messages[userMsgIdx].content }];
+                for (const att of attachments ?? []) {
+                  if (att.mimeType.startsWith("image/")) {
+                    parts.push({ type: "image", source: { type: "base64", media_type: att.mimeType, data: att.content } });
+                  } else if (att.content) {
+                    parts.push({ type: "text", text: `\n\n--- File: ${att.name} ---\n${att.content}` });
+                  }
                 }
+                messages[userMsgIdx] = { role: "user", content: parts };
+              } else {
+                let fullPrompt = messages[userMsgIdx].content;
+                for (const att of attachments ?? []) {
+                  if (att.mimeType.startsWith("image/")) continue;
+                  if (att.content) fullPrompt += `\n\n--- File: ${att.name} ---\n${att.content}`;
+                }
+                messages[userMsgIdx] = { role: "user", content: fullPrompt };
               }
-              messages.push({ role: "user", content: parts });
-            } else {
-              let fullPrompt = cleanPrompt;
-              for (const att of attachments ?? []) {
-                if (att.mimeType.startsWith("image/")) continue;
-                if (att.content) fullPrompt += `\n\n--- File: ${att.name} ---\n${att.content}`;
-              }
-              messages.push({ role: "user", content: fullPrompt });
             }
-            currentHistory.push({ id: "usr-" + Date.now(), role: "user" as const, content: cleanPrompt, timestamp: Date.now() });
           }
 
           // Start turn
@@ -1109,10 +1252,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           const parsedToolsFromText = await parseToolCalls(safeTextForParsing);
           // Merge: code block tool calls take priority (they're more explicit), then text-parsed ones
           // Deduplicate: if the same tool+args appears in both, keep only the code-block version
+          const sortedStringify = (obj: Record<string, any>) => JSON.stringify(obj, Object.keys(obj).sort());
           const parsedTools = [...parsedFromCodeBlocks];
-          const codeBlockKeys = new Set(parsedFromCodeBlocks.map((t) => `${t.name}:${JSON.stringify(t.args)}`));
+          const codeBlockKeys = new Set(parsedFromCodeBlocks.map((t) => `${t.name}:${sortedStringify(t.args)}`));
           for (const tc of parsedToolsFromText) {
-            const key = `${tc.name}:${JSON.stringify(tc.args)}`;
+            const key = `${tc.name}:${sortedStringify(tc.args)}`;
             if (!codeBlockKeys.has(key)) {
               parsedTools.push(tc);
               codeBlockKeys.add(key);
@@ -1247,14 +1391,17 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           timestamp: Date.now(),
         });
 
-        // Hook: SessionEnd (natural completion)
-        await hookBus.emit("SessionEnd", {
-          sessionId,
-          reason: "completed",
-          messageCount: currentHistory.length,
-          durationMs: Date.now() - sessionStartTime,
-          timestamp: Date.now(),
-        });
+        // Hook: SessionEnd (natural completion) — guard against double emission with abort()
+        if (!emittedSessionEnds.has(sessionId)) {
+          emittedSessionEnds.add(sessionId);
+          await hookBus.emit("SessionEnd", {
+            sessionId,
+            reason: "completed",
+            messageCount: currentHistory.length,
+            durationMs: Date.now() - sessionStartTime,
+            timestamp: Date.now(),
+          });
+        }
       } catch (err) {
         const startTime = sessionStartTimes.get(sessionId) ?? Date.now();
         let messageCount = 0;
@@ -1264,24 +1411,31 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         } catch (_e) { /* failed to read session message count */ }
 
         if (err instanceof ProviderError) {
+          if (err.code === "credit") consecutiveRateLimitErrors++;
           emit({ type: "error", error: err.message });
           emit({ type: "message-end", messageId: sessionId });
-          await hookBus.emit("SessionEnd", {
-            sessionId,
-            reason: "error",
-            messageCount,
-            durationMs: Date.now() - startTime,
-            timestamp: Date.now(),
-          });
+          if (!emittedSessionEnds.has(sessionId)) {
+            emittedSessionEnds.add(sessionId);
+            await hookBus.emit("SessionEnd", {
+              sessionId,
+              reason: "error",
+              messageCount,
+              durationMs: Date.now() - startTime,
+              timestamp: Date.now(),
+            });
+          }
         } else if ((err as Error)?.name === "AbortError") {
           emit({ type: "message-end", messageId: sessionId });
-          await hookBus.emit("SessionEnd", {
-            sessionId,
-            reason: "aborted",
-            messageCount,
-            durationMs: Date.now() - startTime,
-            timestamp: Date.now(),
-          });
+          if (!emittedSessionEnds.has(sessionId)) {
+            emittedSessionEnds.add(sessionId);
+            await hookBus.emit("SessionEnd", {
+              sessionId,
+              reason: "aborted",
+              messageCount,
+              durationMs: Date.now() - startTime,
+              timestamp: Date.now(),
+            });
+          }
         } else {
           emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
           emit({ type: "message-end", messageId: sessionId });
@@ -1296,13 +1450,21 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       } finally {
         activeControllers.delete(sessionId);
         sessionStartTimes.delete(sessionId);
-        // Clean up file watchers
-        const watcher = fileWatchers.get(sessionId);
-        if (watcher) { watcher(); fileWatchers.delete(sessionId); }
-        // Clean up MCP HTTP sessions
-        mcpHttpSessions.delete(sessionId);
-        // Clean up pending diff proposals
-        pendingDiffProposals.delete(sessionId);
+        // Clean up file watchers — watchers are keyed by path, clean all active ones
+        for (const [watchPath, unwatch] of fileWatchers) {
+          try { unwatch(); } catch { /* ignore */ }
+        }
+        fileWatchers.clear();
+        // Clean up MCP HTTP sessions (keyed by server name, remove all for this session)
+        for (const [serverName, sesId] of mcpHttpSessions) {
+          if (sesId === sessionId) mcpHttpSessions.delete(serverName);
+        }
+        // Clean up all pending diff proposals (they're session-scoped)
+        pendingDiffProposals.clear();
+        // Clean up stream listener cleanup functions
+        streamCleanups.delete(sessionId);
+        // Clean up SessionEnd dedup tracking
+        emittedSessionEnds.delete(sessionId);
         // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
         try {
           const { useChat } = await import("../store/useAppStore");
@@ -1328,7 +1490,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         messageCount = sessionMessages?.length ?? 0;
       } catch { /* store not available */ }
       // Only emit SessionEnd if we're the ones cleaning up (not sendPrompt's finally)
-      if (activeControllers.has(sessionId)) {
+      if (activeControllers.has(sessionId) && !emittedSessionEnds.has(sessionId)) {
+        emittedSessionEnds.add(sessionId);
         hookBus.emit("SessionEnd", {
           sessionId,
           reason: "aborted",
@@ -1397,6 +1560,26 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             },
           });
         }
+        // Notify the LLM that the diff was approved and the file was written.
+        // Without this, the LLM may re-request the same operation on the next turn.
+        try {
+          const { useChat } = await import("../store/useAppStore");
+          const chatState = useChat.getState();
+          const msgs = chatState.sessionMessages[sessionId];
+          if (msgs) {
+            const approvalMsg: import("@dalam/shared-types").ChatMessage = {
+              id: "diff-approval-" + Math.random().toString(36).slice(2, 9),
+              role: "system",
+              content: `User approved the file write. ${pending.filePath} has been updated (${pending.hunks.reduce((n, h) => n + h.newLines, 0)} lines added, ${pending.hunks.reduce((n, h) => n + h.oldLines, 0)} removed). Continue with your task.`,
+              timestamp: Date.now(),
+            };
+            const newMsgs = [...msgs, approvalMsg];
+            useChat.setState({
+              sessionMessages: { ...chatState.sessionMessages, [sessionId]: newMsgs },
+              messages: [...chatState.messages, approvalMsg],
+            });
+          }
+        } catch { /* store not available */ }
       }
     },
     async rejectDiff(_sessionId: string, diffId: string) {
@@ -1590,10 +1773,13 @@ interface ParsedToolCall {
 
 function parseAttributes(tagStr: string): Record<string, string> {
   const attrs: Record<string, string> = {};
-  const regex = /([a-zA-Z0-9_-]+)=["']([^"']*)["']/g;
+  // Match key="value" or key='value', ensuring matching opening and closing quotes
+  const regex = /([a-zA-Z0-9_-]+)=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g;
   let match;
   while ((match = regex.exec(tagStr)) !== null) {
-    attrs[match[1]] = match[2];
+    const val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : "");
+    // Unescape: remove backslash before quotes
+    attrs[match[1]] = val.replace(/\\(["'])/g, "$1");
   }
   return attrs;
 }
@@ -1908,10 +2094,11 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 
     if (selfClose || rawTag.endsWith("/>") || rawTag.trim().endsWith("/>")) {
       const args: Record<string, string> = {};
-      const attrRegex = /([a-z0-9_-]+)=["']([^"']*)["']/gi;
+      const attrRegex = /([a-z0-9_-]+)=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/gi;
       let attrMatch;
       while ((attrMatch = attrRegex.exec(bodyOrAttrs)) !== null) {
-        args[attrMatch[1]] = attrMatch[2];
+        const val = attrMatch[2] !== undefined ? attrMatch[2] : (attrMatch[3] !== undefined ? attrMatch[3] : "");
+        args[attrMatch[1]] = val.replace(/\\(["'])/g, "$1");
       }
       toolCalls.push({ name: fullName, args, raw: rawTag });
     } else {
@@ -1949,7 +2136,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 }
 
 function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Promise<"approved" | "denied"> {
-  const TIMEOUT_MS = 30_000; // 30 seconds — don't block agent loop too long
+  const TIMEOUT_MS = 120_000; // 2 minutes — give users time to review tool proposals
   _debugLog(`waitForToolApproval: waiting for tool ${toolCallId}`);
   return new Promise((resolve) => {
     let resolved = false;
@@ -2001,6 +2188,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       };
       if (abortSignal.aborted) {
         resolved = true;
+        cleanup();
         resolve("denied");
         return;
       }
@@ -2015,6 +2203,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         if (useChatRef) {
           try { useChatRef.getState().resolveToolApproval(toolCallId, "denied"); } catch (_e) { /* ignore */ }
         }
+        _debugLog(`waitForToolApproval: timed out after ${TIMEOUT_MS}ms for tool ${toolCallId}`);
         resolve("denied");
       }
     }, TIMEOUT_MS);
@@ -2046,27 +2235,11 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
 }
 
 async function executeTool(name: string, args: Record<string, any>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
-  // Validate required args per tool
-  if (name === "read_file" && typeof args.path !== "string") {
-    return "Error: read_file requires a 'path' argument";
-  }
-  if (name === "write_file" && typeof args.path !== "string") {
-    return "Error: write_file requires a 'path' argument";
-  }
-  if (name === "edit_file" && typeof args.path !== "string") {
-    return "Error: edit_file requires a 'path' argument";
-  }
-  if (name === "run_command" && typeof args.command !== "string") {
-    return "Error: run_command requires a 'command' argument";
-  }
-  if (name === "grep_file" && typeof args.path !== "string") {
-    return "Error: grep_file requires a 'path' argument";
-  }
-  if (name === "search_files" && typeof args.pattern !== "string") {
-    return "Error: search_files requires a 'pattern' argument";
-  }
-  if (name === "list_dir" && typeof args.path !== "string") {
-    return "Error: list_dir requires a 'path' argument";
+  // Validate args against Zod schema
+  const { validateToolArgs } = await import("./toolSchemas");
+  const validation = validateToolArgs(name, args);
+  if (!validation.valid) {
+    return `Error: ${validation.error}`;
   }
 
   if (name === "read_file") {
@@ -2292,7 +2465,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const { Command } = await import("@tauri-apps/plugin-shell");
     const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
     const program = isWindows ? "powershell" : "bash";
-    const commandArgs = isWindows ? ["-Command", args.command] : ["-c", args.command];
+    const commandArgs = isWindows ? ["-NoProfile", "-NonInteractive", "-Command", args.command] : ["-c", args.command];
     const cmd = Command.create(program, commandArgs, { cwd: workspacePath });
     const child = await cmd.spawn();
     let killed = false;
@@ -2633,10 +2806,13 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
 
           cmd.stdout.on("data", (data: string) => {
             outputBuffer += data;
-            // Try to parse the entire buffer as a single JSON-RPC message
-            // (MCP responses may be multi-line JSON)
-            const trimmed = outputBuffer.trim();
-            if (trimmed.startsWith("{")) {
+            // NDJSON: split on newlines, parse each complete line
+            const lines = outputBuffer.split("\n");
+            // Keep the last incomplete line in the buffer
+            outputBuffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith("{")) continue;
               try {
                 const parsed = JSON.parse(trimmed);
                 if (parsed.result?.content || parsed.content || parsed.error) {
@@ -2650,12 +2826,10 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
                     const text = content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
                     resolve(text);
                   }
-                  outputBuffer = "";
-                } else if (parsed.result && !parsed.result.content && !parsed.error) {
-                  outputBuffer = "";
+                  return;
                 }
               } catch {
-                // Incomplete JSON — wait for more data
+                // Not valid JSON — skip this line
               }
             }
           });

@@ -36,6 +36,7 @@ interface ToolStats {
 
 const sessionStats = new Map<string, ToolStats>();
 let maintenanceCounter = 0;
+let maintenanceRunning = false;
 
 function getOrCreateStats(sessionId: string): ToolStats {
   if (!sessionStats.has(sessionId)) {
@@ -134,6 +135,13 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
 
     // Clean up stats
     sessionStats.delete(event.sessionId);
+    // Also clean up any stale stats older than 1 hour
+    const oneHourAgo = Date.now() - 3600000;
+    for (const [id, stats] of sessionStats) {
+      if ((stats as any)._lastUpdated && (stats as any)._lastUpdated < oneHourAgo) {
+        sessionStats.delete(id);
+      }
+    }
   }
 
   // ── Auto-extract memories from the last exchange ──
@@ -231,13 +239,16 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
 
   // ── Periodic self-maintaining memory cleanup ──
   maintenanceCounter++;
-  if (maintenanceCounter >= CTX.MEMORY_MAINTAIN_INTERVAL) {
+  if (maintenanceCounter >= CTX.MEMORY_MAINTAIN_INTERVAL && !maintenanceRunning) {
     maintenanceCounter = 0;
+    maintenanceRunning = true;
     try {
       const { runMaintenance } = await import("./memoryStore");
       await runMaintenance();
     } catch (e) {
       console.warn("[HookListener] Memory maintenance failed:", e);
+    } finally {
+      maintenanceRunning = false;
     }
   }
 

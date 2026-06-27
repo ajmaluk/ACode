@@ -15,6 +15,8 @@ import { useToast } from "@/components/ui/Toaster";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
+import { InterruptBar } from "@/components/chat/InterruptBar";
+import { CostDisplay } from "@/components/chat/CostDisplay";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
 import { modKey } from "@/lib/platform";
@@ -559,11 +561,18 @@ function ChatView() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Auto-scroll only if user hasn't scrolled up
+  // Auto-scroll only if user hasn't scrolled up — debounced via RAF to prevent jitter
+  const scrollRafRef = useRef<number>(0);
   useEffect(() => {
     if (!isUserScrolledUp.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      });
     }
+    return () => cancelAnimationFrame(scrollRafRef.current);
   }, [messages, streamingContent, thinkingContent]);
 
   const hasMessages = messages.length > 0;
@@ -603,7 +612,15 @@ function ChatView() {
   }, []);
 
   const handleSubmit = () => {
-    if (!value.trim() || isStreaming) return;
+    if (isStreaming) {
+      const chat = useChat.getState();
+      if (chat.session?.id) {
+        chat.abort(chat.session.id);
+        toast.info("Generation aborted");
+      }
+      return;
+    }
+    if (!value.trim()) return;
     if (!workspace) { toast.warning("Open a folder first"); return; }
     if (!selectedModelId && !settings.selectedModel) { toast.warning("Select a model in Settings first"); return; }
     const trimmed = value.trim();
@@ -1090,7 +1107,6 @@ Add your project's common commands here so Dalam knows how to build:
                     onChange={(e) => setValue(e.target.value)}
                     onKeyDown={handleKeyDown}
                     rows={1}
-                    disabled={isStreaming}
                   />
                   <PromptAutocomplete
                     value={value}
@@ -1208,10 +1224,10 @@ Add your project's common commands here so Dalam knows how to build:
                         />
                       )}
                     </div>
-                    <Tooltip content={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : isStreaming ? "Streaming…" : "Send"} side="top">
+                    <Tooltip content={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"} side="top">
                       <button
                         className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
-                        disabled={!value.trim() || isStreaming || !workspace || (!selectedModelId && !settings.selectedModel)}
+                        disabled={!isStreaming && (!value.trim() || !workspace || (!selectedModelId && !settings.selectedModel))}
                         onClick={handleSubmit}
                       >
                         {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
@@ -1243,6 +1259,7 @@ Add your project's common commands here so Dalam knows how to build:
                   {messages.length} {messages.length === 1 ? "message" : "messages"}
                 </span>
                 <span className="text-dalam-text-muted/40">·</span>
+                <CostDisplay />
                 <span className="flex items-center gap-1" title="Approximate token count (1 token ≈ 4 chars)">
                   <Sparkles className="w-3 h-3" />
                   {Math.ceil(messages.reduce((sum, m) => sum + m.content.length, 0) / 4).toLocaleString()} tokens
@@ -1257,7 +1274,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
               </div>
             )}
-            {messages.map((m) => <ChatMessage key={m.id} message={m} activeAgentName={activeAgentName} />)}
+            {messages.map((m, idx) => <ChatMessage key={m.id} message={m} activeAgentName={activeAgentName} onResetToMessage={(content) => setValue(content)} isLast={idx === messages.length - 1} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1357,7 +1374,7 @@ Add your project's common commands here so Dalam knows how to build:
               <textarea ref={followupTextareaRef}
                 className="w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-80"
                 placeholder="Ask for follow-up changes" value={value} onChange={(e) => setValue(e.target.value)}
-                onKeyDown={handleFollowupKeyDown} rows={1} disabled={isStreaming} />
+                onKeyDown={handleFollowupKeyDown} rows={1} />
               <PromptAutocomplete
                 value={value}
                 onChange={setValue}
@@ -1434,9 +1451,9 @@ Add your project's common commands here so Dalam knows how to build:
                 </div>
                 <button
                   className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
-                  disabled={!value.trim() || isStreaming || !workspace || (!selectedModelId && !settings.selectedModel)}
+                  disabled={!isStreaming && (!value.trim() || !workspace || (!selectedModelId && !settings.selectedModel))}
                   onClick={handleSubmit}
-                  title={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : isStreaming ? "Streaming…" : "Send"}
+                  title={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"}
                 >
                   {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
                 </button>
@@ -1445,6 +1462,7 @@ Add your project's common commands here so Dalam knows how to build:
           </div>
         </div>
       )}
+      {/* InterruptBar removed — use main input instead */}
     </div>
   );
 }
@@ -1531,7 +1549,7 @@ function RunningToolsSection({ toolCalls }: { toolCalls: import("@dalam/shared-t
 
 const EMPTY_ACTIVITIES: never[] = [];
 
-function ChatMessage({ message, pending, activeAgentName }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; activeAgentName?: string }) {
+function ChatMessage({ message, pending, activeAgentName, onResetToMessage, isLast }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; activeAgentName?: string; onResetToMessage?: (content: string) => void; isLast?: boolean }) {
   const toast = useToast();
   const segments = splitCodeFences(message.content);
   // For settled messages, activities come from message.activities (no store subscription needed).
@@ -1557,7 +1575,7 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
     // Skip empty user messages (e.g. tool result placeholders that leaked through)
     if (!message.content && !message.attachments?.length) return null;
     return (
-      <div className="py-2 animate-fade-in">
+      <div className="group/usermsg py-2 animate-fade-in">
         <div className="flex justify-end">
           <div className="max-w-[80%]">
             {message.attachments && message.attachments.length > 0 && (
@@ -1576,10 +1594,37 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
                 ))}
               </div>
             )}
-            <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 text-right">
+            <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 relative">
               <p className="text-[13px] text-dalam-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
                 {message.content}
               </p>
+              {/* Hover toolbar: copy + reset to checkpoint */}
+              <div className="absolute -bottom-7 right-0 flex items-center gap-0.5 opacity-0 group-hover/usermsg:opacity-100 transition-opacity z-10">
+                <button
+                  className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+                  title="Copy message"
+                  onClick={() => { void navigator.clipboard.writeText(message.content); toast.success("Copied"); }}
+                >
+                  <Copy className="w-3 h-3" />
+                </button>
+                <button
+                  className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+                  title="Reset to this message (clear below, edit in input)"
+                  onClick={() => {
+                    // Find all messages after this one and remove them
+                    const msgs = useChat.getState().messages;
+                    const idx = msgs.findIndex((m) => m.id === message.id);
+                    if (idx >= 0) {
+                      const kept = msgs.slice(0, idx + 1);
+                      useChat.setState({ messages: kept });
+                      // Set the message content in the input for editing
+                      onResetToMessage?.(message.content);
+                    }
+                  }}
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1600,7 +1645,7 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
   }
 
   return (
-    <div className="py-2 animate-fade-in">
+    <div className="group/msg py-2 animate-fade-in">
 
       {/* Thinking block — model's reasoning, collapsed by default */}
       {!pending && message.thinking && (
@@ -1675,16 +1720,38 @@ function ChatMessage({ message, pending, activeAgentName }: { message: import("@
         <ChangesCard changes={message.fileChanges!} />
       )}
 
-      {/* Message meta footer — only when the message is settled. */}
-      {!pending && message.content && (
-        <div className="flex items-center gap-2 mt-1 opacity-0 hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      {/* Message meta footer — only on the last message when settled. */}
+      {!pending && isLast && (message.content || hasToolCalls || hasFileChanges) && (
+        <div className="flex items-center gap-2 mt-1 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity">
           <div className="ml-auto flex items-center gap-0.5">
+            {message.content && (
+              <button
+                className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+                title="Copy"
+                onClick={() => { void navigator.clipboard.writeText(message.content); toast.success("Copied"); }}
+              >
+                <Copy className="w-3 h-3" />
+              </button>
+            )}
             <button
               className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-              title="Copy"
-              onClick={() => { void navigator.clipboard.writeText(message.content); toast.success("Copied"); }}
+              title="Reset to before this message"
+              onClick={() => {
+                const msgs = useChat.getState().messages;
+                const idx = msgs.findIndex((m) => m.id === message.id);
+                if (idx > 0) {
+                  // Keep messages before this one (find the last user message before this)
+                  const kept = msgs.slice(0, idx);
+                  useChat.setState({ messages: kept });
+                  // Find the last user message to put back in input
+                  const lastUser = [...kept].reverse().find((m) => m.role === "user");
+                  if (lastUser) onResetToMessage?.(lastUser.content);
+                } else if (idx === 0) {
+                  useChat.setState({ messages: [] });
+                }
+              }}
             >
-              <Copy className="w-3 h-3" />
+              <RotateCcw className="w-3 h-3" />
             </button>
           </div>
         </div>
@@ -1832,7 +1899,8 @@ function CodeBlock({ language, content }: { language: string; content: string })
     if (language && hljs.getLanguage(language)) {
       try { return hljs.highlight(content, { language }).value; } catch { return escapeHtml(content); }
     }
-    try { return hljs.highlightAuto(content).value; } catch { return escapeHtml(content); }
+    // For performance and safety, avoid highlightAuto during active streaming or when language is not provided
+    try { return hljs.highlight(content, { language: "plaintext" }).value; } catch { return escapeHtml(content); }
   }, [content, language]);
 
   const handleApply = useCallback(() => {
@@ -1896,19 +1964,31 @@ function formatTime(ts: number): string {
 
 function splitCodeFences(text: string): { type: "text" | "code"; content: string; language?: string }[] {
   const out: { type: "text" | "code"; content: string; language?: string }[] = [];
-  const re = /```(\w*)\n([\s\S]*?)```/g;
+  // Match ```lang\n...``` OR ```lang``` (no newline after opening fence)
+  const re = /```(\w*)(?:\n([\s\S]*?))?\n?```/g;
   let last = 0;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text))) {
     if (match.index > last) out.push({ type: "text", content: text.slice(last, match.index) });
-    out.push({ type: "code", content: match[2], language: match[1] });
+    out.push({ type: "code", content: match[2] ?? "", language: match[1] });
     last = match.index + match[0].length;
   }
   if (last < text.length) {
     const rest = text.slice(last);
-    const unclosedOpen = rest.match(/^```(\w*)\n([\s\S]*)$/);
-    if (unclosedOpen) {
-      out.push({ type: "code", content: unclosedOpen[2], language: unclosedOpen[1] });
+    const fenceIdx = rest.indexOf("```");
+    if (fenceIdx !== -1) {
+      if (fenceIdx > 0) {
+        out.push({ type: "text", content: rest.slice(0, fenceIdx) });
+      }
+      const codePart = rest.slice(fenceIdx + 3);
+      const newlineIdx = codePart.indexOf("\n");
+      if (newlineIdx !== -1) {
+        const language = codePart.slice(0, newlineIdx).trim();
+        const content = codePart.slice(newlineIdx + 1);
+        out.push({ type: "code", content, language });
+      } else {
+        out.push({ type: "code", content: "", language: codePart.trim() });
+      }
     } else {
       out.push({ type: "text", content: rest });
     }

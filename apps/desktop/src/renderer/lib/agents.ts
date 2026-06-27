@@ -224,6 +224,7 @@ export function isDangerousCommand(command: string): boolean {
  */
 export const DEFAULT_PERMISSIONS: PermissionRuleset = fromConfig({
   "*": "allow",
+  mcp: "ask",
   doom_loop: "ask",
   external_directory: {
     "*": "ask",

@@ -332,28 +332,42 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
 function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
   // For split view, we render each hunk as a side-by-side table.
   // Each hunk's lines are paired: context lines appear on both sides,
-  // remove on left only, add on right only.
+  // remove on left only, add on right only. Removes and adds that are
+  // adjacent are paired on the same row for proper side-by-side alignment.
   const [leftLines, rightLines] = useMemo(() => {
     const left: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
     const right: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
     let rowIdx = 0;
 
     for (const hunk of hunks) {
-      // In split view, we need to align adds and removes.
-      // Simple approach: render removes and adds in sequence, context on both sides.
+      // Buffer consecutive removes/adds to pair them
+      const removes: import("@/lib/diff").ComputedDiffLine[] = [];
+      const adds: import("@/lib/diff").ComputedDiffLine[] = [];
+
+      const flushPair = () => {
+        const maxLen = Math.max(removes.length, adds.length);
+        for (let i = 0; i < maxLen; i++) {
+          if (i < removes.length) left.push({ line: removes[i], rowIdx });
+          if (i < adds.length) right.push({ line: adds[i], rowIdx });
+          rowIdx++;
+        }
+        removes.length = 0;
+        adds.length = 0;
+      };
+
       for (const line of hunk.lines) {
         if (line.type === "context") {
+          flushPair();
           left.push({ line, rowIdx });
           right.push({ line, rowIdx });
           rowIdx++;
         } else if (line.type === "remove") {
-          left.push({ line, rowIdx });
-          rowIdx++;
+          removes.push(line);
         } else {
-          right.push({ line, rowIdx });
-          rowIdx++;
+          adds.push(line);
         }
       }
+      flushPair();
     }
 
     return [left, right];
@@ -436,9 +450,9 @@ function ReviewTab() {
             <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
               <WandSparkles className="w-7 h-7 text-dalam-accent-primary" />
             </div>
-            <p className="text-sm text-dalam-text-primary font-medium mb-1">Code Review</p>
+            <p className="text-sm text-dalam-text-primary font-medium mb-1">No Changes Yet</p>
             <p className="text-xs text-dalam-text-muted max-w-[200px] leading-relaxed">
-              Review your code changes with AI-powered analysis. Changes will appear here as the agent makes edits.
+              File changes made by the agent will appear here. Click any file to review the diff.
             </p>
           </div>
         </div>
@@ -456,7 +470,7 @@ function ReviewTab() {
           <div
             key={fc.path}
             className="flex items-center gap-2 px-3 py-2 hover:bg-dalam-bg-hover transition-colors cursor-pointer"
-            onClick={() => { openDiff({ path: fc.path, action: fc.action as any, additions: fc.additions, deletions: fc.deletions }); }}
+            onClick={() => { openDiff({ path: fc.path, action: fc.action as "created" | "modified" | "deleted", additions: fc.additions, deletions: fc.deletions }); }}
           >
             <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
             <div className="flex-1 min-w-0">

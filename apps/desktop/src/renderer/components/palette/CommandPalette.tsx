@@ -130,7 +130,7 @@ export function CommandPalette() {
         group: "View",
         icon: <TerminalSquare className="w-3.5 h-3.5" />,
         shortcut: `${modKey()}\``,
-        perform: () => { useChat.getState().newChat(); useUI.getState().toggleRightPanel(); setOpen(false); },
+        perform: () => { const ui = useUI.getState(); ui.setRightPanelTab("terminal"); if (!ui.rightPanelOpen) ui.toggleRightPanel(); setOpen(false); },
       },
       {
         id: "search-files",

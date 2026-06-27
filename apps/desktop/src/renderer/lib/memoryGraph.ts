@@ -434,17 +434,20 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
  * Checks highest-degree nodes first for better UX.
  */
 export function hitTest(nodes: GraphNode[], x: number, y: number): GraphNode | null {
-  // Sort candidates by degree (most connected first) for better visual priority
-  const sorted = [...nodes].sort((a, b) => b.connections.length - a.connections.length);
-  for (const node of sorted) {
+  // Check all nodes; return the smallest matching node (best precision)
+  let best: GraphNode | null = null;
+  let bestRadius = Infinity;
+  for (const node of nodes) {
     const dx = x - node.x;
     const dy = y - node.y;
     const hitRadius = node.size + 4;
-    if (dx * dx + dy * dy < hitRadius * hitRadius) {
-      return node;
+    const distSq = dx * dx + dy * dy;
+    if (distSq < hitRadius * hitRadius && hitRadius < bestRadius) {
+      best = node;
+      bestRadius = hitRadius;
     }
   }
-  return null;
+  return best;
 }
 
 // ──────────────────────────── Statistics ───────────────────────
@@ -593,11 +596,19 @@ export function graphDiameter(nodes: GraphNode[]): number {
   const adj = new Map<string, string[]>();
   for (const node of nodes) adj.set(node.id, node.connections);
 
-  // Sample up to 50 nodes for large graphs
+  // Sample up to 50 nodes for large graphs using Fisher-Yates shuffle
   const sampleSize = Math.min(nodes.length, 50);
-  const sampled = nodes.length <= 50
-    ? nodes
-    : [...nodes].sort(() => Math.random() - 0.5).slice(0, sampleSize);
+  let sampled: GraphNode[];
+  if (nodes.length <= 50) {
+    sampled = nodes;
+  } else {
+    const shuffled = [...nodes];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    sampled = shuffled.slice(0, sampleSize);
+  }
 
   let diameter = 0;
 

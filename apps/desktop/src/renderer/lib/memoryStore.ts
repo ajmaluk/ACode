@@ -309,6 +309,18 @@ export async function getMemoryStats(): Promise<{
 // SECTION 4 — MARKDOWN SYNC (Source of Truth)
 // ============================================================
 
+/** Escape a string for safe inclusion in YAML double-quoted values. */
+function yamlEscape(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/:/g, "\\:")
+    .replace(/#/g, "\\#");
+}
+
 /**
  * Write a memory entry as a Markdown file with YAML frontmatter.
  * This is the source of truth for git tracking.
@@ -326,13 +338,13 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
       `id: "${entry.id}"`,
       `category: "${entry.category}"`,
       `tier: "${entry.tier}"`,
-      `summary: "${entry.summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
-      `tags: [${entry.tags.map((t) => `"${t}"`).join(", ")}]`,
+      `summary: "${yamlEscape(entry.summary)}"`,
+      `tags: [${entry.tags.map((t) => `"${yamlEscape(t)}"`).join(", ")}]`,
       `created_at: ${entry.createdAt}`,
       `updated_at: ${entry.updatedAt}`,
       `stale: ${entry.stale}`,
-      ...(entry.sourceSession ? [`source_session: "${entry.sourceSession}"`] : []),
-      ...(entry.sourceFile ? [`source_file: "${entry.sourceFile.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`] : []),
+      ...(entry.sourceSession ? [`source_session: "${yamlEscape(entry.sourceSession)}"`] : []),
+      ...(entry.sourceFile ? [`source_file: "${yamlEscape(entry.sourceFile)}"`] : []),
       "---",
       "",
       entry.content,
@@ -410,22 +422,42 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
 
   const [, frontmatter, body] = frontmatterMatch;
   const fields: Record<string, string> = {};
+  let currentKey = "";
 
   for (const line of frontmatter.split(/\r?\n/)) {
-    const match = line.match(/^(\w+):\s*(.+)$/);
+    // Handle YAML list items (e.g., "  - item")
+    const listMatch = line.match(/^\s+-\s+(.+)$/);
+    if (listMatch && currentKey) {
+      // Append to existing value as comma-separated
+      const existing = fields[currentKey];
+      fields[currentKey] = existing ? `${existing},${listMatch[1].trim()}` : listMatch[1].trim();
+      continue;
+    }
+
+    const match = line.match(/^(\w+):\s*(.*)$/);
     if (match) {
+      currentKey = match[1];
       let value = match[2].trim();
       // Strip quotes
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
       }
-      // Unescape escaped quotes and backslashes
-      value = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      // Unescape YAML escape sequences
+      value = value
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\:/g, ':')
+        .replace(/\\#/g, '#');
       // Parse arrays
       if (value.startsWith("[") && value.endsWith("]")) {
         value = value.slice(1, -1);
       }
-      fields[match[1]] = value;
+      fields[currentKey] = value;
+    } else {
+      currentKey = "";
     }
   }
 

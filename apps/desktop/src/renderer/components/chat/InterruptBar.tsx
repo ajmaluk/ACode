@@ -33,15 +33,15 @@ export const InterruptBar: React.FC = () => {
   return (
     <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50">
       {!showRedirect ? (
-        <div className="flex items-center gap-2 bg-surface border border-border rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm">
+        <div className="flex items-center gap-2 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm">
           <div className="flex items-center gap-2">
-            <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
-            <span className="text-sm text-muted">Agent is working…</span>
+            <span className="inline-block w-2 h-2 bg-dalam-accent-primary rounded-full animate-pulse" />
+            <span className="text-sm text-dalam-text-secondary">Agent is working…</span>
           </div>
-          <div className="h-4 w-px bg-border" />
+          <div className="h-4 w-px bg-dalam-border-primary" />
           <button
             onClick={() => setShowRedirect(true)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-accent hover:bg-accent/10 rounded transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-dalam-accent-primary hover:bg-dalam-accent-primary/10 rounded transition-colors"
             title="Redirect the agent with a new instruction"
           >
             <CornerDownRight size={12} />
@@ -49,7 +49,7 @@ export const InterruptBar: React.FC = () => {
           </button>
           <button
             onClick={() => abort(activeSessionId)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-red-400 hover:bg-red-500/10 rounded transition-colors"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-dalam-git-deleted hover:bg-dalam-git-deleted/10 rounded transition-colors"
             title="Stop the agent"
           >
             <Square size={10} />
@@ -57,7 +57,7 @@ export const InterruptBar: React.FC = () => {
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-2 bg-surface border border-accent rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm">
+        <div className="flex items-center gap-2 bg-dalam-bg-secondary border border-dalam-accent-primary rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm">
           <input
             ref={inputRef}
             type="text"
@@ -76,7 +76,7 @@ export const InterruptBar: React.FC = () => {
               }
             }}
             placeholder="Type redirect instruction…"
-            className="bg-transparent text-sm outline-none flex-1 min-w-[200px] text-foreground"
+            className="bg-transparent text-sm outline-none flex-1 min-w-[200px] text-dalam-text-primary"
           />
           <button
             onClick={() => {
@@ -87,7 +87,7 @@ export const InterruptBar: React.FC = () => {
                 setShowRedirect(false);
               }
             }}
-            className="px-2 py-1 text-xs bg-accent text-white rounded hover:bg-accent/90 transition-colors"
+            className="px-2 py-1 text-xs bg-dalam-accent-primary text-white rounded hover:bg-dalam-accent-primary/90 transition-colors"
           >
             Send ↵
           </button>

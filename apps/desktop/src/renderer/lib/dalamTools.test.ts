@@ -5,10 +5,11 @@ import { describe, it, expect } from "vitest";
 
 function parseAttributes(tagStr: string): Record<string, string> {
   const attrs: Record<string, string> = {};
-  const regex = /([a-zA-Z0-9_-]+)=["']([^"']*)["']/g;
+  const regex = /([a-zA-Z0-9_-]+)=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g;
   let match;
   while ((match = regex.exec(tagStr)) !== null) {
-    attrs[match[1]] = match[2];
+    const val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : "");
+    attrs[match[1]] = val.replace(/\\(["'])/g, "$1");
   }
   return attrs;
 }
@@ -204,6 +205,12 @@ describe("parseAttributes", () => {
   it("handles multiple attributes", () => {
     const attrs = parseAttributes("a='1' b='2' c='3' d='4' e='5'");
     expect(Object.keys(attrs)).toHaveLength(5);
+  });
+
+  it("handles nested quotes of the opposite type", () => {
+    const attrs = parseAttributes('command="echo \'hello\'" pattern=\'foo "bar"\'');
+    expect(attrs.command).toBe("echo 'hello'");
+    expect(attrs.pattern).toBe('foo "bar"');
   });
 });
 

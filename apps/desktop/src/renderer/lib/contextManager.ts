@@ -78,11 +78,38 @@ export function estimateTokens(text: string): number {
   let count = 0;
   let codeMode = false;
 
+  // Pre-scan for code fence boundaries (line-level detection)
+  const lines = text.split("\n");
+  const fenceLines = new Set<number>();
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trimStart().startsWith("```")) {
+      fenceLines.add(i);
+    }
+  }
+
+  let lineNum = 0;
+  let colNum = 0;
+  // Detect fence on the very first line (line 0) before entering the loop,
+  // because the in-loop check only fires after a newline increments lineNum.
+  if (fenceLines.has(0)) codeMode = !codeMode;
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
 
-    // Detect code blocks (backtick-fenced or common code patterns)
-    if (text.slice(i, i + 3) === "```") codeMode = !codeMode;
+    // Track line boundaries for code fence detection
+    if (code === 10) { // newline
+      lineNum++;
+      colNum = 0;
+      // Toggle codeMode at line boundaries with triple backtick
+      if (fenceLines.has(lineNum)) {
+        codeMode = !codeMode;
+      }
+      count += 1; // newline = 1 token
+      continue;
+    }
+    colNum++;
+
+    // Check for triple backtick at start of a line (already tracked via fenceLines)
+    // Also handle inline backtick pairs for emphasis (not code blocks)
 
     // CJK characters — roughly 1.5 chars per token
     if (code >= 0x2e80 && code <= 0x9fff) {
@@ -90,8 +117,8 @@ export function estimateTokens(text: string): number {
     } else if (code > 0xf900 && code < 0xfaff) {
       count += 0.67;
     }
-    // Whitespace — roughly 1 token per space/newline
-    else if (code === 32 || code === 10 || code === 13 || code === 9) {
+    // Whitespace — roughly 1 token per space/tab
+    else if (code === 32 || code === 9) {
       count += 1;
     }
     // Code identifiers — roughly 3.5 chars per token

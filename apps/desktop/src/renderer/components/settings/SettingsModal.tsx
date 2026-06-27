@@ -1452,13 +1452,15 @@ function CommandsTab() {
       if (e.shiftKey) parts.push(platform() === "mac" ? "⇧" : "Shift");
       const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
       parts.push(key);
-      setCommands((prev) => prev.map((c) => c.id === editing ? { ...c, shortcut: parts.join(platform() === "mac" ? "" : " ") } : c));
+      // Compute updated array BEFORE setting state, so both state and localStorage use the same data
+      const updated = commands.map((c) => c.id === editing ? { ...c, shortcut: parts.join(platform() === "mac" ? "" : " ") } : c);
+      setCommands(updated);
       setEditing(null);
-      localStorage.setItem("dalam.commands.shortcuts", JSON.stringify(commands.map((c) => ({ id: c.id, shortcut: c.shortcut }))));
+      localStorage.setItem("dalam.commands.shortcuts", JSON.stringify(updated.map((c) => ({ id: c.id, shortcut: c.shortcut }))));
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [editing]);
+  }, [editing, commands]);
 
   return (
     <>
