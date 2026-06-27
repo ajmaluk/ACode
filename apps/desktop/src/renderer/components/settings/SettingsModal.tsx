@@ -128,18 +128,18 @@ function GeneralTab() {
   return (
     <>
       <h1 className="text-3xl font-bold text-dalam-text-primary mb-8">General</h1>
-      <div className="flex gap-2 mb-6">
-        {(["Dark", "Light", "System default"] as const).map((label) => {
-          const val = label === "Dark" ? "dark" : label === "Light" ? "light" : "system";
-          const isActive = settings.theme === val;
-          return (
-            <button key={label} onClick={() => update("theme", val)}
-              className={`px-4 py-1.5 rounded-lg text-sm border transition-colors ${isActive ? "bg-dalam-bg-active text-dalam-text-primary border-dalam-border-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary border-dalam-border-primary hover:bg-dalam-bg-hover"}`}>
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <Card title="Theme" description="Choose the appearance theme used by the application UI.">
+        <div className="flex justify-end">
+          <div className="relative">
+            <select className="input-base w-48 appearance-none pr-8" value={settings.theme} onChange={(e) => update("theme", e.target.value as any)}>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="system">System default</option>
+            </select>
+            <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dalam-text-muted pointer-events-none" />
+          </div>
+        </div>
+      </Card>
       <Card title="Language" description="Choose the display language used by the application UI.">
         <div className="flex justify-end">
           <div className="relative">
@@ -150,22 +150,7 @@ function GeneralTab() {
           </div>
         </div>
       </Card>
-      <Card title="Interface zoom" description="Adjust the overall size of text and controls in the current window.">
-        <div className="flex justify-end">
-          <div className="flex rounded-lg border border-dalam-border-primary overflow-hidden">
-            {(["Smaller", "Default", "Larger"] as const).map((label) => {
-              const isActive = (label === "Smaller" && settings.uiZoom < 0.95) || (label === "Default" && settings.uiZoom >= 0.95 && settings.uiZoom <= 1.05) || (label === "Larger" && settings.uiZoom > 1.05);
-              return (
-                <button key={label} className={`px-4 py-1.5 text-sm transition-colors ${isActive ? "bg-dalam-bg-active text-dalam-text-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
-                  onClick={() => update("uiZoom", label === "Smaller" ? 0.9 : label === "Default" ? 1.0 : 1.15)}>
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </Card>
-      <div className="my-6 border-t border-dalam-border-primary" />
+
       <Card title="Inherit system terminal profile" description="When launching the built-in terminal, inherit login shell environment, proxy, Kubernetes variables, and local terminal font when possible.">
         <div className="flex justify-end"><Toggle checked={settings.inheritSystemTerminal} onChange={() => update("inheritSystemTerminal", !settings.inheritSystemTerminal)} label="Inherit system terminal profile" /></div>
       </Card>
@@ -173,6 +158,12 @@ function GeneralTab() {
         <div className="flex items-center gap-3">
           <input className="input-base flex-1" value={terminalFont} placeholder="Leave blank to inherit, e.g. MesloLGS NF, monospace" onChange={(e) => setTerminalFont(e.target.value)} />
           <button className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors" onClick={() => update("terminalFont", terminalFont)}>Save</button>
+        </div>
+      </Card>
+      <Card title="Terminal font size" description="Adjust the default font size used by the built-in terminal.">
+        <div className="flex items-center gap-4">
+          <input type="range" min={10} max={22} value={settings.terminalFontSize || 13} onChange={(e) => update("terminalFontSize", Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
+          <span className="text-sm text-dalam-text-primary w-8 text-right">{settings.terminalFontSize || 13}</span>
         </div>
       </Card>
       <div className="my-6 border-t border-dalam-border-primary" />
@@ -210,21 +201,68 @@ function CodePreviewTab() {
         </div>
       </Card>
       <div className="mt-8">
-        <h3 className="text-sm font-medium text-dalam-text-primary mb-2">Live preview</h3>
+        <h3 className="text-base font-semibold text-dalam-text-primary mb-1">Live preview</h3>
         <p className="text-xs text-dalam-text-muted mb-4">The code viewer on the right automatically switches to the matching theme for the current app mode.</p>
-        <div className="grid grid-cols-2 gap-4">
-          {(["Light", "Dark"] as const).map((mode) => (
-            <div key={mode} className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <div className="text-sm font-medium text-dalam-text-primary">{mode} preview</div>
-                  <div className="text-xs text-dalam-text-muted">{mode === "Light" ? settings.codeThemeLight : settings.codeThemeDark}</div>
+        <div className="flex flex-col gap-4">
+          {(["Light", "Dark"] as const).map((mode) => {
+            const formatThemeName = (theme: string) => {
+              if (theme === "github-light") return "GitHub Light";
+              if (theme === "github-dark") return "GitHub Dark";
+              if (theme === "solarized-light") return "Solarized Light";
+              if (theme === "dalam-dark") return "Dalam Dark";
+              if (theme === "one-dark") return "One Dark";
+              if (theme === "dracula") return "Dracula";
+              return theme;
+            };
+
+            const lightPreviewLines = [
+              <span className="font-mono"><span className="text-[#d73a49]">const</span> <span className="text-[#005cc5]">themePreview</span>: <span className="text-[#6f42c1]">ThemeConfig</span> = &#123;</span>,
+              <span className="font-mono">  surface: <span className="text-[#032f62]">"sidebar"</span>,</span>,
+              <span className="font-mono">  accent: <span className="text-[#032f62]">"#339CFF"</span>,</span>,
+              <span className="font-mono">  contrast: <span className="text-[#005cc5]">45</span>,</span>,
+              <span className="font-mono">&#125;;</span>
+            ];
+
+            const darkPreviewLines = [
+              <span className="font-mono"><span className="text-[#ff7b72]">const</span> <span className="text-[#79c0ff]">themePreview</span>: <span className="text-[#d2a8ff]">ThemeConfig</span> = &#123;</span>,
+              <span className="font-mono">  surface: <span className="text-[#a5d6ff]">"sidebar"</span>,</span>,
+              <span className="font-mono">  accent: <span className="text-[#a5d6ff]">"#339CFF"</span>,</span>,
+              <span className="font-mono">  contrast: <span className="text-[#79c0ff]">45</span>,</span>,
+              <span className="font-mono">&#125;;</span>
+            ];
+
+            const previewLines = mode === "Light" ? lightPreviewLines : darkPreviewLines;
+            const bgClass = mode === "Light" ? "bg-white text-[#24292e] border-[#e1e4e8]" : "bg-[#0d1117] text-[#c9d1d9] border-[#30363d]";
+
+            return (
+              <div key={mode} className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl p-4 flex flex-col">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <div className="text-sm font-semibold text-dalam-text-primary">{mode} preview</div>
+                    <div className="text-xs text-dalam-text-muted mt-0.5">{formatThemeName(mode === "Light" ? settings.codeThemeLight : settings.codeThemeDark)}</div>
+                  </div>
+                  <span className={`px-2.5 py-1 text-xs font-medium rounded-md ${mode === "Dark" ? "bg-dalam-bg-active text-dalam-text-primary" : "bg-dalam-bg-tertiary text-dalam-text-muted border border-dalam-border-primary"}`}>{mode === "Dark" ? "Active" : "Light"}</span>
                 </div>
-                <span className={`px-2 py-0.5 text-[10px] rounded ${mode === "Dark" ? "bg-dalam-accent-primary text-white" : "bg-dalam-bg-tertiary text-dalam-text-secondary border border-dalam-border-primary"}`}>{mode === "Dark" ? "Active" : mode}</span>
+                <pre 
+                  className={`text-mono leading-relaxed rounded-lg p-4 overflow-x-auto flex-1 border ${bgClass} ${settings.wordWrap ? "whitespace-pre-wrap break-all" : "whitespace-pre"}`}
+                  style={{ fontSize: `${settings.codeFontSize}px` }}
+                >
+                  <code className="block">
+                    {previewLines.map((line, idx) => (
+                      <div key={idx} className="flex">
+                        {settings.showLineNumbers && (
+                          <span className="w-8 select-none text-dalam-text-muted text-right pr-3 font-mono opacity-50">
+                            {idx + 1}
+                          </span>
+                        )}
+                        <span>{line}</span>
+                      </div>
+                    ))}
+                  </code>
+                </pre>
               </div>
-              <pre className="text-mono text-xs leading-relaxed text-dalam-text-primary bg-dalam-bg-primary rounded-lg p-3 overflow-x-auto"><code>{`const themePreview: ThemeConfig = {\n  surface: "sidebar",\n  accent: "#339CFF",\n  contrast: 45,\n};`}</code></pre>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </>
@@ -1460,17 +1498,12 @@ function CommandsTab() {
 
 function IndexingTab() {
   const { settings, update } = useSettings();
-  const [indexingEnabled, setIndexingEnabled] = useState(settings.indexingEnabled ?? true);
-  const [autoIndex, setAutoIndex] = useState(settings.autoIndex ?? true);
-  const [maxFileSize, setMaxFileSize] = useState(settings.maxFileSize ?? 2);
   const [excludedPatterns, setExcludedPatterns] = useState(settings.excludedPatterns ?? "node_modules\n.git\ndist\nbuild\n*.min.js\n.DS_Store");
 
-  const saveIndexing = () => {
-    void update("indexingEnabled", indexingEnabled);
-    void update("autoIndex", autoIndex);
-    void update("maxFileSize", maxFileSize);
-    void update("excludedPatterns", excludedPatterns);
-  };
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setExcludedPatterns(settings.excludedPatterns ?? "node_modules\n.git\ndist\nbuild\n*.min.js\n.DS_Store");
+  }, [settings.excludedPatterns]);
 
   return (
     <>
@@ -1479,19 +1512,19 @@ function IndexingTab() {
       <Card title="Code indexing" description="Build a searchable index of your workspace so the agent can find files and symbols quickly.">
         <div className="flex items-center justify-between">
           <span className="text-sm text-dalam-text-secondary">Enable indexing</span>
-          <Toggle checked={indexingEnabled} onChange={() => { const next = !indexingEnabled; setIndexingEnabled(next); void update("indexingEnabled", next); }} label="Enable indexing" />
+          <Toggle checked={settings.indexingEnabled ?? true} onChange={() => update("indexingEnabled", !(settings.indexingEnabled ?? true))} label="Enable indexing" />
         </div>
       </Card>
       <Card title="Auto reindex" description="Automatically reindex files when they change.">
         <div className="flex items-center justify-between">
           <span className="text-sm text-dalam-text-secondary">Watch for file changes</span>
-          <Toggle checked={autoIndex} onChange={() => { const next = !autoIndex; setAutoIndex(next); void update("autoIndex", next); }} label="Watch for file changes and auto reindex" />
+          <Toggle checked={settings.autoIndex ?? true} onChange={() => update("autoIndex", !(settings.autoIndex ?? true))} label="Watch for file changes and auto reindex" />
         </div>
       </Card>
       <Card title="Max file size" description="Skip files larger than this size when indexing (in MB).">
         <div className="flex items-center gap-4">
-          <input type="range" min={1} max={50} value={maxFileSize} onChange={(e) => setMaxFileSize(Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
-          <span className="text-sm text-dalam-text-primary w-12 text-right">{maxFileSize} MB</span>
+          <input type="range" min={1} max={50} value={settings.maxFileSize ?? 2} onChange={(e) => update("maxFileSize", Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
+          <span className="text-sm text-dalam-text-primary w-12 text-right">{settings.maxFileSize ?? 2} MB</span>
         </div>
       </Card>
       <Card title="Excluded patterns" description="Glob patterns to skip during indexing, one per line.">
@@ -1500,7 +1533,7 @@ function IndexingTab() {
           value={excludedPatterns}
           onChange={(e) => setExcludedPatterns(e.target.value)}
         />
-        <button className="mt-3 px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors" onClick={saveIndexing}>
+        <button className="mt-3 px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors" onClick={() => update("excludedPatterns", excludedPatterns)}>
           Save patterns
         </button>
       </Card>

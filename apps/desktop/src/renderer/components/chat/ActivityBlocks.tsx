@@ -463,25 +463,23 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
 
   // list_dir: parse JSON array of { name, path, type }
   if (toolName === "list_dir" && result.startsWith("[")) {
-    try {
-      const items: { name: string; path: string; type: string }[] = JSON.parse(result);
+    let items: { name: string; path: string; type: string }[] | null = null;
+    try { items = JSON.parse(result); } catch { /* fall through */ }
+    if (items) {
       const dirs = items.filter((i) => i.type === "directory").sort((a, b) => a.name.localeCompare(b.name));
       const files = items.filter((i) => i.type !== "directory").sort((a, b) => a.name.localeCompare(b.name));
       return (
         <div className="space-y-0.5">
-          {dirs.map((item) => {
-            const Icon = Folder;
-            return (
+          {dirs.map((item) => (
               <button
                 key={item.path}
                 className="flex items-center gap-1.5 px-2 py-0.5 rounded text-left hover:bg-dalam-bg-hover/50 transition-colors w-full group"
                 onClick={(e) => { e.stopPropagation(); openFile(item.path); }}
               >
-                <Icon className="w-3 h-3 text-dalam-accent-primary flex-shrink-0" />
+                <Folder className="w-3 h-3 text-dalam-accent-primary flex-shrink-0" />
                 <span className="text-dalam-text-primary text-[11px] group-hover:text-dalam-accent-primary transition-colors">{item.name}/</span>
               </button>
-            );
-          })}
+          ))}
           {files.map((item) => {
             const Icon = getFileIconForName(item.name);
             return (
@@ -498,7 +496,7 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
           <div className="text-[10px] text-dalam-text-muted pt-0.5">{dirs.length} {dirs.length === 1 ? "folder" : "folders"}, {files.length} {files.length === 1 ? "file" : "files"}</div>
         </div>
       );
-    } catch { /* fall through to raw display */ }
+    }
   }
 
   // grep_file / search_files: parse "lineNum: text" or "file:lineNum: text"

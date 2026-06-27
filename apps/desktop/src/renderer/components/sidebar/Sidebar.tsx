@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactDOM from "react-dom";
 import {
   useWorkspace,
   useSettingsView,
@@ -31,6 +32,7 @@ import {
 } from "lucide-react";
 import type { ChatSessionSummary, ChatVersion } from "@dalam/shared-types";
 import { FileTree } from "./FileTree";
+import { Tooltip } from "../ui/Tooltip";
 
 function formatRelative(ts: number, now: number): string {
   const diff = Math.max(0, now - ts);
@@ -38,39 +40,6 @@ function formatRelative(ts: number, now: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
   return `${Math.floor(diff / 86_400_000)}d`;
-}
-
-interface TooltipProps {
-  content: string;
-  children: React.ReactNode;
-  side?: "top" | "bottom" | "left" | "right";
-}
-
-function Tooltip({ content, children, side = "top" }: TooltipProps) {
-  const [visible, setVisible] = useState(false);
-  const positionClasses = {
-    top: "bottom-full left-1/2 -translate-x-1/2 mb-2",
-    bottom: "top-full left-1/2 -translate-x-1/2 mt-2",
-    left: "right-full top-1/2 -translate-y-1/2 mr-2",
-    right: "left-full top-1/2 -translate-y-1/2 ml-2",
-  };
-
-  return (
-    <div
-      className="relative inline-flex"
-      onMouseEnter={() => setVisible(true)}
-      onMouseLeave={() => setVisible(false)}
-    >
-      {children}
-      {visible && (
-        <div
-          className={`absolute z-50 px-2 py-1 text-[11px] font-medium text-dalam-text-primary bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md shadow-lg whitespace-nowrap pointer-events-none animate-in fade-in-0 ${positionClasses[side]}`}
-        >
-          {content}
-        </div>
-      )}
-    </div>
-  );
 }
 
 interface SessionRowProps {
@@ -86,18 +55,25 @@ interface SessionRowProps {
 function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRename, onShowVersions }: SessionRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!menuOpen) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    if (!menuPosition) return;
+    const handleClose = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-session-menu]")) {
+        setMenuPosition(null);
+      }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [menuOpen]);
+    document.addEventListener("mousedown", handleClose);
+    document.addEventListener("scroll", handleClose, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClose);
+      document.removeEventListener("scroll", handleClose, true);
+    };
+  }, [menuPosition]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -117,7 +93,7 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
       className={`group relative w-full flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded transition-colors cursor-pointer ${
         isActive ? "bg-dalam-bg-active" : "hover:bg-dalam-bg-hover"
       }`}
-      onClick={() => { if (!editing) { onSelect(); setMenuOpen(false); } }}
+      onClick={() => { if (!editing) { onSelect(); setMenuPosition(null); } }}
       title={session.preview ?? session.title}
     >
       {editing ? (
@@ -136,32 +112,50 @@ function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRena
       ) : (
         <>
           <span className="flex-1 min-w-0 truncate text-xs text-dalam-text-secondary">
-            {session.title}
+             {session.title}
           </span>
           <span className="text-[10px] text-dalam-text-muted flex-shrink-0 tabular-nums mr-1">
             {formatRelative(session.lastActivityAt, now)}
           </span>
-          <div className="relative" ref={menuRef}>
+          <div className="relative" ref={menuRef} data-session-menu>
             <button
               className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-dalam-bg-hover transition-all"
-              onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (menuPosition) {
+                  setMenuPosition(null);
+                } else {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setMenuPosition({
+                    top: rect.bottom + 4,
+                    left: rect.right - 160
+                  });
+                }
+              }}
             >
               <MoreVertical className="w-3 h-3 text-dalam-text-muted" />
             </button>
-            {menuOpen && (
-              <div className="absolute right-0 top-full mt-1 w-40 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1">
-                <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setEditing(true); setMenuOpen(false); }}>
-                  <Pencil className="w-3 h-3" /> Rename
-                </button>
-                <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onShowVersions(); setMenuOpen(false); }}>
-                  <History className="w-3 h-3" /> Versions
-                </button>
-                <div className="border-t border-dalam-border-primary my-1" />
-                <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onRemove(); setMenuOpen(false); }}>
-                  <Trash2 className="w-3 h-3" /> Delete
-                </button>
-              </div>
-            )}
+            {menuPosition && typeof document !== "undefined" &&
+              ReactDOM.createPortal(
+                <div
+                  className="fixed bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1 w-40"
+                  style={{ top: menuPosition.top, left: menuPosition.left }}
+                  data-session-menu
+                >
+                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setEditing(true); setMenuPosition(null); }}>
+                    <Pencil className="w-3 h-3" /> Rename
+                  </button>
+                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onShowVersions(); setMenuPosition(null); }}>
+                    <History className="w-3 h-3" /> Versions
+                  </button>
+                  <div className="border-t border-dalam-border-primary my-1" />
+                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onRemove(); setMenuPosition(null); }}>
+                    <Trash2 className="w-3 h-3" /> Delete
+                  </button>
+                </div>,
+                document.body
+              )
+            }
           </div>
         </>
       )}
@@ -179,8 +173,7 @@ export function Sidebar() {
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
   const [fileTreeView, setFileTreeView] = useState<string | null>(null);
-  const [menuOpenWorkspace, setMenuOpenWorkspace] = useState<string | null>(null);
-  const menuWorkspaceRef = useRef<HTMLDivElement>(null);
+  const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{ id: string; top: number; left: number } | null>(null);
 
   const [, force] = useState(0);
   useEffect(() => {
@@ -189,13 +182,20 @@ export function Sidebar() {
   }, []);
 
   useEffect(() => {
-    if (!menuOpenWorkspace) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuWorkspaceRef.current && !menuWorkspaceRef.current.contains(e.target as Node)) setMenuOpenWorkspace(null);
+    if (!workspaceMenuPosition) return;
+    const handleClose = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-workspace-menu]")) {
+        setWorkspaceMenuPosition(null);
+      }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [menuOpenWorkspace]);
+    document.addEventListener("mousedown", handleClose);
+    document.addEventListener("scroll", handleClose, true);
+    return () => {
+      document.removeEventListener("mousedown", handleClose);
+      document.removeEventListener("scroll", handleClose, true);
+    };
+  }, [workspaceMenuPosition]);
 
   const sessionsByWorkspace = useMemo(() => {
     const map = new Map<string, ChatSessionSummary[]>();
@@ -270,7 +270,7 @@ export function Sidebar() {
 
   if (fileTreeView && activeFileWorkspace) {
     return (
-      <aside className="h-full flex flex-col bg-dalam-bg-secondary border-r border-dalam-border-primary">
+      <aside className="h-full flex flex-col bg-dalam-bg-secondary">
         <div className="px-2 py-1.5 flex items-center gap-1.5 border-b border-dalam-border-primary flex-shrink-0">
           <button
             className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
@@ -288,7 +288,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="h-full flex flex-col bg-dalam-bg-secondary border-r border-dalam-border-primary">
+    <aside className="h-full flex flex-col bg-dalam-bg-secondary">
       {/* Primary actions */}
       <div className="px-3 py-2 flex flex-col gap-0.5 border-b border-dalam-border-primary flex-shrink-0">
         <button
@@ -361,50 +361,69 @@ export function Sidebar() {
                   ) : (
                     <Folder className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                   )}
-                  <span className="truncate text-xs text-dalam-text-primary font-medium">{ws.name}</span>
+                  <span className="truncate text-[13px] text-dalam-text-primary font-medium">{ws.name}</span>
                 </button>
 
                 {/* Workspace action icons - visible on hover, positioned absolute */}
-                <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5">
-                  <Tooltip content="Files" side="top">
+                <div className="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-1.5">
+                  <Tooltip content="Show files" side="top">
                     <button
-                      className="p-0.5 rounded hover:bg-dalam-bg-active transition-colors"
-                      onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
+                       className="p-1 rounded hover:bg-dalam-bg-active transition-colors"
+                       onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
                     >
-                      <List className="w-3 h-3 text-dalam-text-muted" />
+                      <List className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
                   <Tooltip content="New task" side="top">
                     <button
-                      className="p-0.5 rounded hover:bg-dalam-bg-active transition-colors"
+                      className="p-1 rounded hover:bg-dalam-bg-active transition-colors"
                       onClick={() => handleNewTask(ws.id)}
                     >
-                      <MessageSquarePlus className="w-3 h-3 text-dalam-text-muted" />
+                      <MessageSquarePlus className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                  <div className="relative" ref={menuWorkspaceRef}>
+                  <div className="relative" data-workspace-menu>
                     <Tooltip content="More" side="top">
                       <button
-                        className="p-0.5 rounded hover:bg-dalam-bg-active transition-colors"
-                        onClick={(e) => { e.stopPropagation(); setMenuOpenWorkspace(menuOpenWorkspace === ws.id ? null : ws.id); }}
+                        className="p-1 rounded hover:bg-dalam-bg-active transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (workspaceMenuPosition && workspaceMenuPosition.id === ws.id) {
+                            setWorkspaceMenuPosition(null);
+                          } else {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setWorkspaceMenuPosition({
+                              id: ws.id,
+                              top: rect.bottom + 4,
+                              left: rect.right - 144
+                            });
+                          }
+                        }}
                       >
-                        <MoreVertical className="w-3 h-3 text-dalam-text-muted" />
+                        <MoreVertical className="w-3.5 h-3.5 text-dalam-text-muted" />
                       </button>
                     </Tooltip>
-                    {menuOpenWorkspace === ws.id && (
-                      <div className="absolute right-0 top-full mt-1 w-36 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1">
-                        <button
-                          className="w-full text-left px-2.5 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeWorkspace(ws.id);
-                            setMenuOpenWorkspace(null);
-                          }}
+                    {workspaceMenuPosition && workspaceMenuPosition.id === ws.id && typeof document !== "undefined" &&
+                      ReactDOM.createPortal(
+                        <div
+                          className="fixed bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1 w-36"
+                          style={{ top: workspaceMenuPosition.top, left: workspaceMenuPosition.left }}
+                          data-workspace-menu
                         >
-                          <Trash2 className="w-3 h-3" /> Remove
-                        </button>
-                      </div>
-                    )}
+                          <button
+                            className="w-full text-left px-2.5 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeWorkspace(ws.id);
+                              setWorkspaceMenuPosition(null);
+                            }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Remove
+                          </button>
+                        </div>,
+                        document.body
+                      )
+                    }
                   </div>
                 </div>
               </div>
@@ -458,7 +477,7 @@ export function Sidebar() {
 
       <div className="p-3 flex-shrink-0">
         <button
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary bg-dalam-bg-tertiary/50 shadow-sm hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
+          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
           onClick={() => openSettings()}
           title={`Open Settings (${shortcut(",")})`}
         >

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents, useTerminal } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/Toaster";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { modKey } from "@/lib/platform";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import {
@@ -91,43 +92,39 @@ export function TopNav() {
   };
 
   return (
-    <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary flex-shrink-0 select-none">
+    <div className="h-9 flex items-center bg-dalam-bg-secondary flex-shrink-0 select-none">
       {/* Left section: sidebar toggle, back, forward, new task */}
       <div className="flex items-center gap-0.5 px-1.5">
-        <button
-          className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
-            sidebarOpen
-              ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
-              : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
-          }`}
-          title={sidebarOpen ? `Hide sidebar (${mod}B)` : `Show sidebar (${mod}B)`}
-          onClick={toggleSidebar}
-        >
-          <PanelLeft className="w-3.5 h-3.5" />
-        </button>
-        <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title={`Back (${mod}[)`}
-          onClick={() => goBackChat()}
-          disabled={!canGoBack}
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title={`Forward (${mod}])`}
-          onClick={() => goForwardChat()}
-          disabled={!canGoForward}
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-        <button
-          className="w-7 h-7 flex items-center justify-center rounded-full border border-dalam-border-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
-          title={`New task (${mod}N)`}
-          onClick={() => newChat()}
-        >
-          <Plus className="w-4 h-4" />
-        </button>
+        <Tooltip content={sidebarOpen ? `Hide sidebar (${mod}B)` : `Show sidebar (${mod}B)`} side="bottom">
+          <button
+            className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+              sidebarOpen
+                ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+                : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
+            }`}
+            onClick={toggleSidebar}
+          >
+            <PanelLeft className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
+        <Tooltip content={`Back (${mod}[)`} side="bottom">
+          <button
+            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            onClick={() => goBackChat()}
+            disabled={!canGoBack}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+        </Tooltip>
+        <Tooltip content={`Forward (${mod}])`} side="bottom">
+          <button
+            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            onClick={() => goForwardChat()}
+            disabled={!canGoForward}
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </Tooltip>
       </div>
 
       {/* Center: working directory (only when a workspace is selected) */}
@@ -135,20 +132,21 @@ export function TopNav() {
         {activeWorkspace ? (
           <div className="flex items-center gap-2">
             <div className="relative" ref={filePickerRef}>
-              <button
-                onClick={() => {
-                  // Only show the "open in" dropdown when in an active chat.
-                  if (inChat) setFilePickerOpen((v) => !v);
-                  else void openWorkspace();
-                }}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors max-w-[400px]"
-                title={inChat ? "Open working directory in…" : "Open a different folder"}
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
-                <span className="font-medium truncate">{activeWorkspace.name}</span>
-                <span className="text-dalam-text-muted truncate text-[10px]">· {activeWorkspace.path}</span>
-                {inChat && <ChevronRight className="w-3 h-3 text-dalam-text-muted rotate-90 flex-shrink-0" />}
-              </button>
+              <Tooltip content={inChat ? "Open working directory in…" : "Open a different folder"} side="bottom">
+                <button
+                  onClick={() => {
+                    // Only show the "open in" dropdown when in an active chat.
+                    if (inChat) setFilePickerOpen((v) => !v);
+                    else void openWorkspace();
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors max-w-[400px]"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
+                  <span className="font-medium truncate">{activeWorkspace.name}</span>
+                  <span className="text-dalam-text-muted truncate text-[10px]">· {activeWorkspace.path}</span>
+                  {inChat && <ChevronRight className="w-3 h-3 text-dalam-text-muted rotate-90 flex-shrink-0" />}
+                </button>
+              </Tooltip>
 
             {filePickerOpen && (
               <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 w-60 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
@@ -203,77 +201,73 @@ export function TopNav() {
             )}
           </div>
         ) : (
-          <button
-            onClick={() => void openWorkspace()}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-            title="Open a folder to start working"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-amber-400/80" />
-            <span>Open a folder to begin</span>
-          </button>
+          <Tooltip content="Open a folder to start working" side="bottom">
+            <button
+              onClick={() => void openWorkspace()}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-amber-400/80" />
+              <span>Open a folder to begin</span>
+            </button>
+          </Tooltip>
         )}
       </div>
 
       {/* Right section: agent, theme, terminal, settings, right panel toggle */}
       <div className="flex items-center gap-0.5 px-1.5">
-        {/* Agent indicator */}
-        <button
-          onClick={() => useSettingsView.getState().open("agents")}
-          className="flex items-center gap-1.5 px-2 h-7 text-xs text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-md border border-dalam-border-primary transition-colors"
-          title="Active agent"
-        >
-          <Zap className={`w-3.5 h-3.5 ${AGENT_META[activeAgentName]?.color || "text-amber-400"}`} />
-          <span>{AGENT_META[activeAgentName]?.label || "Build"}</span>
-        </button>
 
         {/* Theme switcher */}
-        <button
-          className="btn-icon"
-          aria-label="Toggle theme"
-          title={`Theme: ${settings.theme}`}
-          onClick={() => {
-            const next = settings.theme === "dark" ? "light" : settings.theme === "light" ? "system" : "dark";
-            void updateSetting("theme", next);
-          }}
-        >
-          {settings.theme === "dark" ? <Moon className="w-4 h-4" /> :
-           settings.theme === "light" ? <Sun className="w-4 h-4" /> :
-           <Monitor className="w-4 h-4" />}
-        </button>
-
-        {session && session.workspacePath && (
+        <Tooltip content={`Theme: ${settings.theme}`} side="bottom">
           <button
-            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-            title="Open terminal"
+            className="btn-icon"
+            aria-label="Toggle theme"
             onClick={() => {
-              if (session.workspacePath) {
-                useTerminal.getState().ensureTabForCwd(session.workspacePath);
-              }
-              useUI.getState().setRightPanelTab("terminal");
-              useUI.getState().setRightPanelOpen(true);
+              const next = settings.theme === "dark" ? "light" : settings.theme === "light" ? "system" : "dark";
+              void updateSetting("theme", next);
             }}
           >
-            <TerminalSquare className="w-3.5 h-3.5" />
+            {settings.theme === "dark" ? <Moon className="w-4 h-4" /> :
+             settings.theme === "light" ? <Sun className="w-4 h-4" /> :
+             <Monitor className="w-4 h-4" />}
           </button>
+        </Tooltip>
+
+        {session && session.workspacePath && (
+          <Tooltip content="Open terminal" side="bottom">
+            <button
+              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+              onClick={() => {
+                if (session.workspacePath) {
+                  useTerminal.getState().ensureTabForCwd(session.workspacePath);
+                }
+                useUI.getState().setRightPanelTab("terminal");
+                useUI.getState().setRightPanelOpen(true);
+              }}
+            >
+              <TerminalSquare className="w-3.5 h-3.5" />
+            </button>
+          </Tooltip>
         )}
-        <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
-          title={`Settings (${mod},)`}
-          onClick={() => openSettings()}
-        >
-          <Settings className="w-4 h-4" />
-        </button>
-        <button
-          className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
-            rightPanelOpen
-              ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
-              : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
-          }`}
-          title={rightPanelOpen ? `Hide right panel (${mod}\\)` : `Show right panel (${mod}\\)`}
-          onClick={toggleRightPanel}
-        >
-          <PanelRight className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip content={`Settings (${mod},)`} side="bottom">
+          <button
+            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+            onClick={() => openSettings()}
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </Tooltip>
+        <Tooltip content={rightPanelOpen ? `Hide right panel (${mod}\\)` : `Show right panel (${mod}\\)`} side="bottom">
+          <button
+            className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+              rightPanelOpen
+                ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+                : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
+            }`}
+            onClick={toggleRightPanel}
+          >
+            <PanelRight className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
       </div>
     </div>
   );

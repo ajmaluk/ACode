@@ -540,7 +540,25 @@ const dalamAPI: DalamAPI = {
             return known.includes(lower) ? lower : (isWindows ? "powershell" : "bash");
           };
           const shellCmd = title ? extractShell(title) : (isWindows ? "powershell" : "bash");
-          const command = Command.create(shellCmd, [], { cwd: cwd ?? undefined });
+
+          const currentSettings = getStoredSettings();
+          const args: string[] = [];
+          if (currentSettings.inheritSystemTerminal && (shellCmd === "zsh" || shellCmd === "bash")) {
+            args.push("-l");
+          }
+
+          const env: Record<string, string> = {};
+          if (currentSettings.httpProxy) {
+            env.HTTP_PROXY = currentSettings.httpProxy;
+            env.HTTPS_PROXY = currentSettings.httpProxy;
+            env.http_proxy = currentSettings.httpProxy;
+            env.https_proxy = currentSettings.httpProxy;
+          }
+
+          const command = Command.create(shellCmd, args, {
+            cwd: cwd ?? undefined,
+            env: Object.keys(env).length > 0 ? env : undefined
+          });
           const cbs = new Set<(data: string) => void>();
           listeners.set(id, cbs);
 

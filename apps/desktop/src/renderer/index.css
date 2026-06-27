@@ -13,9 +13,9 @@
 :root,
 [data-theme="dark"] {
   /* Surfaces (soft gray — matching Z Code aesthetic) */
-  --dalam-bg-primary: #1e1e1e;
-  --dalam-bg-secondary: #252526;
-  --dalam-bg-tertiary: #2d2d2d;
+  --dalam-bg-primary:   #1E1E1E;
+  --dalam-bg-secondary: #3C3C3C;
+  --dalam-bg-tertiary:  #4A4A4A;
   --dalam-bg-hover: #383838;
   --dalam-bg-active: #444444;
   --dalam-bg-overlay: rgba(30, 30, 30, 0.88);

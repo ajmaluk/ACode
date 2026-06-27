@@ -1001,7 +1001,7 @@ async function _doSaveWorkspaceData() {
       .map(({ status: _status, tools: _tools, error: _error, ...rest }) => ({
         ...rest,
         // Preserve current connection status instead of forcing disconnected
-        status: status || "disconnected",
+        status: _status || "disconnected",
       }));
 
     // Read existing config first to preserve alwaysAllowed and other fields
@@ -2548,7 +2548,7 @@ export const useTerminal = create<TerminalState>((set, get) => ({
       const remaining = s.tabs.filter((t) => t.id !== id);
       const newActive =
         s.activeTabId === id ? remaining[0]?.id ?? null : s.activeTabId;
-      const { [id]: _, ...rest } = s.output;
+      const { [id]: _removed, ...rest } = s.output;
       return { tabs: remaining, activeTabId: newActive, output: rest };
     });
   },
@@ -3204,7 +3204,7 @@ function normalizeBrowserUrl(input: string): string | null {
   return "https://www.google.com/search?q=" + encodeURIComponent(raw);
 }
 
-export const useUI = create<UIState>((set, get) => ({
+export const useUI = create<UIState>((set, _get) => ({
   sidebarOpen: true,
   rightPanelOpen: false,
   browserTabs: [],

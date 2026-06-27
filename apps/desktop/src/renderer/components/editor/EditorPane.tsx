@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
-import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, getPrimaryAgent, type ModelProvider } from "@/store/useAppStore";
+import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, type ModelProvider } from "@/store/useAppStore";
 import type { PrimaryAgentName, FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
@@ -8,12 +8,13 @@ import { TopNav } from "@/components/editor/TopNav";
 import {
   X, FileCode, FilePlus, Circle, MoreHorizontal, Columns, ArrowUp,
   ChevronDown, ChevronUp, ChevronRight, Shield, Loader2, Sparkles,
-  FileText, GitBranch, Clock, Terminal, Search,
+  FileText, GitBranch, Terminal, Search,
   FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy, Code2,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toaster";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, ReadBlock, ExploreBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
+import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
 import { modKey } from "@/lib/platform";
@@ -307,7 +308,6 @@ export function EditorPane() {
   const { openTabs, activeFilePath, setActiveFile, closeTab, updateTabContent, markSaved, fileTree, openFile } = useWorkspace();
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath) ?? null;
-  const mod = modKey();
 
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
@@ -487,9 +487,8 @@ function ChatView() {
   const { sendMessage, isStreaming, messages, streamingContent, thinkingContent, selectedModelId, setSelectedModel, pendingToolCalls, resolveToolApproval, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment, pendingActivities, session } = useChat();
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
-  const { activeAgentName, setActiveAgent, agents } = useAgents();
+  const { activeAgentName, setActiveAgent } = useAgents();
   const toast = useToast();
-  const activeAgent = getPrimaryAgent(activeAgentName);
   const agentInfo = AGENT_DISPLAY[activeAgentName];
   const mod = modKey();
   const AgentIcon = agentInfo.icon;
@@ -511,8 +510,24 @@ function ChatView() {
   const providerHoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showFollowupAgentDropdown, setShowFollowupAgentDropdown] = useState(false);
   const [showFollowupModelDropdown, setShowFollowupModelDropdown] = useState(false);
-  const [inputExpanded, setInputExpanded] = useState(false);
   const [timestamp] = useState(() => Date.now());
+
+  // Auto-resize the textareas dynamically based on scrollHeight
+  useEffect(() => {
+    const mainTextarea = mainTextareaRef.current;
+    if (mainTextarea) {
+      mainTextarea.style.height = "auto";
+      mainTextarea.style.height = `${Math.min(mainTextarea.scrollHeight, 320)}px`;
+    }
+  }, [value]);
+
+  useEffect(() => {
+    const followupTextarea = followupTextareaRef.current;
+    if (followupTextarea) {
+      followupTextarea.style.height = "auto";
+      followupTextarea.style.height = `${Math.min(followupTextarea.scrollHeight, 320)}px`;
+    }
+  }, [value]);
 
   // Cleanup provider hover timeout on unmount
   useEffect(() => {
@@ -1039,7 +1054,7 @@ Add your project's common commands here so Dalam knows how to build:
                     </div>
                   )}
                 </div>
-                <div className={`px-4 py-2.5 relative ${inputExpanded ? "min-h-[200px]" : ""}`}>
+                <div className="px-4 py-2.5 relative">
                   {pendingAttachments.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {pendingAttachments.map((att) => (
@@ -1063,7 +1078,7 @@ Add your project's common commands here so Dalam knows how to build:
                   )}
                   <textarea
                     ref={mainTextareaRef}
-                    className={`w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none leading-relaxed overflow-hidden transition-all ${inputExpanded ? "min-h-[160px]" : "min-h-[28px]"}`}
+                    className="w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none leading-relaxed overflow-y-auto min-h-[28px] max-h-80"
                     placeholder={
                       activeAgentName === "plan"
                         ? "Describe a task to plan. The agent will explore the codebase, produce a plan, and ask you to approve before executing."
@@ -1074,7 +1089,7 @@ Add your project's common commands here so Dalam knows how to build:
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    rows={inputExpanded ? 8 : 1}
+                    rows={1}
                     disabled={isStreaming}
                   />
                   <PromptAutocomplete
@@ -1085,27 +1100,20 @@ Add your project's common commands here so Dalam knows how to build:
                     chatSessions={chatSessions}
                     keyHandlerRef={mainAutocompleteKey}
                   />
-                  {/* Expand/Collapse button */}
-                  <button
-                    className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-                    onClick={() => setInputExpanded((v) => !v)}
-                    title={inputExpanded ? "Collapse input" : "Expand input"}
-                  >
-                    {inputExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-                  </button>
                 </div>
                 <div className="flex items-center justify-between px-4 pb-2.5">
                   <div className="flex items-center gap-2">
                     <AttachFileButton />
                     <div className="relative" ref={agentRef}>
-                      <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-dalam-bg-hover rounded-md transition-colors ${agentInfo.color}`}
-                        onClick={() => { setShowAgentDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowModelDropdown(false); }}
-                        title={`Primary agent: ${agentInfo.label}`}
-                      >
-                        <AgentIcon className="w-3.5 h-3.5" />
-                        <span>{agentInfo.label}</span>
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
+                      <Tooltip content={`Primary agent: ${agentInfo.label}`} side="top">
+                        <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-dalam-bg-hover rounded-md transition-colors ${agentInfo.color}`}
+                          onClick={() => { setShowAgentDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowModelDropdown(false); }}
+                        >
+                          <AgentIcon className="w-3.5 h-3.5" />
+                          <span>{agentInfo.label}</span>
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </Tooltip>
                       {showAgentDropdown && (
                         <div className="absolute bottom-full left-0 mb-1 w-80 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
                           <div className="px-3 py-2 border-b border-dalam-border-primary">
@@ -1146,12 +1154,14 @@ Add your project's common commands here so Dalam knows how to build:
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="relative" ref={modelRef}>
-                      <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
-                        onClick={() => { setShowModelDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowAgentDropdown(false); }}>
-                        <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
-                        {currentModel?.model.name || (selectedModelId || "Select model")}
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
+                      <Tooltip content={currentModel?.model.name || (selectedModelId || "Select model")} side="top">
+                        <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
+                          onClick={() => { setShowModelDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowAgentDropdown(false); }}>
+                          <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
+                          {currentModel?.model.name || (selectedModelId || "Select model")}
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </Tooltip>
                       {showModelDropdown && (
                         <div className="absolute bottom-full right-0 mb-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 min-w-[220px]" data-dropdown-body>
                           <div className="max-h-80 overflow-y-auto">
@@ -1198,14 +1208,15 @@ Add your project's common commands here so Dalam knows how to build:
                         />
                       )}
                     </div>
-                    <button
-                      className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
-                      disabled={!value.trim() || isStreaming || !workspace || (!selectedModelId && !settings.selectedModel)}
-                      onClick={handleSubmit}
-                      title={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : isStreaming ? "Streaming…" : "Send"}
-                    >
-                      {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
-                    </button>
+                    <Tooltip content={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : isStreaming ? "Streaming…" : "Send"} side="top">
+                      <button
+                        className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                        disabled={!value.trim() || isStreaming || !workspace || (!selectedModelId && !settings.selectedModel)}
+                        onClick={handleSubmit}
+                      >
+                        {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
               </div>
@@ -1320,8 +1331,8 @@ Add your project's common commands here so Dalam knows how to build:
       {/* Only show follow-up input when there are actual messages */}
       {hasMessages && (
         <div className="border-t border-dalam-border-primary p-3 flex-shrink-0 bg-dalam-bg-primary">
-          <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
-            <div className={`px-4 py-3 relative ${inputExpanded ? "min-h-[200px]" : ""}`}>
+          <div className="max-w-2xl w-full mx-auto bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
+            <div className="px-4 py-3 relative">
               {pendingAttachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {pendingAttachments.map((att) => (
@@ -1344,9 +1355,9 @@ Add your project's common commands here so Dalam knows how to build:
                 </div>
               )}
               <textarea ref={followupTextareaRef}
-                className={`w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none overflow-hidden transition-all ${inputExpanded ? "min-h-[160px]" : "min-h-[40px]"}`}
+                className="w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-80"
                 placeholder="Ask for follow-up changes" value={value} onChange={(e) => setValue(e.target.value)}
-                onKeyDown={handleFollowupKeyDown} rows={inputExpanded ? 8 : 1} disabled={isStreaming} />
+                onKeyDown={handleFollowupKeyDown} rows={1} disabled={isStreaming} />
               <PromptAutocomplete
                 value={value}
                 onChange={setValue}
@@ -1355,14 +1366,6 @@ Add your project's common commands here so Dalam knows how to build:
                 chatSessions={chatSessions}
                 keyHandlerRef={followupAutocompleteKey}
               />
-              {/* Expand/Collapse button */}
-              <button
-                className="absolute bottom-1 right-1 w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-                onClick={() => setInputExpanded((v) => !v)}
-                title={inputExpanded ? "Collapse input" : "Expand input"}
-              >
-                {inputExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-              </button>
             </div>
             <div className="flex items-center justify-between px-4 pb-3">
               <div className="flex items-center gap-2">
@@ -1746,14 +1749,15 @@ function AttachFileButton() {
         accept="image/*,.txt,.js,.ts,.tsx,.jsx,.py,.rs,.go,.java,.c,.cpp,.h,.css,.html,.json,.md,.yaml,.yml,.toml,.sh,.sql,.csv,.xml,.swift,.rb,.php"
         onChange={(e) => void handleFiles(e.target.files)}
       />
-      <button
-        className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-        onClick={() => inputRef.current?.click()}
-        title="Attach file or image"
-        aria-label="Attach file or image"
-      >
-        <Paperclip className="w-4 h-4" />
-      </button>
+      <Tooltip content="Add context" side="top">
+        <button
+          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+          onClick={() => inputRef.current?.click()}
+          aria-label="Add context"
+        >
+          <Paperclip className="w-4 h-4" />
+        </button>
+      </Tooltip>
     </>
   );
 }

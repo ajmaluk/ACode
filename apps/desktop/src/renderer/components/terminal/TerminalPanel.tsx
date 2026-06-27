@@ -2,7 +2,8 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { useTerminal, useWorkspace, useChat } from "@/store/useAppStore";
+import { useTerminal, useWorkspace, useChat, useSettings } from "@/store/useAppStore";
+import { Tooltip } from "../ui/Tooltip";
 import { Plus, X, Trash2, Bot, Wifi } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { createDalamAPI } from "@/lib/dalamAPI";
@@ -56,6 +57,18 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const procIdRef = useRef<string | null>(null);
+  const { settings } = useSettings();
+
+  useEffect(() => {
+    const term = terminalsMapRef.current.get(tabId);
+    if (term) {
+      term.options.fontFamily = settings.terminalFont ? `${settings.terminalFont}, SF Mono, Menlo, monospace` : "JetBrains Mono, SF Mono, Menlo, monospace";
+      term.options.fontSize = settings.terminalFontSize || 13;
+      setTimeout(() => {
+        fitAddonRef.current?.fit();
+      }, 50);
+    }
+  }, [settings.terminalFont, settings.terminalFontSize, terminalsMapRef, tabId]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -63,8 +76,8 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
 
     const term = new Terminal({
       theme: DALAM_TERM_THEME,
-      fontFamily: "JetBrains Mono, SF Mono, Menlo, monospace",
-      fontSize: 13,
+      fontFamily: settings.terminalFont ? `${settings.terminalFont}, SF Mono, Menlo, monospace` : "JetBrains Mono, SF Mono, Menlo, monospace",
+      fontSize: settings.terminalFontSize || 13,
       lineHeight: 1.2,
       cursorBlink: true,
       cursorStyle: "bar",
@@ -205,13 +218,14 @@ export function TerminalPanel() {
             )}
           </div>
         ))}
-        <button
-          className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-          onClick={handleAddTab}
-          title="New terminal"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip content="New terminal" side="top">
+          <button
+            className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+            onClick={handleAddTab}
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
 
         <div className="flex-1" />
 
@@ -229,20 +243,21 @@ export function TerminalPanel() {
           )}
         </div>
 
-        <button
-          className="px-3 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-          title="Clear (Ctrl+L)"
-          onClick={() => {
-            if (!activeTabId) return;
-            const term = terminalsRef.current.get(activeTabId);
-            if (term) {
-              term.clear();
-              term.write(ANSI.prompt);
-            }
-          }}
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        <Tooltip content="Clear (Ctrl+L)" side="top">
+          <button
+            className="px-3 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+            onClick={() => {
+              if (!activeTabId) return;
+              const term = terminalsRef.current.get(activeTabId);
+              if (term) {
+                term.clear();
+                term.write(ANSI.prompt);
+              }
+            }}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
       </div>
 
       <div className="flex-1 min-h-0 relative">
