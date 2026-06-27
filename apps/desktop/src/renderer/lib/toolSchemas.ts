@@ -118,7 +118,7 @@ export const MemoryImportArgsSchema = z.object({});
 // ─── Schema Registry ─────────────────────────────────────────
 
 type ToolSchemaEntry = {
-  schema: z.ZodType<any>;
+  schema: z.ZodType<unknown>;
   requiredFields: string[];
 };
 
@@ -181,8 +181,8 @@ const DANGEROUS_COMMANDS = [
  */
 export function validateToolArgs(
   toolName: string,
-  args: Record<string, any>,
-): { valid: true; args: any } | { valid: false; error: string } {
+  args: Record<string, unknown>,
+): { valid: true; args: Record<string, unknown> } | { valid: false; error: string } {
   const entry = TOOL_SCHEMAS[toolName];
 
   if (!entry) {
@@ -227,7 +227,7 @@ export function validateToolArgs(
 
   // Security checks for file operations
   if (["write_file", "edit_file"].includes(toolName)) {
-    const path = args.path;
+    const path = String(args.path ?? "");
     for (const pattern of DANGEROUS_PATH_PATTERNS) {
       if (pattern.test(path)) {
         return {
@@ -240,7 +240,7 @@ export function validateToolArgs(
 
   // Security checks for commands
   if (toolName === "run_command") {
-    const cmd = (args.command || "").toLowerCase();
+    const cmd = String(args.command || "").toLowerCase();
     for (const dangerous of DANGEROUS_COMMANDS) {
       if (cmd.includes(dangerous.toLowerCase())) {
         return {
@@ -251,5 +251,5 @@ export function validateToolArgs(
     }
   }
 
-  return { valid: true, args: result.data };
+  return { valid: true, args: result.data as Record<string, unknown> };
 }

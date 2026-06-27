@@ -19,7 +19,7 @@ import { countTokens } from "./tokenizer";
 
 const MAX_DIRECT_TOKENS = 4_000;
 const MAX_TOTAL_TOKENS = 50_000;
-const MAX_FILE_READ_TOKENS = 8_000;
+
 
 export interface LargeInputResult {
   processedContent: string;

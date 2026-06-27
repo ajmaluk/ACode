@@ -135,13 +135,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
 
     // Clean up stats
     sessionStats.delete(event.sessionId);
-    // Also clean up any stale stats older than 1 hour
-    const oneHourAgo = Date.now() - 3600000;
-    for (const [id, stats] of sessionStats) {
-      if ((stats as any)._lastUpdated && (stats as any)._lastUpdated < oneHourAgo) {
-        sessionStats.delete(id);
-      }
-    }
+
   }
 
   // ── Auto-extract memories from the last exchange ──
@@ -223,11 +217,9 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
 
     if (entries.length === 0) return;
 
-    let saved = 0;
     for (const entry of entries) {
       try {
-        const result = await saveMemory(entry, workspace.path);
-        if (result.action === "add" || result.action === "update") saved++;
+        await saveMemory(entry, workspace.path);
       } catch {
         // Silently skip individual failures
       }
@@ -263,7 +255,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
       const { useToasts } = await import("../components/ui/Toaster");
       const pushToast = useToasts.getState().push;
       // Asynchronously trigger proposal check without blocking SessionEnd execution
-      proposeSkillFromSession(event.sessionId, workspace.path, false, (t: any) => pushToast(t)).catch((err) => {
+      proposeSkillFromSession(event.sessionId, workspace.path, false, (t: Parameters<typeof pushToast>[0]) => pushToast(t)).catch((err) => {
         console.warn("[HookListener] Background skill crystallization failed:", err);
       });
     }

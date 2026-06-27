@@ -19,7 +19,7 @@
  *   - ChangesCard    — file changes (open diff, +/- stats)
  *   - TodoBlock      — todo list checklist
  */
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import {
   CheckCircle2,
   FileText,
@@ -33,7 +33,6 @@ import {
   FilePlus,
   Shield,
   Folder,
-  FolderOpen,
   File,
   FileCode,
   FileJson,

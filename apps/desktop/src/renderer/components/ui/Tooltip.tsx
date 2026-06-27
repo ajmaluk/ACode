@@ -65,6 +65,7 @@ export function Tooltip({ content, children, side = "top", delay = 100 }: Toolti
       window.removeEventListener("scroll", updateCoords, true);
       window.removeEventListener("resize", updateCoords);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   const positionStyles = {

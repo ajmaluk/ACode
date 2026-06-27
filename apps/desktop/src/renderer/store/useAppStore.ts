@@ -58,6 +58,40 @@ const TAG_TO_TOOL: Record<string, string> = {
   run_command: "bash",
 };
 
+const KNOWN_TAG_NAMES = Object.keys(TAG_TO_TOOL);
+
+// Regex to strip ALL XML tool call tags (opening, closing, and self-closing) from content.
+// Uses [^>]* to handle malformed attributes (e.g. unescaped quotes inside command values).
+const XML_STRIP_RE = new RegExp(
+  `<(${KNOWN_TAG_NAMES.join("|")})[^>]*>[\\s\\S]*?<\\/\\1>|<(${KNOWN_TAG_NAMES.join("|")})[^>]*\\/?>`,
+  "gi"
+);
+const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi");
+const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
+
+/**
+ * Strip all XML tool call tags from content (for display purposes).
+ * Handles opening+closing pairs, self-closing tags, and closing-only tags.
+ * Also handles malformed XML (unescaped quotes in attributes, broken tags).
+ */
+export function stripXmlToolCallTags(content: string): string {
+  let result = content;
+  // Strip opening+content+closing blocks: <tool ...>content</tool>
+  // and self-closing tags: <tool .../>
+  result = result.replace(XML_STRIP_RE, "");
+  // Strip orphan closing tags that weren't paired above: </tool>
+  result = result.replace(XML_CLOSING_TAG_RE, "");
+  // Strip MCP tags
+  result = result.replace(XML_MCP_STRIP_RE, "");
+  // Strip broken/malformed tag fragments from model output (e.g. ><]minimax[>][)
+  result = result.replace(/>\]\s*<[^>]*>?\[</g, "");
+  result = result.replace(/\]>\s*\[</g, "");
+  result = result.replace(/<\]?\w+\[>?\]?\[?/g, "");
+  // Clean up excessive whitespace left behind
+  result = result.replace(/\n{3,}/g, "\n\n").trim();
+  return result;
+}
+
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
@@ -72,7 +106,6 @@ export function parseXmlToolCalls(content: string): {
   cleanedContent: string;
 } {
   const toolCalls: import("@dalam/shared-types").ToolCall[] = [];
-  const rawMatches: string[] = [];
   let match: RegExpExecArray | null;
 
   // Reset regex state
@@ -119,24 +152,10 @@ export function parseXmlToolCalls(content: string): {
       status: "completed" as const,
       result: tagContent || undefined,
     });
-    rawMatches.push(fullMatch);
   }
 
-  // Strip XML tool calls from content for clean display
-  // Build a single regex that matches all found tool call tags
-  let cleanedContent = content;
-  if (rawMatches.length > 0) {
-    // Escape special regex chars in raw matches and join with OR
-    const escaped = rawMatches.map((m) => m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const stripRe = new RegExp(escaped.join("|"), "g");
-    cleanedContent = content.replace(stripRe, "");
-  }
-  // Strip MCP tool call tags (not in TAG_TO_TOOL, dynamic server+tool names)
-  cleanedContent = cleanedContent
-    .replace(/<mcp_[\s\S]*?<\/mcp_[^>]*>/g, "")
-    .replace(/<mcp_[^>]*\/>/g, "");
-  // Clean up excessive whitespace left behind
-  cleanedContent = cleanedContent.replace(/\n{3,}/g, "\n\n").trim();
+  // Use the comprehensive strip function to clean all XML tags
+  const cleanedContent = stripXmlToolCallTags(content);
 
   return { toolCalls, cleanedContent };
 }
@@ -216,6 +235,23 @@ export type OpenTab = {
   language: string;
   cursor?: { line: number; column: number };
 };
+
+// ─── Config Types ─────────────────────────────────────────────
+/** Shape of a provider entry stored in .dalam/config.json */
+interface ProjectProviderConfig {
+  id: string;
+  enabled?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+/** Shape of .dalam/config.json */
+interface WorkspaceConfig {
+  settings?: Partial<AppSettings>;
+  providers?: ProjectProviderConfig[];
+  mcpServers?: McpServer[];
+  alwaysAllowed?: Record<string, true>;
+}
 
 // ─── Workspace Persistence ────────────────────────────────────
 const WORKSPACES_STORAGE_KEY = "dalam.workspaces.v1";
@@ -860,7 +896,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
         if (projConfig.providers) {
           const { providers } = useModelProviders.getState();
           const nextProviders = providers.map(p => {
-            const projProv = projConfig.providers.find((pp: any) => pp.id === p.id);
+            const projProv = (projConfig.providers as ProjectProviderConfig[] | undefined)?.find((pp) => pp.id === p.id);
             return projProv ? { ...p, ...projProv } : p;
           });
           useModelProviders.setState({ providers: nextProviders });
@@ -882,7 +918,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
           };
         });
 
-        const globalMcpServers = loadMcpServers().map((m: any) => {
+        const globalMcpServers = loadMcpServers().map((m: McpServer) => {
           const existing = currentServers.find((s) => s.name === m.name && s.scope !== "project");
           return {
             ...m,
@@ -920,7 +956,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
         await api.fs.writeFile(configPath, JSON.stringify(defaultProjConfig, null, 2));
 
         const currentServers = useSkillsMcp.getState().mcpServers;
-        const globalMcpServers = loadMcpServers().map((m: any) => {
+        const globalMcpServers = loadMcpServers().map((m: McpServer) => {
           const existing = currentServers.find((s) => s.name === m.name && s.scope !== "project");
           return {
             ...m,
@@ -1063,7 +1099,7 @@ async function _doSaveWorkspaceData() {
       }));
 
     // Read existing config first to preserve alwaysAllowed and other fields
-    let existingConfig: any = {};
+    let existingConfig: WorkspaceConfig = {};
     try {
       if (await exists(configPath)) {
         existingConfig = JSON.parse(await api.fs.readFile(configPath));
@@ -2521,7 +2557,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const stats = computeContextStats(messages, maxContext);
       if (stats.needsCompaction) {
         // Select messages for compaction FIRST from original (un-pruned) messages
-        const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
+        const { toCompact } = selectMessagesForCompaction(messages, 6);
         if (toCompact.length > 0) {
           // Only prune tool outputs in the messages being compacted (preserve full outputs in kept messages)
           const prunedToCompact = stats.shouldPrune
@@ -3009,8 +3045,8 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
           m.name === name ? { ...m, status: "connected", tools, error: undefined } : m
         ),
       }));
-    } catch (err: any) {
-      const errorMsg = err?.message || String(err);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`MCP server "${name}" connection failed:`, errorMsg);
       set((s) => ({
         mcpServers: s.mcpServers.map((m) =>
@@ -3531,7 +3567,7 @@ async function persistAlwaysAllowedToDisk(data: Record<string, true>) {
     const dotDalam = joinPath(activeWs.path, ".dalam");
     if (!(await exists(dotDalam))) await mkdir(dotDalam);
     const configPath = joinPath(dotDalam, "config.json");
-    let existing: any = {};
+    let existing: WorkspaceConfig = {};
     try {
       if (await exists(configPath)) {
         existing = JSON.parse(await api.fs.readFile(configPath));

@@ -3,6 +3,17 @@
  * DALAM DATABASE — SQLite + FTS5 via @tauri-apps/plugin-sql
  * ============================================================
  *
+ * Minimal interface for the @tauri-apps/plugin-sql Database instance.
+ * We only use `execute()` and `close()` from the driver.
+ */
+interface SqlDatabase {
+  execute(sql: string, bindValues?: unknown[]): Promise<{ rowsAffected: number }>;
+  select(sql: string, bindValues?: unknown[]): Promise<unknown[]>;
+  close(): Promise<void>;
+}
+
+/**
+ *
  * Initializes two logical databases:
  *   - project.db  — persistent, per-workspace (.dalam/project.db)
  *     Stores memories with FTS5 full-text search index.
@@ -20,9 +31,9 @@
  * ============================================================
  */
 
-let dbInstance: any = null;
+let dbInstance: SqlDatabase | null = null;
 let currentWorkspacePath: string | null = null;
-let dbLoadingPromise: Promise<any> | null = null;
+let dbLoadingPromise: Promise<SqlDatabase | null> | null = null;
 
 // ─── Schema ──────────────────────────────────────────────────
 
@@ -67,7 +78,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  * The database file is stored at <workspacePath>/.dalam/project.db.
  * This file should be gitignored — it's a local cache.
  */
-export async function initDatabase(workspacePath: string): Promise<any> {
+export async function initDatabase(workspacePath: string): Promise<SqlDatabase | null> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
   // Prevent concurrent init calls from leaking connections
   if (dbLoadingPromise) {
@@ -78,9 +89,9 @@ export async function initDatabase(workspacePath: string): Promise<any> {
     await closeDatabase();
   }
 
-  let Database: any;
+  let Database: { load(path: string): Promise<SqlDatabase> };
   try {
-    Database = (await import("@tauri-apps/plugin-sql")).default;
+    Database = (await import("@tauri-apps/plugin-sql")).default as unknown as { load(path: string): Promise<SqlDatabase> };
   } catch (e) {
     console.warn("[Database] SQLite plugin not available, memory search disabled:", e);
     return null;
@@ -100,8 +111,8 @@ export async function initDatabase(workspacePath: string): Promise<any> {
     // mkdir may fail if already exists or permissions — proceed anyway
   }
 
-  const initWork = async (): Promise<any> => {
-    let db: any;
+  const initWork = async (): Promise<SqlDatabase | null> => {
+    let db: SqlDatabase | null;
     try {
       db = await Database.load(dbPath);
     } catch (e) {
@@ -150,7 +161,7 @@ export async function initDatabase(workspacePath: string): Promise<any> {
   };
 
   dbLoadingPromise = initWork();
-  let db: any;
+  let db: SqlDatabase | null;
   try {
     db = await dbLoadingPromise;
   } catch (error) {
@@ -178,7 +189,7 @@ export function isDatabaseReady(): boolean {
  * Get the current database instance.
  * Throws if not initialized.
  */
-export function getDb(): any {
+export function getDb(): SqlDatabase {
   if (!dbInstance) {
     throw new Error("Database not initialized. Call initDatabase() first.");
   }

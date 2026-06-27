@@ -1,4 +1,4 @@
-import type { DalamAPI, AgentSessionMode, AppSettings, DiffProposal, FileNode, StreamEvent } from "@dalam/shared-types";
+import type { DalamAPI, AgentSessionMode, AppSettings, ChatMessage, DiffProposal, FileNode, StreamEvent } from "@dalam/shared-types";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
@@ -30,6 +30,49 @@ export const mcpHttpSessions = new Map<string, string>();
 const emittedSessionEnds = new Set<string>();
 
 const SETTINGS_CACHE = new Map<string, string>();
+
+// ─── Internal Types ─────────────────────────────────────────
+/** Shape of a provider entry from localStorage */
+interface StoredProvider {
+  id: string;
+  baseUrl?: string;
+  apiKey?: string;
+  apiFormat?: string;
+}
+
+/** API message format for LLM providers (content can be string or multimodal parts) */
+interface ApiMessage {
+  role: string;
+  content: string | ApiContentPart[];
+}
+
+/** Content part for multimodal messages (OpenAI image_url, Anthropic image) */
+interface ApiContentPart {
+  type: string;
+  text?: string;
+  image_url?: { url: string };
+  source?: { type: string; media_type: string; data: string };
+}
+
+/** Minimal interface for the @tauri-apps/plugin-sql Database instance */
+interface TerminalChild {
+  write(input: string): Promise<void>;
+  kill(): Promise<void>;
+}
+
+/** Anthropic-style content block from API response */
+interface AnthropicContentBlock {
+  type?: string;
+  text?: string;
+}
+
+/** Minimal Zustand store ref for waitForToolApproval */
+interface ChatStoreRef {
+  getState(): {
+    pendingToolCalls: import("@dalam/shared-types").ToolCall[];
+    resolveToolApproval: (id: string, decision: "approved" | "denied") => void;
+  };
+}
 
 function joinPath(...parts: string[]): string {
   return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
@@ -82,7 +125,7 @@ function getProviderConfig(providerId: string): { baseUrl: string; apiKey: strin
     const providersRaw = localStorage.getItem("dalam.providers.v1");
     if (providersRaw) {
       const providers = JSON.parse(providersRaw);
-      const provider = providers.find((p: any) => p.id === providerId);
+      const provider = providers.find((p: StoredProvider) => p.id === providerId);
       if (!provider?.baseUrl || !provider?.apiKey) return null;
       return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
     }
@@ -256,10 +299,10 @@ async function fetchJsonWithRetry(
 
 async function* streamOpenAI(
   baseUrl: string, apiKey: string, model: string,
-  messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
+  messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
-  const body: Record<string, any> = { model, messages, stream: true };
+  const body: Record<string, unknown> = { model, messages, stream: true };
   if (maxTokens) body.max_tokens = maxTokens;
   const resp = await fetchWithRetry(url, {
     method: "POST",
@@ -422,12 +465,12 @@ async function* streamOpenAI(
 
 async function* streamAnthropic(
   baseUrl: string, apiKey: string, model: string,
-  messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
+  messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   const url = baseUrl.replace(/\/+$/, "") + "/v1/messages";
   const systemMsg = messages.find((m) => m.role === "system")?.content || "";
   const chatMessages = messages.filter((m) => m.role !== "system");
-  const body: Record<string, any> = { model, system: systemMsg, messages: chatMessages, stream: true };
+  const body: Record<string, unknown> = { model, system: systemMsg, messages: chatMessages, stream: true };
   if (maxTokens) body.max_tokens = maxTokens;
   const resp = await fetchWithRetry(url, {
     method: "POST",
@@ -502,7 +545,7 @@ async function* streamAnthropic(
 
 async function* streamChat(
   baseUrl: string, apiKey: string, apiFormat: string, model: string,
-  messages: { role: string; content: any }[], signal?: AbortSignal, maxTokens?: number
+  messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   if (apiFormat === "anthropic") {
     yield* streamAnthropic(baseUrl, apiKey, model, messages, signal, maxTokens);
@@ -643,7 +686,7 @@ const dalamAPI: DalamAPI = {
   },
 
   terminal: (() => {
-    const processes = new Map<string, { child: any; command: any }>();
+    const processes = new Map<string, { child: TerminalChild; command: unknown }>();
     const listeners = new Map<string, Set<(data: string) => void>>();
     const pendingErrors = new Map<string, string>();
 
@@ -1106,7 +1149,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const systemPrompt = await assembleContext(cleanPrompt);
 
         // Loop state
-        const currentHistory: any[] = conversationHistory ? [...conversationHistory] : [];
+        const currentHistory: ChatMessage[] = conversationHistory ? [...conversationHistory] : [];
         let totalFullContent = "";
         let totalToolCalls = 0;
         let loopCount = 0;
@@ -1121,13 +1164,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
         // Build messages from LIVE currentHistory (not pre-loop snapshot)
         // Token-budget-aware: uses estimateTokens for accurate counting
-        async function buildMessages(): Promise<any[]> {
+        async function buildMessages(): Promise<ApiMessage[]> {
           const { estimateTokens: estTokens } = await import("./contextManager");
           const MAX_TOKENS = 80000;
           // Reserve tokens for system prompt, compaction summary, and output
           const systemTokenEst = estTokens(systemPrompt);
           const OUTPUT_RESERVE = 8000;
-          const allMsgs = currentHistory.filter((m: any) => m.role !== "system");
+          const allMsgs = currentHistory.filter((m) => m.role !== "system");
           const COMPACT_RESERVE = compactionSummary && allMsgs.length > 10 ? estTokens(compactionSummary) + 100 : 0;
           const availableForHistory = MAX_TOKENS - systemTokenEst - OUTPUT_RESERVE - COMPACT_RESERVE;
           if (availableForHistory <= 0) {
@@ -1136,7 +1179,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           }
 
           // Always include the last message; work backward from there
-          const msgs: any[] = [];
+          const msgs: ChatMessage[] = [];
           let tokenCount = 0;
           for (let i = allMsgs.length - 1; i >= 0; i--) {
             const m = allMsgs[i];
@@ -1147,7 +1190,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             msgs.unshift(m);
           }
 
-          const result: any[] = [{ role: "system", content: systemPrompt }];
+          const result: ApiMessage[] = [{ role: "system", content: systemPrompt }];
           if (compactionSummary && allMsgs.length > 10) {
             result.push({ role: "system", content: `[COMPACTED HISTORY]\n${compactionSummary}\n` });
           }
@@ -1183,10 +1226,10 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           if (loopCount === 1) {
             const hasImages = attachments?.some((a) => a.mimeType.startsWith("image/"));
             // Find the user message in the messages array and enrich it
-            const userMsgIdx = messages.map((m: any) => m.role).lastIndexOf("user");
+            const userMsgIdx = messages.map((m) => m.role).lastIndexOf("user");
             if (userMsgIdx >= 0) {
               if (hasImages && config.apiFormat === "openai") {
-                const parts: any[] = [{ type: "text", text: messages[userMsgIdx].content }];
+                const parts: ApiContentPart[] = [{ type: "text", text: messages[userMsgIdx].content as string }];
                 for (const att of attachments ?? []) {
                   if (att.mimeType.startsWith("image/")) {
                     parts.push({ type: "image_url", image_url: { url: `data:${att.mimeType};base64,${att.content}` } });
@@ -1196,7 +1239,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                 }
                 messages[userMsgIdx] = { role: "user", content: parts };
               } else if (hasImages && config.apiFormat === "anthropic") {
-                const parts: any[] = [{ type: "text", text: messages[userMsgIdx].content }];
+                const parts: ApiContentPart[] = [{ type: "text", text: messages[userMsgIdx].content as string }];
                 for (const att of attachments ?? []) {
                   if (att.mimeType.startsWith("image/")) {
                     parts.push({ type: "image", source: { type: "base64", media_type: att.mimeType, data: att.content } });
@@ -1304,7 +1347,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               const { useChat } = await import("../store/useAppStore");
               const pending = useChat.getState().pendingToolCalls;
               for (const tc of toolCallMetas) {
-                const stored = pending.find((t: any) => t.id === tc.id);
+                const stored = pending.find((t) => t.id === tc.id);
                 if (stored && stored.status === "completed") {
                   autoApprovedTools.add(tc.id);
                 }
@@ -2143,7 +2186,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
     let unsubscribe: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let abortHandler: (() => void) | null = null;
-    let useChatRef: any = null;
+    let useChatRef: ChatStoreRef | null = null;
 
     const cleanup = () => {
       if (timer) { clearTimeout(timer); timer = null; }
@@ -2157,7 +2200,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       if (resolved || !useChatRef) return;
       try {
         const { pendingToolCalls } = useChatRef.getState();
-        const tc = pendingToolCalls.find((t: any) => t.id === toolCallId);
+        const tc = pendingToolCalls.find((t) => t.id === toolCallId);
         if (!tc) return;
         _debugLog(`waitForToolApproval: check tool ${toolCallId}, status=${tc.status}`);
         if (tc.status === "completed") {
@@ -2214,10 +2257,10 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       check();
       if (resolved) return;
       // Subscribe to store changes — only re-check when pendingToolCalls actually changes
-      let lastToolCalls = useChatRef.getState().pendingToolCalls;
+      let lastToolCalls = useChatRef!.getState().pendingToolCalls;
       unsubscribe = useChat.subscribe(() => {
         if (resolved) return;
-        const current = useChatRef.getState().pendingToolCalls;
+        const current = useChatRef!.getState().pendingToolCalls;
         if (current !== lastToolCalls) {
           lastToolCalls = current;
           check();
@@ -2791,7 +2834,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
         return `[MCP Error: Invalid response format from server "${serverName}"]`;
       }
       const content = json.result?.content || [];
-      return content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
+      return content.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
     } else {
       const command = server.command;
       if (!command) throw new Error("Stdio command is required");
@@ -2823,7 +2866,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
                     resolve(`[MCP Error: Invalid response format from server "${serverName}"]`);
                   } else {
                     const content = parsed.result?.content || parsed.content || [];
-                    const text = content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
+                    const text = content.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
                     resolve(text);
                   }
                   return;

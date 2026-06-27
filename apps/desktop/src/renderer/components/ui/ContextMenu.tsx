@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState, forwardRef } from "react";
 import { ChevronRight } from "lucide-react";
-
-export type ContextMenuItem =
-  | { type: "item"; label: string; shortcut?: string; icon?: React.ReactNode; perform: () => void; destructive?: boolean; disabled?: boolean }
-  | { type: "separator" }
-  | { type: "submenu"; label: string; icon?: React.ReactNode; items: ContextMenuItem[] };
+import { connectContextMenu, type ContextMenuItem } from "./contextMenuUtils";
 
 type ContextMenuState = {
   x: number;
@@ -12,19 +8,11 @@ type ContextMenuState = {
   items: ContextMenuItem[];
 };
 
-let globalSetMenu: ((s: ContextMenuState | null) => void) | null = null;
-
-export function showContextMenu(e: React.MouseEvent, items: ContextMenuItem[]) {
-  e.preventDefault();
-  e.stopPropagation();
-  globalSetMenu?.({ x: e.clientX, y: e.clientY, items });
-}
-
 export function ContextMenuProvider({ children }: { children: React.ReactNode }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { globalSetMenu = setMenu; return () => { globalSetMenu = null; }; }, []);
+  useEffect(() => connectContextMenu(setMenu), []);
 
   useEffect(() => {
     if (!menu) return;

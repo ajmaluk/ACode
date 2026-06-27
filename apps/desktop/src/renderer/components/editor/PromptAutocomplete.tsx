@@ -280,7 +280,8 @@ export function PromptAutocomplete({
   // Publish the handler so the parent can call it from its textarea onKeyDown.
   useEffect(() => {
     if (keyHandlerRef) keyHandlerRef.current = handleKeyDown;
-  }, [keyHandlerRef, handleKeyDown]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyHandlerRef]);
 
   if (!trigger || options.length === 0) return null;
 

@@ -150,7 +150,8 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
       window.removeEventListener("resize", handleResize);
       ro.disconnect();
 
-      terminalsMapRef.current.delete(tabId);
+      const currentTerminals = terminalsMapRef.current;
+      currentTerminals.delete(tabId);
 
       if (unsubData) unsubData();
       if (inputDisposable) inputDisposable.dispose();

@@ -118,8 +118,9 @@ export function MemoryGraph() {
       }
     };
 
+    const frameId = animFrameRef.current;
     render();
-    return () => cancelAnimationFrame(animFrameRef.current);
+    return () => cancelAnimationFrame(frameId);
   }, [graphData, hoveredNode, selectedNode]);
 
   // Mouse interaction

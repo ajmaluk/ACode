@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
-import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, type ModelProvider } from "@/store/useAppStore";
+import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
 import type { PrimaryAgentName, FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
 import { TopNav } from "@/components/editor/TopNav";
 import {
   X, FileCode, FilePlus, Circle, MoreHorizontal, Columns, ArrowUp,
-  ChevronDown, ChevronUp, ChevronRight, Shield, Loader2, Sparkles,
+  ChevronDown, ChevronRight, Shield, Loader2, Sparkles,
   FileText, GitBranch, Terminal, Search,
   FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy, Code2,
 } from "lucide-react";
@@ -15,7 +15,7 @@ import { useToast } from "@/components/ui/Toaster";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
-import { InterruptBar } from "@/components/chat/InterruptBar";
+
 import { CostDisplay } from "@/components/chat/CostDisplay";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
@@ -152,7 +152,7 @@ function StreamingActivityPanel({
             const status = isRunning ? "running" : isCompleted ? "completed" : isFailed ? "failed" : undefined;
 
             const target = (() => {
-              const args = tc.args as Record<string, any> | undefined;
+              const args = tc.args;
               if (!args) return "";
               if (typeof args.path === "string") return args.path;
               if (typeof args.command === "string") return `$ ${args.command}`;
@@ -486,7 +486,7 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
 function ChatView() {
   const { workspaces, activeWorkspaceId, setActiveWorkspace, openWorkspace, fileTree } = useWorkspace();
   const { settings } = useSettings();
-  const { sendMessage, isStreaming, messages, streamingContent, thinkingContent, selectedModelId, setSelectedModel, pendingToolCalls, resolveToolApproval, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment, pendingActivities, session } = useChat();
+  const { sendMessage, isStreaming, messages, streamingContent, thinkingContent, selectedModelId, setSelectedModel, pendingToolCalls, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment, pendingActivities, session } = useChat();
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
   const { activeAgentName, setActiveAgent } = useAgents();
@@ -513,6 +513,12 @@ function ChatView() {
   const [showFollowupAgentDropdown, setShowFollowupAgentDropdown] = useState(false);
   const [showFollowupModelDropdown, setShowFollowupModelDropdown] = useState(false);
   const [timestamp] = useState(() => Date.now());
+
+  // Strip XML tool call tags from streaming content so raw tags aren't shown to user
+  const cleanStreamingContent = useMemo(
+    () => (streamingContent ? stripXmlToolCallTags(streamingContent) : ""),
+    [streamingContent]
+  );
 
   // Auto-resize the textareas dynamically based on scrollHeight
   useEffect(() => {
@@ -1182,7 +1188,7 @@ Add your project's common commands here so Dalam knows how to build:
                         <div className="absolute bottom-full right-0 mb-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 min-w-[220px]" data-dropdown-body>
                           <div className="max-h-80 overflow-y-auto">
                             {providers.filter((p) => p.enabled).map((p) => {
-                              const enabledModels = p.models.filter((m) => (m as any).enabled !== false);
+                              const enabledModels = p.models.filter((m) => m.enabled !== false);
                               if (enabledModels.length === 0) return null;
                               const hasActiveModel = enabledModels.some((m) => m.modelId === selectedModelId);
                               return (
@@ -1274,7 +1280,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
               </div>
             )}
-            {messages.map((m, idx) => <ChatMessage key={m.id} message={m} activeAgentName={activeAgentName} onResetToMessage={(content) => setValue(content)} isLast={idx === messages.length - 1} />)}
+            {messages.map((m, idx) => <ChatMessage key={m.id} message={m} onResetToMessage={(content) => setValue(content)} isLast={idx === messages.length - 1} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1306,20 +1312,19 @@ Add your project's common commands here so Dalam knows how to build:
                 sessionStartTime={session?.startedAt ?? timestamp}
               />
             )}
-            {isStreaming && streamingContent && (
+            {isStreaming && cleanStreamingContent && (
               <ChatMessage
                 message={{
                   id: "streaming",
                   role: "assistant",
-                  content: streamingContent,
+                  content: cleanStreamingContent,
                   timestamp: timestamp,
                   ...(thinkingContent ? { thinking: thinkingContent } : {}),
                 }}
                 pending
-                activeAgentName={activeAgentName}
-              />
-            )}
-            {isStreaming && !streamingContent && pendingToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent && (
+            />
+          )}
+          {isStreaming && !streamingContent && pendingToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent && (
               <div className="py-3 animate-fade-in-up">
                 <div className="flex items-center gap-3 text-[13px] text-dalam-text-secondary">
                   <div className="animate-thinking-wave">
@@ -1485,7 +1490,7 @@ function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, provider
 }) {
   const [style, setStyle] = useState<React.CSSProperties>({});
   const p = providers.find((pr) => pr.id === hoveredProvider);
-  const enabledModels = p?.models.filter((m) => (m as any).enabled !== false) ?? [];
+  const enabledModels = p?.models.filter((m) => m.enabled !== false) ?? [];
 
   useLayoutEffect(() => {
     const rowEl = providerRowRefs.current[hoveredProvider];
@@ -1519,37 +1524,9 @@ function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, provider
   );
 }
 
-function RunningToolsSection({ toolCalls }: { toolCalls: import("@dalam/shared-types").ToolCall[] }) {
-  const [open, setOpen] = useState(true);
-  const done = toolCalls.filter((t) => t.status === "completed").length;
-  return (
-    <div className="py-2 animate-fade-in opacity-60 hover:opacity-100 transition-opacity">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full text-dalam-text-secondary"
-      >
-        <ChevronDown
-          className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
-        />
-        <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0" />
-        <span>Running tools</span>
-        <span className="text-[11px] text-dalam-text-muted tabular-nums ml-1">
-          {done}/{toolCalls.length}
-        </span>
-      </button>
-      {open && (
-        <div className="ml-3.5 mt-1 pl-3 border-l border-dalam-border-primary/60">
-          <ToolCallsList toolCalls={toolCalls} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 const EMPTY_ACTIVITIES: never[] = [];
 
-function ChatMessage({ message, pending, activeAgentName, onResetToMessage, isLast }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; activeAgentName?: string; onResetToMessage?: (content: string) => void; isLast?: boolean }) {
+function ChatMessage({ message, pending, onResetToMessage, isLast }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; onResetToMessage?: (content: string) => void; isLast?: boolean }) {
   const toast = useToast();
   const segments = splitCodeFences(message.content);
   // For settled messages, activities come from message.activities (no store subscription needed).

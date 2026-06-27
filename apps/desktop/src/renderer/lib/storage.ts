@@ -71,10 +71,10 @@ function openDB(): Promise<IDBDatabase> {
  */
 async function migrateFromLocalStorage(): Promise<void> {
   const keys = [
-    { lsKey: "dalam.chatSessions.v1", storeName: "sessions" as ObjectStoreName, transform: (v: any) => ({ id: "all", data: v }) },
-    { lsKey: "dalam.sessionMessages.v1", storeName: "messages" as ObjectStoreName, transform: (v: any) => ({ id: "all", data: v }) },
-    { lsKey: "dalam.sessionVersions.v1", storeName: "versions" as ObjectStoreName, transform: (v: any) => ({ id: "all", data: v }) },
-    { lsKey: "dalam.compactionSummaries.v1", storeName: "compaction" as ObjectStoreName, transform: (v: any) => ({ sessionId: "all", data: v }) },
+    { lsKey: "dalam.chatSessions.v1", storeName: "sessions" as ObjectStoreName, transform: (v: unknown) => ({ id: "all", data: v }) },
+    { lsKey: "dalam.sessionMessages.v1", storeName: "messages" as ObjectStoreName, transform: (v: unknown) => ({ id: "all", data: v }) },
+    { lsKey: "dalam.sessionVersions.v1", storeName: "versions" as ObjectStoreName, transform: (v: unknown) => ({ id: "all", data: v }) },
+    { lsKey: "dalam.compactionSummaries.v1", storeName: "compaction" as ObjectStoreName, transform: (v: unknown) => ({ sessionId: "all", data: v }) },
   ];
 
   const db = await openDB();
@@ -124,7 +124,7 @@ async function ensureDB(): Promise<IDBDatabase> {
 /**
  * Read a blob from IndexedDB.
  */
-export async function idbGet(storeName: ObjectStoreName, key: string): Promise<any> {
+export async function idbGet(storeName: ObjectStoreName, key: string): Promise<unknown> {
   try {
     const db = await ensureDB();
     return new Promise((resolve) => {
@@ -146,7 +146,7 @@ export async function idbGet(storeName: ObjectStoreName, key: string): Promise<a
  */
 export async function idbPut(
   storeName: ObjectStoreName,
-  value: any,
+  value: unknown,
 ): Promise<void> {
   try {
     const db = await ensureDB();

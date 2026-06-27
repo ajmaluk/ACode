@@ -24,7 +24,6 @@ import {
   Pencil,
   History,
   Undo2,
-  MoreHorizontal,
   MoreVertical,
   List,
   ArrowLeft,
@@ -52,7 +51,7 @@ interface SessionRowProps {
   onShowVersions: () => void;
 }
 
-function SessionRow({ session, isActive, isStreaming, onSelect, onRemove, onRename, onShowVersions }: SessionRowProps) {
+function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, onRemove, onRename, onShowVersions }: SessionRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);

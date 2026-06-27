@@ -316,7 +316,7 @@ function ModelsTab() {
 }
 
 function ProviderDetail({ provider }: { provider: ModelProvider }) {
-  const { updateProvider, toggleProvider, removeModel } = useModelProviders();
+  const { updateProvider, toggleProvider } = useModelProviders();
   const [apiKey, setApiKey] = useState(provider.apiKey || "");
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
   const [showApiKey, setShowApiKey] = useState(false);

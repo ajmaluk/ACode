@@ -5,25 +5,21 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { modKey } from "@/lib/platform";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import {
-  ChevronLeft, ChevronRight, Plus, PanelLeft, PanelRight,
+  ChevronLeft, ChevronRight, PanelLeft, PanelRight,
   FolderOpen, Code2, Sparkles, TerminalSquare, FolderTree, Settings,
-  Brain, Sun, Moon, Monitor, Zap, ClipboardList,
+  Brain, Sun, Moon, Monitor,
 } from "lucide-react";
 
-const AGENT_META: Record<string, { label: string; icon: React.ElementType; color: string }> = {
-  build: { label: "Build", icon: Zap, color: "text-amber-400" },
-  plan: { label: "Plan", icon: ClipboardList, color: "text-emerald-400" },
-  yolo: { label: "YOLO", icon: Sparkles, color: "text-rose-400" },
-};
+
 
 export function TopNav() {
   const { sidebarOpen, toggleSidebar, rightPanelOpen, toggleRightPanel } = useUI();
-  const { goBackChat, goForwardChat, newChat, chatHistory, chatHistoryIdx, messages, session } = useChat();
+  const { goBackChat, goForwardChat, chatHistory, chatHistoryIdx, messages, session } = useChat();
   const { activeWorkspaceId, workspaces, openWorkspace } = useWorkspace();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const { open: openSettings } = useSettingsView();
   const { settings, update: updateSetting } = useSettings();
-  const { activeAgentName } = useAgents();
+
   const toast = useToasts((s) => s.push);
   const mod = modKey();
 

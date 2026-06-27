@@ -1,57 +1,10 @@
-import { create } from "zustand";
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { CheckCircle2, XCircle, AlertTriangle, Info, X } from "lucide-react";
+import type { ToastKind } from "./toastTypes";
+import { useToasts } from "./toastStore";
 
-export type ToastKind = "info" | "success" | "warning" | "error";
-
-export type ToastAction = {
-  label: string;
-  onClick: () => void;
-  variant?: "primary" | "secondary" | "danger";
-};
-
-export type Toast = {
-  id: string;
-  kind: ToastKind;
-  title: string;
-  description?: string;
-  durationMs?: number;
-  actions?: ToastAction[];
-};
-
-type ToastState = {
-  toasts: Toast[];
-  push: (t: Omit<Toast, "id">) => string;
-  dismiss: (id: string) => void;
-};
-
-export const useToasts = create<ToastState>((set, get) => ({
-  toasts: [],
-  push(t) {
-    const id = "t-" + Math.random().toString(36).slice(2, 9);
-    set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
-    const duration = t.durationMs ?? 3500;
-    if (duration > 0) {
-      // Track the timer so dismiss() can cancel it — otherwise a toast
-      // that the user closes early still fires its setTimeout, which is
-      // a small leak in long-lived sessions.
-      const timer = setTimeout(() => get().dismiss(id), duration);
-      timerRegistry.set(id, timer);
-    }
-    return id;
-  },
-  dismiss(id) {
-    const timer = timerRegistry.get(id);
-    if (timer) {
-      clearTimeout(timer);
-      timerRegistry.delete(id);
-    }
-    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-  },
-}));
-
-// Module-scoped timer registry so dismiss can cancel a pending auto-dismiss.
-const timerRegistry = new Map<string, ReturnType<typeof setTimeout>>();
+export { useToasts, useToast } from "./toastStore";
+export type { ToastKind, ToastAction, Toast } from "./toastTypes";
 
 const KIND_STYLES: Record<ToastKind, { ring: string; text: string; icon: React.ReactNode; bar: string }> = {
   success: {
@@ -136,16 +89,6 @@ export function Toaster() {
       })}
     </div>
   );
-}
-
-export function useToast() {
-  const push = useToasts((s) => s.push);
-  return useMemo(() => ({
-    info: (title: string, description?: string) => push({ kind: "info", title, description }),
-    success: (title: string, description?: string) => push({ kind: "success", title, description }),
-    warning: (title: string, description?: string) => push({ kind: "warning", title, description }),
-    error: (title: string, description?: string) => push({ kind: "error", title, description }),
-  }), [push]);
 }
 
 // Add to globals via a small util — keeps the keyframes in sync

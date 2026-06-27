@@ -40,7 +40,7 @@ export function WelcomeScreen() {
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
   const { loadWorkspace } = useWorkspace();
-  const { settings, update } = useSettings();
+  const { settings } = useSettings();
   const { skills, mcpServers } = useSkillsMcp();
   const toast = useToasts((s) => s.push);
   const steps = getSteps();

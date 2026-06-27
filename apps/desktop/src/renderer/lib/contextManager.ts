@@ -88,7 +88,6 @@ export function estimateTokens(text: string): number {
   }
 
   let lineNum = 0;
-  let colNum = 0;
   // Detect fence on the very first line (line 0) before entering the loop,
   // because the in-loop check only fires after a newline increments lineNum.
   if (fenceLines.has(0)) codeMode = !codeMode;
@@ -98,7 +97,6 @@ export function estimateTokens(text: string): number {
     // Track line boundaries for code fence detection
     if (code === 10) { // newline
       lineNum++;
-      colNum = 0;
       // Toggle codeMode at line boundaries with triple backtick
       if (fenceLines.has(lineNum)) {
         codeMode = !codeMode;
@@ -106,7 +104,7 @@ export function estimateTokens(text: string): number {
       count += 1; // newline = 1 token
       continue;
     }
-    colNum++;
+
 
     // Check for triple backtick at start of a line (already tracked via fenceLines)
     // Also handle inline backtick pairs for emphasis (not code blocks)
