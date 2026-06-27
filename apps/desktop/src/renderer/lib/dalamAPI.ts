@@ -9,7 +9,7 @@ import { hookBus } from "./hookBus";
 // ---------------------------------------------------------------------------
 const _debugLog = (...args: unknown[]) => {
   try {
-    if (typeof window !== "undefined" && (window as any).__DALAM_DEBUG) {
+    if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).__DALAM_DEBUG) {
       console.log("[DALAM]", ...args);
     }
   } catch { /* ignore */ }
@@ -91,7 +91,7 @@ export function getRecentFiles(): string[] {
   try {
     const raw = localStorage.getItem("dalam.recentFiles.v1");
     return raw ? JSON.parse(raw) : [];
-  } catch (_e) { return []; }
+  } catch { return []; }
 }
 
 function addRecentFile(path: string) {
@@ -105,7 +105,7 @@ function getStoredSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.settings);
     if (raw) { SETTINGS_CACHE.set("all", raw); return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }; }
-  } catch (_e) { /* settings load failed, use defaults */ }
+  } catch { /* settings load failed, use defaults */ }
   const defaults = { ...DEFAULT_SETTINGS };
   SETTINGS_CACHE.set("all", JSON.stringify(defaults));
   return defaults;
@@ -129,7 +129,7 @@ function getProviderConfig(providerId: string): { baseUrl: string; apiKey: strin
       if (!provider?.baseUrl || !provider?.apiKey) return null;
       return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
     }
-  } catch (_e) { /* provider config parse failed */ }
+  } catch { /* provider config parse failed */ }
   return null;
 }
 
@@ -283,7 +283,7 @@ async function fetchJsonWithRetry(
   options: RequestInit,
   maxRetries = 2,
   baseDelayMs = 1000
-): Promise<any> {
+): Promise<unknown> {
   return retryWithBackoff(async () => {
     const resp = await corsFetch(url, options);
     if (!resp.ok) {
@@ -323,7 +323,7 @@ async function* streamOpenAI(
   const _tcArgBuffers = new Map<number, { name: string; args: string }>();
 
   /** Build an XML tag from a completed tool call name + parsed JSON args */
-  function _emitToolCallXml(tcName: string, parsedArgs: Record<string, any>): string {
+  function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): string {
     const attrs = Object.entries(parsedArgs)
       .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
       .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
@@ -447,7 +447,7 @@ async function* streamOpenAI(
       }
     }
     // Flush any remaining incomplete tool call buffers (emit with whatever args we have)
-    for (const [idx, buf] of _tcArgBuffers) {
+    for (const [, buf] of _tcArgBuffers) {
       try {
         const parsedArgs = JSON.parse(buf.args || "{}")
         const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
@@ -666,7 +666,7 @@ const dalamAPI: DalamAPI = {
       // Update open tabs to reflect the new path
       try {
         const { useWorkspace } = await import("../store/useAppStore");
-        const { openTabs, closeTab, setActiveFile } = useWorkspace.getState();
+        const { closeTab, setActiveFile } = useWorkspace.getState();
         const wasActive = useWorkspace.getState().activeFilePath === path;
         closeTab(path);
         if (wasActive) setActiveFile(newPath);
@@ -800,7 +800,7 @@ const dalamAPI: DalamAPI = {
       return { sessionId };
     },
     async sendPrompt(sessionId, prompt, conversationHistory?, agentName?, attachments?) {
-      const { settings, providerId, modelId, config } = getActiveProvider();
+      const { settings, modelId, config } = getActiveProvider();
 
       /** Assemble the system prompt and context blocks for the LLM. */
       async function assembleContext(cleanPrompt: string): Promise<string> {
@@ -1165,8 +1165,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         // Build messages from LIVE currentHistory (not pre-loop snapshot)
         // Token-budget-aware: uses estimateTokens for accurate counting
         async function buildMessages(): Promise<ApiMessage[]> {
-          const { estimateTokens: estTokens } = await import("./contextManager");
-          const MAX_TOKENS = 80000;
+          const { estimateTokens: estTokens, parseContextWindow } = await import("./contextManager");
+          const { useModelProviders, useSettings: settingsStore } = await import("../store/useAppStore");
+          // Use the model's actual context window, with 120K fallback
+          const modelId = settingsStore.getState().settings.selectedModel || "";
+          const allModels = useModelProviders.getState().getAllModels();
+          const modelInfo = allModels.find((m) => m.model.modelId === modelId);
+          const MAX_TOKENS = parseContextWindow(modelInfo?.model.contextWindow) || 120000;
           // Reserve tokens for system prompt, compaction summary, and output
           const systemTokenEst = estTokens(systemPrompt);
           const OUTPUT_RESERVE = 8000;
@@ -1295,7 +1300,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           const parsedToolsFromText = await parseToolCalls(safeTextForParsing);
           // Merge: code block tool calls take priority (they're more explicit), then text-parsed ones
           // Deduplicate: if the same tool+args appears in both, keep only the code-block version
-          const sortedStringify = (obj: Record<string, any>) => JSON.stringify(obj, Object.keys(obj).sort());
+          const sortedStringify = (obj: Record<string, unknown>) => JSON.stringify(obj, Object.keys(obj).sort());
           const parsedTools = [...parsedFromCodeBlocks];
           const codeBlockKeys = new Set(parsedFromCodeBlocks.map((t) => `${t.name}:${sortedStringify(t.args)}`));
           for (const tc of parsedToolsFromText) {
@@ -1312,18 +1317,16 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           // FIX: Single parse pass for display content — strip all tool tags
           const TOOL_TAG_RE = /<(?:read_file|write_file|edit_file|list_dir|grep_file|search_files|run_command|git_status|git_commit|git_log|clipboard_read|clipboard_write|notify|system_info|open_url|launch_app|reveal_in_finder|get_env|get_screen_info|list_processes|kill_process|get_disk_space|memory_save|memory_search|memory_delete|memory_stats|memory_maintain|memory_extract|memory_export|memory_import|mcp_[\w_]+)[\s\S]*?(?:\/>|<\/[\w_]+>)/g;
-          const displayContent = safeTextForParsing.replace(TOOL_TAG_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+          const ANTLML_TAG_RE = /(?:antml:function_calls\s*)?<invoke[\s\S]*?<\/(?:antml:)?function_calls\s*>/gi;
+          const displayContent = safeTextForParsing.replace(TOOL_TAG_RE, "").replace(ANTLML_TAG_RE, "").replace(/\n{3,}/g, "\n\n").trim();
 
-          // Emit display content if non-empty
-          if (displayContent) {
-            const assistantTurnMsg = {
-              id: lastMessageId || sessionId,
-              role: "assistant" as const,
-              content: displayContent,
-              timestamp: Date.now(),
-            };
-            currentHistory.push(assistantTurnMsg);
-          }
+          const assistantTurnMsg = {
+            id: lastMessageId || sessionId,
+            role: "assistant" as const,
+            content: displayContent || "(executing tools...)",
+            timestamp: Date.now(),
+          };
+          currentHistory.push(assistantTurnMsg);
 
           if (parsedTools.length > 0) {
             // FIX 2: Parallel tool approval and execution
@@ -1403,8 +1406,28 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
             // Push combined tool results as single user message
             if (toolResults.length > 0) {
-              currentHistory.push({ id: "tr-" + Math.random().toString(36).slice(2, 9), role: "user" as const, content: toolResults.join("\n\n"), timestamp: Date.now() });
+              const toolResultContent = toolResults.join("\n\n");
+              currentHistory.push({ id: "tr-" + Math.random().toString(36).slice(2, 9), role: "user" as const, content: toolResultContent, timestamp: Date.now() });
               totalToolCalls += toolResults.length;
+
+              // Persist tool results to sessionMessages so the LLM sees them on the next turn
+              try {
+                const { useChat } = await import("../store/useAppStore");
+                const store = useChat.getState();
+                const sid = store.activeSessionId;
+                if (sid) {
+                  const toolResultMsg: ChatMessage = {
+                    id: "tr-" + Math.random().toString(36).slice(2, 9),
+                    role: "user",
+                    content: toolResultContent,
+                    timestamp: Date.now(),
+                  };
+                  const existing = store.sessionMessages[sid] ?? [];
+                  useChat.setState({
+                    sessionMessages: { ...store.sessionMessages, [sid]: [...existing, toolResultMsg] },
+                  });
+                }
+              } catch { /* store not available */ }
             }
 
             // Reset streaming state
@@ -1451,7 +1474,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         try {
           const { useChat } = await import("../store/useAppStore");
           messageCount = useChat.getState().sessionMessages[sessionId]?.length ?? 0;
-        } catch (_e) { /* failed to read session message count */ }
+        } catch { /* failed to read session message count */ }
 
         if (err instanceof ProviderError) {
           if (err.code === "credit") consecutiveRateLimitErrors++;
@@ -1494,7 +1517,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         activeControllers.delete(sessionId);
         sessionStartTimes.delete(sessionId);
         // Clean up file watchers — watchers are keyed by path, clean all active ones
-        for (const [watchPath, unwatch] of fileWatchers) {
+        for (const [, unwatch] of fileWatchers) {
           try { unwatch(); } catch { /* ignore */ }
         }
         fileWatchers.clear();
@@ -1554,7 +1577,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       }
     },
     async summarizeMessages(model, messages) {
-      const { settings, config } = getActiveProvider(false);
+      const { config } = getActiveProvider(false);
 
       const isAnthropic = config.apiFormat === "anthropic";
       const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
@@ -1578,11 +1601,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         method: "POST",
         headers,
         body: JSON.stringify(body),
-      }, 2, 1000);
+      }, 2, 1000) as Record<string, unknown>;
       if (isAnthropic) {
-        return json.content?.[0]?.text || "";
+        const content = (json.content as Array<{ text: string }>);
+        return content?.[0]?.text || "";
       } else {
-        return json.choices?.[0]?.message?.content || "";
+        const choices = (json.choices as Array<{ message: { content: string } }>);
+        return choices?.[0]?.message?.content || "";
       }
     },
     async approveDiff(sessionId: string, diffId: string) {
@@ -1810,8 +1835,12 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
 interface ParsedToolCall {
   name: string;
-  args: Record<string, any>;
+  args: Record<string, string>;
   raw: string;
+}
+
+function decodeHtmlEntities(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
 function parseAttributes(tagStr: string): Record<string, string> {
@@ -1821,8 +1850,8 @@ function parseAttributes(tagStr: string): Record<string, string> {
   let match;
   while ((match = regex.exec(tagStr)) !== null) {
     const val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : "");
-    // Unescape: remove backslash before quotes
-    attrs[match[1]] = val.replace(/\\(["'])/g, "$1");
+    // Unescape: remove backslash before quotes, then decode HTML entities
+    attrs[match[1]] = decodeHtmlEntities(val.replace(/\\(["'])/g, "$1"));
   }
   return attrs;
 }
@@ -1933,10 +1962,10 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   const runCommandRegex = /<run_command\s+command="([^"]*)"\s*\/?>/gi;
   const runCommandRegex2 = /<run_command\s+command='([^']*)'\s*\/?>/gi;
   while ((match = runCommandRegex.exec(text)) !== null) {
-    toolCalls.push({ name: "run_command", args: { command: match[1] }, raw: match[0] });
+    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1]) }, raw: match[0] });
   }
   while ((match = runCommandRegex2.exec(text)) !== null) {
-    toolCalls.push({ name: "run_command", args: { command: match[1] }, raw: match[0] });
+    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1]) }, raw: match[0] });
   }
 
   // 6. git_status — handle both self-closing and closing tags
@@ -2175,6 +2204,54 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
+  // 25. Anthropic antml:function_calls / <invoke> format
+  // Models like MiniMax output: antml:function_calls<invoke name="tool">parameter name="key">value</antml:parameter></antml:function_calls
+  const antmlBlockRegex = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
+  let antmlMatch;
+  while ((antmlMatch = antmlBlockRegex.exec(text)) !== null) {
+    const toolName = antmlMatch[1];
+    const inner = antmlMatch[2];
+    const args: Record<string, string> = {};
+    const paramRegex = /(?:parameter\s+name=["']([^"']+)["'])?>([\s\S]*?)<\/(?:antml:)?parameter>/gi;
+    let paramMatch;
+    while ((paramMatch = paramRegex.exec(inner)) !== null) {
+      if (paramMatch[1]) args[paramMatch[1]] = paramMatch[2].trim();
+    }
+    if (Object.keys(args).length === 0) {
+      const trimmed = inner.trim();
+      if (trimmed) args["content"] = trimmed;
+    }
+    toolCalls.push({ name: toolName, args, raw: antmlMatch[0] });
+  }
+
+  // 26. Standalone <invoke> tags without wrapping antml:function_calls
+  const invokeRegex = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
+  let invokeMatch;
+  while ((invokeMatch = invokeRegex.exec(text)) !== null) {
+    // Skip if already captured by the antml block regex above
+    if (toolCalls.some(tc => tc.raw.includes(invokeMatch![0]))) continue;
+    const toolName = invokeMatch[1];
+    const inner = invokeMatch[2];
+    const args: Record<string, string> = {};
+    const paramRegex = /parameter\s*name=["']([^"']+)["']\s*>([\s\S]*?)<\/parameter>/gi;
+    let paramMatch;
+    while ((paramMatch = paramRegex.exec(inner)) !== null) {
+      args[paramMatch[1]] = paramMatch[2].trim();
+    }
+    if (Object.keys(args).length === 0) {
+      const trimmed = inner.trim();
+      if (trimmed) args["content"] = trimmed;
+    }
+    toolCalls.push({ name: toolName, args, raw: invokeMatch[0] });
+  }
+
+  // Decode HTML entities in all parsed tool call args (handles &quot; from _emitToolCallXml)
+  for (const tc of toolCalls) {
+    for (const [k, v] of Object.entries(tc.args)) {
+      if (typeof v === "string") tc.args[k] = decodeHtmlEntities(v);
+    }
+  }
+
   return toolCalls;
 }
 
@@ -2244,7 +2321,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         cleanup();
         // Update the tool call status in the store so the UI doesn't stay stuck
         if (useChatRef) {
-          try { useChatRef.getState().resolveToolApproval(toolCallId, "denied"); } catch (_e) { /* ignore */ }
+          try { useChatRef.getState().resolveToolApproval(toolCallId, "denied"); } catch { /* ignore */ }
         }
         _debugLog(`waitForToolApproval: timed out after ${TIMEOUT_MS}ms for tool ${toolCallId}`);
         resolve("denied");
@@ -2277,7 +2354,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
   });
 }
 
-async function executeTool(name: string, args: Record<string, any>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
+async function executeTool(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
   // Validate args against Zod schema
   const { validateToolArgs } = await import("./toolSchemas");
   const validation = validateToolArgs(name, args);
@@ -2290,7 +2367,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const MAX_READ_SIZE = 1024 * 1024; // 1MB limit for agent reads
     try {
       const fileInfo = await stat(args.path);
-      const fileSize = (fileInfo as any).size ?? 0;
+      const fileSize = (fileInfo as { size?: number }).size ?? 0;
       if (fileSize > MAX_READ_SIZE) {
         return `[File too large to read: ${fileSize} bytes. Use list_dir or run_command with head/tail to inspect portions.]`;
       }
@@ -2414,7 +2491,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const { readFile, stat } = await import("@tauri-apps/plugin-fs");
     try {
       const fileInfo = await stat(args.path);
-      const fileSize = (fileInfo as any).size ?? 0;
+      const fileSize = (fileInfo as { size?: number }).size ?? 0;
       if (fileSize > 5 * 1024 * 1024) {
         return `[File too large to grep: ${(fileSize / 1024 / 1024).toFixed(1)}MB. Use run_command with grep instead.]`;
       }
@@ -2442,7 +2519,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
   }
 
   if (name === "search_files") {
-    const { readFile, stat } = await import("@tauri-apps/plugin-fs");
+    const { readFile } = await import("@tauri-apps/plugin-fs");
     const searchPath = args.path || workspacePath;
     const pattern = args.pattern;
     const fileGlob = args.glob || "*";
@@ -2592,8 +2669,8 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const tags = args.tags ? args.tags.split(/,\s*/).map((t: string) => t.trim()).filter(Boolean) : [];
     const result = await saveMemory(
       {
-        category: args.category as any || "project",
-        tier: args.tier as any || "medium",
+        category: (args.category as import("./memoryTypes").MemoryCategory) || "project",
+        tier: (args.tier as import("./memoryTypes").MemoryTier) || "medium",
         summary: args.summary || args.content.slice(0, 150),
         content: args.content,
         tags,
@@ -2607,7 +2684,7 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
     const { searchMemories } = await import("./memoryStore");
     const limit = args.limit ? parseInt(args.limit, 10) : 10;
     const results = await searchMemories(args.query, {
-      category: args.category as any || undefined,
+      category: (args.category as import("./memoryTypes").MemoryCategory) || undefined,
       limit,
     });
     if (results.length === 0) return "No memories found matching the query.";
@@ -2694,12 +2771,18 @@ async function executeTool(name: string, args: Record<string, any>, workspacePat
       const body = isAnthropic
         ? { model: settings.selectedModel, system: "You are a memory extraction assistant.", messages: [{ role: "user", content: prompt }], max_tokens: 1000 }
         : { model: settings.selectedModel, messages: [{ role: "system", content: "You are a memory extraction assistant." }, { role: "user", content: prompt }], max_tokens: 1000 };
-      const resp = await fetchJsonWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, 2, 1000);
-      return isAnthropic ? (resp.content?.[0]?.text || "") : (resp.choices?.[0]?.message?.content || "");
+      const resp = await fetchJsonWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) }, 2, 1000) as Record<string, unknown>;
+      const r = resp as Record<string, unknown>;
+      if (isAnthropic) {
+        const content = (r.content as Array<{ text: string }>);
+        return content?.[0]?.text || "";
+      }
+      const choices = (r.choices as Array<{ message: { content: string } }>);
+      return choices?.[0]?.message?.content || "";
     };
 
     // Get last exchange from session messages
-    const { useChat, useWorkspace } = await import("../store/useAppStore");
+    const { useChat } = await import("../store/useAppStore");
     const activeSessionId = useChat.getState().session?.id ?? useChat.getState().chatSessions.at(-1)?.id;
     if (!activeSessionId) return "Error: No active session found.";
     const sessionMessages = useChat.getState().sessionMessages[activeSessionId];

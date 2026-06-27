@@ -252,7 +252,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     );
     if (workspace) {
       const { proposeSkillFromSession } = await import("./skillCrystallizer");
-      const { useToasts } = await import("../components/ui/Toaster");
+      const { useToasts } = await import("../components/ui/toastStore");
       const pushToast = useToasts.getState().push;
       // Asynchronously trigger proposal check without blocking SessionEnd execution
       proposeSkillFromSession(event.sessionId, workspace.path, false, (t: Parameters<typeof pushToast>[0]) => pushToast(t)).catch((err) => {

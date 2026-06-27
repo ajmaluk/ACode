@@ -1,5 +1,5 @@
 import { useWorkspace } from "@/store/useAppStore";
-import { useToast } from "@/components/ui/Toaster";
+import { useToast } from "@/components/ui/toastStore";
 import { ChevronRight, FileCode } from "lucide-react";
 import { splitPath } from "@/lib/pathUtils";
 

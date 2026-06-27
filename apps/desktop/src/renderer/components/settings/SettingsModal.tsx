@@ -3,7 +3,7 @@ import {
   useSettingsView, useSettings, useSkillsMcp, useModelProviders, useAgents, useWorkspace,
   type SettingsTab, type ModelProvider, type PrimaryAgentName, type AgentInfo, type PermissionRule, type PermissionAction,
 } from "@/store/useAppStore";
-import { useToasts } from "@/components/ui/Toaster";
+import { useToasts } from "@/components/ui/toastStore";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { joinPath } from "@/lib/pathUtils";
 import { modKey, platform } from "@/lib/platform";

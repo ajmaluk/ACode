@@ -4,7 +4,7 @@
  */
 
 import { create } from "zustand";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { Toast } from "./toastTypes";
 
 type ToastState = {
@@ -52,4 +52,30 @@ export function useToast() {
     warning: (title: string, description?: string) => push({ kind: "warning", title, description }),
     error: (title: string, description?: string) => push({ kind: "error", title, description }),
   }), [push]);
+}
+
+/**
+ * Inject global progress-bar keyframes into the document head.
+ */
+export function useProgressKeyframes() {
+  useEffect(() => {
+    const id = "dalam-progress-keyframes";
+    if (document.getElementById(id)) return;
+    const style = document.createElement("style");
+    style.id = id;
+    style.textContent = `
+      @keyframes dalam-progress {
+        from { transform: scaleX(1); }
+        to { transform: scaleX(0); }
+      }
+      .animate-progress {
+        transform-origin: left;
+        animation-name: dalam-progress;
+        animation-timing-function: linear;
+        animation-fill-mode: forwards;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => { style.remove(); };
+  }, []);
 }

@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState, forwardRef } from "react";
 import { ChevronRight } from "lucide-react";
-import { connectContextMenu, type ContextMenuItem } from "./contextMenuUtils";
-
-type ContextMenuState = {
-  x: number;
-  y: number;
-  items: ContextMenuItem[];
-};
+import { connectContextMenu, type ContextMenuState } from "./contextMenuUtils";
 
 export function ContextMenuProvider({ children }: { children: React.ReactNode }) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);

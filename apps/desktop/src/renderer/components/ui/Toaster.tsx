@@ -1,10 +1,6 @@
-import { useEffect } from "react";
 import { CheckCircle2, XCircle, AlertTriangle, Info, X } from "lucide-react";
 import type { ToastKind } from "./toastTypes";
 import { useToasts } from "./toastStore";
-
-export { useToasts, useToast } from "./toastStore";
-export type { ToastKind, ToastAction, Toast } from "./toastTypes";
 
 const KIND_STYLES: Record<ToastKind, { ring: string; text: string; icon: React.ReactNode; bar: string }> = {
   success: {
@@ -91,26 +87,3 @@ export function Toaster() {
   );
 }
 
-// Add to globals via a small util — keeps the keyframes in sync
-export function useProgressKeyframes() {
-  useEffect(() => {
-    const id = "dalam-progress-keyframes";
-    if (document.getElementById(id)) return;
-    const style = document.createElement("style");
-    style.id = id;
-    style.textContent = `
-      @keyframes dalam-progress {
-        from { transform: scaleX(1); }
-        to { transform: scaleX(0); }
-      }
-      .animate-progress {
-        transform-origin: left;
-        animation-name: dalam-progress;
-        animation-timing-function: linear;
-        animation-fill-mode: forwards;
-      }
-    `;
-    document.head.appendChild(style);
-    return () => { style.remove(); };
-  }, []);
-}

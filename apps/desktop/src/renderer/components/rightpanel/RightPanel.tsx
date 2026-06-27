@@ -3,7 +3,7 @@ import { useGit, useChat, useWorkspace, useDiffView, useUI, useTerminal } from "
 import type { GitStatus } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { computeDiff } from "@/lib/diff";
-import { useToast } from "@/components/ui/Toaster";
+import { useToast } from "@/components/ui/toastStore";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import {
   GitBranch, FileCode, Check, X,

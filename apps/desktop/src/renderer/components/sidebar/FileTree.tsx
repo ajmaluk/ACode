@@ -17,8 +17,8 @@ import {
 } from "lucide-react";
 import type { FileNode as FileNodeT } from "@dalam/shared-types";
 import { useWorkspace, useDiffView } from "@/store/useAppStore";
-import { showContextMenu, type ContextMenuItem } from "@/components/ui/ContextMenu";
-import { useToast } from "@/components/ui/Toaster";
+import { showContextMenu, type ContextMenuItem } from "@/components/ui/contextMenuUtils";
+import { useToast } from "@/components/ui/toastStore";
 
 function renderFileIcon(name: string, className: string) {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";

@@ -58,7 +58,19 @@ const TAG_TO_TOOL: Record<string, string> = {
   run_command: "bash",
 };
 
-const KNOWN_TAG_NAMES = Object.keys(TAG_TO_TOOL);
+// Comprehensive list of ALL tool names for display stripping (must match dalamAPI.ts KNOWN_TOOL_NAMES)
+const ALL_TOOL_NAMES = [
+  "read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files",
+  "run_command", "git_status", "git_commit", "git_log",
+  "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
+  "launch_app", "reveal_in_finder",
+  "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
+  "memory_save", "memory_search", "memory_delete", "memory_stats",
+  "memory_maintain", "memory_extract", "memory_export", "memory_import",
+  // Legacy aliases used by TAG_TO_TOOL
+  "bash", "shell", "search", "grep", "webfetch", "websearch",
+];
+const KNOWN_TAG_NAMES = [...new Set(ALL_TOOL_NAMES)];
 
 // Regex to strip ALL XML tool call tags (opening, closing, and self-closing) from content.
 // Uses [^>]* to handle malformed attributes (e.g. unescaped quotes inside command values).
@@ -83,6 +95,15 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(XML_CLOSING_TAG_RE, "");
   // Strip MCP tags
   result = result.replace(XML_MCP_STRIP_RE, "");
+  // Strip Anthropic antml:function_calls / <invoke> blocks
+  result = result.replace(/(?:antml:function_calls\s*)?<invoke[\s\S]*?<\/(?:antml:)?function_calls\s*>/gi, "");
+  // Strip orphan antml tags
+  result = result.replace(/<\/?antml:[^>]*>/gi, "");
+  // Strip orphan <invoke> tags
+  result = result.replace(/<\/?invoke[^>]*>/gi, "");
+  // Strip incomplete XML tool tags at end of content (arriving across streaming deltas)
+  // Matches: <run_command command="ls -la$  (no closing > or />)
+  result = result.replace(new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi"), "");
   // Strip broken/malformed tag fragments from model output (e.g. ><]minimax[>][)
   result = result.replace(/>\]\s*<[^>]*>?\[</g, "");
   result = result.replace(/\]>\s*\[</g, "");
@@ -1009,8 +1030,18 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
           ? [...data.chatSessions].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0]
           : undefined;
         if (lastSession) {
+          // Reconstruct a proper AgentSession from the stored ChatSessionSummary
+          const restoredSession: import("@dalam/shared-types").AgentSession = {
+            id: lastSession.id,
+            workspacePath: lastSession.workspacePath,
+            model: lastSession.model ?? useSettings.getState().settings.selectedModel,
+            mode: lastSession.mode,
+            startedAt: lastSession.startedAt,
+            messages: data.sessionMessages?.[lastSession.id] || [],
+            status: lastSession.status === "completed" ? "idle" : lastSession.status,
+          };
           useChat.setState({
-            session: lastSession,
+            session: restoredSession,
             messages: data.sessionMessages?.[lastSession.id] || [],
           });
         } else {
@@ -1395,10 +1426,6 @@ export const useChat = create<ChatState>((set, get) => ({
       sessionMessages: { ...get().sessionMessages, [sessionId]: [] },
       sessionAgentName: { ...get().sessionAgentName, [sessionId]: activeAgentName },
     });
-    // Clean up previous stream listener to prevent ghost events
-    api.agent.cleanupStream(sessionId);
-    // Register stream listener for this session (single registration)
-    api.agent.onStreamEvent(sessionId, (event) => get().appendStream(event));
     savePersistedSessionSummaries(get().chatSessions);
     savePersistedMessages(get().sessionMessages);
     savePersistedAgents(get().sessionAgentName);
@@ -1413,6 +1440,8 @@ export const useChat = create<ChatState>((set, get) => ({
       await api.agent.abort(sessionId);
     } finally {
       api.agent.cleanupStream(sessionId);
+      // Always reset _sendInProgress when aborting — the send loop is being terminated
+      set({ _sendInProgress: false });
       // Guard against race with newChat — if session was already cleared,
       // don't overwrite the fresh state with stale abort data
       const currentSession = get().session;
@@ -1464,15 +1493,19 @@ export const useChat = create<ChatState>((set, get) => ({
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
         console.error("Failed to start session:", err);
+        set({ _sendInProgress: false });
         return;
       }
       // Re-check isStreaming after await to prevent race condition with concurrent sendMessage calls
-      if (get().isStreaming) return;
+      if (get().isStreaming) { set({ _sendInProgress: false }); return; }
       session = get().session;
-      if (!session) return;
+      if (!session) { set({ _sendInProgress: false }); return; }
     }
     const { messages } = get();
     const api = createDalamAPI();
+    // Ensure stream listener is registered for the current session
+    api.agent.cleanupStream(session.id);
+    api.agent.onStreamEvent(session.id, (event) => get().appendStream(event));
 
     const { pendingAttachments } = get();
     const userMsg: ChatMessage = {
@@ -1558,7 +1591,7 @@ export const useChat = create<ChatState>((set, get) => ({
       set({ _safetyTimer: null });
       const { isStreaming, session: currentSession } = get();
       // If appendStream already handled the error (streaming ended), don't add duplicate error message
-      if (!isStreaming) return;
+      if (!isStreaming) { set({ _sendInProgress: false }); return; }
       const msg = err instanceof Error ? err.message : "Unknown error";
       const errorMsg: ChatMessage = {
         id: "err-" + Math.random().toString(36).slice(2, 9),
@@ -1567,7 +1600,7 @@ export const useChat = create<ChatState>((set, get) => ({
         timestamp: Date.now(),
       };
       const sessionId = currentSession?.id;
-      if (!sessionId) return;
+      if (!sessionId) { set({ _sendInProgress: false }); return; }
       const newSessionMessages = { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), errorMsg] };
       set({
         isStreaming: false,
@@ -1593,7 +1626,7 @@ export const useChat = create<ChatState>((set, get) => ({
   appendStream(event) {
     const _log = (...args: unknown[]) => {
       try {
-        if (typeof window !== "undefined" && (window as any).__DALAM_DEBUG) {
+        if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).__DALAM_DEBUG) {
           console.log("[DALAM:store]", ...args);
         }
       } catch { /* ignore */ }
@@ -1742,7 +1775,6 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "message-end": {
         const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
-        const api = createDalamAPI();
 
         // Clear safety timeout if it exists — but ONLY when the turn is truly done.
         // During intermediate turns (tool calls just executed, agentic loop continues
@@ -1799,9 +1831,6 @@ export const useChat = create<ChatState>((set, get) => ({
         // Skip creating a message if there's nothing to show (e.g., error already
         // handled the turn and cleared streamingContent)
         if (!finalContent && allToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent) {
-          // Even with empty content, we need to update session status to prevent stuck loading
-          const sessionId = get().activeSessionId;
-          if (sessionId) api.agent.cleanupStream(sessionId);
           set({
             isStreaming: false,
             pendingToolCalls: [],
@@ -1878,7 +1907,6 @@ export const useChat = create<ChatState>((set, get) => ({
           ...(currentTaskPlan && currentTaskPlan.length > 0 ? { taskPlan: currentTaskPlan, taskPlanSummary: currentTaskPlanSummary ?? undefined } : {}),
         };
         const sessionId = get().activeSessionId;
-        if (sessionId) api.agent.cleanupStream(sessionId);
         const newSessionMessages = sessionId
           ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), assistantMsg] }
           : get().sessionMessages;
@@ -2157,7 +2185,8 @@ export const useChat = create<ChatState>((set, get) => ({
         }));
         break;
       case "ask-permission": {
-        const permKind = (["bash", "edit", "mcp", "read"] as const).includes(event.kind as any) ? (event.kind as "bash" | "edit" | "mcp" | "read") : "bash";
+        const VALID_KINDS = ["bash", "edit", "mcp", "read"] as const;
+        const permKind = (VALID_KINDS as readonly string[]).includes(event.kind) ? (event.kind as typeof VALID_KINDS[number]) : "bash";
         usePermission.getState().ask({
           kind: permKind,
           title: "Permission required",
@@ -2234,7 +2263,7 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       default:
-        console.warn("Unknown stream event type:", (event as any).type);
+        console.warn("Unknown stream event type:", (event as { type: string }).type);
         break;
     }
   },
@@ -2257,6 +2286,7 @@ export const useChat = create<ChatState>((set, get) => ({
       restoredVersionId: null,
       preRestoreMessages: null,
       _safetyTimer: null,
+      _sendInProgress: false,
     });
   },
 
@@ -2283,6 +2313,7 @@ export const useChat = create<ChatState>((set, get) => ({
         preRestoreMessages: null,
         taskPlan: null,
         taskPlanSummary: null,
+        _sendInProgress: false,
       });
       return;
     }
@@ -2324,6 +2355,7 @@ export const useChat = create<ChatState>((set, get) => ({
       preRestoreMessages: null,
       taskPlan: null,
       taskPlanSummary: null,
+      _sendInProgress: false,
     });
   },
 
@@ -2384,6 +2416,7 @@ export const useChat = create<ChatState>((set, get) => ({
           restoredVersionId: null,
           preRestoreMessages: null,
           session: null,
+          _sendInProgress: false,
         } : {}),
       };
     });
@@ -2573,10 +2606,21 @@ export const useChat = create<ChatState>((set, get) => ({
           const model = selectedModelId || useSettings.getState().settings.selectedModel;
           const summary = await api.agent.summarizeMessages(model, compactionMessages);
           if (summary) {
+            // Replace compacted messages with summary + kept messages
+            const { toKeep } = selectMessagesForCompaction(messages, 6);
+            const summaryMsg: ChatMessage = {
+              id: "compact-" + Math.random().toString(36).slice(2, 9),
+              role: "system",
+              content: `[Conversation summary]\n${summary}`,
+              timestamp: Date.now(),
+            };
+            const compacted = [summaryMsg, ...toKeep];
             set((s) => {
-              const next = { ...s.compactionSummaries, [sessionId]: summary };
-              savePersistedCompactionSummaries(next);
-              return { compactionSummaries: next };
+              const nextSummaries = { ...s.compactionSummaries, [sessionId]: summary };
+              const nextMessages = { ...s.sessionMessages, [sessionId]: compacted };
+              savePersistedCompactionSummaries(nextSummaries);
+              savePersistedMessages(nextMessages);
+              return { compactionSummaries: nextSummaries, sessionMessages: nextMessages };
             });
           }
         }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents, useTerminal } from "@/store/useAppStore";
-import { useToasts } from "@/components/ui/Toaster";
+import { useToasts } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { modKey } from "@/lib/platform";
 import { createDalamAPI } from "@/lib/dalamAPI";

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useWorkspace, useSettings, useSkillsMcp } from "@/store/useAppStore";
-import { useToasts } from "@/components/ui/Toaster";
+import { useToasts } from "@/components/ui/toastStore";
 import { Sparkles, FolderOpen, Zap, Code2, Brain, ArrowRight, X } from "lucide-react";
 import { modKey } from "@/lib/platform";
 
