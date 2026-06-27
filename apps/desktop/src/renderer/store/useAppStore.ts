@@ -886,7 +886,12 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
   const contextPath = joinPath(dotDalam, "context.json");
 
   try {
-    const { exists } = await import("@tauri-apps/plugin-fs");
+    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+
+    // Ensure .dalam directory exists before checking files inside it
+    if (!(await exists(dotDalam))) {
+      try { await mkdir(dotDalam, { recursive: true }); } catch { /* may already exist or scope issue */ }
+    }
 
     // Load always-allowed permissions from disk first (needed for tool permission evaluations)
     await usePermission.getState().loadFromDisk();
