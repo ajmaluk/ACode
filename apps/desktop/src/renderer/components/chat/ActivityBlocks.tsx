@@ -596,6 +596,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
   const { resolveToolApproval } = useChat();
   const openDiff = useDiffView((s) => s.openFile);
   const needsApproval = toolCall.status === "awaiting-approval";
+  const [resolving, setResolving] = useState(false);
 
   const meta = getToolMeta(toolCall.name);
   const args = toolCall.args ?? {};
@@ -676,16 +677,26 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
         {needsApproval && (
           <div className="flex items-center gap-1.5 pt-1">
             <button
-              onClick={() => resolveToolApproval(toolCall.id, "approved", "Approved by user")}
-              className="flex items-center gap-1 px-2 py-1 bg-dalam-git-added/20 hover:bg-dalam-git-added/30 text-dalam-git-added text-xs rounded transition-colors"
+              disabled={resolving}
+              onClick={async () => {
+                setResolving(true);
+                await resolveToolApproval(toolCall.id, "approved", "Approved by user");
+                setResolving(false);
+              }}
+              className="flex items-center gap-1 px-2 py-1 bg-dalam-git-added/20 hover:bg-dalam-git-added/30 text-dalam-git-added text-xs rounded transition-colors disabled:opacity-50"
             >
-              <Check className="w-3 h-3" />Approve
+              <Check className="w-3 h-3" />{resolving ? "Approving..." : "Approve"}
             </button>
             <button
-              onClick={() => resolveToolApproval(toolCall.id, "denied", "Denied by user")}
-              className="flex items-center gap-1 px-2 py-1 bg-dalam-git-deleted/20 hover:bg-dalam-git-deleted/30 text-dalam-git-deleted text-xs rounded transition-colors"
+              disabled={resolving}
+              onClick={async () => {
+                setResolving(true);
+                await resolveToolApproval(toolCall.id, "denied", "Denied by user");
+                setResolving(false);
+              }}
+              className="flex items-center gap-1 px-2 py-1 bg-dalam-git-deleted/20 hover:bg-dalam-git-deleted/30 text-dalam-git-deleted text-xs rounded transition-colors disabled:opacity-50"
             >
-              <X className="w-3 h-3" />Deny
+              <X className="w-3 h-3" />{resolving ? "Denying..." : "Deny"}
             </button>
           </div>
         )}

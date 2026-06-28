@@ -55,7 +55,7 @@ export function PermissionDialog() {
         const next = (selectedRef.current + 1) % NUM_OPTIONS;
         selectedRef.current = next;
         setSelected(next);
-      } else if (e.key === "Enter" || e.key === " ") {
+      } else if (e.key === "Enter") {
         e.preventDefault();
         decide(selectedRef.current);
       } else if (e.key === "1") {

@@ -103,6 +103,8 @@ export type ChatMessage = {
   attachments?: FileAttachment[];
   taskPlan?: { id: string; title: string; status: "pending" | "running" | "done" | "failed" }[];
   taskPlanSummary?: string;
+  /** Internal flag: tool result messages that should be hidden from the chat UI */
+  isToolResult?: boolean;
 };
 
 export type PendingActivity =

@@ -39,22 +39,26 @@ interface TimerState {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pendingActivities: any[];
   chatSessions: ChatSessionSummary[];
+  _autoRemoveTimers: Set<ReturnType<typeof setTimeout>>;
 }
 
 /**
- * Reset the safety timer to 120s. Clears any existing timer first.
+ * Reset the safety timer. Clears any existing timer first.
+ * @param mode - "normal" = 120s, "tool-approval" = 10min for user approval waits
  * Called on every stream event to keep the agent loop alive.
  */
 export function resetSafetyTimer(
   get: () => TimerState,
   set: (partial: Record<string, unknown>) => void,
+  mode: "normal" | "tool-approval" = "normal",
 ) {
   const existing = get()._safetyTimer;
   if (existing) clearTimeout(existing);
+  const timeout = mode === "tool-approval" ? TOOL_APPROVAL_TIMEOUT_MS : SAFETY_TIMEOUT_MS;
   const timer = setTimeout(() => {
     const state = get();
     if (!state.isStreaming) return;
-    console.warn("[Chat] Safety timeout triggered — no stream events for 120s");
+    console.warn(`[Chat] Safety timeout triggered (${mode}) — no stream events for ${timeout / 1000}s`);
     const api = createDalamAPI();
     const sid = state.activeSessionId;
     if (sid) api.agent.cleanupStream(sid);
@@ -62,12 +66,17 @@ export function resetSafetyTimer(
       id: "msg-" + Math.random().toString(36).slice(2, 9),
       role: "system",
       content:
-        "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+        mode === "tool-approval"
+          ? "Agent loop timed out — no activity for 10 minutes during tool approval."
+          : "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
       timestamp: Date.now(),
     };
+    // Clear any pending auto-remove timers to prevent orphaned callbacks
+    get()._autoRemoveTimers.forEach((t) => clearTimeout(t));
     set({
       isStreaming: false,
       _sendInProgress: false,
+      _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
       streamingContent: "",
       thinkingContent: "",
       pendingToolCalls: [],
@@ -82,7 +91,7 @@ export function resetSafetyTimer(
           )
         : state.chatSessions,
     });
-  }, SAFETY_TIMEOUT_MS);
+  }, timeout);
   set({ _safetyTimer: timer });
 }
 
@@ -95,34 +104,6 @@ export function extendSafetyTimerForApproval(
   get: () => TimerState,
   set: (partial: Record<string, unknown>) => void,
 ) {
-  const existing = get()._safetyTimer;
-  if (existing) clearTimeout(existing);
-  const timer = setTimeout(() => {
-    const state = get();
-    if (!state.isStreaming) return;
-    console.warn(
-      "[Chat] Safety timeout triggered during tool approval — no events for 10min",
-    );
-    const api = createDalamAPI();
-    const sid = state.activeSessionId;
-    if (sid) api.agent.cleanupStream(sid);
-    const systemMsg: ChatMessage = {
-      id: "msg-" + Math.random().toString(36).slice(2, 9),
-      role: "system",
-      content:
-        "Agent loop timed out — no activity for 10 minutes during tool approval.",
-      timestamp: Date.now(),
-    };
-    set({
-      isStreaming: false,
-      _sendInProgress: false,
-      streamingContent: "",
-      thinkingContent: "",
-      pendingToolCalls: [],
-      pendingActivities: [],
-      _safetyTimer: null,
-      messages: [...state.messages, systemMsg],
-    });
-  }, TOOL_APPROVAL_TIMEOUT_MS);
-  set({ _safetyTimer: timer });
+  // Delegate to resetSafetyTimer with tool-approval mode to ensure consistent behavior
+  resetSafetyTimer(get, set, "tool-approval");
 }

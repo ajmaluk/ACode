@@ -492,7 +492,7 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
 function ChatView() {
   const { workspaces, activeWorkspaceId, setActiveWorkspace, openWorkspace, fileTree } = useWorkspace();
   const { settings } = useSettings();
-  const { sendMessage, isStreaming, messages, streamingContent, thinkingContent, selectedModelId, setSelectedModel, pendingToolCalls, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment, pendingActivities, session } = useChat();
+  const { sendMessage, isStreaming, messages, selectedModelId, setSelectedModel, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment } = useChat();
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
   const { activeAgentName, setActiveAgent } = useAgents();
@@ -522,41 +522,6 @@ function ChatView() {
   const followupProviderHoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const followupProviderRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [timestamp] = useState(() => Date.now());
-
-  // Strip XML tool call tags from streaming content via requestAnimationFrame.
-  // RAF batches strip operations with the browser's paint cycle, coalescing
-  // rapid message-delta events into a single strip + setState per frame.
-  const cleanRef = useRef("");
-  const pendingContentRef = useRef("");
-  const rafIdRef = useRef(0);
-  const [cleanStreamingContent, setCleanStreamingContent] = useState("");
-  useEffect(() => {
-    if (!streamingContent) {
-      if (cleanRef.current !== "") {
-        cleanRef.current = "";
-        pendingContentRef.current = "";
-        setCleanStreamingContent("");
-      }
-      return;
-    }
-    // Stash the latest content; the next RAF will pick it up
-    pendingContentRef.current = streamingContent;
-    // If a RAF is already scheduled, it will use the latest value
-    if (rafIdRef.current) return;
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = 0;
-      const raw = pendingContentRef.current;
-      if (!raw) return;
-      const cleaned = stripXmlToolCallTags(raw);
-      if (cleanRef.current !== cleaned) {
-        cleanRef.current = cleaned;
-        setCleanStreamingContent(cleaned);
-      }
-    });
-    return () => {
-      if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); rafIdRef.current = 0; }
-    };
-  }, [streamingContent]);
 
   // Auto-resize the textareas dynamically based on scrollHeight
   useEffect(() => {
@@ -612,7 +577,7 @@ function ChatView() {
       });
     }
     return () => cancelAnimationFrame(scrollRafRef.current);
-  }, [messages, streamingContent, thinkingContent]);
+  }, [messages]);
 
   const hasMessages = messages.length > 0;
   const hasMessagesRef = useRef(false);
@@ -833,7 +798,7 @@ Keyboard Shortcuts:
         setValue("");
         return;
       }
-      const formatted = messages.map(m => `### ${m.role.toUpperCase()}:\n\n${m.content}\n`).join("\n---\n\n");
+      const formatted = messages.filter(m => !m.isToolResult && !m.content?.startsWith("[Tool result for ")).map(m => `### ${m.role.toUpperCase()}:\n\n${m.content}\n`).join("\n---\n\n");
       const title = `Dalam Session Share log - ${new Date().toLocaleString()}\n\n`;
       const shareContent = title + formatted;
       
@@ -1313,7 +1278,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
               </div>
             )}
-            {messages.map((m, idx) => <ChatMessage key={m.id} message={m} onResetToMessage={(content) => setValue(content)} isLast={idx === messages.length - 1} />)}
+            {messages.filter(m => !m.isToolResult && !m.content?.startsWith("[Tool result for ")).map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={(content) => setValue(content)} isLast={idx === arr.length - 1} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1337,36 +1302,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </div>
               </div>
             )}
-            {isStreaming && (
-              <StreamingActivityPanel
-                activities={pendingActivities}
-                toolCalls={pendingToolCalls}
-                thinkingContent={thinkingContent}
-                sessionStartTime={session?.startedAt ?? timestamp}
-              />
-            )}
-            {isStreaming && cleanStreamingContent && (
-              <ChatMessage
-                message={{
-                  id: "streaming",
-                  role: "assistant",
-                  content: cleanStreamingContent,
-                  timestamp: timestamp,
-                  ...(thinkingContent ? { thinking: thinkingContent } : {}),
-                }}
-                pending
-            />
-          )}
-          {isStreaming && !streamingContent && pendingToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent && (
-              <div className="py-3 animate-fade-in-up">
-                <div className="flex items-center gap-3 text-[13px] text-dalam-text-secondary">
-                  <div className="animate-thinking-wave">
-                    <span /><span /><span /><span /><span />
-                  </div>
-                  <span className="opacity-70">Thinking</span>
-                </div>
-              </div>
-            )}
+            <StreamingMessageWrapper scrollRef={scrollRef} isUserScrolledUp={isUserScrolledUp} timestamp={timestamp} />
           </div>
         )}
       </div>
@@ -1722,7 +1658,12 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
           {segments.filter((seg) => seg.type !== "text" || seg.content.trim()).map((seg, idx) =>
             seg.type === "code"
               ? <CodeBlock key={"code-" + idx} language={seg.language ?? ""} content={seg.content} />
-              : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0"><MarkdownContent content={seg.content} /></div>
+              : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0">
+                  {pending
+                    ? <StreamingContent content={seg.content} pending={true} />
+                    : <MarkdownContent content={seg.content} />
+                  }
+                </div>
           )}
           {pending && (
             <span className="inline-block w-[2px] h-4 bg-dalam-accent-primary ml-0.5 animate-typing-cursor rounded-sm align-middle" />
@@ -1787,6 +1728,19 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
         </div>
       )}
     </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.pending === nextProps.pending &&
+    prevProps.isLast === nextProps.isLast &&
+    prevProps.onResetToMessage === nextProps.onResetToMessage &&
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.message.role === nextProps.message.role &&
+    prevProps.message.thinking === nextProps.message.thinking &&
+    (prevProps.message.activities ?? []).length === (nextProps.message.activities ?? []).length &&
+    (prevProps.message.toolCalls ?? []).length === (nextProps.message.toolCalls ?? []).length &&
+    (prevProps.message.fileChanges ?? []).length === (nextProps.message.fileChanges ?? []).length
   );
 });
 
@@ -1909,7 +1863,7 @@ const MARKDOWN_COMPONENTS: Record<string, any> = {
   td: ({ children }: { children: React.ReactNode }) => <td className="px-2 py-1 border border-dalam-border-primary">{children}</td>,
 };
 
-function MarkdownContent({ content }: { content: string }) {
+const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown
       remarkPlugins={MARKDOWN_REMARK_PLUGINS}
@@ -1918,9 +1872,29 @@ function MarkdownContent({ content }: { content: string }) {
       {content}
     </Markdown>
   );
-}
+});
 
-function CodeBlock({ language, content }: { language: string; content: string }) {
+// Lightweight streaming renderer — avoids expensive react-markdown re-parsing on each delta.
+// Falls to raw <pre> display during streaming; switches to full Markdown when settled.
+const StreamingContent = React.memo(function StreamingContent({ content, pending }: { content: string; pending: boolean }) {
+  if (!pending || content.length < 200) {
+    // Short or complete — render normally
+    return <MarkdownContent content={content} />;
+  }
+  // Streaming with long content: use lightweight rendering to avoid react-markdown re-parsing
+  const segments = splitCodeFences(content);
+  return (
+    <div className="prose-dalam mb-2 last:mb-0">
+      {segments.map((seg, idx) =>
+        seg.type === "code"
+          ? <CodeBlock key={"sc-" + idx} language={seg.language ?? ""} content={seg.content} />
+          : <p key={"st-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0">{seg.content}</p>
+      )}
+    </div>
+  );
+});
+
+const CodeBlock = React.memo(function CodeBlock({ language, content }: { language: string; content: string }) {
   const toast = useToast();
   const activeFilePath = useWorkspace((s) => s.activeFilePath);
   const updateTabContent = useWorkspace((s) => s.updateTabContent);
@@ -1986,7 +1960,7 @@ function CodeBlock({ language, content }: { language: string; content: string })
       )}
     </div>
   );
-}
+});
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -2032,4 +2006,262 @@ function findFirstFile(nodes: import("@dalam/shared-types").FileNode[]): string 
     if (n.children) { const inner = findFirstFile(n.children); if (inner) return inner; }
   }
   return null;
+}
+
+function StreamingMessageWrapper({
+  scrollRef,
+  isUserScrolledUp,
+  timestamp,
+}: {
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  isUserScrolledUp: React.RefObject<boolean>;
+  timestamp: number;
+}) {
+  const isStreaming = useChat((s) => s.isStreaming);
+  const streamingContent = useChat((s) => s.streamingContent);
+  const thinkingContent = useChat((s) => s.thinkingContent);
+  const pendingToolCalls = useChat((s) => s.pendingToolCalls);
+  const pendingActivities = useChat((s) => s.pendingActivities);
+  const session = useChat((s) => s.session);
+
+  const cleanRef = useRef("");
+  const lastRawLenRef = useRef(0); // Track raw length for correct delta computation
+  const pendingContentRef = useRef("");
+  const pendingThinkingRef = useRef("");
+  const cleanThinkingRef = useRef(""); // Ref for thinking comparison (avoids stale closure)
+  const lastUpdateRef = useRef(0);
+  const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [cleanStreamingContent, setCleanStreamingContent] = useState("");
+  const [cleanThinkingContent, setCleanThinkingContent] = useState("");
+
+  useEffect(() => {
+    if (!streamingContent && !thinkingContent) {
+      if (cleanRef.current !== "" || cleanThinkingRef.current !== "") {
+        cleanRef.current = "";
+        lastRawLenRef.current = 0;
+        pendingContentRef.current = "";
+        pendingThinkingRef.current = "";
+        cleanThinkingRef.current = "";
+        setCleanStreamingContent("");
+        setCleanThinkingContent("");
+        lastUpdateRef.current = 0;
+        if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+      }
+      return;
+    }
+    pendingContentRef.current = streamingContent;
+    pendingThinkingRef.current = thinkingContent;
+
+    const performUpdate = () => {
+      const raw = pendingContentRef.current;
+      const rawThinking = pendingThinkingRef.current;
+      
+      const cleaned = stripXmlToolCallTags(raw);
+      let changed = false;
+      if (cleanRef.current !== cleaned) {
+        cleanRef.current = cleaned;
+        setCleanStreamingContent(cleaned);
+        changed = true;
+      }
+      // Use ref for comparison to avoid stale closure
+      if (cleanThinkingRef.current !== rawThinking) {
+        cleanThinkingRef.current = rawThinking;
+        setCleanThinkingContent(rawThinking);
+        changed = true;
+      }
+      if (changed) {
+        lastUpdateRef.current = Date.now();
+        lastRawLenRef.current = raw.length;
+      }
+      timeoutIdRef.current = null;
+    };
+
+    const now = Date.now();
+    const elapsed = now - lastUpdateRef.current;
+
+    // Boundary-based batching: render only when complete sentences or lines are formed,
+    // or when the fallback timeout (350ms) is reached to prevent lag feeling.
+    // Use raw-to-raw delta (not stripped-to-raw) for correct boundary detection.
+    const raw = streamingContent;
+    const delta = raw.slice(lastRawLenRef.current);
+
+    const hasLineBreak = delta.includes("\n");
+    const hasSentenceEnd = /[.!?](\s|$)/.test(delta);
+    const hasCodeBlock = delta.includes("```");
+    const isBoundary = hasLineBreak || hasSentenceEnd || hasCodeBlock;
+
+    const throttleLimit = 80; // Fallback maximum latency (ms) — was 350ms, too laggy for fast APIs
+
+    if (isBoundary || elapsed >= throttleLimit) {
+      if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+      performUpdate();
+    } else {
+      if (!timeoutIdRef.current) {
+        timeoutIdRef.current = setTimeout(performUpdate, Math.min(throttleLimit - elapsed, 16)); // Cap at ~1 frame for smoothness
+      }
+    }
+
+    return () => {
+      if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+    };
+  }, [streamingContent, thinkingContent]);
+
+  // Handle auto-scroll on content updates inside the wrapper to keep ChatView from re-rendering
+  useEffect(() => {
+    if (!isUserScrolledUp.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [cleanStreamingContent, cleanThinkingContent, scrollRef, isUserScrolledUp]);
+
+  if (!isStreaming) return null;
+
+  return (
+    <>
+      <StreamingActivityPanel
+        activities={pendingActivities}
+        toolCalls={pendingToolCalls}
+        thinkingContent={cleanThinkingContent}
+        sessionStartTime={session?.startedAt ?? timestamp}
+      />
+      {cleanStreamingContent && (
+        <ChatMessage
+          message={{
+            id: "streaming",
+            role: "assistant",
+            content: cleanStreamingContent, // raw content — StreamingContent handles code fences
+            timestamp: timestamp,
+            ...(cleanThinkingContent ? { thinking: cleanThinkingContent } : {}),
+          }}
+          pending
+        />
+      )}
+      {!cleanStreamingContent && pendingToolCalls.length === 0 && pendingActivities.length === 0 && !cleanThinkingContent && (
+        <div className="py-3 animate-fade-in-up">
+          <div className="flex items-center gap-3 text-[13px] text-dalam-text-secondary">
+            <div className="animate-thinking-wave">
+              <span /><span /><span /><span /><span />
+            </div>
+            <span className="opacity-70">Thinking</span>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function completeStreamingMarkdown(text: string): string {
+  if (!text) return "";
+  const lines = text.split("\n");
+  let inTable = false;
+  let headerColCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const nextLine = lines[i + 1]?.trim() ?? "";
+    const isNextSeparator = nextLine && /^[|:\-\s]+$/.test(nextLine) && nextLine.includes("-");
+
+    if (isNextSeparator && !inTable) {
+      // Current line is table header. Count columns
+      const cols = line.split("|").map(s => s.trim()).filter(Boolean);
+      headerColCount = cols.length;
+      inTable = true;
+    } else if (inTable) {
+      // Check if this is the separator row itself
+      const isSeparator = /^[|:\-\s]+$/.test(line) && line.includes("-");
+      if (isSeparator) {
+        const sepCols = line.split("|").filter(Boolean);
+        if (sepCols.length < headerColCount) {
+          const missing = headerColCount - sepCols.length;
+          // Append missing separators nicely
+          let completedLine = line;
+          if (!completedLine.endsWith("|") && completedLine.includes("|")) {
+            completedLine += "|";
+          }
+          completedLine += "---|".repeat(missing);
+          lines[i] = completedLine;
+        }
+      } else if (line.startsWith("|") || line.includes("|")) {
+        // Normal row. Balance columns to prevent misaligned borders
+        const rowColsCount = line.split("|").filter(Boolean).length;
+        if (rowColsCount < headerColCount) {
+          const missing = headerColCount - rowColsCount;
+          let completedLine = line;
+          if (!completedLine.endsWith("|") && completedLine.includes("|")) {
+            completedLine += "|";
+          }
+          completedLine += " |".repeat(missing);
+          lines[i] = completedLine;
+        }
+      } else {
+        // Table ended
+        inTable = false;
+        headerColCount = 0;
+      }
+    }
+  }
+
+  let completedText = lines.join("\n");
+
+  // Auto-close unclosed code fences during streaming.
+  // Count triple-backtick occurrences; if odd, append a closing fence
+  // so the markdown parser renders the in-progress code block properly.
+  const fenceMatches = completedText.match(/```/g);
+  const fenceCount = fenceMatches ? fenceMatches.length : 0;
+  if (fenceCount % 2 !== 0) {
+    completedText += "\n```";
+  }
+
+  // Auto-close inline formatting tags (bold, italic, strikethrough, inline code)
+  const stack: string[] = [];
+  let idx = 0;
+  while (idx < completedText.length) {
+    if (completedText.startsWith("```", idx)) {
+      // Skip block code contents entirely
+      const endIdx = completedText.indexOf("```", idx + 3);
+      if (endIdx !== -1) {
+        idx = endIdx + 3;
+      } else {
+        break;
+      }
+    } else if (completedText.startsWith("`", idx)) {
+      if (stack[stack.length - 1] === "`") {
+        stack.pop();
+      } else {
+        stack.push("`");
+      }
+      idx += 1;
+    } else if (completedText.startsWith("**", idx) || completedText.startsWith("__", idx)) {
+      const tag = completedText.slice(idx, idx + 2);
+      if (stack[stack.length - 1] === tag) {
+        stack.pop();
+      } else {
+        stack.push(tag);
+      }
+      idx += 2;
+    } else if (completedText.startsWith("*", idx) || completedText.startsWith("_", idx)) {
+      const tag = completedText.slice(idx, idx + 1);
+      if (stack[stack.length - 1] === tag) {
+        stack.pop();
+      } else {
+        stack.push(tag);
+      }
+      idx += 1;
+    } else if (completedText.startsWith("~~", idx)) {
+      if (stack[stack.length - 1] === "~~") {
+        stack.pop();
+      } else {
+        stack.push("~~");
+      }
+      idx += 2;
+    } else {
+      idx += 1;
+    }
+  }
+
+  while (stack.length > 0) {
+    const tag = stack.pop();
+    completedText += tag;
+  }
+
+  return completedText;
 }

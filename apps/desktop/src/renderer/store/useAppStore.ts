@@ -20,6 +20,7 @@ import type {
   StreamEvent,
   TerminalTab,
   TodoItem,
+  ToolCall,
   Workspace,
 } from "@dalam/shared-types";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
@@ -925,10 +926,12 @@ function _createSafetyTimer(
         : "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
       timestamp: Date.now(),
     };
+    // Clear any pending auto-remove timers to prevent orphaned callbacks
+    get()._autoRemoveTimers.forEach((t) => clearTimeout(t));
     set({
       isStreaming: false,
       _sendInProgress: false,
-  _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
+      _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
       streamingContent: "",
       thinkingContent: "",
       pendingToolCalls: [],
@@ -1448,6 +1451,9 @@ type ChatState = {
   _sendInProgress: boolean;
   /** Timers for auto-removing denied tools and completed sub-agents from UI */
   _autoRemoveTimers: Set<ReturnType<typeof setTimeout>>;
+  /** Buffer for batching message-delta events to reduce React re-renders */
+  _deltaBatchBuffer: string;
+  _deltaBatchTimer: ReturnType<typeof setTimeout> | null;
   doomLoopWarningCount: number;
   /** Active sub-agents spawned via the task tool */
   subAgents: SubAgentState[];
@@ -1514,6 +1520,8 @@ export const useChat = create<ChatState>((set, get) => ({
   _compactingSessions: new Set<string>(),
   _safetyTimer: null,
   _sendInProgress: false,
+  _deltaBatchBuffer: "",
+  _deltaBatchTimer: null,
   doomLoopWarningCount: 0,
   subAgents: [],
   _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
@@ -1666,6 +1674,9 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
+    // Clear delta batch timer
+    const deltaTimer = get()._deltaBatchTimer;
+    if (deltaTimer) clearTimeout(deltaTimer);
     try {
       await api.agent.abort(sessionId);
     } finally {
@@ -1833,7 +1844,9 @@ export const useChat = create<ChatState>((set, get) => ({
                 };
                 set((s) => ({
                   messages: [...s.messages, systemMsg],
-                  _sendInProgress: false,
+      _sendInProgress: false,
+      _deltaBatchBuffer: "",
+      _deltaBatchTimer: null,
                 }));
               }
             }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
@@ -1857,6 +1870,8 @@ export const useChat = create<ChatState>((set, get) => ({
       set((s) => {
         const timer = s._safetyTimer;
         if (timer) clearTimeout(timer);
+        const dt = s._deltaBatchTimer;
+        if (dt) clearTimeout(dt);
         return {
           isStreaming: false,
           streamingContent: "",
@@ -1864,6 +1879,8 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingToolCalls: [],
           pendingActivities: [],
           _safetyTimer: null,
+          _deltaBatchBuffer: "",
+          _deltaBatchTimer: null,
           messages: [...s.messages, errorMsg],
           sessionMessages: newSessionMessages,
           chatSessions: s.session
@@ -1893,13 +1910,26 @@ export const useChat = create<ChatState>((set, get) => ({
       } catch { /* ignore */ }
     };
     _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content?.length ?? 0}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
+    // Flush any pending delta batch buffer on non-delta events to ensure no content is lost
+    if (event.type !== "message-delta") {
+      const buf = get()._deltaBatchBuffer;
+      if (buf) {
+        const timer = get()._deltaBatchTimer;
+        if (timer) clearTimeout(timer);
+        const newContent = get().streamingContent + buf;
+        set({ streamingContent: newContent, _deltaBatchBuffer: "", _deltaBatchTimer: null });
+      }
+    }
     // Reset safety timer on every stream event — the agent loop is alive
     // as long as events keep flowing. This prevents the timer from killing
     // active multi-turn agent loops (tool approval waits, sequential LLM calls).
+    // If there are pending tool approvals, use the extended 10-minute timeout.
     const existingTimer = get()._safetyTimer;
     if (existingTimer) {
       clearTimeout(existingTimer);
-      const newTimer = _createSafetyTimer(get, set, "normal");
+      const pending = get().pendingToolCalls;
+      const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
+      const newTimer = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
       set({ _safetyTimer: newTimer });
     }
     switch (event.type) {
@@ -1924,16 +1954,36 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "message-delta":
+        // Batch message-delta events to reduce React re-renders during fast streaming.
+        // Accumulate content in buffer, flush every 50ms or on non-delta events.
         set((s) => {
-          const newContent = s.streamingContent + event.content;
-          // Only truncate display content if extremely large (200K+)
-          // Tool parsing uses the raw content from the API, not this field
-          if (newContent.length > 200000) {
-            const trimmed = newContent.slice(-200000);
-            const spaceIdx = trimmed.indexOf(" ");
-            return { streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed };
+          const newBuffer = s._deltaBatchBuffer + event.content;
+          if (s._deltaBatchTimer) {
+            // Timer already running — just accumulate
+            return { _deltaBatchBuffer: newBuffer };
           }
-          return { streamingContent: newContent };
+          // Start a new flush timer
+          const timer = setTimeout(() => {
+            const state = get();
+            const buf = state._deltaBatchBuffer;
+            if (buf) {
+              const newContent = state.streamingContent + buf;
+              if (newContent.length > 200000) {
+                const trimmed = newContent.slice(-200000);
+                const spaceIdx = trimmed.indexOf(" ");
+                set({
+                  streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed,
+                  _deltaBatchBuffer: "",
+                  _deltaBatchTimer: null,
+                });
+              } else {
+                set({ streamingContent: newContent, _deltaBatchBuffer: "", _deltaBatchTimer: null });
+              }
+            } else {
+              set({ _deltaBatchTimer: null });
+            }
+          }, 50);
+          return { _deltaBatchBuffer: newBuffer, _deltaBatchTimer: timer };
         });
         break;
       case "diff-proposed": {
@@ -1952,17 +2002,57 @@ export const useChat = create<ChatState>((set, get) => ({
                     typeof tc.args.path === "string" && !tc.diffId
             );
           }
-          // Last resort: pick the most recent pending tool that has no diff yet
+          // Last resort: pick the most recent pending edit tool that has no diff yet
           if (idx === -1) {
             for (let i = s.pendingToolCalls.length - 1; i >= 0; i--) {
               const tc = s.pendingToolCalls[i];
-              if ((tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") && !tc.diffId) {
+              if ((tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
+                  !tc.diffId &&
+                  (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "write" || tc.name === "edit")) {
                 idx = i;
                 break;
               }
             }
           }
-          if (idx === -1) return s;
+
+          // If not found in pendingToolCalls, search messages (message-end may have already cleared pendingToolCalls)
+          let targetMsgIdx = -1;
+          let targetTcIdx = -1;
+          if (idx === -1) {
+            for (let m = s.messages.length - 1; m >= 0; m--) {
+              const msg = s.messages[m];
+              if (!msg.toolCalls) continue;
+              const tcIdx = msg.toolCalls.findIndex(
+                tc => !tc.diffId &&
+                      (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "write" || tc.name === "edit")
+              );
+              if (tcIdx !== -1) {
+                targetMsgIdx = m;
+                targetTcIdx = tcIdx;
+                break;
+              }
+            }
+          }
+
+          if (idx === -1 && targetMsgIdx === -1) return s;
+
+          // If found in a message, update the message's toolCalls
+          if (targetMsgIdx !== -1) {
+            const updatedMsgs = [...s.messages];
+            const msg = updatedMsgs[targetMsgIdx];
+            const patchedToolCalls = msg.toolCalls!.map((tc, i) =>
+              i === targetTcIdx ? { ...tc, diffId: proposal.diffId, diff: proposal } : tc
+            );
+            updatedMsgs[targetMsgIdx] = { ...msg, toolCalls: patchedToolCalls };
+            const sid = s.activeSessionId;
+            const updatedSM = sid
+              ? { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).map((m) =>
+                  m.id === msg.id ? { ...m, toolCalls: patchedToolCalls } : m
+                ) }
+              : s.sessionMessages;
+            return { messages: updatedMsgs, sessionMessages: updatedSM };
+          }
+
           const updated = [...s.pendingToolCalls];
           updated[idx] = { ...updated[idx], diffId: proposal.diffId, diff: proposal };
           return { pendingToolCalls: updated };
@@ -2160,7 +2250,7 @@ export const useChat = create<ChatState>((set, get) => ({
         const existing = get().pendingToolCalls.some((tc) => tc.id === tool.id);
         if (existing) break;
         // Canonicalize bash commands for permission matching
-        const isBashTool = tool.name === "shell" || tool.name === "bash" || tool.name === "execute";
+        const isBashTool = tool.name === "shell" || tool.name === "bash" || tool.name === "execute" || tool.name === "run_command";
         const commandStr = tool.args && typeof tool.args.command === "string" ? tool.args.command : "";
         const canonicalPattern = isBashTool && commandStr ? canonicaliseBashCommand(commandStr) : tool.name;
         // Map tool names to permission keys
@@ -2176,10 +2266,12 @@ export const useChat = create<ChatState>((set, get) => ({
         const agentAction = useAgents.getState().evaluatePermission(permissionKey, canonicalPattern);
         const needsApproval = agentAction === "ask";
         const denied = agentAction === "deny";
-        // Auto-denied tools: mark as failed and don't add to pendingToolCalls
+        // Auto-denied tools: mark as failed and resolve immediately so the
+        // API layer's waitForToolApproval doesn't hang forever.
         if (denied) {
           const deniedTool = { ...tool, status: "failed" as const, result: "Denied by permission policy" };
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, deniedTool] }));
+          get().resolveToolApproval(tool.id, "denied", "Denied by permission policy");
           // Auto-remove denied tools from UI after a short delay
           const _autoRemoveTimer = setTimeout(() => {
             set((s) => ({ pendingToolCalls: s.pendingToolCalls.filter((tc) => tc.id !== tool.id) }));
@@ -2616,7 +2708,9 @@ export const useChat = create<ChatState>((set, get) => ({
                   };
                   set((s) => ({
                     messages: [...s.messages, sysMsg],
-                    _sendInProgress: false,
+  _sendInProgress: false,
+  _deltaBatchBuffer: "",
+  _deltaBatchTimer: null,
                   }));
                 }
               }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
@@ -2678,6 +2772,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
       get()._clearAutoRemoveTimers();
+      _pendingResolutions.clear();
     set({
       session: null,
       messages: [],
@@ -2701,6 +2796,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
     get()._clearAutoRemoveTimers();
+    _pendingResolutions.clear();
     const { session, abort, sessionMessages, sessionAgentName, isStreaming } = get();
     // Clean up stream listener for the old session before switching
     if (session) {
@@ -2854,8 +2950,13 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   approvePlan() {
-    const { planApproval } = get();
+    const { planApproval, isStreaming, _sendInProgress } = get();
     if (!planApproval) return;
+    // Guard against concurrent stream — if still streaming, don't send a new message
+    if (isStreaming || _sendInProgress) {
+      console.warn("[Chat] approvePlan: ignored because a stream is already in progress");
+      return;
+    }
     set({ planApproval: null });
     // Switch to build mode — permissions auto-approve for file writes
     useAgents.getState().setActiveAgent("build");
@@ -3103,43 +3204,104 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async resolveToolApproval(toolCallId, decision, result) {
+    // First, resolve via direct callback if registered (avoids polling races)
+    const resolver = _toolCallResolvers.get(toolCallId);
+    if (resolver) _toolCallResolvers.delete(toolCallId);
+    const finalDecision = resolver ? await resolver(decision) : undefined;
+    // If the resolver already handled the side effects, we may still need
+    // to update the store for UI consistency. The resolver returns the
+    // effective decision (e.g., "denied" if already resolved).
+    const effectiveDecision = finalDecision ?? decision;
+
     const api = createDalamAPI();
     const sessionId = get().activeSessionId;
-    const tool = get().pendingToolCalls.find((tc) => tc.id === toolCallId);
-    if (decision === "approved" && sessionId && tool?.diffId) {
-      try {
-        await api.agent.approveDiff(sessionId, tool.diffId);
-      } catch (err) {
-        console.error("Failed to approve diff:", err);
-        set((s) => ({
-          pendingToolCalls: s.pendingToolCalls.map((tc) =>
-            tc.id === toolCallId ? { ...tc, status: "failed" as const, result: `Diff approval failed: ${err}` } : tc
-          ),
-        }));
-        return;
-      }
-    } else if (decision === "denied" && sessionId && tool?.diffId) {
-      try {
-        await api.agent.rejectDiff(sessionId, tool.diffId);
-      } catch (err) {
-        console.error("Failed to reject diff:", err);
+
+    // Find tool: first in pendingToolCalls, then fall back to scanning messages
+    let tool = get().pendingToolCalls.find((tc) => tc.id === toolCallId);
+    if (!tool) {
+      for (const msg of get().messages) {
+        if (msg.toolCalls) {
+          tool = msg.toolCalls.find((tc) => tc.id === toolCallId);
+          if (tool) break;
+        }
       }
     }
-    set((s) => ({
-      pendingToolCalls: s.pendingToolCalls.map((tc) =>
-        tc.id === toolCallId
-          ? {
-              ...tc,
-              status: decision === "approved" ? "completed" : "failed",
-              result: result ?? (decision === "denied" ? "Denied by user" : undefined),
-            }
-          : tc
-      ),
-    }));
+
+    // Save decision for waitForToolApproval to pick up if no resolver was registered yet
+    // (fixes the race where auto-approved tools resolve before waitForToolApproval registers)
+    if (!resolver) {
+      _pendingResolutions.set(toolCallId, effectiveDecision);
+    }
+
+    // Handle diff approval/rejection
+    if (tool?.diffId) {
+      if (effectiveDecision === "approved") {
+        try {
+          if (sessionId) await api.agent.approveDiff(sessionId, tool.diffId);
+        } catch (err) {
+          console.error("Failed to approve diff:", err);
+          const failMsg = `Diff approval failed: ${err}`;
+          set((s) => ({
+            pendingToolCalls: s.pendingToolCalls.map((tc) =>
+              tc.id === toolCallId ? { ...tc, status: "failed" as const, result: failMsg } : tc
+            ),
+            messages: s.messages.map((msg) =>
+              msg.toolCalls?.some((tc) => tc.id === toolCallId)
+                ? { ...msg, toolCalls: msg.toolCalls.map((tc) => tc.id === toolCallId ? { ...tc, status: "failed" as const, result: failMsg } : tc) }
+                : msg
+            ),
+            sessionMessages: sessionId
+              ? { ...s.sessionMessages, [sessionId]: (s.sessionMessages[sessionId] ?? []).map((msg) =>
+                  msg.toolCalls?.some((tc) => tc.id === toolCallId)
+                    ? { ...msg, toolCalls: msg.toolCalls.map((tc) => tc.id === toolCallId ? { ...tc, status: "failed" as const, result: failMsg } : tc) }
+                    : msg
+                ) }
+              : s.sessionMessages,
+          }));
+          return;
+        }
+      } else {
+        try {
+          if (sessionId) await api.agent.rejectDiff(sessionId, tool.diffId);
+        } catch (err) {
+          console.error("Failed to reject diff:", err);
+        }
+      }
+    }
+
+    // Update tool status in pendingToolCalls, messages, and sessionMessages
+    const applyStatus = (tc: ToolCall) => ({
+      ...tc,
+      status: (effectiveDecision === "approved" ? "completed" : "failed") as ToolCall["status"],
+      result: result ?? (effectiveDecision === "denied" ? "Denied by user" : undefined),
+    });
+
+    set((s) => {
+      const sid = s.activeSessionId;
+      return {
+        pendingToolCalls: s.pendingToolCalls.map((tc) => tc.id === toolCallId ? applyStatus(tc) : tc),
+        messages: s.messages.map((msg) =>
+          msg.toolCalls?.some((tc) => tc.id === toolCallId)
+            ? { ...msg, toolCalls: msg.toolCalls.map((tc) => tc.id === toolCallId ? applyStatus(tc) : tc) }
+            : msg
+        ),
+        sessionMessages: sid
+          ? { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).map((msg) =>
+              msg.toolCalls?.some((tc) => tc.id === toolCallId)
+                ? { ...msg, toolCalls: msg.toolCalls.map((tc) => tc.id === toolCallId ? applyStatus(tc) : tc) }
+                : msg
+            ) }
+          : s.sessionMessages,
+      };
+    });
   },
 
   newChat() {
         get()._clearAutoRemoveTimers();
+        _pendingResolutions.clear();
+        // Clean up delta batch timer
+        const deltaBatchTimer = get()._deltaBatchTimer;
+        if (deltaBatchTimer) clearTimeout(deltaBatchTimer);
         const { session, messages } = get();
     // Stop trajectory recording for old session
     if (session) void stopRecording(session.id).catch(() => {});
@@ -4075,6 +4237,16 @@ export type PermissionRequest = {
 
 const ALWAYS_ALLOWED_KEY = "dalam.alwaysAllowed.v1";
 
+/**
+ * Module-level resolver map that survives pendingToolCalls being cleared.
+ * waitForToolApproval registers a callback keyed by toolCallId;
+ * resolveToolApproval invokes it directly when found. This decouples
+ * tool resolution from the pendingToolCalls array, fixing the race
+ * where message-end clears the array before the user responds.
+ */
+export const _toolCallResolvers = new Map<string, (decision: "approved" | "denied") => void>();
+export const _pendingResolutions = new Map<string, "approved" | "denied">();
+
 function loadAlwaysAllowed(): Record<string, true> {
   try {
     const raw = localStorage.getItem(ALWAYS_ALLOWED_KEY);
@@ -4215,14 +4387,16 @@ export async function withPermission<T>(
   if (action === "deny") return null;
   const decision = await usePermission.getState().ask(params);
   if (decision === "deny") return null;
-  if (decision === "always") {
+  const shouldAlways = decision === "always";
+  const result = await run();
+  if (shouldAlways) {
     usePermission.getState().allowAlways({
-      id: "",
+      id: "perm-" + Math.random().toString(36).slice(2, 9),
       createdAt: Date.now(),
       ...params,
     });
   }
-  return await run();
+  return result;
 }
 
 // ---- Question overlay (AskUserQuestion) ------------------------------------

@@ -247,15 +247,17 @@ async function flushBuffer(sessionId: string): Promise<void> {
   buffer.turns = [];
   buffer.lastFlush = Date.now();
 
-  // Use the workspace path stored when recording started
-  const workspacePath = buffer.workspacePath;
-
-  if (!workspacePath) {
-    logger.warn("Trajectory", "No workspace path, cannot flush", { sessionId });
-    return;
-  }
-
   try {
+    // Use the workspace path stored when recording started
+    const workspacePath = buffer.workspacePath;
+
+    if (!workspacePath) {
+      logger.warn("Trajectory", "No workspace path, cannot flush", { sessionId });
+      // Restore turns so they aren't lost
+      buffer.turns = [...turns, ...buffer.turns];
+      return;
+    }
+
     const api = createDalamAPI();
     const filePath = joinPath(
       workspacePath,
@@ -304,40 +306,29 @@ async function flushBuffer(sessionId: string): Promise<void> {
     // turns since the last flush, keeping file I/O linear.
     let writeSucceeded = false;
     try {
-      const { exists, readTextFile, writeTextFile } = await import("@tauri-apps/plugin-fs");
-      let existing = "";
-      if (await exists(filePath)) {
-        existing = await readTextFile(filePath);
+      // Seed the cache on the first flush by reading existing file content
+      if (!buffer._appendedContent) {
+        try {
+          const existing = await api.fs.readFile(filePath);
+          buffer._appendedContent = existing;
+        } catch {
+          // File doesn't exist yet — start fresh
+          buffer._appendedContent = "";
+        }
       }
-      // Only append — never re-read the full file on subsequent flushes
-      if (!buffer._appendedContent && existing) {
-        buffer._appendedContent = existing;
-      }
-      const fullContent = (buffer._appendedContent ?? "") + jsonLine;
-      await writeTextFile(filePath, fullContent);
+      const fullContent = buffer._appendedContent + jsonLine;
+      await api.fs.writeFile(filePath, fullContent);
       // Only update cache AFTER successful write to prevent duplicates on retry
       buffer._appendedContent = fullContent;
       writeSucceeded = true;
     } catch (e) {
-      // Fallback via API bridge
-      try {
-        if (!buffer._appendedContent) {
-          const { exists, readTextFile } = await import("@tauri-apps/plugin-fs");
-          if (await exists(filePath)) {
-            buffer._appendedContent = await readTextFile(filePath);
-          }
-        }
-        const fullContent = (buffer._appendedContent ?? "") + jsonLine;
-        await api.fs.writeFile(filePath, fullContent);
-        buffer._appendedContent = fullContent;
-        writeSucceeded = true;
-      } catch (innerE) {
-        logger.error("Trajectory", "Failed to write trajectory", {
-          sessionId,
-          error: String(innerE),
-        });
-      }
-    }    if (!writeSucceeded) {
+      logger.error("Trajectory", "Failed to write trajectory", {
+        sessionId,
+        error: String(e),
+      });
+    }
+
+    if (!writeSucceeded) {
       // Restore turns to buffer so they can be retried on next flush
       const buf = buffers.get(sessionId);
       if (buf) buf.turns = [...turns, ...buf.turns];

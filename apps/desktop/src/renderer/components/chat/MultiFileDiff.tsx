@@ -48,9 +48,9 @@ export const MultiFileDiffSummary: React.FC = () => {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => {
+            onClick={async () => {
               for (const diff of pendingDiffs) {
-                resolveToolApproval(diff.id, "approved");
+                await resolveToolApproval(diff.id, "approved");
               }
             }}
             className="flex items-center gap-1 px-2.5 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
@@ -59,9 +59,9 @@ export const MultiFileDiffSummary: React.FC = () => {
             Approve All
           </button>
           <button
-            onClick={() => {
+            onClick={async () => {
               for (const diff of pendingDiffs) {
-                resolveToolApproval(diff.id, "denied");
+                await resolveToolApproval(diff.id, "denied");
               }
             }}
             className="flex items-center gap-1 px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"

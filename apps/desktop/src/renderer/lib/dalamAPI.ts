@@ -28,6 +28,9 @@ const fileWatchers = new Map<string, () => void>();
 const pendingDiffProposals = new Map<string, DiffProposal>();
 export const mcpHttpSessions = new Map<string, string>();
 const emittedSessionEnds = new Set<string>();
+// Persistent rate-limit backoff counter — survives across sendPrompt() calls
+// so that repeated user submissions still back off instead of resetting to 0.
+let consecutiveRateLimitErrors = 0;
 
 // ─── Internal Types ─────────────────────────────────────────
 /** Shape of a provider entry from localStorage */
@@ -313,14 +316,33 @@ async function* streamOpenAI(
   const clearLastTimeout = () => { if (lastTimeout !== undefined) { clearTimeout(lastTimeout); lastTimeout = undefined; } };
   // Register abort listener ONCE to avoid accumulating listeners per iteration
   let currentClearFn: (() => void) | undefined;
+  let abortHandlerOpenAI: (() => void) | null = null;
   if (signal) {
-    signal.addEventListener("abort", () => currentClearFn?.(), { once: true });
+    abortHandlerOpenAI = () => currentClearFn?.();
+    signal.addEventListener("abort", abortHandlerOpenAI, { once: true });
   }
 
   // Tool call argument accumulation: OpenAI-compatible providers stream
   // function.arguments incrementally across SSE chunks (e.g. "{\"path\": \"/" then "etc/file\"}").
   // We must accumulate partial JSON by tool_call index before parsing.
   const _tcArgBuffers = new Map<number, { name: string; args: string }>();
+
+  function jsonBracesBalanced(s: string): boolean {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < s.length; i++) {
+      if (escaped) { escaped = false; continue; }
+      const c = s[i];
+      if (c === '\\' && inString) { escaped = true; continue; }
+      if (c === '"' && !escaped) { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') depth--;
+      if (depth < 0) return false;
+    }
+    return depth === 0 && !inString;
+  }
 
   /** Build an XML tag from a completed tool call name + parsed JSON args */
   function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): string {
@@ -385,16 +407,19 @@ async function* streamOpenAI(
                 } else {
                   _tcArgBuffers.set(tcIdx, { name: fn.name, args: fn.arguments || "" });
                 }
-                // Try to parse the accumulated args
+                // Try to parse the accumulated args — but only if braces are balanced
+                // to avoid emitting partial JSON that happens to be valid (CVE-style).
                 const buf = _tcArgBuffers.get(tcIdx)!;
-                try {
-                  const parsedArgs = JSON.parse(buf.args);
-                  // Success — emit XML and remove from buffer
-                  _tcArgBuffers.delete(tcIdx);
-                  const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
-                  yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
-                } catch {
-                  // Incomplete JSON — keep buffering, will try on next chunk
+                if (jsonBracesBalanced(buf.args)) {
+                  try {
+                    const parsedArgs = JSON.parse(buf.args);
+                    // Success — emit XML and remove from buffer
+                    _tcArgBuffers.delete(tcIdx);
+                    const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+                    yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
+                  } catch {
+                    // Incomplete JSON — keep buffering
+                  }
                 }
               }
             }
@@ -429,13 +454,15 @@ async function* streamOpenAI(
                   _tcArgBuffers.set(tcIdx, { name: fn.name, args: fn.arguments || "" });
                 }
                 const buf = _tcArgBuffers.get(tcIdx)!;
-                try {
-                  const parsedArgs = JSON.parse(buf.args);
-                  _tcArgBuffers.delete(tcIdx);
-                  const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
-                  yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
-                } catch {
-                  // Still incomplete
+                if (jsonBracesBalanced(buf.args)) {
+                  try {
+                    const parsedArgs = JSON.parse(buf.args);
+                    _tcArgBuffers.delete(tcIdx);
+                    const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+                    yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
+                  } catch {
+                    // Still incomplete
+                  }
                 }
               }
             }
@@ -460,6 +487,9 @@ async function* streamOpenAI(
     _tcArgBuffers.clear();
   } finally {
     reader.releaseLock();
+    if (abortHandlerOpenAI && signal) {
+      signal.removeEventListener("abort", abortHandlerOpenAI);
+    }
   }
 }
 
@@ -487,8 +517,10 @@ async function* streamAnthropic(
   const clearLastTimer = () => { if (lastReadTimer !== undefined) { clearTimeout(lastReadTimer); lastReadTimer = undefined; } };
   // Register abort listener ONCE to avoid accumulating listeners per iteration
   let currentClearFnAnth: (() => void) | undefined;
+  let abortHandlerAnthropic: (() => void) | null = null;
   if (signal) {
-    signal.addEventListener("abort", () => currentClearFnAnth?.(), { once: true });
+    abortHandlerAnthropic = () => currentClearFnAnth?.();
+    signal.addEventListener("abort", abortHandlerAnthropic, { once: true });
   }
   _debugLog("[streamAnthropic] Starting stream, url:", url);
   try {
@@ -548,6 +580,9 @@ async function* streamAnthropic(
     }
   } finally {
     reader.releaseLock();
+    if (abortHandlerAnthropic && signal) {
+      signal.removeEventListener("abort", abortHandlerAnthropic);
+    }
   }
 }
 
@@ -809,7 +844,7 @@ const dalamAPI: DalamAPI = {
       return { sessionId };
     },
     async sendPrompt(sessionId, prompt, conversationHistory?, agentName?, attachments?) {
-      const { settings, modelId, config } = getActiveProvider();
+      const { settings, providerId, modelId, config } = getActiveProvider();
 
       /** Assemble the system prompt and context blocks for the LLM. */
       async function assembleContext(cleanPrompt: string): Promise<string> {
@@ -1136,8 +1171,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         timestamp: Date.now(),
       });
 
-      let consecutiveRateLimitErrors = 0;
-
       try {
         const { useChat } = await import("../store/useAppStore");
 
@@ -1213,6 +1246,18 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             msgs.unshift(m);
           }
 
+          // Always include the first user message (original prompt) for task context
+          const firstUserMsg = allMsgs.find((m) => m.role === "user");
+          if (firstUserMsg && !msgs.includes(firstUserMsg)) {
+            const firstContent = typeof firstUserMsg.content === "string" ? firstUserMsg.content : "";
+            const firstTokens = estTokens(firstContent);
+            // Only add if it fits within budget (with small margin)
+            if (tokenCount + firstTokens <= availableForHistory * 0.9) {
+              msgs.unshift(firstUserMsg);
+              tokenCount += firstTokens;
+            }
+          }
+
           const result: ApiMessage[] = [{ role: "system", content: systemPrompt }];
           if (compactionSummary && allMsgs.length > 10) {
             result.push({ role: "system", content: `[COMPACTED HISTORY]\n${compactionSummary}\n` });
@@ -1223,22 +1268,44 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           return result;
         }
 
-        function rateLimitDelay(): Promise<void> {
+        // Adaptive rate limiting: some providers (Groq, Together, fireworks) have very low RPM limits
+        // and very fast token speeds. We need a per-provider minimum inter-request delay.
+        async function rateLimitDelay(): Promise<void> {
+          // providerId and modelId come from the outer destructuring on line 847
+          const providerLower = String(providerId ?? "").toLowerCase();
+          const modelLower = String(modelId ?? "").toLowerCase();
+          // Providers/models known for extremely fast inference with strict RPM limits
+          const isFastRpmProvider =
+            providerLower.includes("groq") ||
+            providerLower.includes("together") ||
+            providerLower.includes("fireworks") ||
+            providerLower.includes("together.ai") ||
+            modelLower.includes("llama-3.3-70b") ||
+            modelLower.includes("llama-3.1-8b") ||
+            modelLower.includes("mixtral") ||
+            modelLower.startsWith("gemma-");
+
           if (consecutiveRateLimitErrors > 0) {
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
-            const delay = Math.min(1000 * Math.pow(2, consecutiveRateLimitErrors), 30000);
-            return new Promise((r) => setTimeout(r, delay));
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 60s max
+            const delay = Math.min(1000 * Math.pow(2, consecutiveRateLimitErrors), 60000);
+            await new Promise((r) => setTimeout(r, delay));
+            return;
           }
-          // Base delay between turns to avoid rate limits and give UI time to render
-          return new Promise((r) => setTimeout(r, 500));
+          // Base delay between turns: generous for fast-RPM providers, minimal for others
+          const baseDelay = isFastRpmProvider ? 2000 : 300;
+          await new Promise((r) => setTimeout(r, baseDelay));
         }
+
+        let emittedEndInThisIteration = false;
 
         while (loopCount < MAX_LOOP_HARD) {
           loopCount++;
+          emittedEndInThisIteration = false;
 
           if (Date.now() - loopStartTime > MAX_LOOP_DURATION_MS) {
             emit({ type: "error", error: `Agent loop timed out after ${MAX_LOOP_DURATION_MS / 1000}s.` });
             emit({ type: "message-end", messageId: sessionId });
+            emittedEndInThisIteration = true;
             break;
           }
 
@@ -1333,15 +1400,18 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             _debugLog(`[sendPrompt] Turn ${loopCount}: tools:`, parsedTools.map(t => `${t.name}(${JSON.stringify(t.args).slice(0, 100)})`));
           }
 
-          // FIX: Single parse pass for display content — strip all tool tags
-          const TOOL_TAG_RE = /<(?:read_file|write_file|edit_file|list_dir|grep_file|search_files|run_command|git_status|git_commit|git_log|clipboard_read|clipboard_write|notify|system_info|open_url|launch_app|reveal_in_finder|get_env|get_screen_info|list_processes|kill_process|get_disk_space|memory_save|memory_search|memory_delete|memory_stats|memory_maintain|memory_extract|memory_export|memory_import|mcp_[\w_]+)[\s\S]*?(?:\/>|<\/[\w_]+>)/g;
-          const ANTLML_TAG_RE = /(?:antml:function_calls\s*)?<invoke[\s\S]*?<\/(?:antml:)?function_calls\s*>/gi;
-          const displayContent = safeTextForParsing.replace(TOOL_TAG_RE, "").replace(ANTLML_TAG_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+          // FIX: Single parse pass for display content — strip all tool tags from
+          // the ORIGINAL fullContent (not safeTextForParsing which had code blocks
+          // already removed, causing garbled fragments in display).
+          const { stripXmlToolCallTags: stripForDisplay } = await import("../store/useAppStore");
+          const displayContent = stripForDisplay(fullContent).trim();
 
+          // Push RAW content to API history so the LLM sees its own tool calls.
+          // The UI store independently strips tags for display.
           const assistantTurnMsg = {
             id: lastMessageId || sessionId,
             role: "assistant" as const,
-            content: displayContent || "(executing tools...)",
+            content: fullContent || "(executing tools...)",
             timestamp: Date.now(),
           };
           currentHistory.push(assistantTurnMsg);
@@ -1424,6 +1494,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                   toolResults.push(`[Tool error for ${tc.name}]\nError: ${errMsg}`);
                 }
               } else {
+                // Emit tool-result for denied tools to keep store in sync
+                emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
                 toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
               }
             }
@@ -1435,6 +1507,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               totalToolCalls += toolResults.length;
 
               // Persist tool results to sessionMessages so the LLM sees them on the next turn
+              // Mark as isToolResult so the chat UI can filter them out (they're internal context)
               try {
                 const { useChat } = await import("../store/useAppStore");
                 const store = useChat.getState();
@@ -1445,6 +1518,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                     role: "user",
                     content: toolResultContent,
                     timestamp: Date.now(),
+                    isToolResult: true,
                   };
                   const existing = store.sessionMessages[sid] ?? [];
                   useChat.setState({
@@ -1456,7 +1530,27 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
             // Reset streaming state
             emit({ type: "message-end", messageId: lastMessageId || sessionId });
+            emittedEndInThisIteration = true;
             useChat.setState({ streamingContent: "", thinkingContent: "" });
+
+            // If the abort signal fired during tool execution, break out of the
+            // while loop entirely rather than continuing (which would hit the
+            // aborted stream, throw AbortError, and double-emit message-end).
+            if (ac.signal.aborted) {
+              useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
+              break;
+            }
+
+            // Re-create safety timer immediately for the next iteration
+            // (message-end handler clears it, but the loop is still running)
+            try {
+              const { resetSafetyTimer } = await import("../lib/safetyTimer");
+              resetSafetyTimer(
+                () => useChat.getState() as any,
+                (update: Record<string, unknown>) => useChat.setState(update as any),
+                "normal",
+              );
+            } catch { /* ignore */ }
 
             consecutiveRateLimitErrors = 0;
             continue;
@@ -1464,20 +1558,21 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           // No tools parsed — turn is complete
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
+          emittedEndInThisIteration = true;
           useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           break;
         }
 
-        // If loop exhausted all iterations without break, emit message-end
+        // If loop exhausted all iterations without break, do a finalizer turn
         if (loopCount >= MAX_LOOP_HARD) {
           // Hermes TurnFinalizer pattern: make one toolless API call to get a summary
           // instead of failing silently when iteration budget exhausts.
           try {
+            emit({ type: "message-start", messageId: sessionId });
             const finalizerMessages: ApiMessage[] = [
               { role: "system", content: "The iteration budget has been exhausted. Please provide a concise summary of what you have accomplished so far and what remains to be done. Do not call any tools." },
               ...await buildMessages(),
             ];
-            // Strip any tool definitions from the finalizer call by not including tools
             const finalizerStream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, finalizerMessages, ac.signal, 2048);
             let finalizerContent = "";
             for await (const event of finalizerStream) {
@@ -1496,10 +1591,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
               });
             }
           } catch {
-            // If the finalizer call fails, emit a fallback message
             emit({ type: "message-delta", messageId: sessionId, content: "\n\n[Agent reached iteration limit. No summary available.]" });
           }
-          emit({ type: "message-end", messageId: sessionId });
+          if (!emittedEndInThisIteration) {
+            emit({ type: "message-end", messageId: sessionId });
+          }
         }
 
         // Hook: Stop (after loop exits)
@@ -1585,16 +1681,15 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             fileWatchers.delete(key);
           }
         }
-        // Clean up MCP HTTP sessions (keyed by server name, remove all for this session)
-        for (const [serverName, sesId] of mcpHttpSessions) {
-          if (sesId === sessionId) mcpHttpSessions.delete(serverName);
-        }
+        // MCP HTTP sessions are keyed by server name → session token (not Dalam session ID),
+        // so we cannot match them here. They will be cleaned up by the MCP module on error/close.
         // Clean up pending diff proposals for this session only
         for (const [key] of pendingDiffProposals) {
           if (key.startsWith(sessionId)) pendingDiffProposals.delete(key);
         }
-        // Clean up stream listener cleanup functions
-        streamCleanups.delete(sessionId);
+        // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
+        const streamCleanup = streamCleanups.get(sessionId);
+        if (streamCleanup) streamCleanup();
         // Clean up SessionEnd dedup tracking
         emittedSessionEnds.delete(sessionId);
         // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
@@ -1941,7 +2036,8 @@ const KNOWN_TOOL_NAMES = new Set([
 
 function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
   const toolCalls: ParsedToolCall[] = [];
-  const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+  // Match any code block — LLMs may use any language hint or none at all
+  const codeBlockRegex = /```[\w-]*\s*\n([\s\S]*?)```/gi;
   let blockMatch;
   while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
     const blockContent = blockMatch[1];
@@ -2284,7 +2380,14 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
           }
         }
         toolCalls.push({ name: fullName, args, raw: fullBlock });
-        mcpTagRegex.lastIndex = mcpMatch.index + fullBlock.length;
+        // Advance past the full block. Guard against fullBlock being shorter
+        // than the raw match (which would cause an infinite loop if we jumped
+        // backwards). Fall back to the regex's natural advancement otherwise.
+        const naturalEnd = mcpMatch.index + mcpMatch[0].length;
+        const safeEnd = fullBlock.length >= mcpMatch[0].length
+          ? mcpMatch.index + fullBlock.length
+          : naturalEnd;
+        mcpTagRegex.lastIndex = safeEnd;
       }
     }
   }
@@ -2341,101 +2444,75 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 }
 
 function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Promise<"approved" | "denied"> {
-  const TIMEOUT_MS = 120_000; // 2 minutes — give users time to review tool proposals
+  const TIMEOUT_MS = 120_000;
   _debugLog(`waitForToolApproval: waiting for tool ${toolCallId}`);
   return new Promise((resolve) => {
     let resolved = false;
-    let unsubscribe: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let abortHandler: (() => void) | null = null;
-    let useChatRef: ChatStoreRef | null = null;
 
     const cleanup = () => {
       if (timer) { clearTimeout(timer); timer = null; }
-      unsubscribe?.();
       if (abortHandler && abortSignal) {
         abortSignal.removeEventListener("abort", abortHandler);
       }
+      // Unregister from resolver map and pending resolutions
+      import("../store/useAppStore").then(({ _toolCallResolvers, _pendingResolutions }) => {
+        _toolCallResolvers.delete(toolCallId);
+        _pendingResolutions.delete(toolCallId);
+      }).catch(() => {});
     };
 
-    const check = () => {
-      if (resolved || !useChatRef) return;
-      try {
-        const { pendingToolCalls } = useChatRef.getState();
-        const tc = pendingToolCalls.find((t) => t.id === toolCallId);
-        if (!tc) return;
-        _debugLog(`waitForToolApproval: check tool ${toolCallId}, status=${tc.status}`);
-        if (tc.status === "completed") {
-          resolved = true;
-          cleanup();
-          resolve("approved");
-          return;
-        }
-        if (tc.status === "failed") {
-          resolved = true;
-          cleanup();
-          resolve("denied");
-          return;
-        }
-      } catch (err) {
-        console.error("Error checking tool approval:", err);
+    const finish = (decision: "approved" | "denied") => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      _debugLog(`waitForToolApproval: resolved tool ${toolCallId} -> ${decision}`);
+      resolve(decision);
+    };
+
+    // Check if decision was already made (e.g., auto-approved before waitForToolApproval was registered)
+    import("../store/useAppStore").then(({ _pendingResolutions }) => {
+      const existing = _pendingResolutions.get(toolCallId);
+      if (existing) {
+        _pendingResolutions.delete(toolCallId);
+        finish(existing);
       }
-    };
+    }).catch(() => {});
 
-    // Listen for abort signal to resolve immediately
+    // Register the resolver callback so resolveToolApproval can call us directly
+    import("../store/useAppStore").then(({ _toolCallResolvers }) => {
+      if (resolved) return;
+      _toolCallResolvers.set(toolCallId, (decision: "approved" | "denied") => {
+        finish(decision);
+        return decision;
+      });
+    }).catch((err) => {
+      console.error("Failed to register tool call resolver:", err);
+      finish("denied");
+    });
+
+    // Listen for abort signal
     if (abortSignal) {
-      abortHandler = () => {
-        if (!resolved) {
-          resolved = true;
-          cleanup();
-          resolve("denied");
-        }
-      };
+      abortHandler = () => finish("denied");
       if (abortSignal.aborted) {
-        resolved = true;
-        cleanup();
-        resolve("denied");
+        finish("denied");
         return;
       }
       abortSignal.addEventListener("abort", abortHandler, { once: true });
     }
 
+    // Safety timeout
     timer = setTimeout(() => {
       if (!resolved) {
-        resolved = true;
-        cleanup();
-        // Update the tool call status in the store so the UI doesn't stay stuck
-        if (useChatRef) {
-          try { useChatRef.getState().resolveToolApproval(toolCallId, "denied"); } catch { /* ignore */ }
-        }
         _debugLog(`waitForToolApproval: timed out after ${TIMEOUT_MS}ms for tool ${toolCallId}`);
-        resolve("denied");
+        // Notify the store so the UI tool status is updated
+        import("../store/useAppStore").then(({ useChat }) => {
+          try { useChat.getState().resolveToolApproval(toolCallId, "denied"); } catch { /* ignore */ }
+        }).catch(() => {});
+        finish("denied");
       }
     }, TIMEOUT_MS);
-
-    import("../store/useAppStore").then(({ useChat }) => {
-      useChatRef = useChat;
-      // Initial check
-      check();
-      if (resolved) return;
-      // Subscribe to store changes — only re-check when pendingToolCalls actually changes
-      let lastToolCalls = useChatRef!.getState().pendingToolCalls;
-      unsubscribe = useChat.subscribe(() => {
-        if (resolved) return;
-        const current = useChatRef!.getState().pendingToolCalls;
-        if (current !== lastToolCalls) {
-          lastToolCalls = current;
-          check();
-        }
-      });
-    }).catch((err) => {
-      console.error("Failed to import useAppStore for tool approval:", err);
-      if (!resolved) {
-        resolved = true;
-        cleanup();
-        resolve("denied");
-      }
-    });
   });
 }
 
@@ -3209,8 +3286,10 @@ async function executeSubAgentTask(
 
       subResult += fullContent;
 
-      // Check if sub-agent is calling tools
-      const subTools = await parseToolCalls(fullContent);
+      // Check if sub-agent is calling tools (detect both inline and code-block-wrapped tool tags)
+      const subToolsInline = await parseToolCalls(fullContent);
+      const subToolsCodeBlock = extractToolCallsFromCodeBlocks(fullContent);
+      const subTools = subToolsInline.length > 0 ? subToolsInline : subToolsCodeBlock;
       if (subTools.length === 0) {
         // No tools — sub-agent is done
         break;
@@ -3235,7 +3314,16 @@ async function executeSubAgentTask(
         emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
         try {
           // Execute silently — sub-agents don't need parent permission dialogs
-          const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, emit, true);
+          // Filter emit: suppress parent-facing events from sub-agent tool execution
+        const subAgentEmit = (event: StreamEvent) => {
+          // Only forward sub-agent status updates; suppress diff-proposed,
+          // activity-explore, activity-bash, file-changed to parent UI
+          if (event.type === 'diff-proposed' || event.type === 'activity-explore' ||
+              event.type === 'activity-read' || event.type === 'activity-bash' ||
+              event.type === 'activity-skill' || event.type === 'file-changed') return;
+          emit(event);
+        };
+        const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, subAgentEmit, true);
           // Update the tool call status
           const idx = subToolCalls.findIndex((t) => t.id === subToolId);
           if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "completed", result: toolResult };
@@ -3258,17 +3346,22 @@ async function executeSubAgentTask(
     }
   }
 
-  // Timeout check (only if not aborted — abort is intentional, not a failure)
-  if (!subFailed && !signal.aborted && Date.now() - subStartTime > SUB_TIMEOUT_MS) {
+  // Check for abort or timeout (not mutually exclusive — abort takes precedence)
+  if (!subFailed && signal.aborted) {
+    subFailed = true;
+    subError = "Sub-agent aborted by user";
+  }
+  if (!subFailed && Date.now() - subStartTime > SUB_TIMEOUT_MS) {
     subFailed = true;
     subError = "Sub-agent timed out after 2 minutes";
   }
 
   // Emit sub-agent completion
+  const finalStatus: "completed" | "failed" = subFailed || (signal.aborted && !subResult) ? "failed" : "completed";
   emit({
     type: "sub-agent-end",
     subAgentId,
-    status: subFailed ? "failed" : "completed",
+    status: finalStatus,
     ...(subError ? { error: subError } : {}),
   });
 
