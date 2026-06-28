@@ -917,7 +917,9 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
         const projConfig = JSON.parse(content);
         if (projConfig.settings) {
           const currentSettings = useSettings.getState().settings;
-          useSettings.setState({ settings: { ...currentSettings, ...projConfig.settings } });
+          const mergedSettings = { ...currentSettings, ...projConfig.settings };
+          useSettings.setState({ settings: mergedSettings });
+          localStorage.setItem("dalam.settings.v1", JSON.stringify(mergedSettings));
         }
         if (projConfig.providers) {
           const { providers } = useModelProviders.getState();
@@ -926,6 +928,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
             return projProv ? { ...p, ...projProv } : p;
           });
           useModelProviders.setState({ providers: nextProviders });
+          localStorage.setItem("dalam.providers.v1", JSON.stringify(nextProviders));
         }
 
         // Merge project-scoped MCP servers from config.json with user-scoped ones from localStorage

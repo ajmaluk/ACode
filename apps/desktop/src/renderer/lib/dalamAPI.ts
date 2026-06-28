@@ -29,8 +29,6 @@ const pendingDiffProposals = new Map<string, DiffProposal>();
 export const mcpHttpSessions = new Map<string, string>();
 const emittedSessionEnds = new Set<string>();
 
-const SETTINGS_CACHE = new Map<string, string>();
-
 // ─── Internal Types ─────────────────────────────────────────
 /** Shape of a provider entry from localStorage */
 interface StoredProvider {
@@ -101,19 +99,15 @@ function addRecentFile(path: string) {
 }
 
 function getStoredSettings(): AppSettings {
-  if (SETTINGS_CACHE.has("all")) return { ...DEFAULT_SETTINGS, ...JSON.parse(SETTINGS_CACHE.get("all")!) };
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.settings);
-    if (raw) { SETTINGS_CACHE.set("all", raw); return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }; }
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch { /* settings load failed, use defaults */ }
-  const defaults = { ...DEFAULT_SETTINGS };
-  SETTINGS_CACHE.set("all", JSON.stringify(defaults));
-  return defaults;
+  return { ...DEFAULT_SETTINGS };
 }
 
 function storeSettings(s: AppSettings) {
   localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(s));
-  SETTINGS_CACHE.set("all", JSON.stringify(s));
 }
 
 function getProviderConfig(providerId: string): { baseUrl: string; apiKey: string; apiFormat: string } | null {

@@ -40,6 +40,9 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "fs": {
+      "requireLiteralLeadingDot": false
     }
   }
 }
