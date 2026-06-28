@@ -76,9 +76,20 @@ ${formattedHistory}`;
     ]);
 
     let cleaned = response.replace(/```json/gi, "").replace(/```/g, "").trim();
+    // Robustly extract JSON by tracking brace depth
     const startIdx = cleaned.indexOf("{");
-    const endIdx = cleaned.lastIndexOf("}");
-    if (startIdx !== -1 && endIdx !== -1) {
+    if (startIdx !== -1) {
+      let depth = 0;
+      let endIdx = startIdx;
+      for (let i = startIdx; i < cleaned.length; i++) {
+        if (cleaned[i] === "{") depth++;
+        else if (cleaned[i] === "}") depth--;
+        if (depth === 0) { endIdx = i; break; }
+      }
+      if (depth !== 0) {
+        console.warn("[SkillCrystallizer] Unclosed braces in LLM output — skipping");
+        return;
+      }
       cleaned = cleaned.slice(startIdx, endIdx + 1);
     }
     const data = JSON.parse(cleaned);
@@ -96,7 +107,9 @@ ${formattedHistory}`;
             onClick: async () => {
               try {
                 const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-                const skillsDir = joinPath(workspacePath, `.dalam/skills/${data.name}`);
+                // Sanitize skill name to prevent path traversal
+                const safeName = data.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+                const skillsDir = joinPath(workspacePath, `.dalam/skills/${safeName}`);
                 if (!(await exists(skillsDir))) {
                   await mkdir(skillsDir, { recursive: true });
                 }

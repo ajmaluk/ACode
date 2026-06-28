@@ -70,6 +70,10 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
     }
   }, [settings.terminalFont, settings.terminalFontSize, terminalsMapRef, tabId]);
 
+  // Track active state in a ref so the ResizeObserver callback always has the latest value
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
@@ -132,12 +136,17 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
 
     void startIO();
 
+    let resizeRaf: number | null = null;
     const handleResize = () => {
-      fit.fit();
+      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null;
+        fit.fit();
+      });
     };
 
     const ro = new ResizeObserver(() => {
-      if (active) {
+      if (activeRef.current) {
         handleResize();
       }
     });
@@ -147,6 +156,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
 
     return () => {
       isCleanedUp = true;
+      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
       window.removeEventListener("resize", handleResize);
       ro.disconnect();
 
@@ -252,6 +262,7 @@ export function TerminalPanel() {
               const term = terminalsRef.current.get(activeTabId);
               if (term) {
                 term.clear();
+                term.scrollToBottom();
                 term.write(ANSI.prompt);
               }
             }}

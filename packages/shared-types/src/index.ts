@@ -26,6 +26,7 @@ export interface AppSettings {
   autoIndex?: boolean;
   maxFileSize?: number;
   excludedPatterns?: string;
+  doomLoopThreshold?: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -44,6 +45,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   selectedModel: "",
   selectedProvider: "",
   maxTokens: 4096,
+  doomLoopThreshold: 5,
 };
 
 export type FileNode = {
@@ -157,13 +159,14 @@ export type AgentSession = {
   status: "idle" | "running" | "aborted" | "error";
 };
 
+/** @deprecated Use SkillInfo instead — Skill has inconsistent source values */
 export type Skill = {
   name: string;
   description: string;
   prompt: string;
   enabled: boolean;
   scope: "global" | "workspace";
-  source: "user" | "project" | "bundled";
+  source: "user" | "user-global" | "user-workspace" | "project" | "bundled";
 };
 
 export type McpServer = {
@@ -227,6 +230,23 @@ export type ChatVersion = {
   parentVersionId?: string;
 };
 
+/** State of a sub-agent spawned via the task tool */
+export type SubAgentState = {
+  id: string;
+  prompt: string;
+  description: string;
+  subagentType: string;
+  status: "running" | "completed" | "failed";
+  startedAt: number;
+  completedAt?: number;
+  /** Tool calls executed inside this sub-agent */
+  toolCalls: ToolCall[];
+  /** Text content streamed from the sub-agent */
+  content: string;
+  /** Error message if failed */
+  error?: string;
+};
+
 export type StreamEvent =
   | { type: "message-start"; messageId: string }
   | { type: "message-delta"; messageId: string; content: string }
@@ -240,6 +260,9 @@ export type StreamEvent =
   | { type: "status"; status: AgentSession["status"] }
   | { type: "ask-permission"; toolCallId: string; kind: string; command?: string; description?: string }
   | { type: "ask-question"; header: string; question: string; options: { label: string; description: string }[] }
+  | { type: "sub-agent-start"; subAgentId: string; prompt: string; description: string; subagentType: string }
+  | { type: "sub-agent-update"; subAgentId: string; toolCalls?: ToolCall[]; content?: string }
+  | { type: "sub-agent-end"; subAgentId: string; status: "completed" | "failed"; error?: string }
   | { type: "activity-think"; content: string }
   | { type: "activity-explore"; query: string; kind?: "files" | "grep" | "symbols" | "definition"; matches: { path: string; line?: number; preview?: string }[] }
   | { type: "activity-read"; path: string; content: string; lineRange?: [number, number] }

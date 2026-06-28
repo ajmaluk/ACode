@@ -128,8 +128,38 @@ export async function markStale(id: string): Promise<void> {
 /**
  * purgeStale() — Hard delete stale entries (dream agent).
  */
-export async function purgeStale(): Promise<number> {
+export async function purgeStale(workspacePath?: string): Promise<number> {
   const db = getDb();
+  // First, get the IDs and categories of stale entries for markdown cleanup
+  const staleEntries = await db.select(
+    `SELECT id, category FROM memories WHERE stale=1`
+  ) as { id: string; category: string }[];
+  // Delete corresponding markdown files (best-effort)
+  if (staleEntries.length > 0) {
+    try {
+      const { joinPath: jp } = await import("@/lib/pathUtils");
+      const { remove, exists: fsExists } = await import("@tauri-apps/plugin-fs");
+      // Use provided workspacePath or fall back to active workspace
+      let wsPath = workspacePath;
+      if (!wsPath) {
+        const { useWorkspace } = await import("@/store/useAppStore");
+        const ws = useWorkspace.getState();
+        const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
+        wsPath = activeWs?.path;
+      }
+      if (wsPath) {
+        const memDir = jp(wsPath, ".dalam", "memories");
+        for (const entry of staleEntries) {
+          const mdFile = jp(memDir, `${entry.category}-${entry.id.slice(0, 8)}.md`);
+          if (await fsExists(mdFile)) {
+            await remove(mdFile).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // Markdown cleanup is best-effort
+    }
+  }
   const result = await db.execute(`DELETE FROM memories WHERE stale=1`);
   return result.rowsAffected;
 }
@@ -442,10 +472,10 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
       }
-      // Unescape YAML escape sequences
+      // Unescape YAML escape sequences (order matters: \\ before \")
       value = value
-        .replace(/\\"/g, '"')
         .replace(/\\\\/g, '\\')
+        .replace(/\\"/g, '"')
         .replace(/\\n/g, '\n')
         .replace(/\\r/g, '\r')
         .replace(/\\t/g, '\t')
@@ -481,8 +511,8 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
       }
       return fields.tags.split(/,\s*/).map((t: string) => t.trim().replace(/^"|"$/g, "")).filter(Boolean);
     })(),
-    createdAt: parseInt(fields.created_at) || Date.now(),
-    updatedAt: parseInt(fields.updated_at) || Date.now(),
+    createdAt: (fields.created_at ? parseInt(fields.created_at, 10) : Date.now()),
+    updatedAt: (fields.updated_at ? parseInt(fields.updated_at, 10) : Date.now()),
     accessCount: 0,
     lastAccessedAt: 0,
     verified: false,
@@ -780,7 +810,10 @@ export function jaccardSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : intersection / union;
 }
 
-/** Tokenize text into search terms */
+/** Tokenize text into search terms.
+ * Preserves code identifiers (e.g. file.ts, src/lib/utils, useState)
+ * by splitting on whitespace and punctuation but keeping dots, slashes,
+ * hyphens, and underscores within identifiers intact. */
 function tokenize(text: string): string[] {
   const stopWords = new Set([
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
@@ -794,14 +827,15 @@ function tokenize(text: string): string[] {
     "most", "other", "some", "such", "than", "too", "very", "just",
   ]);
 
-  return [
-    ...new Set(
-      text
-        .toLowerCase()
-        .split(/[^a-z0-9_/.-]+/)
-        .filter((w) => w.length > 2 && !stopWords.has(w))
-    ),
-  ];
+  const tokens = new Set<string>();
+  // Split on whitespace and common separators, but preserve code-like tokens
+  // e.g. "file.ts", "src/lib/utils", "useState", "npm-run" stay intact
+  const raw = text.toLowerCase().split(/[^a-z0-9_/.\-]+/).filter(Boolean);
+  for (const w of raw) {
+    if (w.length <= 2 || stopWords.has(w)) continue;
+    tokens.add(w);
+  }
+  return [...tokens];
 }
 
 /** Tier weight for sorting */

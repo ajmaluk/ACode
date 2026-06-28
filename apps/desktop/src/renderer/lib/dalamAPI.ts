@@ -1,4 +1,4 @@
-import type { DalamAPI, AgentSessionMode, AppSettings, ChatMessage, DiffProposal, FileNode, StreamEvent } from "@dalam/shared-types";
+import type { DalamAPI, AgentSessionMode, AppSettings, ChatMessage, DiffProposal, FileNode, StreamEvent, ToolCall } from "@dalam/shared-types";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
@@ -128,7 +128,7 @@ function getProviderConfig(providerId: string): { baseUrl: string; apiKey: strin
 }
 
 export class ProviderError extends Error {
-  constructor(message: string, public code: "auth" | "credit" | "network" | "provider" | "timeout") {
+  constructor(message: string, public code: "auth" | "credit" | "network" | "provider" | "timeout" | "validation") {
     super(message);
     this.name = "ProviderError";
   }
@@ -194,8 +194,8 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDel
       return await fn();
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      if (err instanceof ProviderError && (err.code === "auth" || err.code === "credit")) {
-        throw err; // Don't retry auth/credit errors
+      if (err instanceof ProviderError && (err.code === "auth" || err.code === "credit" || err.code === "validation")) {
+        throw err; // Don't retry auth/credit/validation errors
       }
       // Don't retry abort signals — user deliberately cancelled
       if (lastError.name === "AbortError") {
@@ -263,7 +263,8 @@ async function fetchWithRetry(
       if (resp.status === 403) throw new ProviderError("Access forbidden. Check your API key and permissions.", "auth");
       if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
       if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
-      throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "provider");
+      // Client errors (400, 404, etc.) are permanent — don't retry them
+      throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "validation");
     }
     return resp;
   }, maxRetries, baseDelayMs);
@@ -310,6 +311,11 @@ async function* streamOpenAI(
   const STREAM_READ_TIMEOUT_MS = 60_000; // 60s per read — detect hung streams
   let lastTimeout: ReturnType<typeof setTimeout> | undefined;
   const clearLastTimeout = () => { if (lastTimeout !== undefined) { clearTimeout(lastTimeout); lastTimeout = undefined; } };
+  // Register abort listener ONCE to avoid accumulating listeners per iteration
+  let currentClearFn: (() => void) | undefined;
+  if (signal) {
+    signal.addEventListener("abort", () => currentClearFn?.(), { once: true });
+  }
 
   // Tool call argument accumulation: OpenAI-compatible providers stream
   // function.arguments incrementally across SSE chunks (e.g. "{\"path\": \"/" then "etc/file\"}").
@@ -325,11 +331,12 @@ async function* streamOpenAI(
     const bodyTools = ["write_file", "edit_file", "clipboard_write", "memory_save"];
     if (bodyTools.includes(tcName) && parsedArgs.content) {
       const contentStr = typeof parsedArgs.content === "string" ? parsedArgs.content : "";
+      const escapedContent = contentStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const bodyAttrs = Object.entries(parsedArgs)
         .filter(([k, v]) => k !== "content" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
         .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
         .join(" ");
-      return `<${tcName} ${bodyAttrs}>${contentStr}</${tcName}>`;
+      return `<${tcName} ${bodyAttrs}>${escapedContent}</${tcName}>`;
     }
     if (tcName === "edit_file" && parsedArgs.search && parsedArgs.replace !== undefined) {
       return `<${tcName} path="${parsedArgs.path || ''}">\n<search>${parsedArgs.search}</search>\n<replace>${parsedArgs.replace}</replace>\n</${tcName}>`;
@@ -341,12 +348,11 @@ async function* streamOpenAI(
     while (true) {
       clearLastTimeout();
       // Race reader.read() against a timeout to detect hung streams
+      currentClearFn = clearLastTimeout;
       const readResult = await Promise.race([
         reader.read(),
         new Promise<never>((_, reject) => {
           lastTimeout = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
-          // Attach signal to clean up timer if aborted
-          signal?.addEventListener("abort", () => clearLastTimeout(), { once: true });
         }),
       ]);
       const { done, value } = readResult;
@@ -477,14 +483,22 @@ async function* streamAnthropic(
   let buffer = "";
   let msgId = "";
   const STREAM_READ_TIMEOUT_MS = 60_000; // 60s per read — detect hung streams
+  let lastReadTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearLastTimer = () => { if (lastReadTimer !== undefined) { clearTimeout(lastReadTimer); lastReadTimer = undefined; } };
+  // Register abort listener ONCE to avoid accumulating listeners per iteration
+  let currentClearFnAnth: (() => void) | undefined;
+  if (signal) {
+    signal.addEventListener("abort", () => currentClearFnAnth?.(), { once: true });
+  }
   _debugLog("[streamAnthropic] Starting stream, url:", url);
   try {
     while (true) {
+      clearLastTimer();
+      currentClearFnAnth = clearLastTimer;
       const readResult = await Promise.race([
         reader.read(),
         new Promise<never>((_, reject) => {
-          const t = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
-          signal?.addEventListener("abort", () => clearTimeout(t), { once: true });
+          lastReadTimer = setTimeout(() => reject(new ProviderError("Stream read timed out (60s no data)", "network")), STREAM_READ_TIMEOUT_MS);
         }),
       ]);
       const { done, value } = readResult;
@@ -666,13 +680,14 @@ const dalamAPI: DalamAPI = {
         if (wasActive) setActiveFile(newPath);
       } catch { /* store not available */ }
     },
-    async watchPath(path: string) {
+    async watchPath(path: string, sessionId?: string) {
       const { watchImmediate } = await import("@tauri-apps/plugin-fs");
       try {
         const unwatch = await watchImmediate(path, (_event) => {
         });
-        // Store the unwatch function so it can be called later
-        fileWatchers.set(path, unwatch);
+        // Store with composite key for session-scoped cleanup
+        const key = sessionId ? `${sessionId}:${path}` : path;
+        fileWatchers.set(key, unwatch);
       } catch (e) {
         console.warn("[FileWatch] Failed to watch path:", path, e);
       }
@@ -1066,6 +1081,15 @@ You are equipped with tools to interact with the workspace and operating system.
     Imports memories from markdown files in .dalam/memories/ into the SQLite cache.
     Use after cloning a repo to restore shared memories.
 
+--- Sub-Agent Tools (OpenCode Pattern) ---
+24. Task (Spawn Sub-Agent):
+    <task prompt="detailed task description" subagent_type="general" description="short label"/>
+    Spawns a sub-agent to handle a complex, multistep task autonomously.
+    Sub-agent types: general (default), explore (fast codebase search).
+    The sub-agent runs in the background and returns its result when complete.
+    Use for: parallel exploration, isolated tasks, complex multi-step work.
+    Do NOT use for: simple single-file reads (use read_file), quick searches (use grep_file).
+
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
 `;
 
@@ -1370,7 +1394,13 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
                 const isAutoApproved = autoApprovedTools.has(tc.id);
                 const toolStartTime = Date.now();
                 try {
-                  const result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
+                  let result: string;
+                  // Sub-agent task execution (OpenCode pattern)
+                  if (tc.name === "task") {
+                    result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                  } else {
+                    result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
+                  }
                   const durationMs = Date.now() - toolStartTime;
                   emit({ type: "tool-result", toolCallId: tc.id, result });
 
@@ -1434,11 +1464,41 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
 
           // No tools parsed — turn is complete
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
+          useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           break;
         }
 
         // If loop exhausted all iterations without break, emit message-end
         if (loopCount >= MAX_LOOP_HARD) {
+          // Hermes TurnFinalizer pattern: make one toolless API call to get a summary
+          // instead of failing silently when iteration budget exhausts.
+          try {
+            const finalizerMessages: ApiMessage[] = [
+              { role: "system", content: "The iteration budget has been exhausted. Please provide a concise summary of what you have accomplished so far and what remains to be done. Do not call any tools." },
+              ...await buildMessages(),
+            ];
+            // Strip any tool definitions from the finalizer call by not including tools
+            const finalizerStream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, finalizerMessages, ac.signal, 2048);
+            let finalizerContent = "";
+            for await (const event of finalizerStream) {
+              if (event.type === "message-delta") {
+                finalizerContent += event.content;
+                emit(event);
+              }
+            }
+            if (finalizerContent) {
+              totalFullContent += finalizerContent;
+              currentHistory.push({
+                id: "tf-" + Math.random().toString(36).slice(2, 9),
+                role: "assistant",
+                content: finalizerContent,
+                timestamp: Date.now(),
+              });
+            }
+          } catch {
+            // If the finalizer call fails, emit a fallback message
+            emit({ type: "message-delta", messageId: sessionId, content: "\n\n[Agent reached iteration limit. No summary available.]" });
+          }
           emit({ type: "message-end", messageId: sessionId });
         }
 
@@ -1499,28 +1559,40 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         } else {
           emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
           emit({ type: "message-end", messageId: sessionId });
-          await hookBus.emit("SessionEnd", {
-            sessionId,
-            reason: "error",
-            messageCount,
-            durationMs: Date.now() - startTime,
-            timestamp: Date.now(),
-          });
+          if (!emittedSessionEnds.has(sessionId)) {
+            emittedSessionEnds.add(sessionId);
+            await hookBus.emit("SessionEnd", {
+              sessionId,
+              reason: "error",
+              messageCount,
+              durationMs: Date.now() - startTime,
+              timestamp: Date.now(),
+            });
+          }
         }
       } finally {
-        activeControllers.delete(sessionId);
-        sessionStartTimes.delete(sessionId);
-        // Clean up file watchers — watchers are keyed by path, clean all active ones
-        for (const [, unwatch] of fileWatchers) {
-          try { unwatch(); } catch { /* ignore */ }
+        // Only clean up if THIS call's controller is still the active one.
+        // A concurrent sendPrompt for the same session would have replaced it.
+        const currentController = activeControllers.get(sessionId);
+        if (currentController === ac) {
+          activeControllers.delete(sessionId);
         }
-        fileWatchers.clear();
+        sessionStartTimes.delete(sessionId);
+        // Clean up file watchers — only clean watchers registered by this call
+        for (const [key, unwatch] of fileWatchers) {
+          if (key.startsWith(sessionId)) {
+            try { unwatch(); } catch { /* ignore */ }
+            fileWatchers.delete(key);
+          }
+        }
         // Clean up MCP HTTP sessions (keyed by server name, remove all for this session)
         for (const [serverName, sesId] of mcpHttpSessions) {
           if (sesId === sessionId) mcpHttpSessions.delete(serverName);
         }
-        // Clean up all pending diff proposals (they're session-scoped)
-        pendingDiffProposals.clear();
+        // Clean up pending diff proposals for this session only
+        for (const [key] of pendingDiffProposals) {
+          if (key.startsWith(sessionId)) pendingDiffProposals.delete(key);
+        }
         // Clean up stream listener cleanup functions
         streamCleanups.delete(sessionId);
         // Clean up SessionEnd dedup tracking
@@ -1536,8 +1608,8 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           }
         } catch { /* store not available */ }
-        // Delete callback AFTER emitting the safety message-end
-        streamCallbacks.delete(sessionId);
+        // Only delete callback if this session doesn't have a newer listener
+        // (checked via streamCleanups — a newer onStreamEvent would have replaced it)
       }
 
     },
@@ -1552,7 +1624,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
       // Only emit SessionEnd if we're the ones cleaning up (not sendPrompt's finally)
       if (activeControllers.has(sessionId) && !emittedSessionEnds.has(sessionId)) {
         emittedSessionEnds.add(sessionId);
-        hookBus.emit("SessionEnd", {
+        await hookBus.emit("SessionEnd", {
           sessionId,
           reason: "aborted",
           messageCount,
@@ -1864,6 +1936,7 @@ const KNOWN_TOOL_NAMES = new Set([
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
+  "task",
 ]);
 
 function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
@@ -2002,7 +2075,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   }
 
   // 12. system_info
-  const systemInfoRegex = /<system_info\s*\/>/gi;
+  const systemInfoRegex = /<system_info\s*\/?>/gi;
   while ((match = systemInfoRegex.exec(text)) !== null) {
     toolCalls.push({ name: "system_info", args: {}, raw: match[0] });
   }
@@ -2065,7 +2138,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   }
 
   // 18. memory_delete
-  const memoryDeleteRegex = /<memory_delete\s+([\s\S]*?)\/?>/gi;
+  const memoryDeleteRegex = /<memory_delete\s+([^>]*)\/?>/gi;
   while ((match = memoryDeleteRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[0]);
     if (attrs.id) {
@@ -2107,7 +2180,25 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "memory_import", args: {}, raw: match[0] });
   }
 
-  // 24. Generic MCP Tool calls
+  // 24. task (sub-agent spawn) — OpenCode pattern
+  const taskRegex = /<task\s+([^>]*)\/?>/gi;
+  while ((match = taskRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[0]);
+    if (attrs.prompt) {
+      toolCalls.push({
+        name: "task",
+        args: {
+          prompt: attrs.prompt,
+          description: attrs.description || "",
+          subagent_type: attrs.subagent_type || "general",
+          background: attrs.background || "false",
+        },
+        raw: match[0],
+      });
+    }
+  }
+
+  // 25. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
   const mcpTagRegex = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
@@ -2434,11 +2525,11 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     const bytes = await readFile(args.path);
     const original = new TextDecoder().decode(bytes);
     if (!original.includes(args.search)) {
-      throw new Error(`Search block not found in file: ${args.path}`);
+      return `Error: Search block not found in file: ${args.path}`;
     }
-    const updated = args.search
-      ? original.split(args.search).join(args.replace)
-      : original;
+    // Replace only the FIRST occurrence (not all) to prevent accidental mass-replacement
+    const searchIdx = original.indexOf(args.search);
+    const updated = original.slice(0, searchIdx) + args.replace + original.slice(searchIdx + args.search.length);
 
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
@@ -2448,7 +2539,6 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
       for (const line of oldLines) { diffLines.push({ type: "remove", content: line }); }
       for (const line of newLines) { diffLines.push({ type: "add", content: line }); }
-      const searchIdx = original.indexOf(args.search);
       const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
       const hunks = [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
       emit({ type: "diff-proposed", proposal: { diffId: "auto-" + Math.random().toString(36).slice(2, 9), filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() } });
@@ -2466,7 +2556,6 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     for (const line of newLines) {
       diffLines.push({ type: "add", content: line });
     }
-    const searchIdx = original.indexOf(args.search);
     const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
     const hunks = [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() };
@@ -2528,6 +2617,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     }
     const globRegex = new RegExp(
       "^" + fileGlob
+        .replace(/([.+^${}()|[\]\\])/g, "\\$1")  // Escape regex metacharacters first
         .replace(/\*\*\//g, ".*")  // **/ → match any path prefix
         .replace(/\*\*/g, ".*")    // ** → match anything
         .replace(/\*/g, "[^/]*")   // * → match within segment
@@ -2549,7 +2639,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
         if (entry.isDirectory) {
           await searchDir(full, depth + 1, visited);
         } else {
-          if (!globRegex.test(entry.name)) continue;
+          // Check glob against both bare filename and relative path (to support dir-prefixed globs like src/**/*.ts)
           const relPath = full.startsWith(searchPath) ? full.slice(searchPath.length + 1) : full;
           if (!globRegex.test(relPath) && !globRegex.test(entry.name)) continue;
           // Skip binary files
@@ -2648,7 +2738,29 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   }
 
   if (name === "launch_app") {
-    const appArgs = args.args ? args.args.split(/\s+/).filter(Boolean) : undefined;
+    // Shell-style argument splitting that respects quoted strings
+    function splitArgs(str: string): string[] {
+      const result: string[] = [];
+      let current = '';
+      let inSingle = false;
+      let inDouble = false;
+      let escape = false;
+      for (const ch of str) {
+        if (escape) { current += ch; escape = false; continue; }
+        if (ch === '\\') { escape = true; continue; }
+        if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+        if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+        if (/\s/.test(ch) && !inSingle && !inDouble) {
+          if (current) result.push(current);
+          current = '';
+          continue;
+        }
+        current += ch;
+      }
+      if (current) result.push(current);
+      return result;
+    }
+    const appArgs = args.args ? splitArgs(args.args) : undefined;
     const result = await dalamAPI.system.launchApp(args.name, appArgs, args.cwd || workspacePath);
     return result || `Launched app: ${args.name}`;
   }
@@ -2661,12 +2773,13 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   if (name === "memory_save") {
     const { saveMemory } = await import("./memoryStore");
     const tags = args.tags ? args.tags.split(/,\s*/).map((t: string) => t.trim()).filter(Boolean) : [];
+    const content = args.content ?? "";
     const result = await saveMemory(
       {
         category: (args.category as import("./memoryTypes").MemoryCategory) || "project",
         tier: (args.tier as import("./memoryTypes").MemoryTier) || "medium",
-        summary: args.summary || args.content.slice(0, 150),
-        content: args.content,
+        summary: args.summary || content.slice(0, 150),
+        content,
         tags,
       },
       workspacePath,
@@ -2813,19 +2926,38 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   }
 
   if (name === "get_env") {
-    throw new Error("get_env tool is not yet implemented");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const key = String(args.key ?? "");
+    if (!key) return "Error: key is required";
+    const value = await invoke<string>("get_env", { key });
+    return value || "(empty)";
   }
   if (name === "get_screen_info") {
-    throw new Error("get_screen_info tool is not yet implemented");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const info = await invoke<{ width: number; height: number; scale_factor: number }>("get_screen_info");
+    return JSON.stringify(info);
   }
   if (name === "list_processes") {
-    throw new Error("list_processes tool is not yet implemented");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const procs = await invoke<{ pid: number; name: string; cpu_usage: number; memory_kb: number }[]>("list_processes");
+    if (!procs || procs.length === 0) return "(no processes found)";
+    return procs.map((p) => `${p.pid}\t${p.name}\tCPU: ${p.cpu_usage.toFixed(1)}%\tMem: ${p.memory_kb}KB`).join("\n");
   }
   if (name === "kill_process") {
-    throw new Error("kill_process tool is not yet implemented");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const pid = Number(args.pid ?? 0);
+    if (!pid) return "Error: pid is required";
+    await invoke("kill_process", { pid });
+    return `Process ${pid} killed`;
   }
   if (name === "get_disk_space") {
-    throw new Error("get_disk_space tool is not yet implemented");
+    const { invoke } = await import("@tauri-apps/api/core");
+    const diskPath = String(args.path ?? "/");
+    const info = await invoke<{ total_bytes: number; available_bytes: number; used_bytes: number }>("get_disk_space", { path: diskPath });
+    const totalGB = (info.total_bytes / (1024 ** 3)).toFixed(2);
+    const availGB = (info.available_bytes / (1024 ** 3)).toFixed(2);
+    const usedGB = (info.used_bytes / (1024 ** 3)).toFixed(2);
+    return `Total: ${totalGB}GB, Available: ${availGB}GB, Used: ${usedGB}GB`;
   }
 
   if (name.startsWith("mcp_")) {
@@ -2920,15 +3052,14 @@ async function executeTool(name: string, args: Record<string, string>, workspace
         const cmd = Command.create(command, server.args ?? [], { env: server.env });
 
         // eslint-disable-next-line no-async-promise-executor -- needed for sequential async operations in promise
-        const resultPromise = new Promise<string>(async (resolve, reject) => {
+        const resultPromise = new Promise<string>((resolve, reject) => {
           let outputBuffer = "";
           let resolved = false;
+          let childProc: Awaited<ReturnType<typeof cmd.spawn>> | null = null;
 
           cmd.stdout.on("data", (data: string) => {
             outputBuffer += data;
-            // NDJSON: split on newlines, parse each complete line
             const lines = outputBuffer.split("\n");
-            // Keep the last incomplete line in the buffer
             outputBuffer = lines.pop() ?? "";
             for (const line of lines) {
               const trimmed = line.trim();
@@ -2958,30 +3089,42 @@ async function executeTool(name: string, args: Record<string, string>, workspace
             console.warn("MCP Stderr:", data);
           });
 
-          const child = await cmd.spawn();
-          const initReq = JSON.stringify({
-            jsonrpc: "2.0",
-            method: "initialize",
-            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } },
-            id: 1,
-          }) + "\n";
-          await child.write(initReq);
-          const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
-          await child.write(initNotif);
-          const req = JSON.stringify({
-            jsonrpc: "2.0",
-            method: "tools/call",
-            params: {
-              name: toolName,
-              arguments: args,
-            },
-            id: 2,
-          }) + "\n";
-          await child.write(req);
+          const doSpawn = async () => {
+            try {
+              childProc = await cmd.spawn();
+            const initReq = JSON.stringify({
+              jsonrpc: "2.0",
+              method: "initialize",
+              params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } },
+              id: 1,
+            }) + "\n";
+            await childProc.write(initReq);
+            const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
+            await childProc.write(initNotif);
+            const req = JSON.stringify({
+              jsonrpc: "2.0",
+              method: "tools/call",
+              params: {
+                name: toolName,
+                arguments: args,
+              },
+              id: 2,
+            }) + "\n";
+            await childProc.write(req);
+          } catch (spawnErr) {
+            if (!resolved) {
+              resolved = true;
+              reject(spawnErr instanceof Error ? spawnErr : new Error(String(spawnErr)));
+            }
+            return;
+          }
+          };
+
+          doSpawn();
 
           setTimeout(() => {
             if (!resolved) {
-              child.kill().catch(() => { });
+              childProc?.kill().catch(() => { });
               reject(new Error("Timeout waiting for tools/call response (30s)"));
             }
           }, 30000);
@@ -2996,4 +3139,138 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   }
 
   throw new Error(`Unknown tool: ${name}`);
+}
+
+/**
+ * Execute a sub-agent task (OpenCode pattern).
+ * Spawns a child conversation loop with a derived system prompt and returns the result.
+ * The sub-agent runs with its own iteration budget and shares the same workspace.
+ */
+async function executeSubAgentTask(
+  args: Record<string, unknown>,
+  parentSessionId: string,
+  workspacePath: string,
+  emit: (event: StreamEvent) => void,
+  signal: AbortSignal,
+): Promise<string> {
+  const prompt = String(args.prompt ?? "");
+  const subagentType = String(args.subagent_type ?? "general");
+  const description = String(args.description ?? "Sub-agent task");
+
+  if (!prompt) return "[Error: task prompt is required]";
+
+  const subAgentId = "sub-" + Math.random().toString(36).slice(2, 9);
+
+  // Emit sub-agent lifecycle events for UI visibility (accordion tracking)
+  emit({ type: "sub-agent-start", subAgentId, prompt, description, subagentType });
+
+  // Build sub-agent system prompt based on type
+  let subSystemPrompt: string;
+  switch (subagentType) {
+    case "explore":
+      subSystemPrompt = `You are a Dalam explore sub-agent. Your job is to quickly search and analyze the codebase to answer questions. Be concise. Read files, search patterns, and return findings. Do NOT edit files.`;
+      break;
+    case "general":
+    default:
+      subSystemPrompt = `You are a Dalam general sub-agent. Complete the assigned task autonomously. Be thorough but concise. Use available tools to read, write, and execute commands as needed.`;
+      break;
+  }
+
+  // Run a mini conversation loop for the sub-agent (max 10 iterations, 2 min timeout)
+  const subHistory: Array<{ role: string; content: string }> = [
+    { role: "system", content: subSystemPrompt },
+    { role: "user", content: prompt },
+  ];
+  const MAX_SUB_ITERATIONS = 10;
+  const SUB_TIMEOUT_MS = 2 * 60 * 1000;
+  const subStartTime = Date.now();
+  let subResult = "";
+  let subFailed = false;
+  let subError: string | undefined;
+  const subToolCalls: ToolCall[] = [];
+
+  const { settings, modelId, config } = getActiveProvider();
+
+  for (let subLoop = 0; subLoop < MAX_SUB_ITERATIONS; subLoop++) {
+    if (signal.aborted || Date.now() - subStartTime > SUB_TIMEOUT_MS) break;
+
+    const apiMessages: ApiMessage[] = subHistory.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    try {
+      const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, apiMessages, signal, 4096);
+      let fullContent = "";
+      for await (const event of stream) {
+        if (signal.aborted) break;
+        if (event.type === "message-delta") fullContent += event.content;
+      }
+
+      subResult += fullContent;
+
+      // Check if sub-agent is calling tools
+      const subTools = await parseToolCalls(fullContent);
+      if (subTools.length === 0) {
+        // No tools — sub-agent is done
+        break;
+      }
+
+      // Execute sub-agent tools — emit sub-agent-update events for UI visibility
+      // (NOT raw tool-call events, which would leak into parent's pendingToolCalls)
+      subHistory.push({ role: "assistant", content: fullContent });
+      // Enforce tool restrictions based on sub-agent type
+      const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log"]);
+      for (const st of subTools) {
+        if (signal.aborted) break;
+        // Explore sub-agents are read-only — reject write tools
+        if (subagentType === "explore" && !READ_ONLY_TOOLS.has(st.name)) {
+          const rejectResult = `Error: Explore sub-agents cannot use ${st.name}. Read-only tools only.`;
+          subHistory.push({ role: "user", content: `[Tool error for ${st.name}]\n${rejectResult}` });
+          continue;
+        }
+        const subToolId = "stc-" + Math.random().toString(36).slice(2, 9);
+        const tc: ToolCall = { id: subToolId, name: st.name, args: st.args, status: "running" };
+        subToolCalls.push(tc);
+        emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
+        try {
+          // Execute silently — sub-agents don't need parent permission dialogs
+          const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, emit, true);
+          // Update the tool call status
+          const idx = subToolCalls.findIndex((t) => t.id === subToolId);
+          if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "completed", result: toolResult };
+          emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
+          subHistory.push({ role: "user", content: `[Tool result for ${st.name}]\n${toolResult || "(no output)"}` });
+        } catch (err) {
+          const errMsg = (err as Error)?.message ?? String(err);
+          const idx = subToolCalls.findIndex((t) => t.id === subToolId);
+          if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "failed", result: `Error: ${errMsg}` };
+          emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
+          subHistory.push({ role: "user", content: `[Tool error for ${st.name}]\n${errMsg}` });
+        }
+      }
+      // Emit content update after each iteration
+      emit({ type: "sub-agent-update", subAgentId, content: subResult });
+    } catch (err) {
+      subFailed = true;
+      subError = (err as Error)?.message ?? String(err);
+      break;
+    }
+  }
+
+  // Timeout check (only if not aborted — abort is intentional, not a failure)
+  if (!subFailed && !signal.aborted && Date.now() - subStartTime > SUB_TIMEOUT_MS) {
+    subFailed = true;
+    subError = "Sub-agent timed out after 2 minutes";
+  }
+
+  // Emit sub-agent completion
+  emit({
+    type: "sub-agent-end",
+    subAgentId,
+    status: subFailed ? "failed" : "completed",
+    ...(subError ? { error: subError } : {}),
+  });
+
+  return subResult || "(Sub-agent completed with no output)";
 }

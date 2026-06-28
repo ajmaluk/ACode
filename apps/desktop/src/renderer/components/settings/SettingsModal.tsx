@@ -3,11 +3,13 @@ import {
   useSettingsView, useSettings, useSkillsMcp, useModelProviders, useAgents, useWorkspace,
   type SettingsTab, type ModelProvider, type PrimaryAgentName, type AgentInfo, type PermissionRule, type PermissionAction,
 } from "@/store/useAppStore";
-import { useToasts } from "@/components/ui/toastStore";
+import { useToasts, useToast } from "@/components/ui/toastStore";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { joinPath } from "@/lib/pathUtils";
 import { modKey, platform } from "@/lib/platform";
 import { MemoryGraph } from "./MemoryGraph";
+import { getConnectorConfigs, saveConnectorConfig, removeConnectorConfig, type ConnectorConfig } from "@/lib/connectors";
+import { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder";
 import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
   Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
@@ -25,6 +27,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: "mcp", label: "MCP Servers", icon: Plug },
   { id: "memory-graph", label: "Memory Graph", icon: Network },
   { id: "plugins", label: "Plugins", icon: Puzzle },
+  { id: "connectors", label: "Connectors", icon: Plug },
   { id: "commands", label: "Commands", icon: Terminal },
   { id: "indexing", label: "Indexing", icon: Database },
   { id: "onboard", label: "Onboard", icon: Rocket },
@@ -80,7 +83,8 @@ export function SettingsModal() {
             {activeTab === "skills" && <SkillsTab />}
             {activeTab === "mcp" && <McpTab />}
             {activeTab === "memory-graph" && <MemoryGraphTab />}
-            {activeTab === "plugins" && <PluginsTab />}
+            {activeTab === "plugins" && <PluginsTab />}              {activeTab === "connectors" && <ConnectorsTab />}
+
             {activeTab === "commands" && <CommandsTab />}
             {activeTab === "indexing" && <IndexingTab />}
             {activeTab === "onboard" && <OnboardTab />}
@@ -172,6 +176,17 @@ function GeneralTab() {
           <input className="input-base flex-1" value={httpProxy} placeholder="Leave blank for direct, e.g. http://127.0.0.1:7890" onChange={(e) => setHttpProxy(e.target.value)} />
           <button className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors" onClick={() => update("httpProxy", httpProxy)}>Save</button>
         </div>
+      </Card>
+      <div className="my-6 border-t border-dalam-border-primary" />
+      <Card title="Agent safety" description="Configure automatic loop detection thresholds for the agentic loop. Lower values = more aggressive intervention; higher values = more tolerant.">
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-dalam-text-secondary whitespace-nowrap">Doom loop threshold</span>
+          <input type="range" min={2} max={15} value={settings.doomLoopThreshold ?? 5} onChange={(e) => update("doomLoopThreshold", Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
+          <span className="text-sm text-dalam-text-primary w-8 text-right font-mono">{settings.doomLoopThreshold ?? 5}</span>
+        </div>
+        <p className="text-xs text-dalam-text-muted mt-2">
+          Warns after this many identical consecutive tool failures. The agentic loop is hard-stopped at 2× this value.
+        </p>
       </Card>
     </>
   );
@@ -1425,6 +1440,131 @@ function PluginsTab() {
   );
 }
 
+// ---- Connectors Tab ------------------------------------------------------------
+
+function ConnectorsTab() {
+  const [configs, setConfigs] = useState<ConnectorConfig[]>(() => getConnectorConfigs());
+  const [addingType, setAddingType] = useState<"telegram" | "whatsapp" | null>(null);
+  const toast = useToast();
+
+  // Telegram form
+  const [tgName, setTgName] = useState("");
+  const [tgToken, setTgToken] = useState("");
+  const [tgUsers, setTgUsers] = useState("");
+
+  // WhatsApp form
+  const [waName, setWaName] = useState("");
+  const [waBridgeUrl, setWaBridgeUrl] = useState("");
+  const [waToken, setWaToken] = useState("");
+  const [waUsers, setWaUsers] = useState("");
+
+  const refresh = () => setConfigs(getConnectorConfigs());
+
+  const handleAddTelegram = () => {
+    if (!tgToken.trim()) { toast.warning("Bot token is required"); return; }
+    const cfg: ConnectorConfig = {
+      id: "tg-" + Date.now().toString(36),
+      name: tgName.trim() || "Telegram Bot",
+      type: "telegram",
+      enabled: true,
+      config: {
+        botToken: tgToken.trim(),
+        allowedUsers: tgUsers.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)),
+      },
+    };
+    saveConnectorConfig(cfg);
+    refresh();
+    setAddingType(null);
+    setTgName(""); setTgToken(""); setTgUsers("");
+    toast.success("Telegram connector added", "Restart to activate.");
+  };
+
+  const handleAddWhatsApp = () => {
+    if (!waBridgeUrl.trim()) { toast.warning("Bridge URL is required"); return; }
+    const cfg: ConnectorConfig = {
+      id: "wa-" + Date.now().toString(36),
+      name: waName.trim() || "WhatsApp",
+      type: "whatsapp",
+      enabled: true,
+      config: {
+        bridgeUrl: waBridgeUrl.trim(),
+        authToken: waToken.trim() || undefined,
+        allowedUsers: waUsers.split(",").map(s => s.trim()).filter(Boolean),
+      },
+    };
+    saveConnectorConfig(cfg);
+    refresh();
+    setAddingType(null);
+    setWaName(""); setWaBridgeUrl(""); setWaToken(""); setWaUsers("");
+    toast.success("WhatsApp connector added", "Restart to activate.");
+  };
+
+  const handleToggle = (cfg: ConnectorConfig) => {
+    saveConnectorConfig({ ...cfg, enabled: !cfg.enabled });
+    refresh();
+  };
+
+  const handleDelete = (id: string) => {
+    removeConnectorConfig(id);
+    refresh();
+    toast.info("Connector removed");
+  };
+
+  return (
+    <>
+      <Card title="Connectors" description="Connect Dalam to external messaging platforms. Receive and respond to messages from Telegram, WhatsApp, and more.">
+        {configs.length === 0 && !addingType && (
+          <p className="text-[12px] text-dalam-text-muted mb-4">No connectors configured. Add one below to get started.</p>
+        )}
+        {configs.map((cfg) => (
+          <div key={cfg.id} className="flex items-center justify-between py-3 border-b border-dalam-border-primary last:border-b-0">
+            <div className="flex items-center gap-3">
+              <span className={`w-2 h-2 rounded-full ${cfg.enabled ? "bg-dalam-git-added" : "bg-dalam-text-muted/40"}`} />
+              <div>
+                <div className="text-[13px] text-dalam-text-primary font-medium">{cfg.name}</div>
+                <div className="text-[11px] text-dalam-text-muted capitalize">{cfg.type}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => handleToggle(cfg)} className="text-[11px] px-2 py-1 rounded bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">
+                {cfg.enabled ? "Disable" : "Enable"}
+              </button>
+              <button onClick={() => handleDelete(cfg.id)} className="text-[11px] px-2 py-1 rounded bg-dalam-git-deleted/10 hover:bg-dalam-git-deleted/20 text-dalam-git-deleted transition-colors">
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      {!addingType && (
+        <div className="flex gap-2 mt-3">
+          <button onClick={() => setAddingType("telegram")} className="text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">+ Telegram</button>
+          <button onClick={() => setAddingType("whatsapp")} className="text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">+ WhatsApp</button>
+        </div>
+      )}
+
+      {addingType === "telegram" && (
+        <Card title="Add Telegram Bot"><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Name</label><input className="input-base w-full" value={tgName} onChange={(e) => setTgName(e.target.value)} placeholder="Telegram Bot" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Bot token</label><input className="input-base w-full font-mono" value={tgToken} onChange={(e) => setTgToken(e.target.value)} placeholder="123456:ABC-DEF..." /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Allowed user IDs (comma-separated)</label><input className="input-base w-full" value={tgUsers} onChange={(e) => setTgUsers(e.target.value)} placeholder="123456789" /></div>
+          <div className="flex gap-2 mt-2">
+            <button onClick={handleAddTelegram} className="btn-primary text-[12px]">Add Connector</button>
+            <button onClick={() => setAddingType(null)} className="text-[12px] px-3 py-1.5 rounded text-dalam-text-muted hover:text-dalam-text-primary">Cancel</button>
+          </div>
+        </Card>
+      )}
+
+      {addingType === "whatsapp" && (
+        <Card title="Add WhatsApp"><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Name</label><input className="input-base w-full" value={waName} onChange={(e) => setWaName(e.target.value)} placeholder="WhatsApp" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Bridge URL</label><input className="input-base w-full font-mono" value={waBridgeUrl} onChange={(e) => setWaBridgeUrl(e.target.value)} placeholder="http://localhost:3000" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Auth token (optional)</label><input className="input-base w-full font-mono" value={waToken} onChange={(e) => setWaToken(e.target.value)} placeholder="Optional" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Allowed phone numbers (comma-separated)</label><input className="input-base w-full" value={waUsers} onChange={(e) => setWaUsers(e.target.value)} placeholder="+1234567890" /></div>
+          <div className="flex gap-2 mt-2">
+            <button onClick={handleAddWhatsApp} className="btn-primary text-[12px]">Add Connector</button>
+            <button onClick={() => setAddingType(null)} className="text-[12px] px-3 py-1.5 rounded text-dalam-text-muted hover:text-dalam-text-primary">Cancel</button>
+          </div>
+        </Card>
+      )}
+    </>
+  );
+}
+
 // ---- Commands ------------------------------------------------------------
 
 function CommandsTab() {
@@ -1496,6 +1636,89 @@ function CommandsTab() {
   );
 }
 
+// ---- Trajectory Export Card ----
+
+function TrajectoryExportCard() {
+  const [stats, setStats] = useState<{ totalSessions: number; totalTurns: number; completedSessions: number; models: Record<string, number> } | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [lastExport, setLastExport] = useState<string | null>(null);
+  const toast = useToasts((s) => s.push);
+  const activeWorkspace = useWorkspace((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId));
+
+  useEffect(() => {
+    if (!activeWorkspace) return;
+    getTrajectoryStats(activeWorkspace.path).then(setStats).catch(() => {});
+  }, [activeWorkspace?.id]);
+
+  if (!activeWorkspace) {
+    return <p className="text-sm text-dalam-text-muted">Open a workspace to view trajectory data.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {stats && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-dalam-text-primary">{stats.totalSessions}</div>
+            <div className="text-xs text-dalam-text-muted">Sessions recorded</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-dalam-text-primary">{stats.totalTurns}</div>
+            <div className="text-xs text-dalam-text-muted">Total turns</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-dalam-text-primary">{stats.completedSessions}</div>
+            <div className="text-xs text-dalam-text-muted">Completed</div>
+          </div>
+        </div>
+      )}
+      {stats && Object.keys(stats.models).length > 0 && (
+        <div>
+          <div className="text-xs text-dalam-text-muted mb-2">Models used:</div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(stats.models).map(([model, count]) => (
+              <span key={model} className="px-2 py-1 text-xs rounded bg-dalam-bg-tertiary border border-dalam-border-primary font-mono">
+                {model} <span className="text-dalam-text-muted">x{count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <button
+          className="px-4 py-2 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-md transition-colors"
+          disabled={exporting}
+          onClick={async () => {
+            setExporting(true);
+            try {
+              const filename = await exportTrajectories(activeWorkspace.path);
+              if (filename) {
+                setLastExport(filename);
+                toast({ kind: "success", title: "Trajectories exported", description: filename });
+              } else {
+                toast({ kind: "warning", title: "No trajectories to export" });
+              }
+            } catch (e) {
+              toast({ kind: "error", title: "Export failed", description: String(e) });
+            } finally {
+              setExporting(false);
+            }
+          }}
+        >
+          {exporting ? "Exporting…" : "Export JSONL"}
+        </button>
+        {lastExport && (
+          <span className="text-xs text-dalam-text-muted">Last export: {lastExport}</span>
+        )}
+      </div>
+      <p className="text-xs text-dalam-text-muted">
+        Trajectories are saved to <code className="px-1 py-0.5 rounded bg-dalam-bg-tertiary font-mono">.dalam/trajectories/</code> as one JSONL file per session.
+        Each line contains a ShareGPT-style conversation record with turns, model info, and metadata.
+      </p>
+    </div>
+  );
+}
+
 // ---- Indexing ------------------------------------------------------------
 
 function IndexingTab() {
@@ -1538,6 +1761,9 @@ function IndexingTab() {
         <button className="mt-3 px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors" onClick={() => update("excludedPatterns", excludedPatterns)}>
           Save patterns
         </button>
+      </Card>
+      <Card title="Conversation trajectories" description="Export full conversation trajectories as JSONL for post-hoc analysis, fine-tuning datasets, and auditing.">
+        <TrajectoryExportCard />
       </Card>
     </>
   );

@@ -1,11 +1,11 @@
 import { useGit, useWorkspace, useSettings, useChat, useModelProviders } from "@/store/useAppStore";
-import { GitBranch, AlertCircle, Cpu, Wifi, CheckCircle2, Loader2, Circle } from "lucide-react";
+import { GitBranch, AlertCircle, Cpu, Wifi, CheckCircle2, Loader2, Circle, AlertTriangle } from "lucide-react";
 
 export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
   const { status } = useGit();
   const { openTabs, activeFilePath } = useWorkspace();
   const { settings } = useSettings();
-  const { session, selectedModelId } = useChat();
+  const { session, selectedModelId, doomLoopWarningCount } = useChat();
   const { getAllModels } = useModelProviders();
   const allModels = getAllModels();
   const resolvedModel = allModels.find((m) => m.model.modelId === selectedModelId || m.model.modelId === settings.selectedModel);
@@ -52,6 +52,12 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
         )}
       </div>
       <div className="flex items-center gap-3 flex-shrink-0">
+        {doomLoopWarningCount > 0 && (
+          <span className="flex items-center gap-1.5 text-amber-400 animate-pulse">
+            <AlertTriangle className="w-3 h-3" />
+            <span>Tool loop: {doomLoopWarningCount} failure{doomLoopWarningCount > 1 ? 's' : ''}</span>
+          </span>
+        )}
         {session && (
           <span className="flex items-center gap-1.5">
             <StatusIcon className={`w-3 h-3 ${session.status === "running" ? "text-dalam-accent-primary animate-spin" : "text-dalam-git-added"}`} />

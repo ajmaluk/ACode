@@ -145,6 +145,13 @@ class HookEventBus {
     const handlers = this.listeners.get(eventName);
     if (!handlers || handlers.size === 0) return;
 
+    // Warn if too many listeners (potential memory leak)
+    if (handlers.size > 20) {
+      console.warn(
+        `[HookBus] ${handlers.size} listeners registered for "${eventName}" — possible memory leak`
+      );
+    }
+
     // Snapshot the handlers to avoid issues if a handler modifies the Set during iteration
     const handlerList = [...handlers];
 
@@ -182,7 +189,8 @@ class HookEventBus {
   private pushLog(entry: typeof this.executionLog[number]): void {
     this.executionLog.push(entry);
     if (this.executionLog.length > HookEventBus.MAX_LOG_SIZE) {
-      this.executionLog = this.executionLog.slice(-HookEventBus.MAX_LOG_SIZE);
+      // splice avoids allocating a new array on every overflow
+      this.executionLog.splice(0, this.executionLog.length - HookEventBus.MAX_LOG_SIZE);
     }
   }
 

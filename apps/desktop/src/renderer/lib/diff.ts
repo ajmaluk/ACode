@@ -187,14 +187,89 @@ function patienceDiff(oldLines: string[], newLines: string[]): DiffOp[] {
 
 /**
  * Simple Myers diff for small segments (used by patience diff).
+ * Uses direct O(mn) LCS to avoid recursion back into myersDiff.
  */
 function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: number, newOffset: number): DiffOp[] {
-  const ops = myersDiff(oldLines, newLines);
-  return ops.map(op => {
-    if (op.type === "keep") return { ...op, oldIdx: op.oldIdx + oldOffset, newIdx: op.newIdx + newOffset };
-    if (op.type === "delete") return { ...op, oldIdx: op.oldIdx + oldOffset };
-    return { ...op, newIdx: op.newIdx + newOffset };
-  });
+  const n = oldLines.length;
+  const m = newLines.length;
+
+  // Small enough for direct O(mn) diff — avoids recursion into myersDiff
+  if (n + m <= 1000) {
+    // Simple LCS-based diff
+    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = 1; i <= n; i++) {
+      for (let j = 1; j <= m; j++) {
+        dp[i][j] = oldLines[i - 1] === newLines[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+    // Backtrack
+    const ops: DiffOp[] = [];
+    let i = n, j = m;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+        ops.push({ type: "keep", oldIdx: i - 1 + oldOffset, newIdx: j - 1 + newOffset });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        ops.push({ type: "insert", newIdx: j - 1 + newOffset });
+        j--;
+      } else {
+        ops.push({ type: "delete", oldIdx: i - 1 + oldOffset });
+        i--;
+      }
+    }
+    return ops.reverse();
+  }
+
+  // For larger segments, split into chunks and diff each with Myers
+  const CHUNK_SIZE = 500;
+  const ops: DiffOp[] = [];
+  let oldPos = 0;
+  let newPos = 0;
+  while (oldPos < n || newPos < m) {
+    const oldChunk = oldLines.slice(oldPos, oldPos + CHUNK_SIZE);
+    const newChunk = newLines.slice(newPos, newPos + CHUNK_SIZE);
+    // Simple LCS-based diff for this chunk
+    const cn = oldChunk.length;
+    const cm = newChunk.length;
+    if (cn + cm <= 200) {
+      // Very small chunk — direct O(mn)
+      const dp: number[][] = Array.from({ length: cn + 1 }, () => new Array(cm + 1).fill(0));
+      for (let i = 1; i <= cn; i++) {
+        for (let j = 1; j <= cm; j++) {
+          dp[i][j] = oldChunk[i - 1] === newChunk[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+      let i = cn, j = cm;
+      const chunkOps: DiffOp[] = [];
+      while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldChunk[i - 1] === newChunk[j - 1]) {
+          chunkOps.push({ type: "keep", oldIdx: i - 1 + oldPos + oldOffset, newIdx: j - 1 + newPos + newOffset });
+          i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+          chunkOps.push({ type: "insert", newIdx: j - 1 + newPos + newOffset });
+          j--;
+        } else {
+          chunkOps.push({ type: "delete", oldIdx: i - 1 + oldPos + oldOffset });
+          i--;
+        }
+      }
+      ops.push(...chunkOps.reverse());
+    } else {
+      // Larger chunk — fall back to line-by-line within this chunk
+      const maxChunkLen = Math.max(cn, cm);
+      for (let k = 0; k < maxChunkLen; k++) {
+        if (k < cn && k < cm && oldChunk[k] === newChunk[k]) {
+          ops.push({ type: "keep", oldIdx: k + oldPos + oldOffset, newIdx: k + newPos + newOffset });
+        } else {
+          if (k < cn) ops.push({ type: "delete", oldIdx: k + oldPos + oldOffset });
+          if (k < cm) ops.push({ type: "insert", newIdx: k + newPos + newOffset });
+        }
+      }
+    }
+    oldPos += CHUNK_SIZE;
+    newPos += CHUNK_SIZE;
+  }
+  return ops;
 }
 
 /**
@@ -209,9 +284,13 @@ function patienceLCS(anchors: [number, number][]): [number, number][] {
   const tails: number[] = [];
   // For each anchor, which pile it was placed on (= LIS length ending at this element)
   const pileOf: number[] = [];
+  // For backtracking: prev[i] = index of predecessor in the LIS ending at i
+  const prev: number[] = new Array(anchors.length).fill(-1);
+  // For each pile level, which index was last placed there
+  const pileTails: number[] = [];
 
-  for (const anchor of anchors) {
-    const val = anchor[1];
+  for (let i = 0; i < anchors.length; i++) {
+    const val = anchors[i][1];
     let lo = 0, hi = tails.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
@@ -219,19 +298,24 @@ function patienceLCS(anchors: [number, number][]): [number, number][] {
       else hi = mid;
     }
     pileOf.push(lo);
-    if (lo === tails.length) tails.push(val);
-    else tails[lo] = val;
+    if (lo === tails.length) {
+      tails.push(val);
+      pileTails.push(i);
+    } else {
+      tails[lo] = val;
+      pileTails[lo] = i;
+    }
+    // Record predecessor: element at the end of the previous pile
+    prev[i] = lo > 0 ? pileTails[lo - 1] : -1;
   }
 
-  // Trace back: pick one element per pile level in reverse
+  // Reconstruct LIS by following prev links from the last element of the longest pile
   const lisLength = tails.length;
   const result: [number, number][] = [];
-  let currentLevel = lisLength - 1;
-  for (let i = anchors.length - 1; i >= 0 && currentLevel >= 0; i--) {
-    if (pileOf[i] === currentLevel) {
-      result.unshift(anchors[i]);
-      currentLevel--;
-    }
+  let idx = pileTails[lisLength - 1];
+  while (idx !== -1 && idx !== undefined) {
+    result.unshift(anchors[idx]);
+    idx = prev[idx];
   }
 
   return result;

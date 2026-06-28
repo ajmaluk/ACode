@@ -14,7 +14,7 @@ import {
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup } from "@/components/chat/ActivityBlocks";
+import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup, SubAgentList } from "@/components/chat/ActivityBlocks";
 
 import { CostDisplay } from "@/components/chat/CostDisplay";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
@@ -123,12 +123,18 @@ function StreamingActivityPanel({
 }) {
   const taskPlan = useChat((s) => s.taskPlan);
   const taskPlanSummary = useChat((s) => s.taskPlanSummary);
+  const subAgents = useChat((s) => s.subAgents);
 
   return (
     <div className="animate-fade-in">
       {/* Task plan (if LLM declared one) */}
       {taskPlan && taskPlan.length > 0 && (
         <TaskPlanBlock tasks={taskPlan} summary={taskPlanSummary} />
+      )}
+
+      {/* Active sub-agents (collapsible accordions) */}
+      {subAgents.length > 0 && (
+        <SubAgentList agents={subAgents} />
       )}
 
       {/* Working timer */}
@@ -517,29 +523,39 @@ function ChatView() {
   const followupProviderRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [timestamp] = useState(() => Date.now());
 
-  // Strip XML tool call tags from streaming content with throttle (runs immediately on first delta, then every 60ms max)
+  // Strip XML tool call tags from streaming content via requestAnimationFrame.
+  // RAF batches strip operations with the browser's paint cycle, coalescing
+  // rapid message-delta events into a single strip + setState per frame.
   const cleanRef = useRef("");
-  const lastStripTime = useRef(0);
+  const pendingContentRef = useRef("");
+  const rafIdRef = useRef(0);
   const [cleanStreamingContent, setCleanStreamingContent] = useState("");
   useEffect(() => {
     if (!streamingContent) {
-      if (cleanRef.current !== "") { cleanRef.current = ""; setCleanStreamingContent(""); }
+      if (cleanRef.current !== "") {
+        cleanRef.current = "";
+        pendingContentRef.current = "";
+        setCleanStreamingContent("");
+      }
       return;
     }
-    const now = Date.now();
-    const elapsed = now - lastStripTime.current;
-    if (elapsed >= 60) {
-      const cleaned = stripXmlToolCallTags(streamingContent);
-      lastStripTime.current = now;
-      if (cleanRef.current !== cleaned) { cleanRef.current = cleaned; setCleanStreamingContent(cleaned); }
-    } else {
-      const timer = setTimeout(() => {
-        const cleaned = stripXmlToolCallTags(streamingContent);
-        lastStripTime.current = Date.now();
-        if (cleanRef.current !== cleaned) { cleanRef.current = cleaned; setCleanStreamingContent(cleaned); }
-      }, 60 - elapsed);
-      return () => clearTimeout(timer);
-    }
+    // Stash the latest content; the next RAF will pick it up
+    pendingContentRef.current = streamingContent;
+    // If a RAF is already scheduled, it will use the latest value
+    if (rafIdRef.current) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = 0;
+      const raw = pendingContentRef.current;
+      if (!raw) return;
+      const cleaned = stripXmlToolCallTags(raw);
+      if (cleanRef.current !== cleaned) {
+        cleanRef.current = cleaned;
+        setCleanStreamingContent(cleaned);
+      }
+    });
+    return () => {
+      if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); rafIdRef.current = 0; }
+    };
   }, [streamingContent]);
 
   // Auto-resize the textareas dynamically based on scrollHeight
@@ -551,17 +567,12 @@ function ChatView() {
     }
   }, [value]);
 
+  // Cleanup both provider hover timeouts on unmount
   useEffect(() => {
-    const followupTextarea = followupTextareaRef.current;
-    if (followupTextarea) {
-      followupTextarea.style.height = "auto";
-      followupTextarea.style.height = `${Math.min(followupTextarea.scrollHeight, 320)}px`;
-    }
-  }, [value]);
-
-  // Cleanup provider hover timeout on unmount
-  useEffect(() => {
-    return () => { if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current); };
+    return () => {
+      if (providerHoverTimeout.current) clearTimeout(providerHoverTimeout.current);
+      if (followupProviderHoverTimeout.current) clearTimeout(followupProviderHoverTimeout.current);
+    };
   }, []);
 
   // Refs for click-outside detection

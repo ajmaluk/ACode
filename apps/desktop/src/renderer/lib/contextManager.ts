@@ -360,13 +360,6 @@ export function pruneToolOutputs(
   messages: ChatMessage[],
   toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens
 ): { pruned: ChatMessage[]; tokensReclaimed: number } {
-  const toolMessages = messages.filter(isToolResult);
-  const totalToolTokens = toolMessages.reduce((s, m) => s + toolTokenEstimate(m), 0);
-
-  if (totalToolTokens < CTX.PRUNE_PROTECT) {
-    return { pruned: messages, tokensReclaimed: 0 };
-  }
-
   // Identify which turns to protect (last N user turns that are NOT tool results)
   const realUserTurnIndexes: number[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -377,30 +370,137 @@ export function pruneToolOutputs(
   }
   const protectAfter = realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
 
-  let tokensReclaimed = 0;
-  const pruned = messages.map((msg, idx) => {
-    // Protect recent turns, non-tool-result messages, already-pruned messages
-    if (idx >= protectAfter || !isToolResult(msg)) return msg;
-
-    if (tokensReclaimed >= CTX.PRUNE_MINIMUM && totalToolTokens - tokensReclaimed < CTX.PRUNE_PROTECT) {
-      return msg; // enough reclaimed
+  // Sort tool result messages by size (largest first) for more efficient pruning
+  const toolIndicesWithSize: Array<{ idx: number; size: number }> = [];
+  let totalPrunableToolTokens = 0;
+  for (let i = 0; i < messages.length; i++) {
+    if (i < protectAfter && isToolResult(messages[i])) {
+      const size = toolTokenEstimate(messages[i]);
+      toolIndicesWithSize.push({ idx: i, size });
+      totalPrunableToolTokens += size;
     }
+  }
 
-    const reclaimed = toolTokenEstimate(msg);
-    tokensReclaimed += reclaimed;
+  if (totalPrunableToolTokens < CTX.PRUNE_PROTECT) {
+    return { pruned: messages, tokensReclaimed: 0 };
+  }
+
+  // Sort descending by size — prune the biggest outputs first
+  toolIndicesWithSize.sort((a, b) => b.size - a.size);
+
+  let tokensReclaimed = 0;
+  const toPrune = new Set<number>();
+
+  for (const { idx, size } of toolIndicesWithSize) {
+    if (tokensReclaimed >= CTX.PRUNE_MINIMUM && totalPrunableToolTokens - tokensReclaimed < CTX.PRUNE_PROTECT) {
+      break; // enough reclaimed
+    }
+    tokensReclaimed += size;
+    toPrune.add(idx);
+  }
+
+  if (toPrune.size === 0) {
+    return { pruned: messages, tokensReclaimed: 0 };
+  }
+
+  const pruned = messages.map((msg, idx) => {
+    if (!toPrune.has(idx)) return msg;
 
     // Extract tool name from prefix: [TOOL RESULT: toolName] or [TOOL ERROR: toolName]
     const toolMatch = msg.content.match(/^\[TOOL (?:RESULT|ERROR):\s*(\S+)/);
     const toolName = toolMatch?.[1] ?? "unknown";
+    const originalTokens = toolTokenEstimate(msg);
 
     return {
       ...msg,
-      content: `[Tool output pruned — ~${reclaimed} tokens reclaimed. Tool: ${toolName}]`,
+      content: `[Tool output pruned — ~${originalTokens} tokens reclaimed. Tool: ${toolName}]`,
     };
   });
 
   return { pruned, tokensReclaimed };
 }
 
+// ============================================================================
+// Frozen Memory Snapshot (Hermes pattern)
+// ============================================================================
+// At session start, freeze a snapshot of the memory state so the agent has
+// consistent context throughout the session. This prevents the context from
+// shifting as new memories are added mid-conversation.
+
+const _frozenSnapshots: Map<string, string[]> = new Map();
+/** Maximum number of frozen snapshots to prevent unbounded growth. */
+const MAX_FROZEN_SNAPSHOTS = 50;
+
+/**
+ * Freeze a memory snapshot for a session.
+ * Call this at session start with the initial memory context.
+ * The frozen snapshot will be injected into every subsequent context computation.
+ * Automatically evicts oldest entries when the cap is exceeded.
+ */
+export function freezeMemorySnapshot(sessionId: string, memories: string[]): void {
+  _frozenSnapshots.set(sessionId, [...memories]);
+  // Evict oldest entries if we exceed the cap (Map preserves insertion order)
+  while (_frozenSnapshots.size > MAX_FROZEN_SNAPSHOTS) {
+    const oldestKey = _frozenSnapshots.keys().next().value;
+    if (oldestKey !== undefined) _frozenSnapshots.delete(oldestKey);
+    else break;
+  }
+}
+
+/**
+ * Get the frozen memory snapshot for a session.
+ * Returns the frozen memories if they exist, or null if no snapshot was frozen.
+ */
+export function getFrozenSnapshot(sessionId: string): string[] | null {
+  return _frozenSnapshots.get(sessionId) ?? null;
+}
+
+/**
+ * Clear the frozen memory snapshot for a session.
+ * Call this when the session ends to free memory.
+ */
+export function clearFrozenSnapshot(sessionId: string): void {
+  _frozenSnapshots.delete(sessionId);
+}
+
+/**
+ * Build a context prompt with frozen memory included.
+ * If a frozen snapshot exists for this session, it's prepended to the memory context.
+ * This ensures the agent always has the same baseline memory context regardless
+ * of what new memories were added during the conversation.
+ */
+export function buildContextWithFrozenMemory(
+  sessionId: string,
+  currentMemories: string[],
+  maxTokens: number = CTX.MEMORY_BUDGET
+): string[] {
+  const frozen = _frozenSnapshots.get(sessionId);
+  if (!frozen || frozen.length === 0) return currentMemories;
+
+  // Frozen memories get priority — they're the baseline context
+  const frozenText = frozen.join("\n");
+  const frozenTokens = Math.ceil(frozenText.length / 4);
+
+  // If frozen memories alone exceed the budget, return only frozen
+  if (frozenTokens >= maxTokens) {
+    return frozen.slice(0, Math.ceil(maxTokens / 200)); // ~200 tokens per memory
+  }
+
+  // Otherwise, fill remaining budget with current memories (excluding duplicates)
+  const frozenSet = new Set(frozen);
+  const additionalBudget = maxTokens - frozenTokens;
+  const additional: string[] = [];
+  let additionalTokens = 0;
+
+  for (const mem of currentMemories) {
+    if (frozenSet.has(mem)) continue; // Skip duplicates
+    const memTokens = Math.ceil(mem.length / 4);
+    if (additionalTokens + memTokens > additionalBudget) break;
+    additional.push(mem);
+    additionalTokens += memTokens;
+  }
+
+  return [...frozen, ...additional];
+}
 
 

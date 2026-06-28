@@ -176,6 +176,8 @@ function computeForce(
 
   // Leaf node or far enough to treat as single body
   if (qt.body !== null || qt.size * qt.size / distSq < theta * theta) {
+    // Skip self-interaction to avoid NaN from division by zero
+    if (qt.body === p) return { fx: 0, fy: 0 };
     const dist = Math.sqrt(distSq) || 1;
     const force = repulsion / distSq;
     return { fx: (dx / dist) * force, fy: (dy / dist) * force };
@@ -374,6 +376,7 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
     if (s && t) edgeEndpoints.push({ source: s, target: t, weight: edge.weight });
   }
 
+  const CONVERGENCE_THRESHOLD = 0.5;
   for (let iter = 0; iter < iterations; iter++) {
     const cooling = 1 - iter / iterations;
     const alpha = cooling * cooling; // quadratic cooling
@@ -416,6 +419,7 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
     }
 
     // Center gravity + velocity integration
+    let totalDisplacement = 0;
     for (const node of nodes) {
       node.vx += (300 - node.x) * 0.005 * alpha;
       node.vy += (250 - node.y) * 0.005 * alpha;
@@ -423,7 +427,11 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
       node.vy *= damping;
       node.x += node.vx;
       node.y += node.vy;
+      totalDisplacement += Math.abs(node.vx) + Math.abs(node.vy);
     }
+
+    // Early exit when system is stable
+    if (totalDisplacement / n < CONVERGENCE_THRESHOLD && iter > MIN_ITERATIONS) break;
   }
 }
 
@@ -434,17 +442,16 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
  * Checks highest-degree nodes first for better UX.
  */
 export function hitTest(nodes: GraphNode[], x: number, y: number): GraphNode | null {
-  // Check all nodes; return the smallest matching node (best precision)
   let best: GraphNode | null = null;
-  let bestRadius = Infinity;
+  let bestDist = Infinity;
   for (const node of nodes) {
     const dx = x - node.x;
     const dy = y - node.y;
     const hitRadius = node.size + 4;
     const distSq = dx * dx + dy * dy;
-    if (distSq < hitRadius * hitRadius && hitRadius < bestRadius) {
+    if (distSq < hitRadius * hitRadius && distSq < bestDist) {
       best = node;
-      bestRadius = hitRadius;
+      bestDist = distSq;
     }
   }
   return best;
@@ -530,8 +537,11 @@ export function connectedComponents(nodes: GraphNode[]): string[][] {
     parent.set(node.id, node.id);
     rank.set(node.id, 0);
   }
+  const nodeIds = new Set(nodes.map(n => n.id));
   for (const node of nodes) {
     for (const conn of node.connections) {
+      // Skip dangling edge references to prevent infinite recursion
+      if (!nodeIds.has(conn)) continue;
       union(node.id, conn);
     }
   }
@@ -562,10 +572,11 @@ export function shortestPath(
 
   const visited = new Set<string>();
   const queue: [string, string[]][] = [[startId, [startId]]];
+  let head = 0;
   visited.add(startId);
 
-  while (queue.length > 0) {
-    const [current, path] = queue.shift()!;
+  while (head < queue.length) {
+    const [current, path] = queue[head++];
     for (const neighbor of adj.get(current) ?? []) {
       if (neighbor === endId) return [...path, neighbor];
       if (!visited.has(neighbor)) {
@@ -591,7 +602,7 @@ export function graphDensity(nodes: GraphNode[], edges: GraphEdge[]): number {
  * For large graphs, samples a subset of nodes to keep cost manageable.
  */
 export function graphDiameter(nodes: GraphNode[]): number {
-  if (nodes.length === 0) return Infinity;
+  if (nodes.length === 0) return 0;
 
   const adj = new Map<string, string[]>();
   for (const node of nodes) adj.set(node.id, node.connections);

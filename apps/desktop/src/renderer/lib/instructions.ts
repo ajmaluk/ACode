@@ -337,6 +337,7 @@ function expandBraces(glob: string): string[] {
 }
 
 function matchSingleGlob(normalizedGlob: string, normalizedPath: string): boolean {
+  if (!normalizedGlob || !normalizedPath) return false;
 
   // Step 1: Use unique placeholders for glob wildcards to prevent subsequent replacement clashes
   let regexStr = normalizedGlob

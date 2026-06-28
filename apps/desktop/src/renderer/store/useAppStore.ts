@@ -24,6 +24,8 @@ import type {
 } from "@dalam/shared-types";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
+import type { SubAgentState } from "@dalam/shared-types";
+import { startRecording, stopRecording, recordUserMessage, recordAssistantMessage, recordSystemMessage, recordToolResult } from "@/lib/trajectoryRecorder";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
@@ -32,6 +34,7 @@ import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, bui
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
 export { BUNDLED_SKILLS, skillRegistry, matchSkillInvocation, renderSkillForPrompt };
+export { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder";
 
 // ============================================================================
 // XML Tool Call Parser
@@ -56,6 +59,7 @@ const TAG_TO_TOOL: Record<string, string> = {
   webfetch: "webfetch",
   websearch: "websearch",
   run_command: "bash",
+  task: "task",
 };
 
 // Comprehensive list of ALL tool names for display stripping (must match dalamAPI.ts KNOWN_TOOL_NAMES)
@@ -67,6 +71,7 @@ const ALL_TOOL_NAMES = [
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
+  "task",
   // Legacy aliases used by TAG_TO_TOOL
   "bash", "shell", "search", "grep", "webfetch", "websearch",
 ];
@@ -116,7 +121,7 @@ export function stripXmlToolCallTags(content: string): string {
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "clipboard_read", "system_info", "memory_search", "memory_stats"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "clipboard_read", "system_info", "memory_search", "memory_stats", "task"]);
 
 /**
  * Parse XML-style tool calls from assistant text content.
@@ -217,7 +222,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const all = await api.settings.getAll();
       // Merge with existing settings (workspace-specific settings take priority)
       set((s) => ({
-        settings: { ...all, ...s.settings },
+        settings: { ...s.settings, ...all },
         loaded: true,
       }));
       if (all.selectedModel) {
@@ -235,8 +240,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
   async updateSettings(updates) {
     const api = createDalamAPI();
-    for (const [key, value] of Object.entries(updates)) {
-      await api.settings.set(key as keyof AppSettings, value as never);
+    const results = await Promise.allSettled(
+      Object.entries(updates).map(([key, value]) =>
+        api.settings.set(key as keyof AppSettings, value as never)
+      )
+    );
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === "rejected") {
+        console.warn(`Failed to save setting ${Object.keys(updates)[i]}:`, (results[i] as PromiseRejectedResult).reason);
+      }
     }
     set((s) => ({ settings: { ...s.settings, ...updates } }));
   },
@@ -323,6 +335,12 @@ type WorkspaceState = {
 };
 
 function detectLanguage(path: string): string {
+  const fileName = path.split("/").pop() ?? path.split("\\").pop() ?? "";
+  if (fileName === "Makefile" || fileName === "makefile" || fileName === "GNUmakefile") return "makefile";
+  if (fileName === "Dockerfile" || fileName.startsWith("Dockerfile.")) return "dockerfile";
+  if (fileName === "Containerfile" || fileName.startsWith("Containerfile.")) return "dockerfile";
+  if (fileName === "CMakeLists.txt") return "cmake";
+  if (fileName.startsWith("Jenkinsfile")) return "groovy";
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "ts" || ext === "tsx") return "typescript";
   if (ext === "js") return "javascript";
@@ -340,7 +358,7 @@ async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     const dotDalam = joinPath(workspacePath, ".dalam");
     if (!(await exists(dotDalam))) {
-      await mkdir(dotDalam);
+      await mkdir(dotDalam, { recursive: true });
     }
 
     // Initialize SQLite database for memory FTS5 search
@@ -402,7 +420,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         name,
         tasks: [],
       };
-      const newWorkspaces = [...get().workspaces.filter((w) => w.id !== workspace.id), workspace];
+      const newWorkspaces = [...get().workspaces.filter((w) => w.path !== path), workspace];
       set({
         workspaces: newWorkspaces,
         activeWorkspaceId: workspace.id,
@@ -739,29 +757,28 @@ function loadPersistedMessages(): Record<string, import("@dalam/shared-types").C
   } catch { return {}; }
 }
 
-function savePersistedMessages(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>) {
+// Throttled message persistence: batches rapid localStorage writes during streaming.
+let _saveMessagesTimer: ReturnType<typeof setTimeout> | null = null;
+let _pendingMessagesRef: Record<string, import("@dalam/shared-types").ChatMessage[]> | null = null;
+const SAVE_MESSAGES_DEBOUNCE_MS = 200;
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => flushSavePersistedMessages());
+}
+type MessagesMap = Record<string, import("@dalam/shared-types").ChatMessage[]>;
+function _doSavePersistedMessages(messages: MessagesMap) {
   try {
     localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages));
   } catch (e) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-      // Level 1: truncate tool results
-      console.warn("[Storage] Quota exceeded — level 1: truncating tool results");
+      console.warn("[Storage] Quota exceeded - truncating tool results");
       const pruned = truncateToolResults(messages);
-      try {
-        localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned));
-      } catch {
-        // Level 2: also trim message content in older messages
-        console.warn("[Storage] Quota exceeded — level 2: trimming old message content");
+      try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned)); } catch {
+        console.warn("[Storage] Quota exceeded - trimming old message content");
         const pruned2 = trimOldMessages(pruned);
-        try {
-          localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned2));
-        } catch {
-          // Level 3: drop oldest sessions entirely
-          console.warn("[Storage] Quota exceeded — level 3: dropping oldest sessions");
+        try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned2)); } catch {
+          console.warn("[Storage] Quota exceeded - dropping oldest sessions");
           const pruned3 = dropOldestSessions(pruned2, 3);
-          try {
-            localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3));
-          } catch {
+          try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3)); } catch {
             console.error("[Storage] Failed to save messages even after aggressive pruning");
           }
         }
@@ -770,7 +787,18 @@ function savePersistedMessages(messages: Record<string, import("@dalam/shared-ty
       console.warn("Failed to save messages:", e);
     }
   }
-  void saveWorkspaceData();
+}
+function savePersistedMessages(messages: MessagesMap) {
+  _pendingMessagesRef = messages;
+  if (_saveMessagesTimer) clearTimeout(_saveMessagesTimer);
+  _saveMessagesTimer = setTimeout(() => {
+    _saveMessagesTimer = null;
+    if (_pendingMessagesRef) { const latest = _pendingMessagesRef; _pendingMessagesRef = null; _doSavePersistedMessages(latest); void saveWorkspaceData(); }
+  }, SAVE_MESSAGES_DEBOUNCE_MS);
+}
+function flushSavePersistedMessages() {
+  if (_saveMessagesTimer) { clearTimeout(_saveMessagesTimer); _saveMessagesTimer = null; }
+  if (_pendingMessagesRef) { const latest = _pendingMessagesRef; _pendingMessagesRef = null; _doSavePersistedMessages(latest); void saveWorkspaceData(); }
 }
 
 function truncateToolResults(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>): Record<string, import("@dalam/shared-types").ChatMessage[]> {
@@ -856,6 +884,163 @@ function savePersistedCompactionSummaries(summaries: Record<string, string>) {
   void saveWorkspaceData();
 }
 
+// Compaction throttle: avoid redundant computeContextStats + summarization calls
+const _lastCompactionAttempt: Record<string, number> = {};
+const COMPACTION_THROTTLE_MS = 30_000;
+const COMPACTION_MIN_MESSAGES = 10;
+
+// Anti-thrashing: track compaction effectiveness to skip ineffective compactions.
+// Inspired by Hermes' ineffective compression detection: if savings are below
+// a minimum threshold, skip future compactions for this session temporarily.
+// Negative = ineffective (abs = original msg count); positive = compacted msg count
+const _lastCompactionCounts: Record<string, number> = {};
+const COMPACTION_MIN_SAVINGS_PERCENT = 5; // Minimum 5% reduction to consider compaction effective
+const ANTI_THRASH_SKIP_MS = 60_000; // Skip compaction for 60s after ineffective attempt
+const _antiThrashTimestamps: Record<string, number> = {}; // sessionId → timestamp of last skip
+
+// ============================================================================
+// Safety Timer Helper — eliminates 3× duplicated timer logic in sendMessage/appendStream
+// ============================================================================
+const SAFETY_TIMEOUT_MS = 120_000;
+const TOOL_APPROVAL_TIMEOUT_MS = 600_000; // 10 min during tool approval
+
+function _createSafetyTimer(
+  get: () => ChatState,
+  set: (partial: Partial<ChatState> | ((s: ChatState) => Partial<ChatState>)) => void,
+  mode: "normal" | "turn" | "tool-approval" = "normal"
+): ReturnType<typeof setTimeout> {
+  const timeout = mode === "tool-approval" ? TOOL_APPROVAL_TIMEOUT_MS : SAFETY_TIMEOUT_MS;
+  return setTimeout(() => {
+    const state = get();
+    if (!state.isStreaming) return;
+    console.warn(`[Chat] Safety timeout triggered (${mode}) — no stream events for ${timeout / 1000}s`);
+    const api = createDalamAPI();
+    const sid = state.activeSessionId;
+    if (sid) api.agent.cleanupStream(sid);
+    const systemMsg: ChatMessage = {
+      id: "msg-" + Math.random().toString(36).slice(2, 9),
+      role: "system",
+      content: mode === "tool-approval"
+        ? "Agent loop timed out — no activity for 10 minutes during tool approval."
+        : "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+      timestamp: Date.now(),
+    };
+    set({
+      isStreaming: false,
+      _sendInProgress: false,
+  _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
+      streamingContent: "",
+      thinkingContent: "",
+      pendingToolCalls: [],
+      pendingActivities: [],
+      _safetyTimer: null,
+      messages: [...state.messages, systemMsg],
+      chatSessions: state.session
+        ? state.chatSessions.map((cs) =>
+            cs.id === state.session!.id
+              ? { ...cs, status: "completed", lastActivityAt: Date.now() }
+              : cs
+          )
+        : state.chatSessions,
+    });
+  }, timeout);
+}
+
+// ============================================================================
+// Doom Loop / Death Spiral Detection (inspired by Hermes ToolCallGuardrailController)
+// Warns at doomLoopThreshold (configurable in Settings > General),
+// hard-stops at 2× that value.
+// ============================================================================
+const DOOM_LOOP_THRESHOLD = 5; // fallback default if setting is unset
+interface ToolCallRecord { name: string; args: string; }
+const _toolCallHistory: Record<string, ToolCallRecord[]> = {};
+const _toolFailureCounts: Record<string, Record<string, number>> = {};
+
+type DoomLoopResult = { message: string; severity: "warn" | "halt" };
+
+function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<string, unknown>): DoomLoopResult | null {
+  const sig = `${toolName}:${JSON.stringify(toolArgs)}`;
+  const history = _toolCallHistory[sessionId] ?? [];
+  const failures = _toolFailureCounts[sessionId] ?? {};
+  const currentCount = (failures[sig] ?? 0) + 1;
+  failures[sig] = currentCount;
+  _toolFailureCounts[sessionId] = failures;
+  // Read threshold from user settings (configurable in Settings > General)
+  const threshold = useSettings.getState().settings.doomLoopThreshold ?? DOOM_LOOP_THRESHOLD;
+  const haltThreshold = threshold * 2;
+  if (currentCount >= haltThreshold) {
+    return { message: `Doom loop HALTED: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agentic loop has been stopped.`, severity: "halt" };
+  }
+  if (currentCount >= threshold) {
+    return { message: `Doom loop detected: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agent appears stuck in a death spiral.`, severity: "warn" };
+  }
+  const toolFailures = history.filter(h => h.name === toolName).length;
+  if (toolFailures >= haltThreshold) {
+    return { message: `Tool guardrail HALTED: "${toolName}" has accumulated ${toolFailures} failures across this session. The agentic loop has been stopped.`, severity: "halt" };
+  }
+  if (toolFailures >= threshold * 2) {
+    return { message: `Tool guardrail: "${toolName}" has accumulated ${toolFailures} failures across this session. Consider changing strategy.`, severity: "warn" };
+  }
+  return null;
+}
+
+function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
+  const history = _toolCallHistory[sessionId] ?? [];
+  history.push({ name: toolName, args: JSON.stringify(toolArgs) });
+  _toolCallHistory[sessionId] = history.slice(-50);
+}
+
+function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
+  const sig = `${toolName}:${JSON.stringify(toolArgs)}`;
+  const failures = _toolFailureCounts[sessionId] ?? {};
+  delete failures[sig];
+  _toolFailureCounts[sessionId] = failures;
+}
+
+/** Reset all failure counters for a tool name (called on successful execution). */
+function _resetToolFailuresForName(sessionId: string, toolName: string) {
+  const failures = _toolFailureCounts[sessionId] ?? {};
+  for (const key of Object.keys(failures)) {
+    if (key.startsWith(toolName + ":")) {
+      delete failures[key];
+    }
+  }
+  _toolFailureCounts[sessionId] = failures;
+}
+
+function _clearDoomLoopState(sessionId: string) {
+  delete _toolCallHistory[sessionId];
+  delete _toolFailureCounts[sessionId];
+}
+
+// ============================================================================
+// Context Overflow Detection (inspired by OpenCode's auto-retry pattern)
+// ============================================================================
+const CONTEXT_OVERFLOW_PATTERNS = [
+  /context[_ ]length[_ ]exceeded/i,
+  /maximum[_ ]context[_ ]length/i,
+  /context[_ ]window/i,
+  /prompt[_ ]is[_ ]too[_ ]long/i,
+  /request[_ ]too[_ ]large/i,
+  /content[_ ]too[_ ]large/i,
+  /tokens[_ ]exceed/i,
+  /input[_ ]is[_ ]too[_ ]long/i,
+  /context[_ ]overflow/i,
+  /max[_ ]context[_ ]tokens/i,
+  /number[_ ]of[_ ]tokens.*exceed/i,
+  /this[_ ]model.*maximum.*context/i,
+];
+
+function _isContextOverflowError(errorMsg: string): boolean {
+  return CONTEXT_OVERFLOW_PATTERNS.some((p) => p.test(errorMsg));
+}
+
+const _contextOverflowRetries: Record<string, number> = {};
+const MAX_CONTEXT_OVERFLOW_RETRIES = 2;
+
+function _clearContextOverflowRetries(sessionId: string) {
+  delete _contextOverflowRetries[sessionId];
+}
 // Concurrency guard: track workspace loading to prevent duplicate loads
 let _workspaceLoadPromise: Promise<void> | null = null;
 let _workspaceLoadPath: string | null = null;
@@ -1046,7 +1231,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
             mode: lastSession.mode,
             startedAt: lastSession.startedAt,
             messages: data.sessionMessages?.[lastSession.id] || [],
-            status: lastSession.status === "completed" ? "idle" : lastSession.status,
+            status: (lastSession.status === "completed" || lastSession.status === "aborted" || lastSession.status === "error") ? "idle" : lastSession.status,
           };
           useChat.setState({
             session: restoredSession,
@@ -1108,7 +1293,7 @@ async function _doSaveWorkspaceData() {
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     if (!(await exists(dotDalam))) {
-      await mkdir(dotDalam);
+      await mkdir(dotDalam, { recursive: true });
     }
 
     const chatState = useChat.getState();
@@ -1261,8 +1446,13 @@ type ChatState = {
   _compactingSessions: Set<string>;
   _safetyTimer: ReturnType<typeof setTimeout> | null;
   _sendInProgress: boolean;
+  /** Timers for auto-removing denied tools and completed sub-agents from UI */
+  _autoRemoveTimers: Set<ReturnType<typeof setTimeout>>;
+  doomLoopWarningCount: number;
+  /** Active sub-agents spawned via the task tool */
+  subAgents: SubAgentState[];
   compactSessionHistory: (sessionId: string) => Promise<void>;
-  setSelectedModel: (id: string) => void;
+  setSelectedModel: (id: string) => Promise<void>;
   startSession: (workspacePath: string, mode: import("@dalam/shared-types").AgentSessionMode) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   saveVersion: (sessionId: string, label: string) => void;
@@ -1279,6 +1469,7 @@ type ChatState = {
   newChat: () => void;
   goBackChat: () => boolean;
   goForwardChat: () => boolean;
+  _clearAutoRemoveTimers: () => void;
   reset: () => void;
   setActiveSession: (id: string | null) => void;
   renameSession: (id: string, title: string) => void;
@@ -1290,6 +1481,7 @@ type ChatState = {
   removePendingAttachment: (id: string) => void;
   clearPendingAttachments: () => void;
   injectSystemMessage: (content: string) => void;
+  load: () => Promise<void>;
 };
 
 export const useChat = create<ChatState>((set, get) => ({
@@ -1322,6 +1514,34 @@ export const useChat = create<ChatState>((set, get) => ({
   _compactingSessions: new Set<string>(),
   _safetyTimer: null,
   _sendInProgress: false,
+  doomLoopWarningCount: 0,
+  subAgents: [],
+  _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
+  _clearAutoRemoveTimers() {
+    get()._autoRemoveTimers.forEach((timer) => clearTimeout(timer));
+    get()._autoRemoveTimers.clear();
+  },
+
+  async load() {
+    try {
+      const { idbGet, isIndexedDBAvailable } = await import("@/lib/storage");
+      if (isIndexedDBAvailable()) {
+        const s = await idbGet("sessions", "all") as { data: ChatSessionSummary[] } | null;
+        const m = await idbGet("messages", "all") as { data: Record<string, ChatMessage[]> } | null;
+        const v = await idbGet("versions", "all") as { data: Record<string, import("@dalam/shared-types").ChatVersion[]> } | null;
+        const c = await idbGet("compaction", "all") as { data: Record<string, string> } | null;
+        const patch: Partial<ChatState> = {};
+        if (s?.data && s.data.length > 0) patch.chatSessions = s.data;
+        if (m?.data && Object.keys(m.data).length > 0) patch.sessionMessages = m.data;
+        if (v?.data && Object.keys(v.data).length > 0) patch.sessionVersions = v.data;
+        if (c?.data && Object.keys(c.data).length > 0) patch.compactionSummaries = c.data;
+        if (Object.keys(patch).length > 0) set(patch);
+      }
+    } catch (e) {
+      // Fallback: localStorage data is already loaded at store creation time
+      console.warn("IndexedDB unavailable, using localStorage defaults:", e);
+    }
+  },
 
   async setSelectedModel(id) {
     set({ selectedModelId: id });
@@ -1433,10 +1653,12 @@ export const useChat = create<ChatState>((set, get) => ({
       activeSessionId: sessionId,
       sessionMessages: { ...get().sessionMessages, [sessionId]: [] },
       sessionAgentName: { ...get().sessionAgentName, [sessionId]: activeAgentName },
+      subAgents: [],
     });
     savePersistedSessionSummaries(get().chatSessions);
     savePersistedMessages(get().sessionMessages);
     savePersistedAgents(get().sessionAgentName);
+    void startRecording(sessionId, workspacePath).catch(() => {});
   },
 
   async abort(sessionId) {
@@ -1457,11 +1679,13 @@ export const useChat = create<ChatState>((set, get) => ({
       if (isStillOurSession) {
         set({
           isStreaming: false,
+          _sendInProgress: false,
           streamingContent: "",
           thinkingContent: "",
           pendingToolCalls: [],
           pendingActivities: [],
           _safetyTimer: null,
+          subAgents: [],
           chatSessions: get().chatSessions.map((s) =>
             s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now() } : s
           ),
@@ -1552,43 +1776,14 @@ export const useChat = create<ChatState>((set, get) => ({
       ),
       sessionMessages: { ...get().sessionMessages, [session!.id]: [...(get().sessionMessages[session!.id] ?? []), userMsg] },
     });
-    // Save version AFTER user message is added so the snapshot includes it
+    // Record user message in trajectory
+    recordUserMessage(session.id, content);
+        // Save version AFTER user message is added so the snapshot includes it
     get().saveVersion(session.id, content.length > 60 ? content.slice(0, 57) + "…" : content);
 
     // Safety timeout: fires 120s after the LAST stream event (reset on each event in appendStream).
     // This catches truly hung streams without killing active multi-turn agent loops.
-    const SAFETY_TIMEOUT_MS = 120_000;
-    const safetyTimer = setTimeout(() => {
-      const state = get();
-      if (state.isStreaming) {
-        console.warn("[Chat] Safety timeout triggered — no stream events for 120s");
-        const sid = state.activeSessionId;
-        if (sid) api.agent.cleanupStream(sid);
-        const systemMsg: ChatMessage = {
-          id: "msg-" + Math.random().toString(36).slice(2, 9),
-          role: "system",
-          content: "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
-          timestamp: Date.now(),
-        };
-        set({
-          isStreaming: false,
-          _sendInProgress: false,
-          streamingContent: "",
-          thinkingContent: "",
-          pendingToolCalls: [],
-          pendingActivities: [],
-          _safetyTimer: null,
-          messages: [...state.messages, systemMsg],
-          chatSessions: state.session
-            ? state.chatSessions.map((cs) =>
-                cs.id === state.session!.id
-                  ? { ...cs, status: "completed", lastActivityAt: Date.now() }
-                  : cs
-              )
-            : state.chatSessions,
-        });
-      }
-    }, SAFETY_TIMEOUT_MS);
+    const safetyTimer = _createSafetyTimer(get, set, "normal");
     set({ _safetyTimer: safetyTimer });
 
     try {
@@ -1597,30 +1792,88 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (err: unknown) {
       clearTimeout(safetyTimer);
       set({ _safetyTimer: null });
-      const { isStreaming, session: currentSession } = get();
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      const sessionId = get().activeSessionId;
+      // Context overflow auto-compaction: handle errors thrown before streaming starts
+      if (sessionId && _isContextOverflowError(msg)) {
+        const retryCount = _contextOverflowRetries[sessionId] ?? 0;
+        if (retryCount < MAX_CONTEXT_OVERFLOW_RETRIES) {
+          _contextOverflowRetries[sessionId] = retryCount + 1;
+          console.warn(`[Chat] Context overflow in sendMessage - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
+          const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
+          const infoSM = sessionId ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), infoMsg] } : get().sessionMessages;
+          set({ isStreaming: false, messages: [...get().messages, infoMsg], sessionMessages: infoSM });
+          if (sessionId) savePersistedMessages(infoSM);
+          const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
+          if (lastUserMsg) {
+            void get().compactSessionHistory(sessionId).then(() => {
+              set((s) => {
+                const msgs = [...s.messages];
+                for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { msgs.splice(i, 1); break; } }
+                const sid = s.activeSessionId;
+                const msgIds = new Set(msgs.map((m) => m.id));
+                const result: Partial<ChatState> = { isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
+                if (sid) {
+                  result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
+                }
+                return result;
+              });
+              // Re-read lastUserMsg inside callback to avoid stale closure
+              const currentMsgs = get().messages;
+              const retryMsg = [...currentMsgs].reverse().find((m) => m.role === "user");
+              if (retryMsg) {
+                setTimeout(() => { void get().sendMessage(retryMsg.content); }, 500);
+              } else {
+                // All messages were removed by compaction — inform the user
+                const systemMsg: ChatMessage = {
+                  id: "sys-" + Math.random().toString(36).slice(2, 9),
+                  role: "system",
+                  content: "Context compaction removed all messages. Please resend your request.",
+                  timestamp: Date.now(),
+                };
+                set((s) => ({
+                  messages: [...s.messages, systemMsg],
+                  _sendInProgress: false,
+                }));
+              }
+            }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
+            // Don't reset _sendInProgress here — it will be reset when the retry completes or fails
+            return;
+          }
+        } else { delete _contextOverflowRetries[sessionId]; }
+      }
+      // Standard error handling (non-overflow errors)
+      const { isStreaming } = get();
       // If appendStream already handled the error (streaming ended), don't add duplicate error message
       if (!isStreaming) { set({ _sendInProgress: false }); return; }
-      const msg = err instanceof Error ? err.message : "Unknown error";
       const errorMsg: ChatMessage = {
         id: "err-" + Math.random().toString(36).slice(2, 9),
         role: "assistant",
         content: `**Error**: ${msg}\n\nCheck your provider settings and try again.`,
         timestamp: Date.now(),
       };
-      const sessionId = currentSession?.id;
       if (!sessionId) { set({ _sendInProgress: false }); return; }
       const newSessionMessages = { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), errorMsg] };
-      set({
-        isStreaming: false,
-        streamingContent: "",
-        thinkingContent: "",
-        pendingToolCalls: [],
-        pendingActivities: [],
-        messages: [...get().messages, errorMsg],
-        sessionMessages: newSessionMessages,
-        chatSessions: get().chatSessions.map((s) =>
-          s.id === sessionId ? { ...s, status: "error", lastActivityAt: Date.now() } : s
-        ),
+      set((s) => {
+        const timer = s._safetyTimer;
+        if (timer) clearTimeout(timer);
+        return {
+          isStreaming: false,
+          streamingContent: "",
+          thinkingContent: "",
+          pendingToolCalls: [],
+          pendingActivities: [],
+          _safetyTimer: null,
+          messages: [...s.messages, errorMsg],
+          sessionMessages: newSessionMessages,
+          chatSessions: s.session
+            ? s.chatSessions.map((cs) =>
+                cs.id === s.session!.id
+                  ? { ...cs, status: "error", lastActivityAt: Date.now() }
+                  : cs
+              )
+            : s.chatSessions,
+        };
       });
       savePersistedMessages(newSessionMessages);
       savePersistedSessionSummaries(get().chatSessions);
@@ -1639,90 +1892,33 @@ export const useChat = create<ChatState>((set, get) => ({
         }
       } catch { /* ignore */ }
     };
-    _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content.length}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
+    _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content?.length ?? 0}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
     // Reset safety timer on every stream event — the agent loop is alive
     // as long as events keep flowing. This prevents the timer from killing
     // active multi-turn agent loops (tool approval waits, sequential LLM calls).
     const existingTimer = get()._safetyTimer;
     if (existingTimer) {
       clearTimeout(existingTimer);
-      const SAFETY_TIMEOUT_MS = 120_000;
-      const newTimer = setTimeout(() => {
-        const state = get();
-        if (state.isStreaming) {
-          console.warn("[Chat] Safety timeout triggered — no stream events for 120s");
-          const api = createDalamAPI();
-          const sid = state.activeSessionId;
-          if (sid) api.agent.cleanupStream(sid);
-          const systemMsg: ChatMessage = {
-            id: "msg-" + Math.random().toString(36).slice(2, 9),
-            role: "system",
-            content: "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
-            timestamp: Date.now(),
-          };
-          set({
-            isStreaming: false,
-            _sendInProgress: false,
-            streamingContent: "",
-            thinkingContent: "",
-            pendingToolCalls: [],
-            pendingActivities: [],
-            _safetyTimer: null,
-            messages: [...state.messages, systemMsg],
-            chatSessions: state.session
-              ? state.chatSessions.map((cs) =>
-                  cs.id === state.session!.id
-                    ? { ...cs, status: "completed", lastActivityAt: Date.now() }
-                    : cs
-                )
-              : state.chatSessions,
-          });
-        }
-      }, SAFETY_TIMEOUT_MS);
+      const newTimer = _createSafetyTimer(get, set, "normal");
       set({ _safetyTimer: newTimer });
     }
     switch (event.type) {
       case "message-start": {
         const pending = get().pendingToolCalls;
         const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
-        set({
-          streamingContent: "",
-          thinkingContent: "",
-          pendingActivities: [],
-          _pendingChanges: [],
+        set((s) => ({
+          // Only clear streaming content if there are no unresolved tools — otherwise
+          // we'd wipe the display while the user is approving/denying a tool call.
+          ...(hasUnresolved ? {} : { streamingContent: "", thinkingContent: "", pendingActivities: [], _pendingChanges: [] }),
           // Don't clear taskPlan or todos here — they persist across turns within a session
           // They're only cleared when starting a completely new chat
           ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
           isStreaming: true,
-        });
+        }));
         // Re-create safety timer for subsequent agent loop turns (tool results
         // delivered → message-end clears the timer → next turn needs protection).
         if (!get()._safetyTimer) {
-          const SAFETY_TIMEOUT_MS = 120_000;
-          const newTimer = setTimeout(() => {
-            const state = get();
-            if (state.isStreaming) {
-              console.warn("[Chat] Safety timeout triggered during turn — no events for 120s");
-              const api = createDalamAPI();
-              const sid = state.activeSessionId;
-              if (sid) api.agent.cleanupStream(sid);
-              const systemMsg: ChatMessage = {
-                id: "msg-" + Math.random().toString(36).slice(2, 9),
-                role: "system",
-                content: "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
-                timestamp: Date.now(),
-              };
-              set({
-                isStreaming: false,
-                streamingContent: "",
-                thinkingContent: "",
-                pendingToolCalls: [],
-                pendingActivities: [],
-                _safetyTimer: null,
-                messages: [...state.messages, systemMsg],
-              });
-            }
-          }, SAFETY_TIMEOUT_MS);
+          const newTimer = _createSafetyTimer(get, set, "turn");
           set({ _safetyTimer: newTimer });
         }
         break;
@@ -1795,31 +1991,7 @@ export const useChat = create<ChatState>((set, get) => ({
             (tc) => tc.status === "awaiting-approval" || tc.status === "pending"
           );
           if (hasActiveToolCalls) {
-            const TOOL_APPROVAL_TIMEOUT_MS = 600_000; // 10 min during tool approval
-            const extendedTimer = setTimeout(() => {
-              const state = get();
-              if (state.isStreaming) {
-                console.warn("[Chat] Safety timeout triggered during tool approval — no events for 10min");
-                const api = createDalamAPI();
-                const sid = state.activeSessionId;
-                if (sid) api.agent.cleanupStream(sid);
-                const systemMsg: ChatMessage = {
-                  id: "msg-" + Math.random().toString(36).slice(2, 9),
-                  role: "system",
-                  content: "Agent loop timed out — no activity for 10 minutes during tool approval.",
-                  timestamp: Date.now(),
-                };
-                set({
-                  isStreaming: false,
-                  streamingContent: "",
-                  thinkingContent: "",
-                  pendingToolCalls: [],
-                  pendingActivities: [],
-                  _safetyTimer: null,
-                  messages: [...state.messages, systemMsg],
-                });
-              }
-            }, TOOL_APPROVAL_TIMEOUT_MS);
+            const extendedTimer = _createSafetyTimer(get, set, "tool-approval");
             set({ _safetyTimer: extendedTimer });
           } else {
             set({ _safetyTimer: null });
@@ -1841,6 +2013,7 @@ export const useChat = create<ChatState>((set, get) => ({
         if (!finalContent && allToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent) {
           set({
             isStreaming: false,
+            _sendInProgress: false,
             pendingToolCalls: [],
             pendingActivities: [],
             streamingContent: "",
@@ -1888,6 +2061,10 @@ export const useChat = create<ChatState>((set, get) => ({
             _pendingChanges: [],
             pendingToolCalls: [],
             pendingActivities: [],
+            // NOTE: Don't clear _sendInProgress here — the agentic loop is still
+            // running (tools were just executed, results will be sent back to API).
+            // Clearing it here would allow the user to send another message while
+            // the agent is still processing, creating a race condition.
           });
           if (sessionId) savePersistedMessages(newSessionMessages);
           break;
@@ -1924,6 +2101,7 @@ export const useChat = create<ChatState>((set, get) => ({
           streamingContent: "",
           thinkingContent: "",
           isStreaming: false,
+          _sendInProgress: false,
           _pendingChanges: [],
           pendingToolCalls: [],
           pendingActivities: [],
@@ -1936,6 +2114,10 @@ export const useChat = create<ChatState>((set, get) => ({
               )
             : get().chatSessions,
         });
+        // Record assistant message in trajectory
+        if (sessionId) {
+          recordAssistantMessage(sessionId, finalContent, undefined, allToolCalls.length > 0 ? allToolCalls.map(tc => ({ name: tc.name, arguments: tc.args, result: tc.result })) : undefined);
+        }
         savePersistedMessages(newSessionMessages);
         savePersistedSessionSummaries(get().chatSessions);
         if (sessionId) {
@@ -1945,6 +2127,31 @@ export const useChat = create<ChatState>((set, get) => ({
           if (lastUserMsg) {
             recordAgentSelection(lastUserMsg.content, useAgents.getState().activeAgentName, true);
           }
+          // Post-turn memory consolidation: async memory sync after each conversation turn
+          // Inspired by Hermes memory lifecycle — extracts key facts from the conversation
+          // and persists them to the memory store for future reference.
+          void (async () => {
+            try {
+              const { extractMemoriesWithLLM } = await import("@/lib/memoryStore");
+              const ws = useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId);
+              if (ws && finalContent) {
+                const api = createDalamAPI();
+                const model = useSettings.getState().settings.selectedModel;
+                if (model) {
+                  // Extract key facts from the conversation and save as memory
+                  await extractMemoriesWithLLM(
+                    messages.filter(m => m.role === "user").pop()?.content ?? "",
+                    finalContent,
+                    (prompt) => api.agent.summarizeMessages(model, [{ role: "user", content: prompt }]),
+                    { sessionId, workspacePath: ws.path, maxEntries: 3 }
+                  );
+                }
+              }
+            } catch (err) {
+              // Memory extraction is best-effort — don't break the main flow
+              console.debug("[Chat] Post-turn memory extraction skipped:", err);
+            }
+          })();
         }
         break;
       }
@@ -1954,7 +2161,7 @@ export const useChat = create<ChatState>((set, get) => ({
         if (existing) break;
         // Canonicalize bash commands for permission matching
         const isBashTool = tool.name === "shell" || tool.name === "bash" || tool.name === "execute";
-        const commandStr = typeof tool.args.command === "string" ? tool.args.command : "";
+        const commandStr = tool.args && typeof tool.args.command === "string" ? tool.args.command : "";
         const canonicalPattern = isBashTool && commandStr ? canonicaliseBashCommand(commandStr) : tool.name;
         // Map tool names to permission keys
         const permissionKey: PermissionKind = EDIT_TOOLS.has(tool.name)
@@ -1974,9 +2181,11 @@ export const useChat = create<ChatState>((set, get) => ({
           const deniedTool = { ...tool, status: "failed" as const, result: "Denied by permission policy" };
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, deniedTool] }));
           // Auto-remove denied tools from UI after a short delay
-          setTimeout(() => {
+          const _autoRemoveTimer = setTimeout(() => {
             set((s) => ({ pendingToolCalls: s.pendingToolCalls.filter((tc) => tc.id !== tool.id) }));
+            get()._autoRemoveTimers.delete(_autoRemoveTimer);
           }, 2000);
+          get()._autoRemoveTimers.add(_autoRemoveTimer);
           break;
         }
         const annotated: typeof tool = needsApproval
@@ -2013,8 +2222,8 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "tool-result":
-        set((s) => ({
-          pendingToolCalls: s.pendingToolCalls.map((tc) =>
+        set((s) => {
+          const updated = s.pendingToolCalls.map((tc) =>
             tc.id === event.toolCallId
               ? {
                   ...tc,
@@ -2022,9 +2231,111 @@ export const useChat = create<ChatState>((set, get) => ({
                   result: event.result,
                 }
               : tc
+          );
+          // If the tool call was already cleared by message-end (race condition),
+          // the result is orphaned. Try to apply it to the last assistant message's
+          // toolCalls array directly, so it's not lost.
+          const found = s.pendingToolCalls.some((tc) => tc.id === event.toolCallId);
+          if (!found && s.pendingToolCalls.length === 0 && s.messages.length > 0) {
+            const lastMsg = s.messages[s.messages.length - 1];
+            if (lastMsg.role === "assistant" && lastMsg.toolCalls?.length) {
+              const patchedToolCalls = lastMsg.toolCalls.map((tc) =>
+                tc.id === event.toolCallId
+                  ? { ...tc, status: (typeof event.result === "string" && event.result.startsWith("Error:") ? "failed" : "completed") as "completed" | "failed", result: event.result }
+                  : tc
+              );
+              const patchedMsg = { ...lastMsg, toolCalls: patchedToolCalls };
+              const patchedMessages = [...s.messages.slice(0, -1), patchedMsg];
+              // Also patch sessionMessages
+              const sid = s.activeSessionId;
+              const patchedSessionMessages = sid ? {
+                ...s.sessionMessages,
+                [sid]: [...(s.sessionMessages[sid] ?? []).slice(0, -1), patchedMsg],
+              } : s.sessionMessages;
+              return {
+                pendingToolCalls: updated,
+                messages: patchedMessages,
+                sessionMessages: patchedSessionMessages,
+              };
+            }
+          }
+          return { pendingToolCalls: updated };
+        });
+        // Doom loop detection + tool failure tracking (on tool RESULT, not call)
+        {
+          const tc = get().pendingToolCalls.find((t) => t.id === event.toolCallId);
+          if (tc) {
+            const sessionId = get().activeSessionId;
+            if (sessionId) {
+              const isError = typeof event.result === "string" && event.result.startsWith("Error:");
+              if (isError) {
+                // Record failure for doom loop tracking
+                _recordToolFailure(sessionId, tc.name, tc.args);
+                // Check doom loop threshold
+                const doomResult = _checkDoomLoop(sessionId, tc.name, tc.args);
+                if (doomResult) {
+                  console.warn("[Chat]", doomResult.message);
+                  set((s) => ({ doomLoopWarningCount: s.doomLoopWarningCount + 1 }));
+                  if (doomResult.severity === "halt") {
+                    void get().abort(sessionId);
+                  }
+                }
+              } else {
+                // Reset doom loop failure counter for this specific signature on success
+                _clearToolFailure(sessionId, tc.name, tc.args);
+              }
+            }
+          }
+        }
+        break;
+      case "sub-agent-start": {
+        const newAgent: SubAgentState = {
+          id: event.subAgentId,
+          prompt: event.prompt,
+          description: event.description,
+          subagentType: event.subagentType,
+          status: "running",
+          startedAt: Date.now(),
+          toolCalls: [],
+          content: "",
+        };
+        set((s) => ({
+          subAgents: [...s.subAgents, newAgent],
+        }));
+        break;
+      }
+      case "sub-agent-end": {
+        set((s) => ({
+          subAgents: s.subAgents.map((sa) =>
+            sa.id === event.subAgentId
+              ? { ...sa, status: event.status, completedAt: Date.now(), error: event.error }
+              : sa
+          ),
+        }));
+        // Auto-remove completed sub-agents from UI after 30 seconds
+        const _subRemoveTimer = setTimeout(() => {
+          set((s) => ({
+            subAgents: s.subAgents.filter((sa) => sa.id !== event.subAgentId),
+          }));
+                    get()._autoRemoveTimers.delete(_subRemoveTimer);
+          }, 30000);
+          get()._autoRemoveTimers.add(_subRemoveTimer);
+        break;
+      }
+      case "sub-agent-update": {
+        set((s) => ({
+          subAgents: s.subAgents.map((sa) =>
+            sa.id === event.subAgentId
+              ? {
+                  ...sa,
+                  ...(event.toolCalls ? { toolCalls: event.toolCalls } : {}),
+                  ...(event.content !== undefined ? { content: event.content } : {}),
+                }
+              : sa
           ),
         }));
         break;
+      }
       case "file-changed": {
         const { isStreaming } = get();
         if (isStreaming) {
@@ -2129,7 +2440,7 @@ export const useChat = create<ChatState>((set, get) => ({
         if (event.command === "task plan") {
           const resultText = event.result ?? "";
           const newTasks: TaskPlanItem[] = resultText.split("\n").filter(Boolean).map((line: string) => {
-            const match = line.match(/^(\w+):\s*(.+)$/);
+            const match = line.match(/^([\w.]+):\s*(.+)$/);
             return match ? { id: match[1], title: match[2], status: "pending" as const } : null;
           }).filter(Boolean) as TaskPlanItem[];
           if (newTasks.length > 0) {
@@ -2155,6 +2466,47 @@ export const useChat = create<ChatState>((set, get) => ({
               : s.taskPlan,
             taskPlanSummary: event.result,
           }));
+          // Hermes-style TurnFinalizer: when iteration budget exhausts without
+          // a final response, make one toolless API call to get a summary
+          // instead of failing silently.
+          void (async () => {
+            try {
+              const sid = get().activeSessionId;
+              const model = useSettings.getState().settings.selectedModel;
+              if (!sid || !model) return;
+              // Dedup guard: skip if a TurnFinalizer summary already exists in messages
+              const hasFinalizerSummary = get().messages.some(
+                (m) => m.role === "system" && m.content.startsWith("**Budget exhausted**")
+              );
+              if (hasFinalizerSummary) return;
+              const recentMsgs = get().messages
+                .slice(-20)
+                .filter((m) => m.role === "user" || m.role === "assistant");
+              if (recentMsgs.length === 0) return;
+              const summaryPrompt = `The agent's iteration budget has been exhausted. Based on the conversation so far, provide a brief summary of what was accomplished and what remains. Do not use any tools — just summarize.`;
+              const api = createDalamAPI();
+              const summaryText = await api.agent.summarizeMessages(model, [
+                ...recentMsgs.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+                { role: "user", content: summaryPrompt },
+              ]);
+              if (summaryText) {
+                const summaryMsg: ChatMessage = {
+                  id: "sys-" + Math.random().toString(36).slice(2, 9),
+                  role: "system",
+                  content: `**Budget exhausted** — Here's a summary of progress:\n\n${summaryText}`,
+                  timestamp: Date.now(),
+                };
+                const s = get();
+                const sm = s.sessionMessages, msgs = s.messages;
+                const sid2 = s.activeSessionId;
+                const newSM = sid2 ? { ...sm, [sid2]: [...(sm[sid2] ?? []), summaryMsg] } : sm;
+                set({ messages: [...msgs, summaryMsg], sessionMessages: newSM });
+                if (sid2) savePersistedMessages(newSM);
+              }
+            } catch (err) {
+              console.debug("[Chat] TurnFinalizer summary failed:", err);
+            }
+          })();
         }
         // Only append non-meta bash activities to the visible activity feed
         const META_COMMANDS = new Set(["task plan", "completed", "task budget exhausted"]);
@@ -2228,6 +2580,51 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "error": {
         const sessionId = get().activeSessionId;
+        if (sessionId && _isContextOverflowError(event.error)) {
+          const retryCount = _contextOverflowRetries[sessionId] ?? 0;
+          if (retryCount < MAX_CONTEXT_OVERFLOW_RETRIES) {
+            _contextOverflowRetries[sessionId] = retryCount + 1;
+            console.warn(`[Chat] Context overflow detected - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
+            const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
+            const infoSM = sessionId ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), infoMsg] } : get().sessionMessages;
+            set({ messages: [...get().messages, infoMsg], sessionMessages: infoSM });
+            if (sessionId) savePersistedMessages(infoSM);
+            const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
+            if (lastUserMsg) {
+              void get().compactSessionHistory(sessionId).then(() => {
+                set((s) => {
+                  const msgs = [...s.messages];
+                  for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { msgs.splice(i, 1); break; } }
+                  const sid = s.activeSessionId;
+                  const msgIds = new Set(msgs.map((m) => m.id));
+                  const result: Partial<ChatState> = { isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
+                  if (sid) {
+                    result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
+                  }
+                  return result;
+                });
+                // Re-read inside callback to avoid stale closure
+                const retryMsg = [...get().messages].reverse().find((m) => m.role === "user");
+                if (retryMsg) {
+                  setTimeout(() => { void get().sendMessage(retryMsg.content); }, 500);
+                } else {
+                  const sysMsg: ChatMessage = {
+                    id: "sys-" + Math.random().toString(36).slice(2, 9),
+                    role: "system",
+                    content: "Context compaction removed all messages. Please resend your request.",
+                    timestamp: Date.now(),
+                  };
+                  set((s) => ({
+                    messages: [...s.messages, sysMsg],
+                    _sendInProgress: false,
+                  }));
+                }
+              }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
+              break;
+            }
+          } else { delete _contextOverflowRetries[sessionId]; }
+        }
+
         let lastUserMsgId: string | undefined;
         for (let i = get().messages.length - 1; i >= 0; i--) {
           if (get().messages[i].role === "user") { lastUserMsgId = get().messages[i].id; break; }
@@ -2280,6 +2677,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on reset
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
+      get()._clearAutoRemoveTimers();
     set({
       session: null,
       messages: [],
@@ -2295,13 +2693,20 @@ export const useChat = create<ChatState>((set, get) => ({
       preRestoreMessages: null,
       _safetyTimer: null,
       _sendInProgress: false,
+      subAgents: [],
     });
   },
 
   setActiveSession(id) {
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
+    get()._clearAutoRemoveTimers();
     const { session, abort, sessionMessages, sessionAgentName, isStreaming } = get();
+    // Clean up stream listener for the old session before switching
+    if (session) {
+      const api = createDalamAPI();
+      api.agent.cleanupStream(session.id);
+    }
     // Only abort if the current session is actually streaming
     if (session && isStreaming) abort(session.id);
     if (!id) {
@@ -2322,7 +2727,12 @@ export const useChat = create<ChatState>((set, get) => ({
         taskPlan: null,
         taskPlanSummary: null,
         _sendInProgress: false,
-      });
+      
+      subAgents: [],
+      chatHistory: [],
+      chatHistoryIdx: -1,
+      doomLoopWarningCount: 0,
+    });
       return;
     }
     const messages = sessionMessages[id] ?? [];
@@ -2364,6 +2774,7 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlan: null,
       taskPlanSummary: null,
       _sendInProgress: false,
+      subAgents: [],
     });
   },
 
@@ -2392,7 +2803,17 @@ export const useChat = create<ChatState>((set, get) => ({
     if (timer) clearTimeout(timer);
     const api = createDalamAPI();
     void get().abort(id).catch(() => {});
-    api.agent.cleanupStream(id);
+    void stopRecording(id).catch(() => {});
+        api.agent.cleanupStream(id);
+    // Clean all per-session caches to prevent memory leaks
+    _clearDoomLoopState(id);
+    _clearContextOverflowRetries(id);
+    delete _lastCompactionCounts[id];
+    delete _lastCompactionAttempt[id];
+    delete _antiThrashTimestamps[id];
+    // Abort any in-progress compaction
+    const nextCompacting = new Set(get()._compactingSessions);
+    nextCompacting.delete(id);
     set((s) => {
       const { [id]: _removed1, ...restVersions } = s.sessionVersions;
       const { [id]: _removed2, ...restMessages } = s.sessionMessages;
@@ -2400,7 +2821,8 @@ export const useChat = create<ChatState>((set, get) => ({
       const { [id]: _removed4, ...restCompaction } = s.compactionSummaries;
       const newSessions = s.chatSessions.filter((cs) => cs.id !== id);
       savePersistedVersions(restVersions);
-      savePersistedMessages(restMessages);
+      _doSavePersistedMessages(restMessages);
+      void saveWorkspaceData();
       savePersistedAgents(restAgents);
       savePersistedSessionSummaries(newSessions);
       savePersistedCompactionSummaries(restCompaction);
@@ -2413,6 +2835,7 @@ export const useChat = create<ChatState>((set, get) => ({
         sessionMessages: restMessages,
         sessionAgentName: restAgents,
         compactionSummaries: restCompaction,
+        _compactingSessions: nextCompacting,
         ...(isActive ? {
           messages: [],
           isStreaming: false,
@@ -2442,12 +2865,9 @@ export const useChat = create<ChatState>((set, get) => ({
     if (activeSessionId) {
       get().saveVersion(activeSessionId, "Plan approved");
     }
-    const result = get().sendMessage(`Plan approved. Now execute this plan step by step. Write each step as you complete it:\n\n${planMsg}`);
-    if (result instanceof Promise) {
-      result.catch((err) => {
-        console.error("Failed to send plan approval message:", err);
-      });
-    }
+    get().sendMessage(`Plan approved. Now execute this plan step by step. Write each step as you complete it:\n\n${planMsg}`).catch((err) => {
+      console.error("Failed to send plan approval message:", err);
+    });
   },
 
   rejectPlan() {
@@ -2582,6 +3002,25 @@ export const useChat = create<ChatState>((set, get) => ({
     const messages = sessionMessages[sessionId];
     if (!messages || messages.length <= 6) return;
 
+    // Anti-thrashing: skip if last compaction was ineffective (Hermes pattern)
+    const lastCount = _lastCompactionCounts[sessionId];
+    const lastSkip = _antiThrashTimestamps[sessionId];
+    if (lastCount && lastCount < 0) {
+      // Last compaction was ineffective — skip if within cooldown window
+      if (lastSkip && Date.now() - lastSkip < ANTI_THRASH_SKIP_MS) {
+        return;
+      }
+      // Cooldown expired — allow one retry
+    }
+
+    // Compaction throttle: don't attempt more than once per 30 seconds
+    const lastAttempt = _lastCompactionAttempt[sessionId] ?? 0;
+    if (Date.now() - lastAttempt < COMPACTION_THROTTLE_MS) return;
+    _lastCompactionAttempt[sessionId] = Date.now();
+
+    // Minimum message count gate
+    if (messages.length < COMPACTION_MIN_MESSAGES) return;
+
     // Create new Set first to avoid mutating the existing one
     const nextCompacting = new Set(_compactingSessions);
     nextCompacting.add(sessionId);
@@ -2600,6 +3039,8 @@ export const useChat = create<ChatState>((set, get) => ({
         // Select messages for compaction FIRST from original (un-pruned) messages
         const { toCompact } = selectMessagesForCompaction(messages, 6);
         if (toCompact.length > 0) {
+          // Build index set for efficient lookup
+          const toCompactIndices = new Set(toCompact.map(m => messages.indexOf(m)));
           // Only prune tool outputs in the messages being compacted (preserve full outputs in kept messages)
           const prunedToCompact = stats.shouldPrune
             ? pruneToolOutputs(toCompact).pruned
@@ -2615,7 +3056,7 @@ export const useChat = create<ChatState>((set, get) => ({
           const summary = await api.agent.summarizeMessages(model, compactionMessages);
           if (summary) {
             // Replace compacted messages with summary + kept messages
-            const { toKeep } = selectMessagesForCompaction(messages, 6);
+            const toKeep = messages.filter((_, i) => !toCompactIndices.has(i));
             const summaryMsg: ChatMessage = {
               id: "compact-" + Math.random().toString(36).slice(2, 9),
               role: "system",
@@ -2628,8 +3069,27 @@ export const useChat = create<ChatState>((set, get) => ({
               const nextMessages = { ...s.sessionMessages, [sessionId]: compacted };
               savePersistedCompactionSummaries(nextSummaries);
               savePersistedMessages(nextMessages);
-              return { compactionSummaries: nextSummaries, sessionMessages: nextMessages };
+              // Also update live messages if this is the active session
+              const isActiveSession = s.activeSessionId === sessionId;
+              return {
+                compactionSummaries: nextSummaries,
+                sessionMessages: nextMessages,
+                ...(isActiveSession ? { messages: compacted } : {}),
+              };
             });
+
+            // Anti-thrashing: track savings (Hermes ineffective compression detection)
+            const savingsPercent = ((messages.length - compacted.length) / messages.length) * 100;
+            if (savingsPercent < COMPACTION_MIN_SAVINGS_PERCENT) {
+              // Ineffective — mark with negative count and record skip timestamp
+              _lastCompactionCounts[sessionId] = -messages.length;
+              _antiThrashTimestamps[sessionId] = Date.now();
+              console.warn(`[Compaction] Anti-thrashing: savings ${savingsPercent.toFixed(1)}% < ${COMPACTION_MIN_SAVINGS_PERCENT}% threshold. Skipping for ${ANTI_THRASH_SKIP_MS / 1000}s.`);
+            } else {
+              // Effective — record positive count
+              _lastCompactionCounts[sessionId] = compacted.length;
+              delete _antiThrashTimestamps[sessionId]; // Clear skip timestamp on success
+            }
           }
         }
       }
@@ -2679,11 +3139,27 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   newChat() {
-    const { session, abort, messages } = get();
+        get()._clearAutoRemoveTimers();
+        const { session, messages } = get();
+    // Stop trajectory recording for old session
+    if (session) void stopRecording(session.id).catch(() => {});
+    // Clear doom loop + context overflow + compaction state
+    if (session) {
+      _clearDoomLoopState(session.id);
+      set({ doomLoopWarningCount: 0 });
+      _clearContextOverflowRetries(session.id);
+      delete _lastCompactionCounts[session.id];
+      delete _lastCompactionAttempt[session.id];
+      delete _antiThrashTimestamps[session.id];
+      // Abort any in-progress compaction to prevent it writing back after session is removed
+      const nextCompacting = new Set(get()._compactingSessions);
+      nextCompacting.delete(session.id);
+      set({ _compactingSessions: nextCompacting });
+    }
     if (session && messages.length > 0) {
       get().saveVersion(session.id, "Session checkpoint");
     }
-    if (session) abort(session.id);
+    if (session) void get().abort(session.id).catch(() => {});
     const { chatHistory, chatHistoryIdx, chatSessions } = get();
     const trimmedHistory = chatHistoryIdx >= 0
       ? chatHistory.slice(0, chatHistoryIdx + 1)
@@ -2715,6 +3191,7 @@ export const useChat = create<ChatState>((set, get) => ({
       thinkingContent: "",
       isStreaming: false,
       _pendingChanges: [],
+      _sendInProgress: false,
       pendingAttachments: [],
       session: null,
       activeSessionId: null,
@@ -2724,6 +3201,7 @@ export const useChat = create<ChatState>((set, get) => ({
       preRestoreMessages: null,
       taskPlan: null,
       taskPlanSummary: null,
+      subAgents: [],
     });
     savePersistedSessionSummaries(finalizedSessions);
   },
@@ -3134,7 +3612,8 @@ export type SettingsTab =
   | "plugins"
   | "commands"
   | "indexing"
-  | "onboard";
+  | "onboard"
+  | "connectors";
 
 export type ModelProvider = {
   id: string;
@@ -3431,8 +3910,25 @@ function deriveTitleFromUrl(url: string): string {
 
 function normalizeBrowserUrl(input: string): string | null {
   const raw = input.trim();
-  if (!raw) return "";
-  // SSRF protection: check private/internal addresses even for protocol-prefixed URLs
+  if (!raw) return null;
+  // SSRF protection: block file:// and other dangerous protocols
+  if (/^file:\/\//i.test(raw)) return null;
+  if (/^(data|javascript|vbscript):\/\//i.test(raw)) return null;
+  // SSRF protection: extract hostname and check ALL private/internal addresses
+  // BEFORE any URL construction to prevent bypass via bare addresses or userinfo
+  const hostnameExtract = raw
+    .replace(/^https?:\/\//i, "")
+    .replace(/^[^@]*@/, "")  // Strip userinfo (user:pass@) before extracting hostname
+    .replace(/[:/].*$/, "")
+    .replace(/^\[/, "")
+    .replace(/\]$/, "");
+  const privatePatternsAll = [
+    /^localhost$/i, /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./,
+    /^192\.168\./, /^169\.254\./, /^0\./, /^::1$/, /^\[::1\]$/,
+    /^metadata\.google\.internal$/i, /^instance-data\.local$/i,
+  ];
+  if (privatePatternsAll.some(p => p.test(hostnameExtract))) return null;
+  // SSRF protection: check private/internal addresses for protocol-prefixed URLs
   const privatePatterns = [
     /^https?:\/\/(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|::1|\[::1\])/i,
     /^https?:\/\/metadata\.google\.internal/i,
@@ -3440,7 +3936,6 @@ function normalizeBrowserUrl(input: string): string | null {
   ];
   if (privatePatterns.some((p) => p.test(raw))) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
-  if (/^(localhost|127\.|10\.|192\.168\.|::1)/i.test(raw)) return "http://" + raw;
   if (/\s/.test(raw)) return "https://www.google.com/search?q=" + encodeURIComponent(raw);
   let host = raw.replace(/^www\./i, "");
   const slash = host.search("/");
@@ -3457,17 +3952,6 @@ function normalizeBrowserUrl(input: string): string | null {
   if (/^\d{1,3}(\.\d{1,3}){0,3}$/.test(host)) return "http://" + raw.replace(/^https?:\/\//i, "");
   if (/^[\w-]+$/.test(host)) return "https://" + host + ".com" + tail;
   if (host.includes(".")) return "https://" + raw.replace(/^https?:\/\//i, "");
-
-  // SSRF protection: check private/internal addresses without protocol
-  const hostname = host || raw;
-  const privatePatternsNoProto = [
-    /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./,
-    /^169\.254\./, /^0\./, /^localhost$/i, /^::1$/, /^\[::1\]$/,
-    /^metadata\.google\.internal$/i, /^instance-data\.local$/i,
-  ];
-  if (privatePatternsNoProto.some(p => p.test(hostname))) {
-    return null; // Block private/metadata addresses
-  }
 
   return "https://www.google.com/search?q=" + encodeURIComponent(raw);
 }
@@ -3516,14 +4000,15 @@ export const useUI = create<UIState>((set, _get) => ({
       browserTabs: s.browserTabs.map((t) => {
         if (t.id !== id) return t;
         const truncated = normalizedUrl.slice(0, 200);
+        const isSameUrl = t.history[t.historyIdx] === truncated;
         return {
           ...t,
           url: truncated,
           title: deriveTitleFromUrl(truncated),
-          history: t.history[t.historyIdx] === truncated
+          history: isSameUrl
             ? t.history
             : [...t.history.slice(0, t.historyIdx + 1), truncated],
-          historyIdx: t.historyIdx + 1,
+          historyIdx: isSameUrl ? t.historyIdx : t.historyIdx + 1,
           loading: false,
         };
       }),
@@ -3617,7 +4102,7 @@ async function persistAlwaysAllowedToDisk(data: Record<string, true>) {
     const api = createDalamAPI();
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     const dotDalam = joinPath(activeWs.path, ".dalam");
-    if (!(await exists(dotDalam))) await mkdir(dotDalam);
+    if (!(await exists(dotDalam))) await mkdir(dotDalam, { recursive: true });
     const configPath = joinPath(dotDalam, "config.json");
     let existing: WorkspaceConfig = {};
     try {

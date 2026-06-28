@@ -148,18 +148,26 @@ export async function idbPut(
   storeName: ObjectStoreName,
   value: unknown,
 ): Promise<void> {
-  try {
-    const db = await ensureDB();
-    return new Promise((resolve, reject) => {
+  const db = await ensureDB();
+  return new Promise((resolve, reject) => {
+    try {
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
       store.put(value);
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch (e) {
-    console.warn(`[IndexedDB] Failed to write to ${storeName}:`, e);
-  }
+      tx.onerror = () => {
+        console.warn(`[IndexedDB] Transaction error writing to ${storeName}:`, tx.error);
+        reject(tx.error);
+      };
+      tx.onabort = () => {
+        console.warn(`[IndexedDB] Transaction aborted writing to ${storeName}`);
+        reject(new Error(`Transaction aborted for ${storeName}`));
+      };
+    } catch (e) {
+      console.warn(`[IndexedDB] Failed to write to ${storeName}:`, e);
+      reject(e);
+    }
+  });
 }
 
 /**
@@ -177,6 +185,7 @@ export async function idbClear(storeName: ObjectStoreName): Promise<void> {
     });
   } catch (e) {
     console.warn(`[IndexedDB] Failed to clear ${storeName}:`, e);
+    throw e;
   }
 }
 

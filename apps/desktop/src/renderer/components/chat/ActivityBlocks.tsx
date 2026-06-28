@@ -44,8 +44,10 @@ import type {
   SkillInfo,
   TodoItem,
   ToolCall,
+  SubAgentState,
 } from "@dalam/shared-types";
 import { useChat, useDiffView, useWorkspace, BUNDLED_SKILLS } from "@/store/useAppStore";
+import { skillRegistry } from "@/lib/skills";
 import { basename, dirname } from "@/lib/pathUtils";
 
 // ============================================================================
@@ -276,7 +278,9 @@ export function ContextGatheringGroup({ activities }: { activities: import("@dal
 // ============================================================================
 
 export function SkillBlock({ name, args, content, status }: { name: string; args?: string; content?: string; status?: "running" | "completed" | "failed" }) {
-  const skill = BUNDLED_SKILLS.find((s: SkillInfo) => s.name === name);
+  const bundledSkill = BUNDLED_SKILLS.find((s: SkillInfo) => s.name === name);
+  const projectSkill = skillRegistry.get(name);
+  const skill = bundledSkill ?? (projectSkill ? { name: projectSkill.name, description: projectSkill.description ?? "", content: projectSkill.content, location: projectSkill.location, source: projectSkill.source } : null);
   const statusIcon = status === "running" ? <span className="w-1.5 h-1.5 rounded-full bg-dalam-accent-primary animate-pulse" />
     : status === "failed" ? <span className="w-1.5 h-1.5 rounded-full bg-dalam-git-deleted" />
     : null;
@@ -852,5 +856,110 @@ export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summa
         })}
       </ul>
     </ActivityRow>
+  );
+}
+
+// ============================================================================
+// SubAgentBlock — collapsible accordion for spawned sub-agents
+// ============================================================================
+
+export function SubAgentBlock({ agent }: { agent: SubAgentState }) {
+  const [open, setOpen] = useState(false);
+  const isRunning = agent.status === "running";
+  const isFailed = agent.status === "failed";
+  const isCompleted = agent.status === "completed";
+
+  const statusIcon = isRunning
+    ? <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin flex-shrink-0" />
+    : isCompleted
+      ? <CheckCircle2 className="w-3.5 h-3.5 text-dalam-git-added flex-shrink-0" />
+      : <X className="w-3.5 h-3.5 text-dalam-git-deleted flex-shrink-0" />;
+
+  const typeLabel = agent.subagentType === "explore" ? "Explore" : "General";
+  const elapsed = agent.completedAt
+    ? ((agent.completedAt - agent.startedAt) / 1000).toFixed(1) + "s"
+    : isRunning
+      ? "running..."
+      : "";
+
+  return (
+    <div className="my-1 border border-dalam-border/30 rounded-md overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 w-full text-left px-2.5 py-1.5 text-[12px] hover:bg-dalam-bg-secondary/40 transition-colors"
+      >
+        {statusIcon}
+        <ChevronDown
+          className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
+        />
+        <span className="font-mono text-dalam-accent-secondary font-medium">task</span>
+        <span className="text-dalam-text-secondary truncate flex-1">{agent.description}</span>
+        <span className="text-[10px] text-dalam-text-muted/60 flex-shrink-0">
+          {typeLabel}{elapsed ? ` · ${elapsed}` : ""}
+        </span>
+      </button>
+      {open && (
+        <div className="px-2.5 pb-2 border-t border-dalam-border/20">
+          <div className="mt-1.5 mb-1">
+            <span className="text-[10px] text-dalam-text-muted/50 uppercase tracking-wider">Prompt</span>
+            <p className="text-[11px] text-dalam-text-secondary/80 mt-0.5 whitespace-pre-wrap break-words">{agent.prompt}</p>
+          </div>
+          {agent.toolCalls.length > 0 && (
+            <div className="mt-1.5">
+              <span className="text-[10px] text-dalam-text-muted/50 uppercase tracking-wider">Tools used ({agent.toolCalls.length})</span>
+              <div className="mt-0.5 space-y-0.5">
+                {agent.toolCalls.map((tc) => (
+                  <div key={tc.id} className="flex items-center gap-1.5 text-[11px]">
+                    {tc.status === "completed" ? (
+                      <CheckCircle2 className="w-3 h-3 text-dalam-git-added flex-shrink-0" />
+                    ) : tc.status === "failed" ? (
+                      <X className="w-3 h-3 text-dalam-git-deleted flex-shrink-0" />
+                    ) : (
+                      <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0" />
+                    )}
+                    <span className="font-mono text-dalam-text-secondary/80">{tc.name}</span>
+                    {tc.args && typeof tc.args === "object" && (
+                      <span className="text-dalam-text-muted/50 truncate max-w-[200px]">
+                        {Object.values(tc.args).slice(0, 2).join(", ")}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {agent.content && (
+            <div className="mt-1.5">
+              <span className="text-[10px] text-dalam-text-muted/50 uppercase tracking-wider">Output</span>
+              <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-1.5 max-h-40 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words mt-0.5">
+                {agent.content}
+              </pre>
+            </div>
+          )}
+          {agent.error && (
+            <div className="mt-1.5">
+              <span className="text-[10px] text-dalam-git-deleted uppercase tracking-wider">Error</span>
+              <p className="text-[11px] text-dalam-git-deleted/80 mt-0.5 whitespace-pre-wrap break-words">{agent.error}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// SubAgentList — renders all active/recent sub-agents as a group
+// ============================================================================
+
+export function SubAgentList({ agents }: { agents: SubAgentState[] }) {
+  if (agents.length === 0) return null;
+  return (
+    <div className="my-1">
+      {agents.map((agent) => (
+        <SubAgentBlock key={agent.id} agent={agent} />
+      ))}
+    </div>
   );
 }

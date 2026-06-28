@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import ReactDOM from "react-dom";
 import {
   useWorkspace,
@@ -28,10 +28,22 @@ import {
   List,
   ArrowLeft,
   MessageSquarePlus,
+  Zap,
+  Webhook,
+  Clock,
+  FileText,
 } from "lucide-react";
 import type { ChatSessionSummary, ChatVersion } from "@dalam/shared-types";
 import { FileTree } from "./FileTree";
 import { Tooltip } from "../ui/Tooltip";
+import {
+  getConnectorConfigs,
+  saveConnectorConfig,
+  removeConnectorConfig,
+  initializeConnectors,
+  shutdownConnectors,
+} from "@/lib/connectors";
+import type { ConnectorConfig } from "@/lib/connectors";
 
 function formatRelative(ts: number, now: number): string {
   const diff = Math.max(0, now - ts);
@@ -75,11 +87,14 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
   }, [menuPosition]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraft(session.title);
+    // Don't overwrite draft while user is actively editing
+    if (!editing) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDraft(session.title);
+    }
     const id = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(id);
-  }, [session.title]);
+  }, [session.title, editing]);
 
   const submit = () => {
     const next = draft.trim();
@@ -157,6 +172,113 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
             }
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── Connectors Section ────────────────────────────────────
+function ConnectorsSection() {
+  const [expanded, setExpanded] = useState(false);
+  const [configs, setConfigs] = useState<ConnectorConfig[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState<"webhook" | "file-watcher" | "cron">("webhook");
+
+  const refresh = useCallback(() => setConfigs(getConnectorConfigs()), []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const handleAdd = () => {
+    if (!newName.trim()) return;
+    const config: ConnectorConfig = {
+      id: `conn-${Date.now().toString(36)}`,
+      name: newName.trim(),
+      type: newType,
+      enabled: true,
+      config: {},
+    };
+    saveConnectorConfig(config);
+    setConfigs(getConnectorConfigs());
+    setNewName("");
+    setShowAdd(false);
+  };
+
+  const handleRemove = (id: string) => {
+    removeConnectorConfig(id);
+    setConfigs(getConnectorConfigs());
+  };
+
+  const typeIcon = (type: string) => {
+    switch (type) {
+      case "webhook": return <Webhook className="w-3 h-3" />;
+      case "file-watcher": return <FileText className="w-3 h-3" />;
+      case "cron": return <Clock className="w-3 h-3" />;
+      default: return <Zap className="w-3 h-3" />;
+    }
+  };
+
+  return (
+    <div className="border-t border-dalam-border-primary mt-1 pt-1">
+      <button
+        className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        <Zap className="w-4 h-4" />
+        <span>Connectors</span>
+        {configs.length > 0 && (
+          <span className="ml-auto text-[10px] bg-dalam-bg-active rounded-full px-1.5 py-0.5 text-dalam-text-muted">{configs.length}</span>
+        )}
+      </button>
+      {expanded && (
+        <div className="ml-4 space-y-0.5">
+          {configs.length === 0 && !showAdd && (
+            <div className="text-[11px] text-dalam-text-muted px-2 py-1">No connectors configured</div>
+          )}
+          {configs.map((c) => (
+            <div key={c.id} className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-dalam-bg-hover group text-xs">
+              {typeIcon(c.type)}
+              <span className="flex-1 truncate text-dalam-text-secondary">{c.name}</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${c.enabled ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
+              <button className="opacity-0 group-hover:opacity-100 p-0.5" onClick={() => handleRemove(c.id)}>
+                <XCircle className="w-3 h-3 text-dalam-text-muted hover:text-dalam-git-deleted" />
+              </button>
+            </div>
+          ))}
+          {showAdd ? (
+            <div className="px-2 py-1 space-y-1">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); else if (e.key === "Escape") setShowAdd(false); }}
+                placeholder="Connector name..."
+                className="w-full text-xs px-1.5 py-1 rounded border border-dalam-border-primary bg-dalam-bg-primary text-dalam-text-primary outline-none"
+              />
+              <select
+                value={newType}
+                onChange={(e) => setNewType(e.target.value as typeof newType)}
+                className="w-full text-xs px-1.5 py-1 rounded border border-dalam-border-primary bg-dalam-bg-primary text-dalam-text-primary"
+              >
+                <option value="webhook">Webhook</option>
+                <option value="file-watcher">File Watcher</option>
+                <option value="cron">Cron</option>
+              </select>
+              <div className="flex gap-1">
+                <button className="text-[10px] px-2 py-0.5 rounded bg-dalam-accent-primary text-white" onClick={handleAdd}>Add</button>
+                <button className="text-[10px] px-2 py-0.5 rounded text-dalam-text-muted" onClick={() => setShowAdd(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="w-full flex items-center gap-1.5 px-2 py-1 rounded text-xs text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-secondary transition-colors"
+              onClick={() => setShowAdd(true)}
+            >
+              <Plus className="w-3 h-3" /> Add connector
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -303,6 +425,7 @@ export function Sidebar() {
           <Sparkles className="w-4 h-4" />
           <span>Skills</span>
         </button>
+        <ConnectorsSection />
       </div>
 
       {/* Workspaces header */}

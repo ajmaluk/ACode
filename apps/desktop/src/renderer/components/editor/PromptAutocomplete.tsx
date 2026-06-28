@@ -278,8 +278,14 @@ export function PromptAutocomplete({
   };
 
   // Publish the handler so the parent can call it from its textarea onKeyDown.
+  // Use a ref to always have the latest handler without re-registering the effect.
+  const latestHandler = useRef(handleKeyDown);
+  latestHandler.current = handleKeyDown;
   useEffect(() => {
-    if (keyHandlerRef) keyHandlerRef.current = handleKeyDown;
+    if (keyHandlerRef) {
+      // biome-ignore lint/suspicious/noExplicitAny: bridge React.KeyboardEvent to native KeyboardEvent
+      keyHandlerRef.current = ((e: any) => latestHandler.current(e)) as any;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyHandlerRef]);
 

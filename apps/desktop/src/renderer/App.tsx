@@ -13,6 +13,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { ShortcutsCheatsheet } from "@/components/ui/ShortcutsCheatsheet";
 import { ContextMenuProvider } from "@/components/ui/ContextMenu";
 import { WelcomeScreen } from "@/components/onboarding/WelcomeScreen";
+import { initializeConnectors } from "@/lib/connectors";
 import {
   useCommandPalette,
   useSettings,
@@ -93,7 +94,23 @@ export function App() {
   }, [rightPanelOpen]);
 
   useEffect(() => {
-    void loadSettings().catch((err) => console.error("Failed to load settings:", err));
+    void loadSettings().catch((err: unknown) => console.error("Failed to load settings:", err));
+    void useChat.getState().load().catch((err: unknown) => console.error("Failed to load chat sessions:", err));
+    void initializeConnectors(
+      (msg) => {
+        console.debug("[Connector] message received:", msg);
+        // Show incoming connector message as a system notification in chat
+        const chat = useChat.getState();
+        if (chat.activeSessionId) {
+          chat.injectSystemMessage(
+            `[${msg.platform}] Message from ${msg.senderName ?? msg.senderId}: ${msg.content}`
+          );
+        } else {
+          console.debug("[Connector] No active session — message queued:", msg.content.slice(0, 80));
+        }
+      },
+      (id, status) => { console.debug("[Connector] status change:", id, status); },
+    ).catch((err: unknown) => console.error("Failed to initialize connectors:", err));
   }, [loadSettings]);
 
   // Auto-restore last workspace on startup

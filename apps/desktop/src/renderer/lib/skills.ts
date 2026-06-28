@@ -462,10 +462,12 @@ export function matchSkillInvocation(
   for (const skill of sorted) {
     const skillName = skill.name.toLowerCase();
     // Match skill name as a whole word (with optional trailing args)
-    const wordRegex = new RegExp(`(?:^|\\b)${skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "i");
+    // Use word boundary assertions to prevent partial matches
+    const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wordRegex = new RegExp(`(?:^|\\b)${escapedName}\\b`, "i");
     if (wordRegex.test(lowerText)) {
       // Extract everything after the skill name as args
-      const match = lowerText.match(new RegExp(`${skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(.*)`, "i"));
+      const match = lowerText.match(new RegExp(`${escapedName}\\s+(.*)`, "i"));
       const args = match?.[1]?.trim() ?? "";
       return { skill, args };
     }

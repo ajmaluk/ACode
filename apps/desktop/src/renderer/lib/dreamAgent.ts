@@ -316,6 +316,12 @@ export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
   };
 }
 
+// Clean up all dream cycle timeouts on page unload to prevent
+// background LLM calls and disk writes during or after shutdown.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", cancelAllDreamCycles);
+}
+
 /**
  * Computes token-level intersection sets to catch surface-level duplicate structures.
  */
@@ -355,13 +361,13 @@ export async function executeWorkspaceDreamOptimization(workspacePath: string): 
     }
 
     // Double pointer lookup loop checking for overlapping signatures
+    const removedIndices = new Set<number>();
     for (let i = 0; i < discoveredSkills.length; i++) {
+      if (removedIndices.has(i)) continue;
       for (let j = i + 1; j < discoveredSkills.length; j++) {
-        const skillA = discoveredSkills[i];
-        const skillB = discoveredSkills[j];
-        
-        // Skip entries whose files were deleted by a prior merge
-        if (!skillA || !skillB) continue;
+        if (removedIndices.has(j)) continue;
+        const skillA = discoveredSkills[i]!;
+        const skillB = discoveredSkills[j]!;
         
         const coefficientScore = calculateTokenSimilarity(skillA.rawContent, skillB.rawContent);
         
@@ -394,8 +400,8 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           // Update skillA content in-memory so subsequent comparisons use merged version
           discoveredSkills[i] = { ...skillA, rawContent: response };
 
-          // Null out skillB so subsequent comparisons skip it
-          discoveredSkills[j] = null as any;
+          // Mark skillB for removal so subsequent comparisons skip it
+          removedIndices.add(j);
 
           // Reload skills registry so UI updates
           const { loadProjectSkills, refreshProjectSkills } = await import("./skills");

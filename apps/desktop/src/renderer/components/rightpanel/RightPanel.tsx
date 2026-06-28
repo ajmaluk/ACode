@@ -155,9 +155,9 @@ function DiffTab() {
   useEffect(() => {
     if (!current) return;
     let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true);
     void (async () => {
+      if (cancelled) return;
+      setLoading(true);
       const api = createDalamAPI();
       try {
         // Modified content: always read the current file

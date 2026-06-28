@@ -108,7 +108,9 @@ export function reproduce(
     archived: false,
   };
 
-  return { agents: [...agents, child], child };
+  const newAgents = [...agents, child];
+  saveAgentDna(newAgents);
+  return { agents: newAgents, child };
 }
 
 /**
@@ -118,12 +120,14 @@ export function autoArchive(agents: AgentDna[]): AgentDna[] {
   const now = Date.now();
   const threshold = ARCHIVE_DAYS * 24 * 60 * 60 * 1000;
 
-  return agents.map(agent => {
+  const result = agents.map(agent => {
     if (!agent.archived && now - agent.lastUsedAt > threshold && (agent.sessionCount > 0 || agent.parentId !== null)) {
       return { ...agent, archived: true };
     }
     return agent;
   });
+  saveAgentDna(result);
+  return result;
 }
 
 /**
@@ -133,12 +137,14 @@ export function selfDestruct(agents: AgentDna[]): AgentDna[] {
   const now = Date.now();
   const destroyThreshold = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-  return agents.filter(agent => {
+  const result = agents.filter(agent => {
     if (agent.archived && now - agent.lastUsedAt > destroyThreshold) {
       return false; // Remove
     }
     return true;
   });
+  saveAgentDna(result);
+  return result;
 }
 
 /**
@@ -152,13 +158,22 @@ export function matchAgentForTask(
   const active = agents.filter(a => !a.archived && isMature(a));
 
   for (const agent of active) {
+    // Try specialization with word-boundary matching (avoids false positives like "code" matching "decode")
+    if (agent.specialization) {
+      try {
+        const escaped = agent.specialization.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp(`\\b${escaped}\\b`, "i").test(lower)) return agent;
+      } catch {
+        // Fallback to includes if regex fails
+        if (lower.includes(agent.specialization.toLowerCase())) return agent;
+      }
+    }
+    // Then try trigger pattern regex
     try {
       const regex = new RegExp(agent.triggerPattern, "i");
       if (regex.test(lower)) return agent;
     } catch {
-      if (lower.includes(agent.specialization.toLowerCase())) {
-        return agent;
-      }
+      // Invalid regex — skip
     }
   }
   return null;
