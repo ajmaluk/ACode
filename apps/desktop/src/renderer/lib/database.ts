@@ -34,6 +34,7 @@ interface SqlDatabase {
 let dbInstance: SqlDatabase | null = null;
 let currentWorkspacePath: string | null = null;
 let dbLoadingPromise: Promise<SqlDatabase | null> | null = null;
+let dbLoadingWorkspace: string | null = null;
 
 // ─── Schema ──────────────────────────────────────────────────
 
@@ -81,9 +82,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 export async function initDatabase(workspacePath: string): Promise<SqlDatabase | null> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
   // Prevent concurrent init calls from leaking connections
-  if (dbLoadingPromise) {
+  // Only await if the same workspace is being initialized
+  if (dbLoadingPromise && dbLoadingWorkspace === workspacePath) {
     await dbLoadingPromise;
     if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
+  }
+  // If a different workspace is loading, wait for it to finish first
+  if (dbLoadingPromise && dbLoadingWorkspace !== workspacePath) {
+    await dbLoadingPromise;
   }
   if (dbInstance) {
     await closeDatabase();
@@ -160,6 +166,7 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     return db;
   };
 
+  dbLoadingWorkspace = workspacePath;
   dbLoadingPromise = initWork();
   let db: SqlDatabase | null;
   try {
@@ -169,6 +176,7 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     throw error;
   } finally {
     dbLoadingPromise = null;
+    dbLoadingWorkspace = null;
   }
 
   if (db) {

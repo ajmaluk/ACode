@@ -10,8 +10,8 @@ describe("hookBus", () => {
       sessionId: "test",
       workspacePath: "/test",
       model: "gpt-4o",
-      agentName: "build",
-      mode: "build",
+      agentName: "yolo",
+      mode: "yolo",
       timestamp: Date.now(),
     });
 
@@ -85,8 +85,8 @@ describe("hookBus", () => {
       sessionId: "test",
       workspacePath: "/test",
       model: "gpt-4o",
-      agentName: "build",
-      mode: "build",
+      agentName: "yolo",
+      mode: "yolo",
       timestamp: Date.now(),
     });
 

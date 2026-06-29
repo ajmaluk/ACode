@@ -32,12 +32,9 @@ export const PERMISSIONS = [
   "doom_loop",
   "external_directory",
   "question",
-  "plan_enter",
-  "plan_exit",
   "change_directory",
 ] as const;
 
-export type PermissionKey = (typeof PERMISSIONS)[number];
 
 /**
  * Build a ruleset from a config object. The config can be:
@@ -171,18 +168,6 @@ const BASH_ARITY: Record<string, number> = {
 };
 
 /**
- * Dangerous shell commands that should always require explicit permission.
- * These commands can cause irreversible damage (process termination, data loss,
- * system modification) and are blocked from automatic allowlisting.
- */
-export const DANGEROUS_SHELL_COMMANDS = new Set([
-  "kill", "killall", "taskkill", "taskkill /f",
-  "rm -rf /", "rm -rf /*", "rm -rf ~",
-  "mkfs", "dd", "format",
-  ":(){:|:&};:",  // fork bomb
-]);
-
-/**
  * Given a full shell command like `git checkout main -b feature/x`, return
  * the canonical "human-readable" command using the arity dictionary
  * (e.g. `git checkout`). This is the pattern the ruleset will be evaluated
@@ -197,21 +182,6 @@ export function canonicaliseBashCommand(command: string): string {
     }
   }
   return tokens[0] ?? "";
-}
-
-/**
- * Check if a shell command contains dangerous operations that should
- * always require explicit permission, regardless of the permission ruleset.
- * Returns true if the command matches a dangerous pattern.
- */
-export function isDangerousCommand(command: string): boolean {
-  const lower = command.toLowerCase().trim();
-  for (const dangerous of DANGEROUS_SHELL_COMMANDS) {
-    if (lower.startsWith(dangerous) || lower.includes(" " + dangerous + " ")) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // ============================================================================
@@ -230,8 +200,6 @@ export const DEFAULT_PERMISSIONS: PermissionRuleset = fromConfig({
     "*": "ask",
   },
   question: "deny",
-  plan_enter: "deny",
-  plan_exit: "deny",
   change_directory: "ask",
 });
 
@@ -239,47 +207,16 @@ export const DEFAULT_PERMISSIONS: PermissionRuleset = fromConfig({
 // Primary agent definitions
 // ============================================================================
 
-const BUILD_AGENT: AgentInfo = {
-  name: "build",
-  category: "build",
-  mode: "primary",
-  native: true,
-  color: "#fb8147",
-  description: "Executes tools based on configured permissions.",
-  permission: mergeRulesets(
-    DEFAULT_PERMISSIONS,
-    fromConfig({ question: "allow", plan_enter: "allow", plan_exit: "allow" })
-  ),
-};
-
-const PLAN_AGENT: AgentInfo = {
-  name: "plan",
-  category: "plan",
-  mode: "primary",
-  native: true,
-  color: "#c7e2a8",
-  description: "Plan mode. Disallows all edit tools. Produces a plan you can review.",
-  permission: mergeRulesets(
-    DEFAULT_PERMISSIONS,
-    fromConfig({
-      question: "allow",
-      plan_exit: "allow",
-      edit: { "*": "deny", ".dalam/plans/*.md": "allow" },
-      write: { "*": "deny", ".dalam/plans/*.md": "allow" },
-    })
-  ),
-};
-
 const YOLO_AGENT: AgentInfo = {
   name: "yolo",
-  category: "build",
+  category: "general",
   mode: "primary",
   native: true,
   color: "#e85d75",
-  description: "YOLO mode. Full access — reads, writes, executes everything without asking. Use with caution.",
+  description: "Full access — reads, writes, executes everything without asking.",
   permission: mergeRulesets(
     DEFAULT_PERMISSIONS,
-    fromConfig({ question: "allow", plan_enter: "allow", plan_exit: "allow" })
+    fromConfig({ question: "allow" })
   ),
 };
 
@@ -364,8 +301,6 @@ const DISTILL_SUBAGENT: AgentInfo = {
 };
 
 export const ALL_AGENTS: AgentInfo[] = [
-  BUILD_AGENT,
-  PLAN_AGENT,
   YOLO_AGENT,
   GENERAL_SUBAGENT,
   EXPLORE_SUBAGENT,
@@ -379,11 +314,6 @@ export const ALL_AGENTS: AgentInfo[] = [
 export const PRIMARY_AGENTS: AgentInfo[] = ALL_AGENTS.filter((a) => a.mode === "primary");
 export const SUBAGENTS: AgentInfo[] = ALL_AGENTS.filter((a) => a.mode === "subagent");
 
-// Re-export from the store-friendly name (used by the Settings UI).
-export const SUBAGENT_LIST: AgentInfo[] = SUBAGENTS;
-
-export const PRIMARY_AGENT_NAMES: PrimaryAgentName[] = ["build", "plan", "yolo"];
-
 export function getAgent(name: string): AgentInfo | undefined {
   return ALL_AGENTS.find((a) => a.name === name);
 }
@@ -394,150 +324,4 @@ export function getPrimaryAgent(name: PrimaryAgentName): AgentInfo {
   return a;
 }
 
-export function defaultAgentName(): PrimaryAgentName {
-  return "build";
-}
 
-// ============================================================================
-// Stop words for prompt similarity comparison
-// ============================================================================
-
-const STOP_WORDS = new Set([
-  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "shall", "can", "need", "dare", "ought",
-  "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
-  "as", "into", "through", "during", "before", "after", "above", "below",
-  "between", "out", "off", "over", "under", "again", "further", "then",
-  "once", "here", "there", "when", "where", "why", "how", "all", "both",
-  "each", "few", "more", "most", "other", "some", "such", "no", "nor",
-  "not", "only", "own", "same", "so", "than", "too", "very", "just",
-  "don", "now",
-]);
-
-// ============================================================================
-// Auto-Agent Selection — Evolver-inspired adaptive agent routing
-// ============================================================================
-
-const AGENT_SELECTION_KEY = "dalam.agentSelectionHistory.v1";
-
-interface SelectionRecord {
-  prompt: string;
-  agent: PrimaryAgentName;
-  success: boolean;
-  timestamp: number;
-}
-
-function loadSelectionHistory(): SelectionRecord[] {
-  try {
-    const raw = localStorage.getItem(AGENT_SELECTION_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
-  return [];
-}
-
-function saveSelectionHistory(history: SelectionRecord[]): void {
-  // Keep only last 100 records
-  const trimmed = history.slice(-100);
-  localStorage.setItem(AGENT_SELECTION_KEY, JSON.stringify(trimmed));
-}
-
-/**
- * Analyze a user prompt and automatically select the best agent.
- * This implements evolver-inspired adaptive agent selection with learning.
- */
-export function autoSelectAgent(prompt: string, currentAgent: PrimaryAgentName): PrimaryAgentName {
-  const lower = prompt.toLowerCase();
-
-  // Check selection history for learned patterns
-  const history = loadSelectionHistory();
-  const learned = learnFromHistory(history, lower);
-  if (learned) return learned;
-
-  // Planning keywords → plan agent
-  const planKeywords = ["plan", "design", "architect", "strategy", "approach", "analyze", "review code", "explain how", "what should", "how would you"];
-  if (planKeywords.some(kw => lower.includes(kw)) && currentAgent !== "plan") {
-    return "plan";
-  }
-
-  // Dangerous commands → build agent (with permissions)
-  const dangerousPatterns = ["rm -rf", "sudo", "drop table", "delete all", "format disk", "git push --force"];
-  if (dangerousPatterns.some(p => lower.includes(p))) {
-    return "build"; // Never auto-select yolo for dangerous commands
-  }
-
-  // Simple tasks → build agent
-  const simplePatterns = ["fix typo", "change color", "rename", "add comment", "format code"];
-  if (simplePatterns.some(p => lower.includes(p))) {
-    return "build";
-  }
-
-  // Default: keep current agent
-  return currentAgent;
-}
-
-/**
- * Learn from selection history to improve future decisions.
- */
-function learnFromHistory(history: SelectionRecord[], prompt: string): PrimaryAgentName | null {
-  if (history.length < 5) return null;
-
-  // Find similar past prompts and check which agent worked best
-  const similar = history.filter(h => {
-    const hWords = h.prompt.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
-    const pWords = prompt.split(/\s+/).filter(w => w.length > 2 && !STOP_WORDS.has(w));
-    const intersection = hWords.filter(w => pWords.includes(w)).length;
-    return intersection >= 2; // At least 2 common words
-  });
-
-  if (similar.length < 2) return null;
-
-  // Group by agent and calculate success rate
-  const byAgent: Record<string, { success: number; total: number }> = {};
-  for (const record of similar) {
-    if (!byAgent[record.agent]) byAgent[record.agent] = { success: 0, total: 0 };
-    byAgent[record.agent].total++;
-    if (record.success) byAgent[record.agent].success++;
-  }
-
-  // Find best agent with > 60% success rate
-  let bestAgent: PrimaryAgentName | null = null;
-  let bestRate = 0.6;
-  for (const [agent, stats] of Object.entries(byAgent)) {
-    const rate = stats.total > 0 ? stats.success / stats.total : 0;
-    if (rate > bestRate && stats.total >= 2 && PRIMARY_AGENT_NAMES.includes(agent as PrimaryAgentName)) {
-      bestRate = rate;
-      bestAgent = agent as PrimaryAgentName;
-    }
-  }
-
-  return bestAgent;
-}
-
-/**
- * Record agent selection result for learning.
- */
-export function recordAgentSelection(prompt: string, agent: PrimaryAgentName, success: boolean): void {
-  const history = loadSelectionHistory();
-  history.push({ prompt: prompt.slice(0, 200), agent, success, timestamp: Date.now() });
-  saveSelectionHistory(history);
-}
-
-/**
- * Detect if a prompt needs a specific agent based on content analysis.
- */
-export function detectAgentNeed(prompt: string): { agent: PrimaryAgentName; reason: string } | null {
-  const lower = prompt.toLowerCase();
-
-  // Code review detection
-  if (lower.includes("review") && (lower.includes("code") || lower.includes("pr") || lower.includes("pull request"))) {
-    return { agent: "plan", reason: "Code review detected" };
-  }
-
-  // Architecture/design detection
-  if (lower.includes("architecture") || lower.includes("design pattern") || lower.includes("system design")) {
-    return { agent: "plan", reason: "Architecture discussion detected" };
-  }
-
-  return null;
-}

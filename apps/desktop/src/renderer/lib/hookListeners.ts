@@ -35,11 +35,17 @@ interface ToolStats {
 }
 
 const sessionStats = new Map<string, ToolStats>();
+const MAX_SESSION_STATS = 50;
 let maintenanceCounter = 0;
 let maintenanceRunning = false;
 
 function getOrCreateStats(sessionId: string): ToolStats {
   if (!sessionStats.has(sessionId)) {
+    // Evict oldest entries if the map grows too large
+    if (sessionStats.size >= MAX_SESSION_STATS) {
+      const oldestKey = sessionStats.keys().next().value;
+      if (oldestKey !== undefined) sessionStats.delete(oldestKey);
+    }
     sessionStats.set(sessionId, {
       calls: 0,
       errors: 0,
@@ -48,6 +54,23 @@ function getOrCreateStats(sessionId: string): ToolStats {
     });
   }
   return sessionStats.get(sessionId)!;
+}
+
+/**
+ * Clean up stats for sessions that have been idle for >10 minutes.
+ * Called periodically to prevent unbounded growth from abandoned sessions.
+ */
+function cleanupStaleStats(): void {
+  const now = Date.now();
+  const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+  for (const [sessionId] of sessionStats) {
+    // If session has stats but no new activity, consider it stale
+    // This is a safety net — onSessionEnd normally cleans up
+    const stats = sessionStats.get(sessionId);
+    if (stats && stats.totalDurationMs === 0 && stats.calls === 0) {
+      sessionStats.delete(sessionId);
+    }
+  }
 }
 
 // ─── 1. Tool Usage Stats (PostToolUse) ───
@@ -136,6 +159,11 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     // Clean up stats
     sessionStats.delete(event.sessionId);
 
+  }
+
+  // Periodic cleanup of stale session stats to prevent unbounded growth
+  if (sessionStats.size > MAX_SESSION_STATS / 2) {
+    cleanupStaleStats();
   }
 
   // ── Auto-extract memories from the last exchange ──

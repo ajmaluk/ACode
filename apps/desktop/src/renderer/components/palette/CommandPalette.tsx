@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Command } from "cmdk";
-import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useAgents, useChat, useUI } from "@/store/useAppStore";
+import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useChat, useUI } from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
 import {
   Settings,
@@ -13,8 +13,6 @@ import {
   Keyboard,
   FileCode,
   History,
-  Zap,
-  Layers,
   ChevronRight,
 } from "lucide-react";
 import { getRecentFiles } from "@/lib/dalamAPI";
@@ -35,7 +33,6 @@ export function CommandPalette() {
   const { open: openSettings } = useSettingsView();
   const { openWorkspace, loadWorkspace, fileTree, openFile } = useWorkspace();
   const { toggle: toggleShortcuts } = useShortcuts();
-  const { setActiveAgent } = useAgents();
   const [recent, setRecent] = useState<string[]>([]);
 
   useEffect(() => {
@@ -99,28 +96,6 @@ export function CommandPalette() {
         shortcut: `${modKey()}N`,
         perform: () => {
           useChat.getState().newChat();
-          setOpen(false);
-        },
-      },
-      {
-        id: "mode-build",
-        label: "Switch to Build mode",
-        hint: "Full read/write/execute",
-        group: "Agent",
-        icon: <Zap className="w-3.5 h-3.5" />,
-        perform: () => {
-          setActiveAgent("build");
-          setOpen(false);
-        },
-      },
-      {
-        id: "mode-plan",
-        label: "Switch to Plan mode",
-        hint: "Read-only analysis",
-        group: "Agent",
-        icon: <Layers className="w-3.5 h-3.5" />,
-        perform: () => {
-          setActiveAgent("plan");
           setOpen(false);
         },
       },

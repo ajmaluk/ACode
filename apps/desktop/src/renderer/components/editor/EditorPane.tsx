@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
-import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, PRIMARY_AGENTS, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
+import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
 import type { PrimaryAgentName, FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
@@ -124,6 +124,7 @@ function StreamingActivityPanel({
   const taskPlan = useChat((s) => s.taskPlan);
   const taskPlanSummary = useChat((s) => s.taskPlanSummary);
   const subAgents = useChat((s) => s.subAgents);
+  const streamingStartedAt = useChat((s) => s.streamingStartedAt);
 
   return (
     <div className="animate-fade-in">
@@ -139,7 +140,7 @@ function StreamingActivityPanel({
 
       {/* Working timer */}
       <div className="mb-2">
-        <WorkingTimer startTime={sessionStartTime} />
+        <WorkingTimer startTime={streamingStartedAt ?? sessionStartTime} />
       </div>
 
       {/* Thinking block (if any) */}
@@ -304,12 +305,9 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
   );
 });
 
-// Map primary agent → UI-friendly label and icon. Mirrors Dalam's
-// primary agent presentation.
+// Agent display — single mode, full access
 const AGENT_DISPLAY: Record<PrimaryAgentName, { label: string; description: string; icon: React.ElementType; color: string; short: string }> = {
-  build: { label: "Build", short: "build", description: "Executes tools based on configured permissions. Asks before each operation.", icon: Zap, color: "text-amber-400" },
-  plan: { label: "Plan", short: "plan", description: "Read-only analysis. Produces a plan you can review, then switches to Build to execute.", icon: ClipboardList, color: "text-emerald-400" },
-  yolo: { label: "YOLO", short: "yolo", description: "Full access — reads, writes, executes everything without asking. Use with caution.", icon: Sparkles, color: "text-rose-400" },
+  yolo: { label: "Assistant", short: "assistant", description: "Full access — reads, writes, executes everything.", icon: Sparkles, color: "text-amber-400" },
 };
 
 export function EditorPane() {
@@ -449,8 +447,6 @@ function EditorStatusBar() {
   );
 }
 
-// Removed dead SidebarToggleButton and RightPanelToggleButton components
-
 function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions, onConfirm, onCancel }: {
   restoredVersionId: string;
   activeSessionId: string;
@@ -497,7 +493,7 @@ function ChatView() {
   const { status: gitStatus } = useGit();
   const { activeAgentName, setActiveAgent } = useAgents();
   const toast = useToast();
-  const agentInfo = AGENT_DISPLAY[activeAgentName];
+  const agentInfo = AGENT_DISPLAY[activeAgentName] ?? AGENT_DISPLAY.yolo;
   const mod = modKey();
   const AgentIcon = agentInfo.icon;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -521,6 +517,7 @@ function ChatView() {
   const [hoveredFollowupProvider, setHoveredFollowupProvider] = useState<string | null>(null);
   const followupProviderHoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const followupProviderRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const streamingStartedAt = useChat((s) => s.streamingStartedAt);
   const [timestamp] = useState(() => Date.now());
 
   // Auto-resize the textareas dynamically based on scrollHeight
@@ -580,10 +577,6 @@ function ChatView() {
   }, [messages]);
 
   const hasMessages = messages.length > 0;
-  const hasMessagesRef = useRef(false);
-  useEffect(() => {
-    hasMessagesRef.current = messages.length > 0;
-  }, [messages.length]);
 
   // Auto-focus the chat input on mount and when switching between empty/non-empty
   const prevMsgCountRef = useRef(messages.length);
@@ -646,8 +639,6 @@ function ChatView() {
   /crystallize - Assess chat history for skill crystallization
   /login      - Opens Settings -> Models to configure API keys
   /model [id] - Switch the active model (e.g. /model gpt-4o)
-  /agent [id] - Switch the active agent (build / plan / yolo)
-  /plan       - Switches active agent to Plan mode
   /reasoning  - Toggles reasoning modes or shows details
   /share      - Formats and copies conversation to clipboard
   /init       - Scans workspace & creates/bootstraps DALAM.md
@@ -747,35 +738,7 @@ Keyboard Shortcuts:
     }
 
     if (trimmed.startsWith("/agent")) {
-      const targetAgentName = trimmed.slice(6).trim().toLowerCase();
-      
-      if (!targetAgentName) {
-        const agentList = PRIMARY_AGENTS.map(a => {
-          const display = AGENT_DISPLAY[a.name as import("@dalam/shared-types").PrimaryAgentName];
-          return `- ${a.name} (${display?.label ?? a.name})`;
-        }).join("\n");
-        chat.injectSystemMessage(`Usage: /agent <agentName>\n\nAvailable Primary Agents:\n${agentList}`);
-      } else {
-        const found = PRIMARY_AGENTS.find(a => {
-          const display = AGENT_DISPLAY[a.name as import("@dalam/shared-types").PrimaryAgentName];
-          return a.name.toLowerCase() === targetAgentName || 
-                 (display && display.label.toLowerCase().includes(targetAgentName));
-        });
-        if (found) {
-          useAgents.getState().setActiveAgent(found.name as import("@dalam/shared-types").PrimaryAgentName);
-          const display = AGENT_DISPLAY[found.name as import("@dalam/shared-types").PrimaryAgentName];
-          chat.injectSystemMessage(`Active agent switched to: ${display?.label ?? found.name} (${found.name})`);
-        } else {
-          chat.injectSystemMessage(`Agent "${targetAgentName}" not found. Type "/agent" to see available options.`);
-        }
-      }
-      setValue("");
-      return;
-    }
-
-    if (trimmed === "/plan") {
-      useAgents.getState().setActiveAgent("plan");
-      chat.injectSystemMessage("Active agent switched to: Plan mode (Read-only analysis)");
+      chat.injectSystemMessage("Mode selection is no longer available. The assistant always has full access to read, write, and execute.");
       setValue("");
       return;
     }
@@ -986,22 +949,23 @@ Add your project's common commands here so Dalam knows how to build:
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {!hasMessages && !isStreaming ? (
           <div className="relative h-full flex flex-col items-center justify-center px-8 -mt-10">
-            {/* Large background A watermark — low opacity, behind everything */}
+            {/* Large background D watermark — low opacity, behind everything */}
             <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center select-none">
               <span
-                className="text-dalam-text-primary"
                 style={{
                   fontFamily: "'Newsreader', 'Iowan Old Style', 'Georgia', serif",
                   fontSize: "min(95vh, 1300px)",
                   fontWeight: 300,
                   lineHeight: 0.85,
                   letterSpacing: "-0.06em",
-                  opacity: 0.07,
                   transform: "translateY(4.5%) rotate(90deg)",
                   userSelect: "none",
+                  background: "linear-gradient(to left, color-mix(in srgb, var(--dalam-text-primary) 0.5%, transparent), color-mix(in srgb, var(--dalam-text-primary) 9.5%, transparent))",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
                 }}
               >
-                A
+                D
               </span>
             </div>
 
@@ -1100,13 +1064,7 @@ Add your project's common commands here so Dalam knows how to build:
                   <textarea
                     ref={mainTextareaRef}
                     className="w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none leading-relaxed overflow-y-auto min-h-[28px] max-h-80"
-                    placeholder={
-                      activeAgentName === "plan"
-                        ? "Describe a task to plan. The agent will explore the codebase, produce a plan, and ask you to approve before executing."
-                        : activeAgentName === "yolo"
-                          ? "YOLO mode — everything runs without permission prompts. Be specific about what you want."
-                          : "Ask Dalam anything, @ to add files, / for commands, $ for skills, # for related conversations"
-                    }
+                    placeholder="Ask Dalam anything, @ to add files, / for commands, $ for skills, # for related conversations"
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
                     onKeyDown={handleKeyDown}
@@ -1137,36 +1095,13 @@ Add your project's common commands here so Dalam knows how to build:
                       {showAgentDropdown && (
                         <div className="absolute bottom-full left-0 mb-1 w-80 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
                           <div className="px-3 py-2 border-b border-dalam-border-primary">
-                            <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted">Primary agent</div>
-                            <div className="text-xs text-dalam-text-muted mt-0.5">Switches the active agent and its permission policy.</div>
+                            <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted">Agent mode</div>
+                            <div className="text-xs text-dalam-text-muted mt-0.5">Full access — reads, writes, executes everything.</div>
                           </div>
-                          {PRIMARY_AGENTS.map((agent) => {
-                            const meta = AGENT_DISPLAY[agent.name as PrimaryAgentName];
-                            const Icon = meta.icon;
-                            return (
-                              <button key={agent.name}
-                                className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-dalam-bg-hover transition-colors ${activeAgentName === agent.name ? "bg-dalam-bg-hover" : ""}`}
-                                onClick={() => { setActiveAgent(agent.name as PrimaryAgentName); setShowAgentDropdown(false); }}>
-                                <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${meta.color}`} />
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-sm text-dalam-text-primary font-medium flex items-center gap-1.5">
-                                    {meta.label}
-                                    {activeAgentName === agent.name && <span className="text-[9px] uppercase text-dalam-accent-primary tracking-wider">active</span>}
-                                  </div>
-                                  <div className="text-xs text-dalam-text-muted mt-0.5">{meta.description}</div>
-                                </div>
-                                {activeAgentName === agent.name && <Check className="w-4 h-4 text-dalam-accent-primary flex-shrink-0 mt-0.5" />}
-                              </button>
-                            );
-                          })}
-                          <div className="border-t border-dalam-border-primary px-3 py-2">
-                            <button
-                              onClick={() => { useSettingsView.getState().open("permissions"); setShowAgentDropdown(false); }}
-                              className="text-xs text-dalam-text-secondary hover:text-dalam-text-primary flex items-center gap-1.5"
-                            >
-                              <Shield className="w-3 h-3" />
-                              Configure permission rules…
-                            </button>
+                          <div className="px-4 py-3 flex items-center gap-3">
+                            <Sparkles className="w-4 h-4 text-amber-400" />
+                            <div className="text-sm text-dalam-text-primary font-medium">Assistant</div>
+                            <span className="text-[9px] uppercase text-dalam-accent-primary tracking-wider">active</span>
                           </div>
                         </div>
                       )}
@@ -1361,32 +1296,10 @@ Add your project's common commands here so Dalam knows how to build:
               <div className="flex items-center gap-2">
                 <AttachFileButton />
                 <div className="relative" ref={followupAgentRef}>
-                  <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-dalam-bg-hover rounded-md transition-colors ${agentInfo.color}`}
-                    onClick={() => { setShowFollowupAgentDropdown((v) => !v); setShowFollowupModelDropdown(false); }}>
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary rounded-md">
                     <AgentIcon className="w-3.5 h-3.5" />
-                    <span>{agentInfo.label}</span>
-                    <ChevronDown className="w-3 h-3" />
-                  </button>
-                  {showFollowupAgentDropdown && (
-                    <div className="absolute bottom-full left-0 mb-1 w-80 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
-                      {PRIMARY_AGENTS.map((agent) => {
-                        const meta = AGENT_DISPLAY[agent.name as PrimaryAgentName];
-                        const Icon = meta.icon;
-                        return (
-                          <button key={agent.name}
-                            className={`w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-dalam-bg-hover transition-colors ${activeAgentName === agent.name ? "bg-dalam-bg-hover" : ""}`}
-                            onClick={() => { setActiveAgent(agent.name as PrimaryAgentName); setShowFollowupAgentDropdown(false); }}>
-                            <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${meta.color}`} />
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm text-dalam-text-primary font-medium">{meta.label}</div>
-                              <div className="text-xs text-dalam-text-muted">{meta.description}</div>
-                            </div>
-                            {activeAgentName === agent.name && <Check className="w-4 h-4 text-dalam-accent-primary flex-shrink-0 mt-0.5" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                    <span>Assistant</span>
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1486,8 +1399,22 @@ function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, provider
     if (!rowEl || !dropdownEl) return;
     const rowRect = rowEl.getBoundingClientRect();
     const dropRect = dropdownEl.getBoundingClientRect();
-    setStyle({ left: dropRect.right + 2, top: dropRect.top + rowRect.top - dropRect.top });
-  }, [hoveredProvider, providerRowRefs, modelRef]);
+    const subH = enabledModels.length * 40 + 8;
+    const vpH = window.innerHeight;
+    let top = rowRect.top;
+    if (top + subH > vpH) top = Math.max(0, vpH - subH - 8);
+    setStyle({ left: dropRect.right + 2, top });
+
+    const scrollEl = dropdownEl;
+    const onScroll = () => {
+      const rr = rowEl.getBoundingClientRect();
+      let t = rr.top;
+      if (t + subH > vpH) t = Math.max(0, vpH - subH - 8);
+      setStyle({ left: dropRect.right + 2, top: t });
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    return () => scrollEl.removeEventListener('scroll', onScroll);
+  }, [hoveredProvider, enabledModels.length]);
 
   if (!p || enabledModels.length === 0) return null;
 

@@ -19,8 +19,6 @@
  * ============================================================
  */
 
-import { logger } from "./logger";
-
 // ─── Types ─────────────────────────────────────────────────
 
 export interface ConnectorMessage {
@@ -96,7 +94,7 @@ const connectorConfigs: Map<string, ConnectorConfig> = new Map();
  */
 export function registerConnector(connector: Connector): void {
   connectors.set(connector.id, connector);
-  logger.info("Connector", `Registered connector: ${connector.name} (${connector.type})`);
+  console.log("Connector", `Registered connector: ${connector.name} (${connector.type})`);
 }
 
 /**
@@ -149,13 +147,13 @@ export class WebhookConnector implements Connector {
     // For now, mark as connected (actual HTTP server requires runtime environment)
     this.connected = true;
     events.onStatusChange("connected");
-    logger.info("Webhook", `Started webhook listener on port ${this.port}${this.path}`);
+    console.log("Webhook", `Started webhook listener on port ${this.port}${this.path}`);
   }
 
   async stop(): Promise<void> {
     this.connected = false;
     this.events?.onStatusChange("disconnected");
-    logger.info("Webhook", "Stopped webhook listener");
+    console.log("Webhook", "Stopped webhook listener");
   }
 
   isConnected(): boolean {
@@ -164,7 +162,7 @@ export class WebhookConnector implements Connector {
 
   async sendMessage(_channelId: string, _content: string): Promise<void> {
     // Webhook is receive-only; sending would require a response URL
-    logger.warn("Webhook", "Webhook connector is receive-only");
+    console.warn("Webhook", "Webhook connector is receive-only");
   }
 
   getStatus(): { connected: boolean; error?: string } {
@@ -180,7 +178,7 @@ export class WebhookConnector implements Connector {
       const headers = (payload.headers ?? {}) as Record<string, unknown>;
       const token = headers["x-auth-token"] ?? payload.token;
       if (token !== this.authToken) {
-        logger.warn("Webhook", "Invalid auth token");
+        console.warn("Webhook", "Invalid auth token");
         return;
       }
     }
@@ -234,7 +232,7 @@ export class FileWatcherConnector implements Connector {
     }
 
     events.onStatusChange("connected");
-    logger.info("FileWatcher", `Started watching ${this.watchPaths.length} paths (poll every ${this.pollIntervalMs}ms)`);
+    console.log("FileWatcher", `Started watching ${this.watchPaths.length} paths (poll every ${this.pollIntervalMs}ms)`);
   }
 
   private async poll(): Promise<void> {
@@ -264,7 +262,7 @@ export class FileWatcherConnector implements Connector {
         }
       }
     } catch (err) {
-      logger.warn("FileWatcher", "Poll error", { error: String(err) });
+      console.warn("[FileWatcher] Poll error:", err);
     }
   }
 
@@ -322,7 +320,7 @@ export class CronConnector implements Connector {
       if (job.enabled) this.scheduleJob(job);
     }
 
-    logger.info("Cron", `Started with ${this.jobs.filter(j => j.enabled).length} active jobs`);
+    console.log("Cron", `Started with ${this.jobs.filter(j => j.enabled).length} active jobs`);
   }
 
   async stop(): Promise<void> {
@@ -360,7 +358,7 @@ export class CronConnector implements Connector {
     // Supports: "* * * * *", "30 9 * * 1-5" (weekdays 9:30), "0 12 * * 0" (Sundays noon)
     const parts = job.schedule.split(" ");
     if (parts.length !== 5) {
-      logger.warn("Cron", `Invalid cron expression for job ${job.name}: ${job.schedule}`);
+      console.warn("Cron", `Invalid cron expression for job ${job.name}: ${job.schedule}`);
       return;
     }
 
@@ -493,7 +491,7 @@ export class TelegramConnector implements Connector {
     this.events = events;
     if (!this.botToken) {
       events.onStatusChange("error");
-      logger.warn("Telegram", "No bot token configured");
+      console.warn("Telegram", "No bot token configured");
       return;
     }
     // Validate bot token by calling getMe
@@ -501,7 +499,7 @@ export class TelegramConnector implements Connector {
       const resp = await fetch(`https://api.telegram.org/bot${this.botToken}/getMe`);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.description || "Invalid token");
-      logger.info("Telegram", `Connected as @${data.result.username}`);
+      console.log("Telegram", `Connected as @${data.result.username}`);
       this.connected = true;
       events.onStatusChange("connected");
       // Start polling for updates
@@ -509,7 +507,7 @@ export class TelegramConnector implements Connector {
       void this.poll(); // immediate first poll
     } catch (err) {
       events.onStatusChange("error");
-      logger.error("Telegram", "Failed to connect", { error: String(err) });
+      console.error("Telegram", "Failed to connect", { error: String(err) });
     }
   }
 
@@ -538,7 +536,7 @@ export class TelegramConnector implements Connector {
         }),
       });
     } catch (err) {
-      logger.error("Telegram", "Failed to send message", { error: String(err) });
+      console.error("Telegram", "Failed to send message", { error: String(err) });
     }
   }
 
@@ -568,7 +566,7 @@ export class TelegramConnector implements Connector {
         this.events.onMessage(message);
       }
     } catch (err) {
-      logger.warn("Telegram", "Poll error", { error: String(err) });
+      console.warn("[Telegram] Poll error:", err);
     }
   }
 }
@@ -602,7 +600,7 @@ export class WhatsAppConnector implements Connector {
     this.events = events;
     if (!this.bridgeUrl) {
       events.onStatusChange("error");
-      logger.warn("WhatsApp", "No bridge URL configured");
+      console.warn("WhatsApp", "No bridge URL configured");
       return;
     }
     // Check bridge health
@@ -613,13 +611,13 @@ export class WhatsAppConnector implements Connector {
       if (!resp.ok) throw new Error(`Bridge returned ${resp.status}`);
       this.connected = true;
       events.onStatusChange("connected");
-      logger.info("WhatsApp", "Connected to bridge");
+      console.log("WhatsApp", "Connected to bridge");
       // Poll for new messages
       this.pollTimer = setInterval(() => void this.poll(), 3000);
       void this.poll();
     } catch (err) {
       events.onStatusChange("error");
-      logger.error("WhatsApp", "Failed to connect to bridge", { error: String(err) });
+      console.error("WhatsApp", "Failed to connect to bridge", { error: String(err) });
     }
   }
 
@@ -645,7 +643,7 @@ export class WhatsAppConnector implements Connector {
         body: JSON.stringify({ chatId, content }),
       });
     } catch (err) {
-      logger.error("WhatsApp", "Failed to send message", { error: String(err) });
+      console.error("WhatsApp", "Failed to send message", { error: String(err) });
     }
   }
 
@@ -677,7 +675,7 @@ export class WhatsAppConnector implements Connector {
         this.events.onMessage(message);
       }
     } catch (err) {
-      logger.warn("WhatsApp", "Poll error", { error: String(err) });
+      console.warn("[WhatsApp] Poll error:", err);
     }
   }
 }
@@ -705,7 +703,7 @@ function saveConnectorConfigs(configs: ConnectorConfig[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(configs));
   } catch {
-    logger.warn("Connector", "Failed to save connector configs");
+    console.warn("Connector", "Failed to save connector configs");
   }
 }
 
@@ -761,7 +759,7 @@ export async function initializeConnectors(
           });
           break;
         default:
-          logger.warn("Connector", `Unknown connector type: ${config.type}`);
+          console.warn("Connector", `Unknown connector type: ${config.type}`);
           continue;
       }
 
@@ -772,7 +770,7 @@ export async function initializeConnectors(
         onStatusChange: (status) => onStatusChange(config.id, status),
       });
     } catch (err) {
-      logger.error("Connector", `Failed to start connector ${config.name}`, { error: String(err) });
+      console.error("Connector", `Failed to start connector ${config.name}`, { error: String(err) });
     }
   }
 }
@@ -785,7 +783,7 @@ export async function shutdownConnectors(): Promise<void> {
     try {
       await connector.stop();
     } catch (err) {
-      logger.warn("Connector", `Failed to stop connector ${connector.name}`, { error: String(err) });
+      console.warn("Connector", `Failed to stop connector ${connector.name}`, { error: String(err) });
     }
   }
   connectors.clear();

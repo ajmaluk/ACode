@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useAgents, useTerminal } from "@/store/useAppStore";
+import { useUI, useChat, useWorkspace, useSettingsView, useSettings, useTerminal } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { modKey } from "@/lib/platform";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import {
-  ChevronLeft, ChevronRight, PanelLeft, PanelRight,
+  ChevronLeft, ChevronRight, PanelRight,
   FolderOpen, Code2, Sparkles, TerminalSquare, FolderTree, Settings,
   Brain, Sun, Moon, Monitor,
 } from "lucide-react";
@@ -13,7 +13,7 @@ import {
 
 
 export function TopNav() {
-  const { sidebarOpen, toggleSidebar, rightPanelOpen, toggleRightPanel } = useUI();
+  const { sidebarOpen, rightPanelOpen, toggleRightPanel } = useUI();
   const { goBackChat, goForwardChat, chatHistory, chatHistoryIdx, messages, session } = useChat();
   const { activeWorkspaceId, workspaces, openWorkspace } = useWorkspace();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
@@ -89,20 +89,8 @@ export function TopNav() {
 
   return (
     <div className="h-9 flex items-center bg-dalam-bg-secondary flex-shrink-0 select-none">
-      {/* Left section: sidebar toggle, back, forward, new task */}
+      {/* Left section: back, forward */}
       <div className="flex items-center gap-0.5 px-1.5">
-        <Tooltip content={sidebarOpen ? `Hide sidebar (${mod}B)` : `Show sidebar (${mod}B)`} side="bottom">
-          <button
-            className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
-              sidebarOpen
-                ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
-                : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
-            }`}
-            onClick={toggleSidebar}
-          >
-            <PanelLeft className="w-3.5 h-3.5" />
-          </button>
-        </Tooltip>
         <Tooltip content={`Back (${mod}[)`} side="bottom">
           <button
             className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"

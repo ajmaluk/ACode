@@ -15,8 +15,6 @@
  * ============================================================
  */
 
-import type { ChatMessage } from "@dalam/shared-types";
-
 // ─── Memory categories (Claude Code Auto Memory pattern) ───
 export type MemoryCategory =
   | "user"        // preferences, role, style
@@ -75,6 +73,8 @@ export const CTX = {
   REBUILD_BUDGET:      65_000,  // MiMo: total injected content on rebuild
   CHECKPOINT_TRIGGERS: [0.20, 0.45, 0.70] as const,
   CHECKPOINT_HARD:          0.85, // hard overflow: force compaction
+  TIER1_PRUNE_RATIO:        0.50, // Tier 1: lightweight tool output pruning (no LLM)
+  TIER2_COMPACT_RATIO:      0.85, // Tier 2: full LLM summarization compaction
   MEMORY_INDEX_MAX_LINES: 200,   // Claude Code MEMORY.md cap
   MEMORY_SEARCH_LIMIT:     20,   // max results per search
   MEMORY_BUDGET:           500,   // max active memories before auto-prune
@@ -84,32 +84,6 @@ export const CTX = {
   DREAM_MIN_SESSIONS:       5,   // at least 5 new sessions
   DREAM_CYCLE_DAYS:         7,   // weekly consolidation
 } as const;
-
-// ─── Context window status ───
-export interface ContextWindow {
-  usable: number;
-  used: number;
-  percentUsed: number;
-  shouldPrune: boolean;
-  shouldCheckpoint: boolean;
-  shouldCompact: boolean;
-}
-
-// ─── Injected context for session resume ───
-export interface InjectedContext {
-  checkpoint: string;
-  projectMemory: string;
-  taskProgress: string;
-  scratchNotes: string;
-  recentMessages: string;
-  totalTokens: number;
-}
-
-// ─── Memory search result ───
-export interface MemorySearchResult {
-  entry: MemoryEntry;
-  score: number;
-}
 
 // ─── Dream agent report ───
 export interface DreamReport {
@@ -123,10 +97,3 @@ export interface DreamReport {
   finalEntries: number;
 }
 
-// ─── Extended ChatMessage with memory fields ───
-// Uses type intersection, not a new type — preserves ChatMessage compatibility
-export type MemoryChatMessage = ChatMessage & {
-  isPruned?: boolean;
-  isCompactionSummary?: boolean;
-  tokenCount?: number;
-};

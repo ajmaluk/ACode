@@ -96,6 +96,8 @@ export function QuestionDialog() {
       <div
         ref={containerRef}
         tabIndex={-1}
+        role="dialog"
+        aria-label={request.question}
         className="w-[760px] max-w-[96vw] surface shadow-2xl outline-none overflow-hidden"
         onKeyDown={(e) => e.stopPropagation()}
       >
@@ -191,7 +193,7 @@ export function QuestionDialog() {
                   resolve(null);
                 }
               }}
-              className="px-3 py-1.5 text-xs rounded-md bg-white text-black hover:opacity-90 transition-opacity font-medium"
+              className="px-3 py-1.5 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
             >
               Submit
             </button>

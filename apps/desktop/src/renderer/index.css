@@ -63,6 +63,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   /* Surfaces (clean white — matching Z Code) */
   --dalam-bg-primary: #ffffff;
   --dalam-bg-secondary: #f8f8f8;

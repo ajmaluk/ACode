@@ -25,12 +25,13 @@ import type {
 } from "@dalam/shared-types";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
+import { mcpHttpSessions } from "@/lib/dalamAPI";
 import type { SubAgentState } from "@dalam/shared-types";
-import { startRecording, stopRecording, recordUserMessage, recordAssistantMessage, recordSystemMessage, recordToolResult } from "@/lib/trajectoryRecorder";
+import { startRecording, stopRecording, recordUserMessage, recordAssistantMessage } from "@/lib/trajectoryRecorder";
 import { basename, toPosix, joinPath } from "@/lib/pathUtils";
-import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand, autoSelectAgent, recordAgentSelection } from "@/lib/agents";
+import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
-import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, buildCompactionPrompt, parseContextWindow } from "@/lib/contextManager";
+import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, tier1PruneToolOutputs, buildCompactionPrompt, parseContextWindow, CTX } from "@/lib/contextManager";
 
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
@@ -114,6 +115,10 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(/>\]\s*<[^>]*>?\[</g, "");
   result = result.replace(/\]>\s*\[</g, "");
   result = result.replace(/<\]?\w+\[>?\]?\[?/g, "");
+  // Strip common model output tags that aren't tool calls
+  result = result.replace(/<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)[^>]*>/gi, "");
+  // Strip orphan closing tags for the above
+  result = result.replace(/<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)\s*>/gi, "");
   // Clean up excessive whitespace left behind
   result = result.replace(/\n{3,}/g, "\n\n").trim();
   return result;
@@ -439,34 +444,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   async loadWorkspace() {
-    set({ loading: true });
-    try {
-      const api = createDalamAPI();
-      const path = await api.system.openDirectoryPicker();
-      if (!path) { set({ loading: false }); return; }
-      await initWorkspaceMemory(api, path);
-      const tree = await api.fs.listDir(path);
-      const workspace: Workspace = {
-        id: "ws-" + toPosix(path),
-        path,
-        name: basename(path) || "workspace",
-        tasks: [],
-      };
-      const newWorkspaces = [...get().workspaces.filter((w) => w.path !== path), workspace];
-      set({
-        workspaces: newWorkspaces,
-        activeWorkspaceId: workspace.id,
-        fileTree: tree,
-        openTabs: [],
-        activeFilePath: null,
-        loading: false,
-      });
-      savePersistedWorkspaces(newWorkspaces, workspace.id);
-      await loadWorkspaceConfigAndSessions(path);
-    } catch (err) {
-      set({ loading: false });
-      console.error("Failed to load workspace:", err);
-    }
+    return get().openWorkspace();
   },
 
   setActiveWorkspace(id) {
@@ -475,6 +453,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const ws = get().workspaces.find((w) => w.id === id);
     if (ws) {
       void loadWorkspaceConfigAndSessions(ws.path);
+      // Also refresh the file tree so @ autocomplete works for the new workspace
+      void get().loadFileTree(ws.path);
     }
   },
   removeWorkspace(id) {
@@ -890,6 +870,11 @@ const _lastCompactionAttempt: Record<string, number> = {};
 const COMPACTION_THROTTLE_MS = 30_000;
 const COMPACTION_MIN_MESSAGES = 10;
 
+// Two-tier compaction tracking (Hermes pre-emptive pattern)
+// Tier 1: lightweight tool output pruning at 50% context usage (no LLM)
+// Tier 2: full LLM summarization at 85% context usage
+const _compactionTier: Record<string, number> = {}; // sessionId → last tier applied (0 = none, 1 = pruned, 2 = compacted)
+
 // Anti-thrashing: track compaction effectiveness to skip ineffective compactions.
 // Inspired by Hermes' ineffective compression detection: if savings are below
 // a minimum threshold, skip future compactions for this session temporarily.
@@ -930,6 +915,7 @@ function _createSafetyTimer(
     get()._autoRemoveTimers.forEach((t) => clearTimeout(t));
     set({
       isStreaming: false,
+      streamingStartedAt: null,
       _sendInProgress: false,
       _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
       streamingContent: "",
@@ -991,6 +977,15 @@ function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Recor
   const history = _toolCallHistory[sessionId] ?? [];
   history.push({ name: toolName, args: JSON.stringify(toolArgs) });
   _toolCallHistory[sessionId] = history.slice(-50);
+  // Cap _toolFailureCounts to prevent unbounded growth across sessions
+  const failures = _toolFailureCounts[sessionId] ?? {};
+  const keys = Object.keys(failures);
+  if (keys.length > 100) {
+    // Remove oldest entries (keep most recent 50)
+    const toRemove = keys.slice(0, keys.length - 50);
+    for (const k of toRemove) delete failures[k];
+    _toolFailureCounts[sessionId] = failures;
+  }
 }
 
 function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
@@ -1000,20 +995,10 @@ function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record
   _toolFailureCounts[sessionId] = failures;
 }
 
-/** Reset all failure counters for a tool name (called on successful execution). */
-function _resetToolFailuresForName(sessionId: string, toolName: string) {
-  const failures = _toolFailureCounts[sessionId] ?? {};
-  for (const key of Object.keys(failures)) {
-    if (key.startsWith(toolName + ":")) {
-      delete failures[key];
-    }
-  }
-  _toolFailureCounts[sessionId] = failures;
-}
-
 function _clearDoomLoopState(sessionId: string) {
   delete _toolCallHistory[sessionId];
   delete _toolFailureCounts[sessionId];
+  delete _contextOverflowRetries[sessionId];
 }
 
 // ============================================================================
@@ -1216,11 +1201,38 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
         const data = JSON.parse(content);
         // Guard: bail if a different workspace loaded while we were reading
         if (_workspaceLoadPath !== workspacePath) return;
+        // Guard: if a new chat was just initiated, don't overwrite the fresh state
+        if (useChat.getState()._suppressSessionRestore) {
+          // Still load chatSessions for this workspace — merge with existing sessions
+          const existingSessions = useChat.getState().chatSessions.filter(
+            (s) => s.workspacePath !== workspacePath
+          );
+          const newSessions = data.chatSessions || [];
+          const existingIds = new Set(existingSessions.map((s) => s.id));
+          const uniqueNewSessions = newSessions.filter((s: { id: string }) => !existingIds.has(s.id));
+          const chatState = useChat.getState();
+          useChat.setState({
+            chatSessions: [...existingSessions, ...uniqueNewSessions],
+            sessionMessages: { ...chatState.sessionMessages, ...(data.sessionMessages || {}) },
+            sessionVersions: { ...chatState.sessionVersions, ...(data.sessionVersions || {}) },
+            compactionSummaries: { ...chatState.compactionSummaries, ...(data.compactionSummaries || {}) },
+          });
+          return;
+        }
+        // Merge sessions: replace this workspace's sessions, keep others intact
+        const currentSessions = useChat.getState().chatSessions.filter(
+          (s) => s.workspacePath !== workspacePath
+        );
+        const newSessions = data.chatSessions || [];
+        // Deduplicate by session ID to prevent duplicates from concurrent loads
+        const existingIds = new Set(currentSessions.map((s) => s.id));
+        const uniqueNewSessions = newSessions.filter((s: { id: string }) => !existingIds.has(s.id));
+        const chatState2 = useChat.getState();
         useChat.setState({
-          chatSessions: data.chatSessions || [],
-          sessionMessages: data.sessionMessages || {},
-          sessionVersions: data.sessionVersions || {},
-          compactionSummaries: data.compactionSummaries || {},
+          chatSessions: [...currentSessions, ...uniqueNewSessions],
+          sessionMessages: { ...chatState2.sessionMessages, ...(data.sessionMessages || {}) },
+          sessionVersions: { ...chatState2.sessionVersions, ...(data.sessionVersions || {}) },
+          compactionSummaries: { ...chatState2.compactionSummaries, ...(data.compactionSummaries || {}) },
         });
         const lastSession = data.chatSessions
           ? [...data.chatSessions].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0]
@@ -1258,11 +1270,12 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
           compactionSummaries: {},
         };
         await api.fs.writeFile(sessionsPath, JSON.stringify(emptySessions, null, 2));
+        // Remove sessions for this workspace, keep others intact
+        const otherSessions = useChat.getState().chatSessions.filter(
+          (s) => s.workspacePath !== workspacePath
+        );
         useChat.setState({
-          chatSessions: [],
-          sessionMessages: {},
-          sessionVersions: {},
-          compactionSummaries: {},
+          chatSessions: otherSessions,
           session: null,
           messages: [],
         });
@@ -1351,7 +1364,7 @@ async function _doSaveWorkspaceData() {
 
 export const useAgents = create<AgentStoreState>((set, get) => ({
   agents: ALL_AGENTS,
-  activeAgentName: "build",
+  activeAgentName: "yolo" as PrimaryAgentName,
   userRules: [],
   enabledSkills: loadEnabledSkills(),
   selectedSubagent: null,
@@ -1389,13 +1402,12 @@ export const useAgents = create<AgentStoreState>((set, get) => ({
     set({ userRules: [] });
   },
   toggleSkill(name) {
-    set((s) => {
-      const next = new Set(s.enabledSkills);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      saveEnabledSkills(next);
-      return { enabledSkills: next };
-    });
+    const prev = get().enabledSkills;
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    set({ enabledSkills: next });
+    saveEnabledSkills(next);
   },
   selectSubagent(name) {
     set({ selectedSubagent: name });
@@ -1427,6 +1439,8 @@ type ChatState = {
   streamingContent: string;
   thinkingContent: string;
   isStreaming: boolean;
+  /** Timestamp (ms) when the current streaming response started. Used by WorkingTimer. */
+  streamingStartedAt: number | null;
   activeAgentName: PrimaryAgentName;
   selectedModelId: string;
   todos: TodoItem[];
@@ -1477,6 +1491,8 @@ type ChatState = {
   goForwardChat: () => boolean;
   _clearAutoRemoveTimers: () => void;
   reset: () => void;
+  /** Set to true by newChat() to prevent async session restore from overwriting fresh state */
+  _suppressSessionRestore: boolean;
   setActiveSession: (id: string | null) => void;
   renameSession: (id: string, title: string) => void;
   setSessionStatus: (id: string, status: ChatSessionSummary["status"]) => void;
@@ -1498,7 +1514,8 @@ export const useChat = create<ChatState>((set, get) => ({
   streamingContent: "",
   thinkingContent: "",
   isStreaming: false,
-  activeAgentName: "build",
+  streamingStartedAt: null,
+  activeAgentName: "yolo" as PrimaryAgentName,
   selectedModelId: "",
   todos: [],
   taskPlan: null,
@@ -1523,6 +1540,7 @@ export const useChat = create<ChatState>((set, get) => ({
   _deltaBatchBuffer: "",
   _deltaBatchTimer: null,
   doomLoopWarningCount: 0,
+  _suppressSessionRestore: false,
   subAgents: [],
   _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
   _clearAutoRemoveTimers() {
@@ -1662,6 +1680,7 @@ export const useChat = create<ChatState>((set, get) => ({
       sessionMessages: { ...get().sessionMessages, [sessionId]: [] },
       sessionAgentName: { ...get().sessionAgentName, [sessionId]: activeAgentName },
       subAgents: [],
+      _suppressSessionRestore: false,
     });
     savePersistedSessionSummaries(get().chatSessions);
     savePersistedMessages(get().sessionMessages);
@@ -1677,6 +1696,20 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear delta batch timer
     const deltaTimer = get()._deltaBatchTimer;
     if (deltaTimer) clearTimeout(deltaTimer);
+    // Flush pending delta batch buffer BEFORE abort signal so the message-end
+    // handler sees the flushed content and persists it in the assistant message.
+    const buf = get()._deltaBatchBuffer;
+    if (buf) {
+      const dt = get()._deltaBatchTimer;
+      if (dt) clearTimeout(dt);
+      set((s) => ({
+        streamingContent: s.streamingContent + buf,
+        _deltaBatchBuffer: "",
+        _deltaBatchTimer: null,
+      }));
+    }
+    // Clear all auto-remove timers to prevent leaked timers firing on stale state
+    get()._clearAutoRemoveTimers();
     try {
       await api.agent.abort(sessionId);
     } finally {
@@ -1690,6 +1723,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if (isStillOurSession) {
         set({
           isStreaming: false,
+          streamingStartedAt: null,
           _sendInProgress: false,
           streamingContent: "",
           thinkingContent: "",
@@ -1711,17 +1745,6 @@ export const useChat = create<ChatState>((set, get) => ({
     if (isStreaming || _sendInProgress) return;
     set({ _sendInProgress: true });
 
-    // Auto-select agent based on prompt content (evolver-inspired adaptive routing)
-    // Only auto-select if user hasn't explicitly chosen an agent for this session
-    const currentAgent = useAgents.getState().activeAgentName;
-    const selectedAgent = autoSelectAgent(content, currentAgent);
-    if (selectedAgent !== currentAgent && !get()._userSelectedAgent) {
-      useAgents.getState().setActiveAgent(selectedAgent);
-    }
-    // Note: _userSelectedAgent is NOT reset here. It persists for the session
-    // so that user's explicit agent choice isn't overridden by auto-select on
-    // subsequent messages. It is reset when starting a new session.
-
     let { session } = get();
     if (!session) {
       const targetWs = useWorkspace.getState().activeWorkspaceId
@@ -1731,8 +1754,7 @@ export const useChat = create<ChatState>((set, get) => ({
         : undefined;
       try {
         const agentName = useAgents.getState().activeAgentName;
-        const validModes = ["build", "plan", "yolo"];
-        const sessionMode = validModes.includes(agentName) ? agentName as import("@dalam/shared-types").AgentSessionMode : "build" as import("@dalam/shared-types").AgentSessionMode;
+        const sessionMode = "yolo" as import("@dalam/shared-types").AgentSessionMode;
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
         console.error("Failed to start session:", err);
@@ -1758,9 +1780,10 @@ export const useChat = create<ChatState>((set, get) => ({
       timestamp: Date.now(),
       ...(pendingAttachments.length > 0 ? { attachments: pendingAttachments } : {}),
     };
-    set({
+    set((s) => ({
       messages: [...messages, userMsg],
       isStreaming: true,
+      streamingStartedAt: Date.now(),
       streamingContent: "",
       thinkingContent: "",
       pendingToolCalls: [],
@@ -1768,25 +1791,25 @@ export const useChat = create<ChatState>((set, get) => ({
       pendingAttachments: [],
       restoredVersionId: null,
       preRestoreMessages: null,
-      chatSessions: get().chatSessions.map((s) =>
-        s.id === session!.id
+      chatSessions: s.chatSessions.map((cs) =>
+        cs.id === session!.id
           ? {
-              ...s,
+              ...cs,
               status: "running",
               lastActivityAt: Date.now(),
               messageCount: messages.length + 1,
               preview: content.length > 60 ? content.slice(0, 57) + "…" : content,
               title:
-                s.title && s.title !== "New task"
-                  ? s.title
+                cs.title && cs.title !== "New task"
+                  ? cs.title
                   : content.length > 50
                     ? content.slice(0, 47) + "…"
                     : content,
           }
-          : s
+          : cs
       ),
-      sessionMessages: { ...get().sessionMessages, [session!.id]: [...(get().sessionMessages[session!.id] ?? []), userMsg] },
-    });
+      sessionMessages: { ...s.sessionMessages, [session!.id]: [...(s.sessionMessages[session!.id] ?? []), userMsg] },
+    }));
     // Record user message in trajectory
     recordUserMessage(session.id, content);
         // Save version AFTER user message is added so the snapshot includes it
@@ -1813,7 +1836,7 @@ export const useChat = create<ChatState>((set, get) => ({
           console.warn(`[Chat] Context overflow in sendMessage - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
           const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
           const infoSM = sessionId ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), infoMsg] } : get().sessionMessages;
-          set({ isStreaming: false, messages: [...get().messages, infoMsg], sessionMessages: infoSM });
+          set({ isStreaming: false, streamingStartedAt: null, messages: [...get().messages, infoMsg], sessionMessages: infoSM });
           if (sessionId) savePersistedMessages(infoSM);
           const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
           if (lastUserMsg) {
@@ -1823,7 +1846,7 @@ export const useChat = create<ChatState>((set, get) => ({
                 for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { msgs.splice(i, 1); break; } }
                 const sid = s.activeSessionId;
                 const msgIds = new Set(msgs.map((m) => m.id));
-                const result: Partial<ChatState> = { isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
+                const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
                 if (sid) {
                   result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
                 }
@@ -1832,8 +1855,11 @@ export const useChat = create<ChatState>((set, get) => ({
               // Re-read lastUserMsg inside callback to avoid stale closure
               const currentMsgs = get().messages;
               const retryMsg = [...currentMsgs].reverse().find((m) => m.role === "user");
+              const retrySessionId = sessionId; // capture before timeout
               if (retryMsg) {
-                setTimeout(() => { void get().sendMessage(retryMsg.content); }, 500);
+                // Set _sendInProgress to prevent concurrent sends during the delay
+                set({ _sendInProgress: true });
+                setTimeout(() => { if (get().activeSessionId === retrySessionId) void get().sendMessage(retryMsg.content); }, 500);
               } else {
                 // All messages were removed by compaction — inform the user
                 const systemMsg: ChatMessage = {
@@ -1849,7 +1875,7 @@ export const useChat = create<ChatState>((set, get) => ({
       _deltaBatchTimer: null,
                 }));
               }
-            }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
+            }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
             // Don't reset _sendInProgress here — it will be reset when the retry completes or fails
             return;
           }
@@ -1874,6 +1900,7 @@ export const useChat = create<ChatState>((set, get) => ({
         if (dt) clearTimeout(dt);
         return {
           isStreaming: false,
+          streamingStartedAt: null,
           streamingContent: "",
           thinkingContent: "",
           pendingToolCalls: [],
@@ -1944,6 +1971,7 @@ export const useChat = create<ChatState>((set, get) => ({
           // They're only cleared when starting a completely new chat
           ...(hasUnresolved ? {} : { pendingToolCalls: [] }),
           isStreaming: true,
+          streamingStartedAt: Date.now(),
         }));
         // Re-create safety timer for subsequent agent loop turns (tool results
         // delivered → message-end clears the timer → next turn needs protection).
@@ -1956,32 +1984,30 @@ export const useChat = create<ChatState>((set, get) => ({
       case "message-delta":
         // Batch message-delta events to reduce React re-renders during fast streaming.
         // Accumulate content in buffer, flush every 50ms or on non-delta events.
+        // Uses functional set() to atomically read+clear the buffer, preventing race conditions.
         set((s) => {
           const newBuffer = s._deltaBatchBuffer + event.content;
           if (s._deltaBatchTimer) {
             // Timer already running — just accumulate
             return { _deltaBatchBuffer: newBuffer };
           }
-          // Start a new flush timer
+          // Start a new flush timer — use functional set to atomically read+flush buffer
           const timer = setTimeout(() => {
-            const state = get();
-            const buf = state._deltaBatchBuffer;
-            if (buf) {
+            set((state) => {
+              const buf = state._deltaBatchBuffer;
+              if (!buf) return { _deltaBatchTimer: null };
               const newContent = state.streamingContent + buf;
               if (newContent.length > 200000) {
                 const trimmed = newContent.slice(-200000);
                 const spaceIdx = trimmed.indexOf(" ");
-                set({
+                return {
                   streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed,
                   _deltaBatchBuffer: "",
                   _deltaBatchTimer: null,
-                });
-              } else {
-                set({ streamingContent: newContent, _deltaBatchBuffer: "", _deltaBatchTimer: null });
+                };
               }
-            } else {
-              set({ _deltaBatchTimer: null });
-            }
+              return { streamingContent: newContent, _deltaBatchBuffer: "", _deltaBatchTimer: null };
+            });
           }, 50);
           return { _deltaBatchBuffer: newBuffer, _deltaBatchTimer: timer };
         });
@@ -2160,7 +2186,7 @@ export const useChat = create<ChatState>((set, get) => ({
           break;
         }
 
-        const planComplete = useAgents.getState().activeAgentName === "plan" && finalContent.includes("[PLAN_COMPLETE]");
+        const planComplete = false; // Plan mode removed
         const currentTaskPlan = get().taskPlan;
         const currentTaskPlanSummary = get().taskPlanSummary;
         // Find the last user message to group this assistant turn under
@@ -2191,6 +2217,7 @@ export const useChat = create<ChatState>((set, get) => ({
           streamingContent: "",
           thinkingContent: "",
           isStreaming: false,
+          streamingStartedAt: null,
           _sendInProgress: false,
           _pendingChanges: [],
           pendingToolCalls: [],
@@ -2212,11 +2239,6 @@ export const useChat = create<ChatState>((set, get) => ({
         savePersistedSessionSummaries(get().chatSessions);
         if (sessionId) {
           void get().compactSessionHistory(sessionId);
-          // Record successful agent selection for learning
-          const lastUserMsg = messages.filter(m => m.role === "user").pop();
-          if (lastUserMsg) {
-            recordAgentSelection(lastUserMsg.content, useAgents.getState().activeAgentName, true);
-          }
           // Post-turn memory consolidation: async memory sync after each conversation turn
           // Inspired by Hermes memory lifecycle — extracts key facts from the conversation
           // and persists them to the memory store for future reference.
@@ -2307,7 +2329,11 @@ export const useChat = create<ChatState>((set, get) => ({
                 ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
               });
             }
-          }).catch((err) => console.error("Permission dialog error:", err));
+          }).catch((err) => {
+            console.error("Permission dialog error:", err);
+            // If the dialog was dismissed/closed, deny the tool to unblock waitForToolApproval
+            get().resolveToolApproval(tool.id, "denied");
+          });
         } else {
           get().resolveToolApproval(tool.id, "approved");
         }
@@ -2659,7 +2685,13 @@ export const useChat = create<ChatState>((set, get) => ({
               ...(event.command ? { command: event.command } : {}),
             });
           }
-        }).catch((err) => console.error("Permission dialog error:", err));
+        }).catch((err) => {
+          console.error("Permission dialog error:", err);
+          // If the dialog was dismissed/closed, deny the tool to unblock the agent loop
+          if (event.toolCallId) {
+            get().resolveToolApproval(event.toolCallId, "denied");
+          }
+        });
         break;
       }
       case "ask-question": {
@@ -2689,7 +2721,7 @@ export const useChat = create<ChatState>((set, get) => ({
                   for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { msgs.splice(i, 1); break; } }
                   const sid = s.activeSessionId;
                   const msgIds = new Set(msgs.map((m) => m.id));
-                  const result: Partial<ChatState> = { isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
+                const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
                   if (sid) {
                     result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
                   }
@@ -2698,7 +2730,9 @@ export const useChat = create<ChatState>((set, get) => ({
                 // Re-read inside callback to avoid stale closure
                 const retryMsg = [...get().messages].reverse().find((m) => m.role === "user");
                 if (retryMsg) {
-                  setTimeout(() => { void get().sendMessage(retryMsg.content); }, 500);
+                  const retrySid = sessionId;
+                  set({ _sendInProgress: true });
+                  setTimeout(() => { if (get().activeSessionId === retrySid) void get().sendMessage(retryMsg.content); }, 500);
                 } else {
                   const sysMsg: ChatMessage = {
                     id: "sys-" + Math.random().toString(36).slice(2, 9),
@@ -2713,7 +2747,7 @@ export const useChat = create<ChatState>((set, get) => ({
   _deltaBatchTimer: null,
                   }));
                 }
-              }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
+              }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
               break;
             }
           } else { delete _contextOverflowRetries[sessionId]; }
@@ -2771,8 +2805,11 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on reset
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
-      get()._clearAutoRemoveTimers();
-      _pendingResolutions.clear();
+    const deltaTimer = get()._deltaBatchTimer;
+    if (deltaTimer) clearTimeout(deltaTimer);
+    get()._clearAutoRemoveTimers();
+    _pendingResolutions.clear();
+    _toolCallResolvers.clear();
     set({
       session: null,
       messages: [],
@@ -2789,6 +2826,8 @@ export const useChat = create<ChatState>((set, get) => ({
       _safetyTimer: null,
       _sendInProgress: false,
       subAgents: [],
+      _deltaBatchBuffer: "",
+      _deltaBatchTimer: null,
     });
   },
 
@@ -2797,6 +2836,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (timer) clearTimeout(timer);
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
+    _toolCallResolvers.clear();
     const { session, abort, sessionMessages, sessionAgentName, isStreaming } = get();
     // Clean up stream listener for the old session before switching
     if (session) {
@@ -2804,13 +2844,14 @@ export const useChat = create<ChatState>((set, get) => ({
       api.agent.cleanupStream(session.id);
     }
     // Only abort if the current session is actually streaming
-    if (session && isStreaming) abort(session.id);
+    if (session && isStreaming) void abort(session.id).catch(() => {});
     if (!id) {
       if (useUI.getState().rightPanelTab === "terminal") {
         useUI.getState().setRightPanelOpen(false);
       }
       set({
         activeSessionId: null,
+        session: null,
         messages: [],
         isStreaming: false,
         streamingContent: "",
@@ -2822,17 +2863,18 @@ export const useChat = create<ChatState>((set, get) => ({
         preRestoreMessages: null,
         taskPlan: null,
         taskPlanSummary: null,
+        planApproval: null,
         _sendInProgress: false,
-      
-      subAgents: [],
-      chatHistory: [],
-      chatHistoryIdx: -1,
-      doomLoopWarningCount: 0,
+        _suppressSessionRestore: false,
+        subAgents: [],
+        chatHistory: [],
+        chatHistoryIdx: -1,
+        doomLoopWarningCount: 0,
     });
       return;
     }
     const messages = sessionMessages[id] ?? [];
-    const agent = sessionAgentName[id] ?? "build";
+    const agent = sessionAgentName[id] ?? "yolo";
     useAgents.getState().setActiveAgent(agent);
     // Reconstruct the AgentSession object from stored data
     const chatSession = get().chatSessions.find((cs) => cs.id === id);
@@ -2871,104 +2913,91 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlanSummary: null,
       _sendInProgress: false,
       subAgents: [],
+      _suppressSessionRestore: false,
+      chatHistory: [],
+      chatHistoryIdx: -1,
     });
   },
 
   renameSession(id, title) {
-    set((s) => {
-      const newSessions = s.chatSessions.map((cs) =>
+    set((s) => ({
+      chatSessions: s.chatSessions.map((cs) =>
         cs.id === id ? { ...cs, title } : cs
-      );
-      savePersistedSessionSummaries(newSessions);
-      return { chatSessions: newSessions };
-    });
+      ),
+    }));
+    savePersistedSessionSummaries(get().chatSessions);
   },
 
   setSessionStatus(id, status) {
-    set((s) => {
-      const newSessions = s.chatSessions.map((cs) =>
+    set((s) => ({
+      chatSessions: s.chatSessions.map((cs) =>
         cs.id === id ? { ...cs, status, lastActivityAt: Date.now() } : cs
-      );
-      savePersistedSessionSummaries(newSessions);
-      return { chatSessions: newSessions };
-    });
+      ),
+    }));
+    savePersistedSessionSummaries(get().chatSessions);
   },
 
   removeSession(id) {
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
-    const api = createDalamAPI();
+    // Clear all auto-remove timers to prevent leaked timers firing on stale state
+    get()._clearAutoRemoveTimers();
+    _pendingResolutions.clear();
     void get().abort(id).catch(() => {});
     void stopRecording(id).catch(() => {});
-        api.agent.cleanupStream(id);
+    // cleanupStream is handled inside abort()'s finally block
     // Clean all per-session caches to prevent memory leaks
     _clearDoomLoopState(id);
     _clearContextOverflowRetries(id);
     delete _lastCompactionCounts[id];
     delete _lastCompactionAttempt[id];
+    delete _compactionTier[id];
     delete _antiThrashTimestamps[id];
     // Abort any in-progress compaction
     const nextCompacting = new Set(get()._compactingSessions);
     nextCompacting.delete(id);
-    set((s) => {
-      const { [id]: _removed1, ...restVersions } = s.sessionVersions;
-      const { [id]: _removed2, ...restMessages } = s.sessionMessages;
-      const { [id]: _removed3, ...restAgents } = s.sessionAgentName;
-      const { [id]: _removed4, ...restCompaction } = s.compactionSummaries;
-      const newSessions = s.chatSessions.filter((cs) => cs.id !== id);
-      savePersistedVersions(restVersions);
-      _doSavePersistedMessages(restMessages);
-      void saveWorkspaceData();
-      savePersistedAgents(restAgents);
-      savePersistedSessionSummaries(newSessions);
-      savePersistedCompactionSummaries(restCompaction);
-      
-      const isActive = s.activeSessionId === id;
-      return {
-        chatSessions: newSessions,
-        activeSessionId: isActive ? null : s.activeSessionId,
-        sessionVersions: restVersions,
-        sessionMessages: restMessages,
-        sessionAgentName: restAgents,
-        compactionSummaries: restCompaction,
-        _compactingSessions: nextCompacting,
-        ...(isActive ? {
-          messages: [],
-          isStreaming: false,
-          streamingContent: "",
-          thinkingContent: "",
-          pendingToolCalls: [],
-          pendingActivities: [],
-          pendingAttachments: [],
-          restoredVersionId: null,
-          preRestoreMessages: null,
-          session: null,
-          _sendInProgress: false,
-        } : {}),
-      };
+    // Compute new state outside set() to avoid side effects in updater
+    const s = get();
+    const { [id]: _removed1, ...restVersions } = s.sessionVersions;
+    const { [id]: _removed2, ...restMessages } = s.sessionMessages;
+    const { [id]: _removed3, ...restAgents } = s.sessionAgentName;
+    const { [id]: _removed4, ...restCompaction } = s.compactionSummaries;
+    const newSessions = s.chatSessions.filter((cs) => cs.id !== id);
+    const isActive = s.activeSessionId === id;
+    // Persist to disk (outside set updater to avoid side effects during render)
+    savePersistedVersions(restVersions);
+    _doSavePersistedMessages(restMessages);
+    void saveWorkspaceData();
+    savePersistedAgents(restAgents);
+    savePersistedSessionSummaries(newSessions);
+    savePersistedCompactionSummaries(restCompaction);
+    // Update state
+    set({
+      chatSessions: newSessions,
+      activeSessionId: isActive ? null : s.activeSessionId,
+      sessionVersions: restVersions,
+      sessionMessages: restMessages,
+      sessionAgentName: restAgents,
+      compactionSummaries: restCompaction,
+      _compactingSessions: nextCompacting,
+      ...(isActive ? {
+        messages: [],
+        isStreaming: false,
+        streamingContent: "",
+        thinkingContent: "",
+        pendingToolCalls: [],
+        pendingActivities: [],
+        pendingAttachments: [],
+        restoredVersionId: null,
+        preRestoreMessages: null,
+        session: null,
+        _sendInProgress: false,
+      } : {}),
     });
   },
 
   approvePlan() {
-    const { planApproval, isStreaming, _sendInProgress } = get();
-    if (!planApproval) return;
-    // Guard against concurrent stream — if still streaming, don't send a new message
-    if (isStreaming || _sendInProgress) {
-      console.warn("[Chat] approvePlan: ignored because a stream is already in progress");
-      return;
-    }
     set({ planApproval: null });
-    // Switch to build mode — permissions auto-approve for file writes
-    useAgents.getState().setActiveAgent("build");
-    const planMsg = planApproval.planContent.replace(/\[PLAN_COMPLETE\]/g, "").trim();
-    // Save the plan as a version checkpoint before switching
-    const { activeSessionId } = get();
-    if (activeSessionId) {
-      get().saveVersion(activeSessionId, "Plan approved");
-    }
-    get().sendMessage(`Plan approved. Now execute this plan step by step. Write each step as you complete it:\n\n${planMsg}`).catch((err) => {
-      console.error("Failed to send plan approval message:", err);
-    });
   },
 
   rejectPlan() {
@@ -3002,18 +3031,20 @@ export const useChat = create<ChatState>((set, get) => ({
       content,
       timestamp: Date.now(),
     };
-    const newSessionMessages = {
-      ...get().sessionMessages,
-      [sessionId]: [...(get().sessionMessages[sessionId] ?? []), sysMsg]
-    };
-    set((s) => ({
-      messages: [...s.messages, sysMsg],
-      sessionMessages: newSessionMessages,
-      chatSessions: s.chatSessions.map(cs =>
-        cs.id === sessionId ? { ...cs, messageCount: (cs.messageCount ?? 0) + 1 } : cs
-      ),
-    }));
-    savePersistedMessages(newSessionMessages);
+    set((s) => {
+      const sessionMsgs = {
+        ...s.sessionMessages,
+        [sessionId]: [...(s.sessionMessages[sessionId] ?? []), sysMsg]
+      };
+      return {
+        messages: [...s.messages, sysMsg],
+        sessionMessages: sessionMsgs,
+        chatSessions: s.chatSessions.map(cs =>
+          cs.id === sessionId ? { ...cs, messageCount: (cs.messageCount ?? 0) + 1 } : cs
+        ),
+      };
+    });
+    savePersistedMessages(get().sessionMessages);
   },
 
   saveVersion(sessionId, label) {
@@ -3085,16 +3116,15 @@ export const useChat = create<ChatState>((set, get) => ({
   deleteVersion(sessionId, versionId) {
     set((s) => {
       const versions = (s.sessionVersions[sessionId] ?? []).filter((v) => v.id !== versionId);
-      const newSessionVersions = { ...s.sessionVersions, [sessionId]: versions };
-      savePersistedVersions(newSessionVersions);
       return {
-        sessionVersions: newSessionVersions,
+        sessionVersions: { ...s.sessionVersions, [sessionId]: versions },
         chatSessions: s.chatSessions.map((ss) =>
           ss.id === sessionId ? { ...ss, versionCount: versions.length } : ss
         ),
         ...(s.restoredVersionId === versionId ? { restoredVersionId: null, preRestoreMessages: null } : {}),
       };
     });
+    savePersistedVersions(get().sessionVersions);
   },
 
   async compactSessionHistory(sessionId) {
@@ -3136,12 +3166,40 @@ export const useChat = create<ChatState>((set, get) => ({
 
       // Use context manager to determine what to compact
       const stats = computeContextStats(messages, maxContext);
-      if (stats.needsCompaction) {
-        // Select messages for compaction FIRST from original (un-pruned) messages
-        const { toCompact } = selectMessagesForCompaction(messages, 6);
+      const currentTier = _compactionTier[sessionId] ?? 0;
+
+      // Tier 1: Lightweight tool output pruning at 50% (no LLM call)
+      if (stats.pressureRatio >= CTX.TIER1_PRUNE_RATIO && currentTier < 1) {
+        const { pruned, tokensReclaimed } = tier1PruneToolOutputs(messages);
+        if (tokensReclaimed > 0) {
+          _compactionTier[sessionId] = 1;
+          set((s) => {
+            const nextMessages = { ...s.sessionMessages, [sessionId]: pruned };
+            const isActiveSession = s.activeSessionId === sessionId;
+            return {
+              sessionMessages: nextMessages,
+              ...(isActiveSession ? { messages: pruned } : {}),
+            };
+          });
+          savePersistedMessages(get().sessionMessages);
+          console.log(`[Compaction] Tier 1: pruned ~${tokensReclaimed} tokens from old tool outputs at ${(stats.pressureRatio * 100).toFixed(0)}% context usage.`);
+        }
+      }
+
+      // Recompute stats after Tier 1 pruning so Tier 2 decisions use fresh data
+      const freshStats = computeContextStats(
+        get().sessionMessages[sessionId] ?? messages,
+        maxContext
+      );
+
+      // Tier 2: Full LLM summarization at 85% (using TIER2_COMPACT_RATIO)
+      if (freshStats.pressureRatio >= CTX.TIER2_COMPACT_RATIO) {
+        // Use LIVE store messages (not stale snapshot) to avoid Tier 2 overwriting Tier 1 pruning.
+        const liveMessages = get().sessionMessages[sessionId] ?? messages;
+        const { toCompact } = selectMessagesForCompaction(liveMessages, 6);
         if (toCompact.length > 0) {
-          // Build index set for efficient lookup
-          const toCompactIndices = new Set(toCompact.map(m => messages.indexOf(m)));
+          // Build index set for efficient lookup against live messages
+          const toCompactIndices = new Set(toCompact.map(m => liveMessages.indexOf(m)));
           // Only prune tool outputs in the messages being compacted (preserve full outputs in kept messages)
           const prunedToCompact = stats.shouldPrune
             ? pruneToolOutputs(toCompact).pruned
@@ -3156,8 +3214,8 @@ export const useChat = create<ChatState>((set, get) => ({
           const model = selectedModelId || useSettings.getState().settings.selectedModel;
           const summary = await api.agent.summarizeMessages(model, compactionMessages);
           if (summary) {
-            // Replace compacted messages with summary + kept messages
-            const toKeep = messages.filter((_, i) => !toCompactIndices.has(i));
+            // Replace compacted messages with summary + kept messages (from live messages)
+            const toKeep = liveMessages.filter((_, i) => !toCompactIndices.has(i));
             const summaryMsg: ChatMessage = {
               id: "compact-" + Math.random().toString(36).slice(2, 9),
               role: "system",
@@ -3165,12 +3223,10 @@ export const useChat = create<ChatState>((set, get) => ({
               timestamp: Date.now(),
             };
             const compacted = [summaryMsg, ...toKeep];
+            _compactionTier[sessionId] = 2;
             set((s) => {
               const nextSummaries = { ...s.compactionSummaries, [sessionId]: summary };
               const nextMessages = { ...s.sessionMessages, [sessionId]: compacted };
-              savePersistedCompactionSummaries(nextSummaries);
-              savePersistedMessages(nextMessages);
-              // Also update live messages if this is the active session
               const isActiveSession = s.activeSessionId === sessionId;
               return {
                 compactionSummaries: nextSummaries,
@@ -3178,12 +3234,14 @@ export const useChat = create<ChatState>((set, get) => ({
                 ...(isActiveSession ? { messages: compacted } : {}),
               };
             });
+            savePersistedCompactionSummaries(get().compactionSummaries);
+            savePersistedMessages(get().sessionMessages);
 
             // Anti-thrashing: track savings (Hermes ineffective compression detection)
-            const savingsPercent = ((messages.length - compacted.length) / messages.length) * 100;
+            const savingsPercent = ((liveMessages.length - compacted.length) / liveMessages.length) * 100;
             if (savingsPercent < COMPACTION_MIN_SAVINGS_PERCENT) {
               // Ineffective — mark with negative count and record skip timestamp
-              _lastCompactionCounts[sessionId] = -messages.length;
+              _lastCompactionCounts[sessionId] = -liveMessages.length;
               _antiThrashTimestamps[sessionId] = Date.now();
               console.warn(`[Compaction] Anti-thrashing: savings ${savingsPercent.toFixed(1)}% < ${COMPACTION_MIN_SAVINGS_PERCENT}% threshold. Skipping for ${ANTI_THRASH_SKIP_MS / 1000}s.`);
             } else {
@@ -3297,12 +3355,17 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   newChat() {
-        get()._clearAutoRemoveTimers();
-        _pendingResolutions.clear();
-        // Clean up delta batch timer
-        const deltaBatchTimer = get()._deltaBatchTimer;
-        if (deltaBatchTimer) clearTimeout(deltaBatchTimer);
-        const { session, messages } = get();
+    const { session, messages } = get();
+    // Abort first to stop any in-progress streaming before clearing state
+    if (session) void get().abort(session.id).catch(() => {});
+    // Clean up all timers and state
+    get()._clearAutoRemoveTimers();
+    _pendingResolutions.clear();
+    _toolCallResolvers.clear();
+    const currentTimer = get()._safetyTimer;
+    if (currentTimer) clearTimeout(currentTimer);
+    const deltaBatchTimer = get()._deltaBatchTimer;
+    if (deltaBatchTimer) clearTimeout(deltaBatchTimer);
     // Stop trajectory recording for old session
     if (session) void stopRecording(session.id).catch(() => {});
     // Clear doom loop + context overflow + compaction state
@@ -3310,6 +3373,7 @@ export const useChat = create<ChatState>((set, get) => ({
       _clearDoomLoopState(session.id);
       set({ doomLoopWarningCount: 0 });
       _clearContextOverflowRetries(session.id);
+      delete _compactionTier[session.id];
       delete _lastCompactionCounts[session.id];
       delete _lastCompactionAttempt[session.id];
       delete _antiThrashTimestamps[session.id];
@@ -3321,7 +3385,6 @@ export const useChat = create<ChatState>((set, get) => ({
     if (session && messages.length > 0) {
       get().saveVersion(session.id, "Session checkpoint");
     }
-    if (session) void get().abort(session.id).catch(() => {});
     const { chatHistory, chatHistoryIdx, chatSessions } = get();
     const trimmedHistory = chatHistoryIdx >= 0
       ? chatHistory.slice(0, chatHistoryIdx + 1)
@@ -3349,6 +3412,7 @@ export const useChat = create<ChatState>((set, get) => ({
       messages: [],
       pendingToolCalls: [],
       pendingActivities: [],
+      streamingStartedAt: null,
       streamingContent: "",
       thinkingContent: "",
       isStreaming: false,
@@ -3364,6 +3428,10 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlan: null,
       taskPlanSummary: null,
       subAgents: [],
+      _safetyTimer: null,
+      _deltaBatchBuffer: "",
+      _deltaBatchTimer: null,
+      _suppressSessionRestore: true,
     });
     savePersistedSessionSummaries(finalizedSessions);
   },
@@ -3634,32 +3702,31 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
   skills: loadSkills(),
   mcpServers: loadMcpServers(),
   toggleSkill(name) {
-    set((s) => {
-      const nextSkills = s.skills.map((sk) =>
+    set((s) => ({
+      skills: s.skills.map((sk) =>
         sk.name === name ? { ...sk, enabled: !sk.enabled } : sk
-      );
-      const bundledStates: Record<string, boolean> = {};
-      const userSkillsOnly: Skill[] = [];
-      nextSkills.forEach((sk) => {
-        if (sk.source === "bundled") {
-          bundledStates[sk.name] = sk.enabled;
-        } else {
-          userSkillsOnly.push(sk);
-        }
-      });
-      localStorage.setItem(BUNDLED_SKILLS_STORAGE_KEY, JSON.stringify(bundledStates));
-      localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
-      return { skills: nextSkills };
+      ),
+    }));
+    const nextSkills = get().skills;
+    const bundledStates: Record<string, boolean> = {};
+    const userSkillsOnly: Skill[] = [];
+    nextSkills.forEach((sk) => {
+      if (sk.source === "bundled") {
+        bundledStates[sk.name] = sk.enabled;
+      } else {
+        userSkillsOnly.push(sk);
+      }
     });
+    localStorage.setItem(BUNDLED_SKILLS_STORAGE_KEY, JSON.stringify(bundledStates));
+    localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
   },
   toggleMcp(name) {
-    set((s) => {
-      const next = s.mcpServers.map((m) =>
+    set((s) => ({
+      mcpServers: s.mcpServers.map((m) =>
         m.name === name ? { ...m, enabled: !m.enabled } : m
-      );
-      saveMcpServers(next);
-      return { mcpServers: next };
-    });
+      ),
+    }));
+    saveMcpServers(get().mcpServers);
     const server = get().mcpServers.find((m) => m.name === name);
     if (server) {
       if (server.enabled) {
@@ -3672,36 +3739,32 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
   addSkill(skill) {
     set((s) => {
       if (s.skills.some((sk) => sk.name === skill.name)) return s;
-      const nextSkills = [...s.skills, { ...skill, enabled: true, source: "user" as const }];
-      const userSkillsOnly = nextSkills.filter(sk => sk.source === "user");
-      localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
-      return { skills: nextSkills };
+      return { skills: [...s.skills, { ...skill, enabled: true, source: "user" as const }] };
     });
+    const userSkillsOnly = get().skills.filter(sk => sk.source === "user");
+    localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
   },
   removeSkill(name) {
-    set((s) => {
-      const nextSkills = s.skills.filter((sk) => sk.name !== name);
-      const userSkillsOnly = nextSkills.filter(sk => sk.source === "user");
-      localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
-      return { skills: nextSkills };
-    });
+    set((s) => ({
+      skills: s.skills.filter((sk) => sk.name !== name),
+    }));
+    const userSkillsOnly = get().skills.filter(sk => sk.source === "user");
+    localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
   },
   addMcpServer(server) {
     set((s) => {
       if (s.mcpServers.some((m) => m.name === server.name)) return s;
       const newServer: McpServer = { scope: "user", ...server, enabled: true, status: "disconnected" };
-      const next = [...s.mcpServers, newServer];
-      saveMcpServers(next);
-      return { mcpServers: next };
+      return { mcpServers: [...s.mcpServers, newServer] };
     });
+    saveMcpServers(get().mcpServers);
     get().connectMcpServer(server.name);
   },
   removeMcpServer(name) {
-    set((s) => {
-      const next = s.mcpServers.filter((m) => m.name !== name);
-      saveMcpServers(next);
-      return { mcpServers: next };
-    });
+    set((s) => ({
+      mcpServers: s.mcpServers.filter((m) => m.name !== name),
+    }));
+    saveMcpServers(get().mcpServers);
   },
   async connectMcpServer(name) {
     set((s) => ({
@@ -3748,6 +3811,7 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
     }
   },
   async disconnectMcpServer(name) {
+    mcpHttpSessions.delete(name);
     set((s) => ({
       mcpServers: s.mcpServers.map((m) =>
         m.name === name ? { ...m, status: "disconnected", tools: [] } : m
@@ -3765,8 +3829,6 @@ export type SettingsTab =
   | "general"
   | "code-preview"
   | "models"
-  | "agents"
-  | "permissions"
   | "instructions"
   | "skills"
   | "mcp"
@@ -3934,51 +3996,45 @@ export const useModelProviders = create<ModelProvidersState>((set, get) => ({
   providers: loadProviders(),
   addProvider(provider) {
     const id = provider.name.toLowerCase().replace(/[^a-z0-9]/g, "-") + "-" + Date.now().toString(36);
-    set((s) => {
-      const next = [...s.providers, { ...provider, id }];
-      saveProviders(next);
-      return { providers: next };
-    });
+    set((s) => ({
+      providers: [...s.providers, { ...provider, id }],
+    }));
+    saveProviders(get().providers);
   },
   removeProvider(id) {
-    set((s) => {
-      const next = s.providers.filter((p) => p.id !== id);
-      saveProviders(next);
-      localStorage.removeItem(`dalam.provider.${id}`);
-      return { providers: next };
-    });
+    set((s) => ({
+      providers: s.providers.filter((p) => p.id !== id),
+    }));
+    saveProviders(get().providers);
+    localStorage.removeItem(`dalam.provider.${id}`);
   },
   toggleProvider(id) {
-    set((s) => {
-      const next = s.providers.map((p) => p.id === id ? { ...p, enabled: !p.enabled } : p);
-      saveProviders(next);
-      return { providers: next };
-    });
+    set((s) => ({
+      providers: s.providers.map((p) => p.id === id ? { ...p, enabled: !p.enabled } : p),
+    }));
+    saveProviders(get().providers);
   },
   updateProvider(id, updates) {
-    set((s) => {
-      const next = s.providers.map((p) => p.id === id ? { ...p, ...updates } : p);
-      saveProviders(next);
-      return { providers: next };
-    });
+    set((s) => ({
+      providers: s.providers.map((p) => p.id === id ? { ...p, ...updates } : p),
+    }));
+    saveProviders(get().providers);
   },
   addModel(providerId, model) {
-    set((s) => {
-      const next = s.providers.map((p) =>
+    set((s) => ({
+      providers: s.providers.map((p) =>
         p.id === providerId ? { ...p, models: [...p.models, { ...model, connected: false }] } : p
-      );
-      saveProviders(next);
-      return { providers: next };
-    });
+      ),
+    }));
+    saveProviders(get().providers);
   },
   removeModel(providerId, modelId) {
-    set((s) => {
-      const next = s.providers.map((p) =>
+    set((s) => ({
+      providers: s.providers.map((p) =>
         p.id === providerId ? { ...p, models: p.models.filter((m) => m.modelId !== modelId) } : p
-      );
-      saveProviders(next);
-      return { providers: next };
-    });
+      ),
+    }));
+    saveProviders(get().providers);
   },
   getAllModels() {
     const { providers } = get();
@@ -4034,6 +4090,7 @@ export type BrowserTab = {
   history: string[];
   historyIdx: number;
   loading: boolean;
+  _refreshTimer?: ReturnType<typeof setTimeout>;
 };
 
 type UIState = {
@@ -4147,6 +4204,8 @@ export const useUI = create<UIState>((set, _get) => ({
   },
   removeBrowserTab: (id) => {
     set((s) => {
+      const tab = s.browserTabs.find((t) => t.id === id);
+      if (tab?._refreshTimer) clearTimeout(tab._refreshTimer);
       const remaining = s.browserTabs.filter((t) => t.id !== id);
       const newActive = s.activeBrowserTabId === id
         ? (remaining[remaining.length - 1]?.id ?? null)
@@ -4195,27 +4254,29 @@ export const useUI = create<UIState>((set, _get) => ({
     }));
   },
   refreshBrowser: (id) => {
-    // Force iframe reload by appending a cache-bust query param
     set((s) => ({
       browserTabs: s.browserTabs.map((t) => {
         if (t.id !== id) return t;
-        // Strip any existing _r= param then add a fresh one
+        if (t._refreshTimer) clearTimeout(t._refreshTimer);
         const base = t.url.replace(/[?&]_r=\d+/, "");
         const sep = base.includes("?") ? "&" : "?";
         const refreshedUrl = base + sep + "_r=" + Date.now();
-        return { ...t, url: refreshedUrl, loading: true };
+        const timer = setTimeout(() => {
+          useUI.setState((s2) => ({
+            browserTabs: s2.browserTabs.map((tab) => tab.id === id ? { ...tab, loading: false, _refreshTimer: undefined } : tab),
+          }));
+        }, 5000);
+        return { ...t, url: refreshedUrl, loading: true, _refreshTimer: timer };
       }),
     }));
-    // Fallback timeout in case onLoad doesn't fire (e.g., blocked by sandbox)
-    setTimeout(() => {
-      useUI.setState((s2) => ({
-        browserTabs: s2.browserTabs.map((t) => t.id === id ? { ...t, loading: false } : t),
-      }));
-    }, 5000);
   },
   updateBrowserTab: (id, patch) => {
     set((s) => ({
-      browserTabs: s.browserTabs.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+      browserTabs: s.browserTabs.map((t) => {
+        if (t.id !== id) return t;
+        if (patch.loading === false && t._refreshTimer) { clearTimeout(t._refreshTimer); return { ...t, ...patch, _refreshTimer: undefined }; }
+        return { ...t, ...patch };
+      }),
     }));
   },
 }));

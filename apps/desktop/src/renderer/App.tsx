@@ -76,9 +76,8 @@ export function App() {
   const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
   const rightPanelRef = useRef<ImperativePanelHandle>(null);
 
-  // Sync the UI store's toggle state with the imperative panel API.
-  // expand()/collapse() are idempotent — calling them when already in the
-  // target state is a no-op, so this is safe with onCollapse/onExpand below.
+  // Sidebar is auto-managed by workspace state (see activeWorkspaceId effect below).
+  // This effect only handles manual toggle from onCollapse/onExpand callbacks.
   useEffect(() => {
     const panel = sidebarPanelRef.current;
     if (!panel) return;
@@ -113,19 +112,40 @@ export function App() {
     ).catch((err: unknown) => console.error("Failed to initialize connectors:", err));
   }, [loadSettings]);
 
-  // Auto-restore last workspace on startup
+  // Auto-restore last workspace on startup and load all workspace sessions for sidebar
   useEffect(() => {
     const { workspaces, activeWorkspaceId } = useWorkspace.getState();
-    if (activeWorkspaceId) {
-      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
-      if (ws) {
-        void loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
-          console.error("Failed to restore workspace:", err)
-        );
-      }
+    // Load sessions for all workspaces so sidebar displays them
+    for (const ws of workspaces) {
+      void loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
+        console.error(`Failed to load workspace ${ws.name}:`, err)
+      );
     }
   }, []);
 
+  // Auto-show sidebar when a workspace is active, auto-hide when none.
+  // Track whether the collapse was manual (user dragged/resized) vs automatic
+  // (no workspace) so we don't override manual collapse when a workspace becomes active.
+  const manualCollapseRef = useRef(false);
+  const activeWorkspaceId = useWorkspace((s) => s.activeWorkspaceId);
+  useEffect(() => {
+    const panel = sidebarPanelRef.current;
+    if (!panel) return;
+    if (activeWorkspaceId && !sidebarOpen && !manualCollapseRef.current) {
+      panel.expand();
+      useUI.getState().setSidebarOpen(true);
+    } else if (!activeWorkspaceId && sidebarOpen) {
+      manualCollapseRef.current = false; // Reset on auto-collapse
+      panel.collapse();
+      useUI.getState().setSidebarOpen(false);
+    }
+  }, [activeWorkspaceId]);
+
+  const paletteOpenRef = useRef(paletteOpen);
+
+  useEffect(() => {
+    paletteOpenRef.current = paletteOpen;
+  }, [paletteOpen]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -145,9 +165,11 @@ export function App() {
         useSettingsView.getState().open();
         return;
       }
-      if (mod && e.key.toLowerCase() === "b" && !isTyping(e.target)) {
+      // Sidebar toggle: Ctrl+B / Cmd+B re-opens sidebar (even after manual collapse, only if workspace active)
+      if (mod && e.key.toLowerCase() === "b" && !isTyping(e.target) && useWorkspace.getState().activeWorkspaceId) {
         e.preventDefault();
-        useUI.getState().toggleSidebar();
+        manualCollapseRef.current = false; // Reset manual collapse flag
+        useUI.getState().setSidebarOpen(true);
         return;
       }
       if (mod && e.key.toLowerCase() === "n" && !isTyping(e.target)) {
@@ -171,14 +193,14 @@ export function App() {
         return;
       }
       if (e.key === "Escape") {
-        if (paletteOpen) {
+        if (paletteOpenRef.current) {
           setPaletteOpen(false);
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePalette, toggleShortcuts, paletteOpen, setPaletteOpen]);
+  }, [togglePalette, toggleShortcuts, setPaletteOpen]);
 
   if (settingsOpen) {
     return (
@@ -209,7 +231,7 @@ export function App() {
             maxSize={32}
             collapsible
             collapsedSize={0}
-            onCollapse={() => useUI.getState().setSidebarOpen(false)}
+            onCollapse={() => { manualCollapseRef.current = true; useUI.getState().setSidebarOpen(false); }}
             onExpand={() => useUI.getState().setSidebarOpen(true)}
           >
             <ErrorBoundary>

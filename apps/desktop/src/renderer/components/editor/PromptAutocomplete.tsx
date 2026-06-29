@@ -5,7 +5,7 @@
  * of matching options. The four trigger surfaces, modeled directly on
  * Dalam's terminal-style chat input:
  *
- *   /  → slash commands  (init, compact, clear, help, login, model, agent, plan, reasoning, share)
+ *   /  → slash commands  (init, compact, clear, help, login, model, reasoning, share)
  *   @  → workspace files (filtered by the file tree)
  *   $  → bundled skills   (from the registry)
  *   #  → related sessions (the sidebar's chat sessions)
@@ -53,8 +53,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: "help",      label: "/help",      description: "Show the available commands and shortcuts",   insert: "/help" },
   { id: "login",     label: "/login",     description: "Authenticate the active model provider",      insert: "/login" },
   { id: "model",     label: "/model",     description: "Switch to a different model",                 insert: "/model " },
-  { id: "agent",     label: "/agent",     description: "Switch the primary agent (build/plan/...)",   insert: "/agent " },
-  { id: "plan",      label: "/plan",      description: "Enter plan mode — read-only exploration",      insert: "/plan" },
   { id: "reasoning", label: "/reasoning", description: "Toggle extended reasoning for this turn",     insert: "/reasoning" },
   { id: "share",     label: "/share",     description: "Copy a shareable link to this session",       insert: "/share" },
 ];
@@ -280,7 +278,9 @@ export function PromptAutocomplete({
   // Publish the handler so the parent can call it from its textarea onKeyDown.
   // Use a ref to always have the latest handler without re-registering the effect.
   const latestHandler = useRef(handleKeyDown);
-  latestHandler.current = handleKeyDown;
+  useEffect(() => {
+    latestHandler.current = handleKeyDown;
+  });
   useEffect(() => {
     if (keyHandlerRef) {
       // biome-ignore lint/suspicious/noExplicitAny: bridge React.KeyboardEvent to native KeyboardEvent

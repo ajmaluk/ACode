@@ -72,7 +72,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
 
   // Track active state in a ref so the ResizeObserver callback always has the latest value
   const activeRef = useRef(active);
-  activeRef.current = active;
+  useEffect(() => { activeRef.current = active; });
 
   useEffect(() => {
     const element = containerRef.current;

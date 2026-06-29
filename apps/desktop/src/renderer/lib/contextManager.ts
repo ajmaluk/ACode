@@ -38,7 +38,7 @@ export type ContextStats = {
   needsCompaction: boolean;
   shouldPrune: boolean;      // tool outputs should be pruned
   nextCheckpointTrigger: number | null; // next unfired trigger threshold (e.g. 0.20), or null if none pending
-  shouldCompact: boolean;    // full compaction needed (≥85%)
+  shouldCompact: boolean;    // full compaction needed (≥95%)
 };
 
 /**
@@ -211,6 +211,78 @@ export function computeContextStats(
  * Strategy: Prioritize compacting large tool outputs and older messages
  * while preserving the conversation structure.
  */
+
+/**
+ * Align compaction boundaries to prevent splitting tool_call/tool_result pairs.
+ *
+ * In Dalam's architecture:
+ * - Assistant messages can have `toolCalls` arrays (the tool calls to execute)
+ * - Tool results come back as user messages with [TOOL RESULT: toolName] prefix
+ * - The sequence is: assistant(toolCalls) → user(toolResult) → assistant(next)
+ *
+ * If we keep an assistant message with toolCalls but compact its tool results,
+ * the model sees orphaned calls. This function ensures pairs stay together
+ * by expanding the keep set to include related messages.
+ *
+ * Pattern inspired by Hermes _align_boundary_backward.
+ */
+/** Check if a message is a tool result (user message with tool prefix). */
+export function _isToolResult(m: ChatMessage): boolean {
+  return m.role === "user" && typeof m.content === "string" && (
+    m.content.startsWith("[TOOL RESULT:") ||
+    m.content.startsWith("[TOOL ERROR:")
+  );
+}
+
+/** Align compaction boundaries — exported for direct unit testing. */
+export function _alignBoundaryPairs(
+  messages: ChatMessage[],
+  baseIndices: Set<number>
+): Set<number> {
+  // Expand baseIndices (the keep set) to include related tool_call/tool_result
+  // pairs so they stay together after compaction.
+  const aligned = new Set(baseIndices);
+
+  for (const idx of baseIndices) {
+    const msg = messages[idx];
+    if (!msg) continue;
+
+    // Case 1: Assistant message with toolCalls is being compacted
+    // → also compact the following tool result messages
+    if (msg.role === "assistant" && msg.toolCalls?.length) {
+      // Walk forward to capture all consecutive tool result messages
+      // that follow this assistant's tool calls
+      for (let j = idx + 1; j < messages.length; j++) {
+        const next = messages[j];
+        if (next.role === "user" && _isToolResult(next)) {
+          aligned.add(j);
+        } else {
+          break;
+        }
+      }
+    }
+
+    // Case 2: Tool result message is being compacted
+    // → also compact the preceding assistant message with toolCalls
+    if (msg.role === "user" && _isToolResult(msg)) {
+      // Walk backward to find the assistant message with toolCalls
+      for (let j = idx - 1; j >= 0; j--) {
+        const prev = messages[j];
+        if (prev.role === "assistant" && prev.toolCalls?.length) {
+          aligned.add(j);
+          break;
+        }
+        // Stop if we hit another user message (not a tool result)
+        if (prev.role === "user" && !_isToolResult(prev)) break;
+        // Stop if we hit a tool result (different tool call batch)
+        if (prev.role === "user" && _isToolResult(prev)) break;
+      }
+    }
+  }
+
+  return aligned;
+}
+
 export function selectMessagesForCompaction(
   messages: ChatMessage[],
   keepRecent: number = 6
@@ -229,7 +301,7 @@ export function selectMessagesForCompaction(
   // 2. Protect the last N user turns (non-tool-result)
   let userTurnCount = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user" && !isToolResult(messages[i])) {
+    if (messages[i].role === "user" && !_isToolResult(messages[i])) {
       protectedIndices.add(i);
       userTurnCount++;
     }
@@ -253,19 +325,22 @@ export function selectMessagesForCompaction(
   // 5. Protect recent assistant messages (last 3 non-tool messages)
   let assistantCount = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "assistant" && !isToolResult(messages[i])) {
+    if (messages[i].role === "assistant" && !_isToolResult(messages[i])) {
       protectedIndices.add(i);
       assistantCount++;
     }
     if (assistantCount >= 3) break;
   }
 
+  // Align boundaries: prevent splitting tool_call/tool_result pairs
+  const alignedIndices = _alignBoundaryPairs(messages, protectedIndices);
+
   // Split into compact and keep
   const toCompact: ChatMessage[] = [];
   const toKeep: ChatMessage[] = [];
 
   for (let i = 0; i < messages.length; i++) {
-    if (protectedIndices.has(i)) {
+    if (alignedIndices.has(i)) {
       toKeep.push(messages[i]);
     } else {
       toCompact.push(messages[i]);
@@ -278,13 +353,6 @@ export function selectMessagesForCompaction(
 /**
  * Check if a message is a tool result (user message with tool prefix).
  */
-function isToolResult(m: ChatMessage): boolean {
-  return m.role === "user" && typeof m.content === "string" && (
-    m.content.startsWith("[TOOL RESULT:") ||
-    m.content.startsWith("[TOOL ERROR:")
-  );
-}
-
 /**
  * Generate a compaction prompt for summarizing old messages.
  * Utility function — may be used by UI for manual compaction triggers.
@@ -363,7 +431,7 @@ export function pruneToolOutputs(
   // Identify which turns to protect (last N user turns that are NOT tool results)
   const realUserTurnIndexes: number[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user" && !isToolResult(messages[i])) {
+    if (messages[i].role === "user" && !_isToolResult(messages[i])) {
       realUserTurnIndexes.push(i);
     }
     if (realUserTurnIndexes.length >= CTX.TURN_PROTECT) break;
@@ -374,7 +442,7 @@ export function pruneToolOutputs(
   const toolIndicesWithSize: Array<{ idx: number; size: number }> = [];
   let totalPrunableToolTokens = 0;
   for (let i = 0; i < messages.length; i++) {
-    if (i < protectAfter && isToolResult(messages[i])) {
+    if (i < protectAfter && _isToolResult(messages[i])) {
       const size = toolTokenEstimate(messages[i]);
       toolIndicesWithSize.push({ idx: i, size });
       totalPrunableToolTokens += size;
@@ -420,87 +488,83 @@ export function pruneToolOutputs(
   return { pruned, tokensReclaimed };
 }
 
-// ============================================================================
-// Frozen Memory Snapshot (Hermes pattern)
-// ============================================================================
-// At session start, freeze a snapshot of the memory state so the agent has
-// consistent context throughout the session. This prevents the context from
-// shifting as new memories are added mid-conversation.
-
-const _frozenSnapshots: Map<string, string[]> = new Map();
-/** Maximum number of frozen snapshots to prevent unbounded growth. */
-const MAX_FROZEN_SNAPSHOTS = 50;
-
 /**
- * Freeze a memory snapshot for a session.
- * Call this at session start with the initial memory context.
- * The frozen snapshot will be injected into every subsequent context computation.
- * Automatically evicts oldest entries when the cap is exceeded.
+ * Tier 1: Lightweight tool output pruning (no LLM call).
+ *
+ * Called when context usage reaches 50% (TIER1_PRUNE_RATIO).
+ * Prunes the oldest and largest tool outputs to reclaim tokens
+ * without consuming any API calls. This is a pre-emptive measure
+ * inspired by Hermes' early 50% compression trigger.
+ *
+ * Unlike pruneToolOutputs (which is used during full compaction),
+ * this function protects a larger tail of recent turns and only
+ * truncates (not removes) tool outputs to preserve conversation flow.
+ *
+ * Returns the pruned messages and tokens reclaimed.
  */
-export function freezeMemorySnapshot(sessionId: string, memories: string[]): void {
-  _frozenSnapshots.set(sessionId, [...memories]);
-  // Evict oldest entries if we exceed the cap (Map preserves insertion order)
-  while (_frozenSnapshots.size > MAX_FROZEN_SNAPSHOTS) {
-    const oldestKey = _frozenSnapshots.keys().next().value;
-    if (oldestKey !== undefined) _frozenSnapshots.delete(oldestKey);
-    else break;
+export function tier1PruneToolOutputs(
+  messages: ChatMessage[],
+  toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens
+): { pruned: ChatMessage[]; tokensReclaimed: number } {
+  // Protect the last N user turns that are NOT tool results (more conservative than tier2)
+  const realUserTurnIndexes: number[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user" && !_isToolResult(messages[i])) {
+      realUserTurnIndexes.push(i);
+    }
+    if (realUserTurnIndexes.length >= CTX.TURN_PROTECT + 2) break; // Protect 4 recent real turns
   }
-}
+  const protectAfter = realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
 
-/**
- * Get the frozen memory snapshot for a session.
- * Returns the frozen memories if they exist, or null if no snapshot was frozen.
- */
-export function getFrozenSnapshot(sessionId: string): string[] | null {
-  return _frozenSnapshots.get(sessionId) ?? null;
-}
-
-/**
- * Clear the frozen memory snapshot for a session.
- * Call this when the session ends to free memory.
- */
-export function clearFrozenSnapshot(sessionId: string): void {
-  _frozenSnapshots.delete(sessionId);
-}
-
-/**
- * Build a context prompt with frozen memory included.
- * If a frozen snapshot exists for this session, it's prepended to the memory context.
- * This ensures the agent always has the same baseline memory context regardless
- * of what new memories were added during the conversation.
- */
-export function buildContextWithFrozenMemory(
-  sessionId: string,
-  currentMemories: string[],
-  maxTokens: number = CTX.MEMORY_BUDGET
-): string[] {
-  const frozen = _frozenSnapshots.get(sessionId);
-  if (!frozen || frozen.length === 0) return currentMemories;
-
-  // Frozen memories get priority — they're the baseline context
-  const frozenText = frozen.join("\n");
-  const frozenTokens = Math.ceil(frozenText.length / 4);
-
-  // If frozen memories alone exceed the budget, return only frozen
-  if (frozenTokens >= maxTokens) {
-    return frozen.slice(0, Math.ceil(maxTokens / 200)); // ~200 tokens per memory
+  // Identify prunable tool outputs (old ones outside the protected tail)
+  const toolIndicesWithSize: Array<{ idx: number; size: number }> = [];
+  let totalPrunableToolTokens = 0;
+  for (let i = 0; i < messages.length; i++) {
+    if (i < protectAfter && _isToolResult(messages[i])) {
+      const size = toolTokenEstimate(messages[i]);
+      // Only consider messages with substantial output (> 1K tokens)
+      if (size > 1_000) {
+        toolIndicesWithSize.push({ idx: i, size });
+        totalPrunableToolTokens += size;
+      }
+    }
   }
 
-  // Otherwise, fill remaining budget with current memories (excluding duplicates)
-  const frozenSet = new Set(frozen);
-  const additionalBudget = maxTokens - frozenTokens;
-  const additional: string[] = [];
-  let additionalTokens = 0;
-
-  for (const mem of currentMemories) {
-    if (frozenSet.has(mem)) continue; // Skip duplicates
-    const memTokens = Math.ceil(mem.length / 4);
-    if (additionalTokens + memTokens > additionalBudget) break;
-    additional.push(mem);
-    additionalTokens += memTokens;
+  // Don't bother if there's nothing meaningful to reclaim
+  if (totalPrunableToolTokens < CTX.PRUNE_MINIMUM) {
+    return { pruned: messages, tokensReclaimed: 0 };
   }
 
-  return [...frozen, ...additional];
+  // Sort descending by size — truncate the biggest outputs first
+  toolIndicesWithSize.sort((a, b) => b.size - a.size);
+
+  let tokensReclaimed = 0;
+  const toTruncate = new Set<number>();
+
+  for (const { idx, size } of toolIndicesWithSize) {
+    // Stop once we've reclaimed enough to matter (at least PRUNE_MINIMUM)
+    if (tokensReclaimed >= CTX.PRUNE_MINIMUM) break;
+    tokensReclaimed += size;
+    toTruncate.add(idx);
+  }
+
+  if (toTruncate.size === 0) {
+    return { pruned: messages, tokensReclaimed: 0 };
+  }
+
+  // Truncate (don't remove) — keep the header, drop the body
+  const pruned = messages.map((msg, idx) => {
+    if (!toTruncate.has(idx)) return msg;
+    const toolMatch = msg.content.match(/^\[TOOL (?:RESULT|ERROR):\s*(\S+)/);
+    const toolName = toolMatch?.[1] ?? "unknown";
+    const originalTokens = toolTokenEstimate(msg);
+    return {
+      ...msg,
+      content: `[TOOL RESULT: ${toolName}] Output truncated (~${originalTokens} tokens). Re-run the tool to see full output.`,
+    };
+  });
+
+  return { pruned, tokensReclaimed };
 }
 
 

@@ -17,7 +17,13 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
   const modified = status?.modified.length ?? 0;
   const changes = added + deleted + modified;
 
-  const StatusIcon = !session ? Circle : session.status === "running" ? Loader2 : CheckCircle2;
+  const statusColor =
+    !session ? "" :
+    session.status === "running" ? "text-dalam-accent-primary animate-spin" :
+    session.status === "aborted" || session.status === "error" ? "text-red-400" :
+    "text-dalam-git-added";
+
+  const StatusIcon = !session ? Circle : session.status === "running" ? Loader2 : session.status === "aborted" || session.status === "error" ? AlertCircle : CheckCircle2;
 
   return (
     <footer className="h-6 flex items-center justify-between bg-dalam-bg-tertiary border-t border-dalam-border-primary px-3 text-[11px] text-dalam-text-muted flex-shrink-0 select-none">
@@ -60,7 +66,7 @@ export function StatusBar({ workspaceReady }: { workspaceReady: boolean }) {
         )}
         {session && (
           <span className="flex items-center gap-1.5">
-            <StatusIcon className={`w-3 h-3 ${session.status === "running" ? "text-dalam-accent-primary animate-spin" : "text-dalam-git-added"}`} />
+            <StatusIcon className={`w-3 h-3 ${statusColor}`} />
             {session.status}
           </span>
         )}

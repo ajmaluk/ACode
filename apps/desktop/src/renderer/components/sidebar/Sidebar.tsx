@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import {
   useWorkspace,
@@ -40,8 +40,6 @@ import {
   getConnectorConfigs,
   saveConnectorConfig,
   removeConnectorConfig,
-  initializeConnectors,
-  shutdownConnectors,
 } from "@/lib/connectors";
 import type { ConnectorConfig } from "@/lib/connectors";
 
@@ -180,14 +178,10 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
 // ─── Connectors Section ────────────────────────────────────
 function ConnectorsSection() {
   const [expanded, setExpanded] = useState(false);
-  const [configs, setConfigs] = useState<ConnectorConfig[]>([]);
+  const [configs, setConfigs] = useState<ConnectorConfig[]>(() => getConnectorConfigs());
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState<"webhook" | "file-watcher" | "cron">("webhook");
-
-  const refresh = useCallback(() => setConfigs(getConnectorConfigs()), []);
-
-  useEffect(() => { refresh(); }, [refresh]);
 
   const handleAdd = () => {
     if (!newName.trim()) return;
@@ -247,27 +241,37 @@ function ConnectorsSection() {
             </div>
           ))}
           {showAdd ? (
-            <div className="px-2 py-1 space-y-1">
+            <div className="px-2.5 py-2 space-y-2 mr-2 bg-dalam-bg-secondary/40 rounded-lg border border-dalam-border-primary/60">
               <input
                 autoFocus
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); else if (e.key === "Escape") setShowAdd(false); }}
                 placeholder="Connector name..."
-                className="w-full text-xs px-1.5 py-1 rounded border border-dalam-border-primary bg-dalam-bg-primary text-dalam-text-primary outline-none"
+                className="w-full text-xs px-2.5 py-1.5 rounded-md border border-dalam-border-primary bg-dalam-bg-input text-dalam-text-primary outline-none focus:border-dalam-accent-primary focus:ring-1 focus:ring-dalam-accent-primary transition-all"
               />
               <select
                 value={newType}
                 onChange={(e) => setNewType(e.target.value as typeof newType)}
-                className="w-full text-xs px-1.5 py-1 rounded border border-dalam-border-primary bg-dalam-bg-primary text-dalam-text-primary"
+                className="w-full text-xs px-2.5 py-1.5 rounded-md border border-dalam-border-primary bg-dalam-bg-input text-dalam-text-primary outline-none focus:border-dalam-accent-primary focus:ring-1 focus:ring-dalam-accent-primary transition-all cursor-pointer"
               >
                 <option value="webhook">Webhook</option>
                 <option value="file-watcher">File Watcher</option>
                 <option value="cron">Cron</option>
               </select>
-              <div className="flex gap-1">
-                <button className="text-[10px] px-2 py-0.5 rounded bg-dalam-accent-primary text-white" onClick={handleAdd}>Add</button>
-                <button className="text-[10px] px-2 py-0.5 rounded text-dalam-text-muted" onClick={() => setShowAdd(false)}>Cancel</button>
+              <div className="flex gap-1.5 pt-0.5 justify-end">
+                <button 
+                  className="text-xs px-2.5 py-1 rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors font-medium" 
+                  onClick={() => setShowAdd(false)}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="text-xs px-3 py-1 rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white font-medium transition-colors" 
+                  onClick={handleAdd}
+                >
+                  Add
+                </button>
               </div>
             </div>
           ) : (
@@ -361,7 +365,8 @@ export function Sidebar() {
       if (fromIdx !== -1 && toIdx !== -1) {
         const reordered = [...workspaces];
         const [moved] = reordered.splice(fromIdx, 1);
-        reordered.splice(toIdx, 0, moved);
+        const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
+        reordered.splice(insertIdx, 0, moved);
         useWorkspace.setState({ workspaces: reordered });
       }
     }
@@ -375,7 +380,9 @@ export function Sidebar() {
   };
 
   const handleNewTask = (wsId: string) => {
-    setActiveWorkspace(wsId);
+    // Only update the workspace ID — skip setActiveWorkspace's async session load
+    // which would race with newChat() and restore old sessions over fresh state
+    useWorkspace.setState({ activeWorkspaceId: wsId });
     cancelPermission();
     resolveQuestion(null);
     newChat();
@@ -568,6 +575,14 @@ export function Sidebar() {
                           onClick={() => setShowAll((prev) => ({ ...prev, [ws.id]: true }))}
                         >
                           Show more ({wsSessions.length - VISIBLE_LIMIT})
+                        </button>
+                      )}
+                      {hasMore && showAllSessions && (
+                        <button
+                          className="text-[10px] text-dalam-text-muted hover:text-dalam-text-secondary px-1.5 py-0.5 transition-colors"
+                          onClick={() => setShowAll((prev) => ({ ...prev, [ws.id]: false }))}
+                        >
+                          Show less
                         </button>
                       )}
                     </>

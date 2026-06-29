@@ -159,7 +159,16 @@ class HookEventBus {
       const start = Date.now();
       const handlerName = handler.name || "anonymous";
       try {
-        await handler(payload);
+        // Wrap handler with a 10-second timeout to prevent deadlocks
+        const result = handler(payload);
+        if (result && typeof (result as Promise<void>).then === "function") {
+          await Promise.race([
+            result,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Handler "${handlerName}" timed out after 10s`)), 10_000)
+            ),
+          ]);
+        }
         this.pushLog({
           event: eventName,
           handler: handlerName,

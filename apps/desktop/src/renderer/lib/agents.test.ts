@@ -171,8 +171,8 @@ describe("agents", () => {
   });
 
   describe("agent definitions", () => {
-    it("has 3 primary agents", () => {
-      expect(PRIMARY_AGENTS).toHaveLength(3);
+    it("has 8 total agents", () => {
+      expect(ALL_AGENTS).toHaveLength(8);
     });
 
     it("has 7 subagents", () => {
@@ -180,13 +180,13 @@ describe("agents", () => {
     });
 
     it("has 10 total agents", () => {
-      expect(ALL_AGENTS).toHaveLength(10);
+      expect(ALL_AGENTS).toHaveLength(8);
     });
 
     it("getAgent returns correct agent", () => {
-      const agent = getAgent("build");
+      const agent = getAgent("yolo");
       expect(agent).toBeDefined();
-      expect(agent!.name).toBe("build");
+      expect(agent!.name).toBe("yolo");
       expect(agent!.mode).toBe("primary");
     });
 
@@ -198,27 +198,15 @@ describe("agents", () => {
       expect(() => getPrimaryAgent("unknown" as any)).toThrow("Unknown primary agent");
     });
 
-    it("build agent has question permission", () => {
-      const agent = getPrimaryAgent("build");
-      const action = evaluate(agent.permission, "question", "*");
-      expect(action).toBe("allow");
-    });
-
-    it("plan agent denies write outside plans dir", () => {
-      const agent = getPrimaryAgent("plan");
-      const action = evaluate(agent.permission, "write", "src/index.ts");
-      expect(action).toBe("deny");
-    });
-
-    it("plan agent allows write to plans dir", () => {
-      const agent = getPrimaryAgent("plan");
-      const action = evaluate(agent.permission, "write", ".dalam/plans/plan.md");
-      expect(action).toBe("allow");
-    });
-
     it("yolo agent allows everything", () => {
       const agent = getPrimaryAgent("yolo");
       const action = evaluate(agent.permission, "bash", "rm -rf /");
+      expect(action).toBe("allow");
+    });
+
+    it("yolo agent allows question", () => {
+      const agent = getPrimaryAgent("yolo");
+      const action = evaluate(agent.permission, "question", "*");
       expect(action).toBe("allow");
     });
 

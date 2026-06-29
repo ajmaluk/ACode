@@ -145,11 +145,17 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
   // and (3) the LLM needs full context of both memories to produce a coherent merge.
   let deduplicatedCount = 0;
   const categories = Array.from(new Set(freshMemories.map(m => m.category)));
+  // Cap LLM merge calls per dream cycle to prevent excessive API usage
+  const MAX_LLM_MERGES_PER_CYCLE = 10;
+  let llmMergeCount = 0;
 
   for (const category of categories) {
-    const catMemories = freshMemories.filter(m => m.category === category);
+    if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
+    const catMemories = freshMemories.filter(m => m.category === category && !m.stale);
     for (let i = 0; i < catMemories.length; i++) {
+      if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
       for (let j = i + 1; j < catMemories.length; j++) {
+        if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
         const m1 = catMemories[i];
         const m2 = catMemories[j];
         if (m1.stale || m2.stale) continue;
@@ -218,6 +224,7 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
               m1.stale = true;
               m2.stale = true;
               deduplicatedCount++;
+              llmMergeCount++;
             }
           } catch (e) {
             console.warn(`[DreamAgent] Failed to merge memories ${m1.id} and ${m2.id}:`, e);

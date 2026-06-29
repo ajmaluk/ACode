@@ -621,21 +621,10 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
     );
   }
 
-  if (!status) {
-    return (
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="text-center">
-          <Loader2 className="w-6 h-6 mx-auto mb-3 text-dalam-text-muted/50 animate-spin" />
-          <p className="text-sm text-dalam-text-muted">Loading git status...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
       {/* Branch info */}
-      <div className="px-3 pt-2.5 pb-1.5 border-b border-dalam-border-primary">
+      {status && (<div className="px-3 pt-2.5 pb-1.5 border-b border-dalam-border-primary">
         <div className="flex items-center gap-2 mb-1.5">
           <div className="flex items-center gap-1.5 px-2 py-0.5 bg-dalam-accent-subtle rounded-md">
             <GitBranch className="w-3 h-3 text-dalam-accent-primary" />
@@ -647,7 +636,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
             {status.ahead === 0 && status.behind === 0 && <span className="text-dalam-git-added">up to date</span>}
           </div>
         </div>
-      </div>
+      </div>)}
 
       {hasChanges ? (
         <>

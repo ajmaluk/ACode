@@ -14,14 +14,13 @@ import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
   Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
   Bot, Zap, ClipboardList, FolderOpen, Shield, CheckCircle2, Network,
+  Info, MessageSquare,
 } from "lucide-react";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "code-preview", label: "Code preview", icon: Code2 },
   { id: "models", label: "Model settings", icon: Cpu },
-  { id: "agents", label: "Agents", icon: Bot },
-  { id: "permissions", label: "Permissions", icon: Shield },
   { id: "instructions", label: "Instructions", icon: ClipboardList },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP Servers", icon: Plug },
@@ -77,8 +76,7 @@ export function SettingsModal() {
             {activeTab === "general" && <GeneralTab />}
             {activeTab === "code-preview" && <CodePreviewTab />}
             {activeTab === "models" && <ModelsTab />}
-            {activeTab === "agents" && <AgentsTab />}
-            {activeTab === "permissions" && <PermissionsTab />}
+            {/* Agents/Permissions tabs removed — single-mode full-access */}
             {activeTab === "instructions" && <InstructionsTab />}
             {activeTab === "skills" && <SkillsTab />}
             {activeTab === "mcp" && <McpTab />}
@@ -357,7 +355,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
       // First try to find a connected model, then fall back to first model
       const connectedModel = provider.models.find((m) => m.connected);
       const modelId = connectedModel?.modelId || provider.models[0]?.modelId;
-      if (!modelId) { setTestStatus("error"); setTestError("No models configured"); return; }
+      if (!modelId) { clearTimeout(timeoutId); setTestStatus("error"); setTestError("No models configured"); return; }
       const endpoint = baseUrl.replace(/\/+$/, "") + (provider.apiFormat === "anthropic" ? "/v1/messages" : "/chat/completions");
       // Use Tauri HTTP plugin to bypass CORS restrictions
       let resp: Response;
@@ -699,69 +697,19 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
 }
 
 // ============================================================================
-// Agents tab — primary agents (build/plan/yolo) and subagents
+// Subagents section (single mode — no primary agent selection)
 // ============================================================================
 
-const PRIMARY_DISPLAY: Record<PrimaryAgentName, { label: string; description: string; icon: React.ElementType; color: string }> = {
-  build: { label: "Build", description: "Executes tools based on configured permissions. Asks before each operation.", icon: Zap, color: "text-amber-400" },
-  plan: { label: "Plan", description: "Read-only analysis. Produces a plan you can review, then switches to Build to execute.", icon: ClipboardList, color: "text-emerald-400" },
-  yolo: { label: "YOLO", description: "Full access — reads, writes, executes everything without asking. Use with caution.", icon: Sparkles, color: "text-rose-400" },
-};
-
-function AgentsTab() {
-  const { activeAgentName, setActiveAgent, agents } = useAgents();
-  const toast = useToasts((s) => s.push);
-  const primaryAgents = agents.filter((a) => a.mode === "primary");
+function SubagentsSection() {
+  const { agents } = useAgents();
   const subagents = agents.filter((a) => a.mode === "subagent");
 
   return (
-    <>
-      <Section
-        title="Primary agent"
-        hint="The agent that handles your messages. Each one has a different permission ruleset and tool set."
-      >
-        <div className="space-y-2 mb-8">
-        {primaryAgents.map((agent: AgentInfo) => {
-          const meta = PRIMARY_DISPLAY[agent.name as PrimaryAgentName];
-          const Icon = meta.icon;
-          const active = activeAgentName === agent.name;
-          return (
-            <button
-              key={agent.name}
-              onClick={() => { setActiveAgent(agent.name as PrimaryAgentName); toast({ kind: "info", title: `Switched to ${meta.label}`, description: meta.description }); }}
-              className={`w-full text-left surface p-4 transition-colors ${
-                active ? "ring-1 ring-dalam-accent-primary" : "hover:border-dalam-accent-primary"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-lg bg-dalam-bg-tertiary flex items-center justify-center flex-shrink-0">
-                  <Icon className={`w-5 h-5 ${meta.color}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-dalam-text-primary">{meta.label}</span>
-                    {agent.color && (
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: agent.color }} />
-                    )}
-                    {active && <span className="text-[9px] uppercase tracking-wider text-dalam-accent-primary font-medium">active</span>}
-                  </div>
-                  <div className="text-xs text-dalam-text-muted mt-1">{meta.description}</div>
-                  <div className="mt-2 flex items-center gap-3 text-[10px] text-dalam-text-muted font-mono">
-                    <span>{agent.permission.length} rules</span>
-                  </div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-      </Section>
-
-      <Section
-        title="Subagents"
-        hint="Specialized agents the primary agent can delegate to. Subagents run in their own context and return a summary."
-      >
-      <div className="border border-dalam-border-primary rounded-lg overflow-hidden mb-8">
+    <Section
+      title="Subagents"
+      hint="Specialized agents the primary agent can delegate to. Subagents run in their own context and return a summary."
+    >
+      <div className="border border-dalam-border-primary rounded-lg overflow-hidden">
         {subagents.map((agent: AgentInfo, idx: number) => (
           <div
             key={agent.name}
@@ -787,189 +735,7 @@ function AgentsTab() {
           </div>
         ))}
       </div>
-      </Section>
-    </>
-  );
-}
-
-const PERMISSION_TYPES = [
-  { key: "bash", label: "Shell (bash)", desc: "Run shell commands", icon: Terminal },
-  { key: "edit", label: "Edit files", desc: "Modify files in your workspace", icon: Code2 },
-  { key: "read", label: "Read files", desc: "Read file contents", icon: Code2 },
-  { key: "write", label: "Write files", desc: "Create new files", icon: Code2 },
-  { key: "webfetch", label: "Web fetch", desc: "Fetch content from URLs", icon: Plug },
-  { key: "websearch", label: "Web search", desc: "Search the web", icon: Plug },
-  { key: "task", label: "Task delegation", desc: "Delegate to a subagent", icon: Bot },
-  { key: "skill", label: "Skill invocation", desc: "Invoke a $skill", icon: Sparkles },
-  { key: "question", label: "Ask question", desc: "Ask the user a clarifying question", icon: ClipboardList },
-  { key: "doom_loop", label: "Doom loop", desc: "Same tool call repeated", icon: Sparkles },
-  { key: "external_directory", label: "External dir", desc: "Files outside the workspace", icon: FolderOpen },
-  { key: "plan_enter", label: "Enter plan", desc: "Switch into plan mode", icon: ClipboardList },
-  { key: "plan_exit", label: "Exit plan", desc: "Switch out of plan mode", icon: ClipboardList },
-];
-
-const ACTION_META: Record<PermissionAction, { label: string; color: string; desc: string }> = {
-  allow: { label: "Allow", color: "text-dalam-git-added", desc: "Run without asking" },
-  ask: { label: "Ask", color: "text-amber-400", desc: "Prompt for confirmation" },
-  deny: { label: "Deny", color: "text-dalam-git-deleted", desc: "Block the action" },
-};
-
-function PermissionsTab() {
-  const { agents, activeAgentName, setActiveAgent, userRules, upsertRule, removeRule, resetRules } = useAgents();
-  const [newPerm, setNewPerm] = useState<string>("bash");
-  const [newPattern, setNewPattern] = useState<string>("*");
-  const [newAction, setNewAction] = useState<PermissionAction>("ask");
-  const toast = useToasts((s) => s.push);
-
-  const activeAgent = agents.find((a: AgentInfo) => a.name === activeAgentName);
-  const allRules: PermissionRule[] = activeAgent?.permission ?? [];
-
-  return (
-    <>
-      <Section
-        title="Permission policy"
-        hint={`Editing the permission ruleset for the ${activeAgentName.toUpperCase()} agent. Rules are merged with the agent's defaults — your custom rules override.`}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-dalam-text-muted">Active agent:</span>
-          <select
-            className="input-base text-xs"
-            value={activeAgentName}
-            onChange={(e) => setActiveAgent(e.target.value as PrimaryAgentName)}
-          >
-            {agents.filter((a: AgentInfo) => a.mode === "primary").map((a: AgentInfo) => (
-              <option key={a.name} value={a.name}>{a.name}</option>
-            ))}
-          </select>
-        </div>
-      </Section>
-
-      <Section
-        title="Add rule"
-        hint="Rules are evaluated top-to-bottom. Specific patterns override wildcards. * matches anything."
-      >
-        <div className="surface p-3">
-          <div className="grid grid-cols-[180px_1fr_120px_auto] gap-2 items-end">
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-dalam-text-muted block mb-1">Permission</label>
-              <select className="input-base w-full" value={newPerm} onChange={(e) => setNewPerm(e.target.value)}>
-                {PERMISSION_TYPES.map((p) => (<option key={p.key} value={p.key}>{p.label}</option>))}
-                <option value="*">* (any)</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-dalam-text-muted block mb-1">Pattern</label>
-              <input
-                className="input-base w-full font-mono text-xs"
-                value={newPattern}
-                onChange={(e) => setNewPattern(e.target.value)}
-                placeholder="e.g. git status, npm run dev, *"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-dalam-text-muted block mb-1">Action</label>
-              <select className="input-base w-full" value={newAction} onChange={(e) => setNewAction(e.target.value as PermissionAction)}>
-                <option value="allow">Allow</option>
-                <option value="ask">Ask</option>
-                <option value="deny">Deny</option>
-              </select>
-            </div>
-            <button
-              className="px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs rounded-md transition-colors"
-              onClick={() => {
-                if (!newPattern.trim()) { toast({ kind: "error", title: "Pattern required" }); return; }
-                upsertRule({ permission: newPerm, pattern: newPattern.trim(), action: newAction });
-                toast({ kind: "success", title: "Rule added", description: `${newPerm} ${newPattern} → ${newAction}` });
-                setNewPattern("*");
-              }}
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      </Section>
-
-      <Section title="Agent defaults" hint="These rules ship with the agent. Add your own rules above to override them.">
-        <div className="border border-dalam-border-primary rounded-lg overflow-hidden">
-          <div className="grid grid-cols-[1fr_1fr_80px_24px] px-3 py-2 bg-dalam-bg-tertiary text-[10px] uppercase tracking-wider text-dalam-text-muted">
-            <span>Permission</span>
-            <span>Pattern</span>
-            <span>Action</span>
-            <span></span>
-          </div>
-          {allRules.length === 0 && (
-            <div className="px-3 py-4 text-center text-xs text-dalam-text-muted">No rules.</div>
-          )}
-          {allRules.map((r: PermissionRule, idx: number) => {
-            const meta = ACTION_META[r.action] ?? ACTION_META.ask;
-            return (
-              <div
-                key={`${r.permission}-${r.pattern}-${idx}`}
-                className="grid grid-cols-[1fr_1fr_80px_24px] px-3 py-2 items-center text-xs border-t border-dalam-border-primary hover:bg-dalam-bg-hover/40"
-              >
-                <span className="text-dalam-text-primary font-mono">{r.permission}</span>
-                <span className="text-dalam-text-secondary font-mono truncate">{r.pattern}</span>
-                <span className={`font-medium ${meta.color}`}>{meta.label}</span>
-                <span></span>
-              </div>
-            );
-          })}
-        </div>
-      </Section>
-
-      {userRules.length > 0 && (
-        <Section title="Your custom rules" hint="These override the agent defaults. Higher entries win over lower ones.">
-          <div className="border border-dalam-border-primary rounded-lg overflow-hidden">
-            <div className="grid grid-cols-[1fr_1fr_80px_24px] px-3 py-2 bg-dalam-bg-tertiary text-[10px] uppercase tracking-wider text-dalam-text-muted">
-              <span>Permission</span>
-              <span>Pattern</span>
-              <span>Action</span>
-              <span></span>
-            </div>
-            {userRules.map((r: PermissionRule, idx: number) => {
-              const meta = ACTION_META[r.action] ?? ACTION_META.ask;
-              return (
-                <div
-                  key={`user-${r.permission}-${r.pattern}-${idx}`}
-                  className="grid grid-cols-[1fr_1fr_80px_24px] px-3 py-2 items-center text-xs border-t border-dalam-border-primary hover:bg-dalam-bg-hover/40"
-                >
-                  <span className="text-dalam-text-primary font-mono">{r.permission}</span>
-                  <span className="text-dalam-text-secondary font-mono truncate">{r.pattern}</span>
-                  <span className={`font-medium ${meta.color}`}>{meta.label}</span>
-                  <button
-                    className="btn-icon p-0.5"
-                    onClick={() => { removeRule(r.permission, r.pattern); toast({ kind: "info", title: "Rule removed" }); }}
-                    title="Remove"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <button
-            className="mt-2 px-3 py-1.5 text-xs text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-md border border-dalam-border-primary transition-colors"
-            onClick={() => { resetRules(); toast({ kind: "info", title: "Custom rules reset" }); }}
-          >
-            Reset to defaults
-          </button>
-        </Section>
-      )}
-
-      <Section title="How permissions are evaluated" hint="For each tool call, Dalam walks the rules top-to-bottom and uses the first match.">
-        <ol className="text-xs text-dalam-text-secondary space-y-1.5 list-decimal pl-5">
-          <li>Exact <code className="text-mono text-dalam-text-primary">(permission, pattern)</code> match wins.</li>
-          <li>Then the wildcard pattern <code className="text-mono text-dalam-text-primary">*</code> for that permission.</li>
-          <li>Then the global wildcard <code className="text-mono text-dalam-text-primary">*</code> rule.</li>
-          <li>If nothing matches, the action is <strong>ask</strong>.</li>
-        </ol>
-        <p className="text-xs text-dalam-text-muted mt-3">
-          For shell commands, the pattern is resolved by the <strong>arity table</strong> — the longest
-          matching command prefix becomes the canonical pattern. e.g. <code className="text-mono">git checkout main -b feature</code> →
-          <code className="text-mono ml-1">git checkout</code>.
-        </p>
-      </Section>
-    </>
+    </Section>
   );
 }
 
@@ -1113,7 +879,16 @@ function McpTab() {
   const [envEntries, setEnvEntries] = useState<Array<{ key: string; value: string }>>([]);
   const [jsonText, setJsonText] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const toast = useToasts((s) => s.push);
+
+  const MCP_PRESETS = [
+    { name: "Filesystem", description: "Read, write, and manage files on your system", command: "npx", args: "-y @modelcontextprotocol/server-filesystem /path/to/allowed/dir", icon: FolderOpen },
+    { name: "Memory", description: "Persistent knowledge graph memory for the agent", command: "npx", args: "-y @modelcontextprotocol/server-memory", icon: Database },
+    { name: "GitHub", description: "Repository management, issues, and pull requests", command: "npx", args: "-y @modelcontextprotocol/server-github", icon: Code2 },
+    { name: "Brave Search", description: "Web search via Brave Search API", command: "npx", args: "-y @modelcontextprotocol/server-brave-search", icon: Zap },
+    { name: "Fetch", description: "Fetch web pages and extract content", command: "npx", args: "-y @modelcontextprotocol/server-fetch", icon: Network },
+  ];
 
   const validateJson = (text: string): boolean => {
     if (!text.trim()) { setJsonError(null); return false; }
@@ -1205,6 +980,54 @@ function McpTab() {
       {view === "list" ? (
         <>
           <p className="text-sm text-dalam-text-muted mb-6">Connect MCP servers to extend the agent with new tools. Use the toggle to connect / disconnect.</p>
+
+          {/* Help toggle */}
+          <button onClick={() => setShowHelp(!showHelp)} className="flex items-center gap-1.5 text-xs text-dalam-accent-primary hover:text-dalam-accent-hover mb-4 transition-colors">
+            <Info className="w-3.5 h-3.5" />
+            {showHelp ? "Hide help" : "What is MCP?"}
+          </button>
+
+          {showHelp && (
+            <Card title="About MCP (Model Context Protocol)" description="MCP is an open protocol that lets AI agents connect to external tools and data sources.">
+              <div className="space-y-3 text-xs text-dalam-text-secondary leading-relaxed">
+                <p><strong className="text-dalam-text-primary">stdio servers</strong> run as local processes. The agent launches them with a command (like <code className="px-1 py-0.5 bg-dalam-bg-active rounded text-dalam-text-primary font-mono">npx -y @modelcontextprotocol/server-memory</code>) and communicates via stdin/stdout.</p>
+                <p><strong className="text-dalam-text-primary">HTTP servers</strong> run remotely. The agent connects to a URL endpoint. Use this for cloud-hosted MCP servers.</p>
+                <p><strong className="text-dalam-text-primary">Quick add:</strong> Click a preset below to auto-fill the form. Adjust the arguments for your setup, then click Add.</p>
+                <p><strong className="text-dalam-text-primary">Environment variables:</strong> Some servers need API keys (e.g., <code className="px-1 py-0.5 bg-dalam-bg-active rounded text-dalam-text-primary font-mono">GITHUB_PERSONAL_ACCESS_TOKEN</code>). Add them in the Environment variables section.</p>
+              </div>
+            </Card>
+          )}
+
+          {/* Quick Add presets */}
+          {mcpServers.length === 0 && !showHelp && (
+            <Card title="Quick Add — Popular MCP Servers" description="Click a preset to auto-fill the add form. You can customize the settings before saving.">
+              <div className="grid grid-cols-1 gap-2">
+                {MCP_PRESETS.map((preset) => {
+                  const Icon = preset.icon;
+                  return (
+                    <button key={preset.name} onClick={() => {
+                      setName(preset.name);
+                      setTransport("stdio");
+                      setCommand(preset.command);
+                      setArgsText(preset.args);
+                      setView("add");
+                      setEditMode("form");
+                    }} className="flex items-center gap-3 p-3 rounded-lg bg-dalam-bg-active/50 hover:bg-dalam-bg-hover border border-dalam-border-primary/50 hover:border-dalam-border-primary text-left transition-all group">
+                      <div className="w-8 h-8 rounded-md bg-dalam-bg-tertiary flex items-center justify-center flex-shrink-0 group-hover:bg-dalam-accent-subtle">
+                        <Icon className="w-4 h-4 text-dalam-text-muted group-hover:text-dalam-accent-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-dalam-text-primary font-medium">{preset.name}</div>
+                        <div className="text-xs text-dalam-text-muted truncate">{preset.description}</div>
+                      </div>
+                      <Plus className="w-4 h-4 text-dalam-text-muted group-hover:text-dalam-accent-primary flex-shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
           <div className="space-y-1">
             {mcpServers.length === 0 && (
               <div className="text-center text-sm text-dalam-text-muted py-8">No MCP servers configured.</div>
@@ -1282,16 +1105,19 @@ function McpTab() {
                 <div>
                   <label className="block text-sm text-dalam-text-primary mb-1.5">Command</label>
                   <input className="input-base text-sm w-full" placeholder="npx" value={command} onChange={(e) => setCommand(e.target.value)} />
+                  <p className="text-[11px] text-dalam-text-muted mt-1">The executable to run. Common: <code className="text-dalam-accent-primary">npx</code>, <code className="text-dalam-accent-primary">uvx</code>, <code className="text-dalam-accent-primary">node</code>, or an absolute path.</p>
                 </div>
                 <div>
                   <label className="block text-sm text-dalam-text-primary mb-1.5">Arguments (space separated)</label>
                   <input className="input-base text-sm w-full font-mono" placeholder="-y @modelcontextprotocol/server-memory" value={argsText} onChange={(e) => setArgsText(e.target.value)} />
+                  <p className="text-[11px] text-dalam-text-muted mt-1">For <code className="text-dalam-accent-primary">npx</code>: use <code className="text-dalam-accent-primary">-y package-name [args]</code>. For filesystem access, append the allowed directory path.</p>
                 </div>
               </>
             ) : (
               <div>
                 <label className="block text-sm text-dalam-text-primary mb-1.5">Endpoint URL</label>
                 <input className="input-base text-sm w-full" placeholder="https://api.example.com/mcp" value={url} onChange={(e) => setUrl(e.target.value)} />
+                <p className="text-[11px] text-dalam-text-muted mt-1">The full URL of the remote MCP server endpoint (e.g., <code className="text-dalam-accent-primary">https://your-server.com/mcp</code>).</p>
               </div>
             )}
 
@@ -1513,9 +1339,25 @@ function ConnectorsTab() {
   return (
     <>
       <Card title="Connectors" description="Connect Dalam to external messaging platforms. Receive and respond to messages from Telegram, WhatsApp, and more.">
+        <div className="space-y-3 text-xs text-dalam-text-secondary leading-relaxed mb-4">
+          <p>Connectors let Dalam receive messages from external platforms and respond using the AI agent. Each connector runs a background service that listens for incoming messages.</p>
+          <p><strong className="text-dalam-text-primary">How to set up:</strong></p>
+          <ol className="list-decimal list-inside space-y-1 text-dalam-text-secondary">
+            <li>Choose a platform (Telegram or WhatsApp) and click the button below.</li>
+            <li>Enter your credentials (bot token, bridge URL, etc.).</li>
+            <li>Save and restart Dalam to activate the connector.</li>
+            <li>The agent will start receiving and responding to messages.</li>
+          </ol>
+        </div>
+
         {configs.length === 0 && !addingType && (
-          <p className="text-[12px] text-dalam-text-muted mb-4">No connectors configured. Add one below to get started.</p>
+          <div className="text-center py-6 border border-dashed border-dalam-border-primary rounded-lg">
+            <Plug className="w-8 h-8 text-dalam-text-muted mx-auto mb-2" />
+            <p className="text-sm text-dalam-text-muted mb-1">No connectors configured</p>
+            <p className="text-xs text-dalam-text-muted">Add a connector below to get started.</p>
+          </div>
         )}
+
         {configs.map((cfg) => (
           <div key={cfg.id} className="flex items-center justify-between py-3 border-b border-dalam-border-primary last:border-b-0">
             <div className="flex items-center gap-3">
@@ -1529,7 +1371,7 @@ function ConnectorsTab() {
               <button onClick={() => handleToggle(cfg)} className="text-[11px] px-2 py-1 rounded bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">
                 {cfg.enabled ? "Disable" : "Enable"}
               </button>
-              <button onClick={() => handleDelete(cfg.id)} className="text-[11px] px-2 py-1 rounded bg-dalam-git-deleted/10 hover:bg-dalam-git-deleted/20 text-dalam-git-deleted transition-colors">
+              <button onClick={() => { if (confirm(`Delete "${cfg.name}"? This cannot be undone.`)) handleDelete(cfg.id); }} className="text-[11px] px-2 py-1 rounded bg-dalam-git-deleted/10 hover:bg-dalam-git-deleted/20 text-dalam-git-deleted transition-colors">
                 Delete
               </button>
             </div>
@@ -1538,14 +1380,33 @@ function ConnectorsTab() {
       </Card>
 
       {!addingType && (
-        <div className="flex gap-2 mt-3">
-          <button onClick={() => setAddingType("telegram")} className="text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">+ Telegram</button>
-          <button onClick={() => setAddingType("whatsapp")} className="text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">+ WhatsApp</button>
+        <div className="space-y-3">
+          <p className="text-xs text-dalam-text-muted">Add a new connector:</p>
+          <div className="flex gap-2">
+            <button onClick={() => setAddingType("telegram")} className="flex items-center gap-2 text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">
+              <MessageSquare className="w-3.5 h-3.5" /> Telegram
+            </button>
+            <button onClick={() => setAddingType("whatsapp")} className="flex items-center gap-2 text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors">
+              <MessageSquare className="w-3.5 h-3.5" /> WhatsApp
+            </button>
+          </div>
         </div>
       )}
 
       {addingType === "telegram" && (
-        <Card title="Add Telegram Bot"><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Name</label><input className="input-base w-full" value={tgName} onChange={(e) => setTgName(e.target.value)} placeholder="Telegram Bot" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Bot token</label><input className="input-base w-full font-mono" value={tgToken} onChange={(e) => setTgToken(e.target.value)} placeholder="123456:ABC-DEF..." /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Allowed user IDs (comma-separated)</label><input className="input-base w-full" value={tgUsers} onChange={(e) => setTgUsers(e.target.value)} placeholder="123456789" /></div>
+        <Card title="Add Telegram Bot">
+          <div className="space-y-3 text-xs text-dalam-text-secondary leading-relaxed mb-4 p-3 bg-dalam-bg-active/50 rounded-lg border border-dalam-border-primary/50">
+            <p><strong className="text-dalam-text-primary">Setup guide:</strong></p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Open Telegram and search for <code className="text-dalam-accent-primary">@BotFather</code>.</li>
+              <li>Send <code className="text-dalam-accent-primary">/newbot</code> and follow the prompts.</li>
+              <li>Copy the bot token BotFather gives you.</li>
+              <li>Optionally, get your user ID from <code className="text-dalam-accent-primary">@userinfobot</code> to restrict access.</li>
+            </ol>
+          </div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Name</label><input className="input-base w-full" value={tgName} onChange={(e) => setTgName(e.target.value)} placeholder="Telegram Bot" /></div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Bot token</label><input className="input-base w-full font-mono" value={tgToken} onChange={(e) => setTgToken(e.target.value)} placeholder="123456:ABC-DEF..." /></div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Allowed user IDs (comma-separated, optional)</label><input className="input-base w-full" value={tgUsers} onChange={(e) => setTgUsers(e.target.value)} placeholder="123456789" /><p className="text-[10px] text-dalam-text-muted mt-1">Leave empty to allow all users. Get your ID from @userinfobot.</p></div>
           <div className="flex gap-2 mt-2">
             <button onClick={handleAddTelegram} className="btn-primary text-[12px]">Add Connector</button>
             <button onClick={() => setAddingType(null)} className="text-[12px] px-3 py-1.5 rounded text-dalam-text-muted hover:text-dalam-text-primary">Cancel</button>
@@ -1554,7 +1415,19 @@ function ConnectorsTab() {
       )}
 
       {addingType === "whatsapp" && (
-        <Card title="Add WhatsApp"><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Name</label><input className="input-base w-full" value={waName} onChange={(e) => setWaName(e.target.value)} placeholder="WhatsApp" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Bridge URL</label><input className="input-base w-full font-mono" value={waBridgeUrl} onChange={(e) => setWaBridgeUrl(e.target.value)} placeholder="http://localhost:3000" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Auth token (optional)</label><input className="input-base w-full font-mono" value={waToken} onChange={(e) => setWaToken(e.target.value)} placeholder="Optional" /></div><div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Allowed phone numbers (comma-separated)</label><input className="input-base w-full" value={waUsers} onChange={(e) => setWaUsers(e.target.value)} placeholder="+1234567890" /></div>
+        <Card title="Add WhatsApp">
+          <div className="space-y-3 text-xs text-dalam-text-secondary leading-relaxed mb-4 p-3 bg-dalam-bg-active/50 rounded-lg border border-dalam-border-primary/50">
+            <p><strong className="text-dalam-text-primary">Setup guide:</strong></p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Set up a WhatsApp bridge server (e.g., <code className="text-dalam-accent-primary">whatsapp-web.js</code> or <code className="text-dalam-accent-primary">baileys</code>).</li>
+              <li>Enter the bridge server URL below.</li>
+              <li>If your bridge requires authentication, enter the auth token.</li>
+            </ol>
+          </div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Name</label><input className="input-base w-full" value={waName} onChange={(e) => setWaName(e.target.value)} placeholder="WhatsApp" /></div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Bridge URL</label><input className="input-base w-full font-mono" value={waBridgeUrl} onChange={(e) => setWaBridgeUrl(e.target.value)} placeholder="http://localhost:3000" /></div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Auth token (optional)</label><input className="input-base w-full font-mono" value={waToken} onChange={(e) => setWaToken(e.target.value)} placeholder="Optional" /></div>
+          <div className="mb-3"><label className="block text-[11px] text-dalam-text-muted mb-1">Allowed phone numbers (comma-separated, optional)</label><input className="input-base w-full" value={waUsers} onChange={(e) => setWaUsers(e.target.value)} placeholder="+1234567890" /><p className="text-[10px] text-dalam-text-muted mt-1">Leave empty to allow all contacts.</p></div>
           <div className="flex gap-2 mt-2">
             <button onClick={handleAddWhatsApp} className="btn-primary text-[12px]">Add Connector</button>
             <button onClick={() => setAddingType(null)} className="text-[12px] px-3 py-1.5 rounded text-dalam-text-muted hover:text-dalam-text-primary">Cancel</button>

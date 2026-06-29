@@ -19,11 +19,13 @@ const DB_VERSION = 1;
 type ObjectStoreName = "sessions" | "messages" | "versions" | "compaction";
 
 let dbInstance: IDBDatabase | null = null;
+let dbLoadingPromise: Promise<IDBDatabase> | null = null;
 
 function openDB(): Promise<IDBDatabase> {
   if (dbInstance) return Promise.resolve(dbInstance);
+  if (dbLoadingPromise) return dbLoadingPromise;
 
-  return new Promise((resolve, reject) => {
+  dbLoadingPromise = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = (event) => {
@@ -56,13 +58,17 @@ function openDB(): Promise<IDBDatabase> {
 
     request.onsuccess = () => {
       dbInstance = request.result;
+      dbLoadingPromise = null;
       resolve(request.result);
     };
 
     request.onerror = () => {
+      dbLoadingPromise = null;
       reject(request.error);
     };
   });
+
+  return dbLoadingPromise;
 }
 
 /**
@@ -116,6 +122,8 @@ async function ensureDB(): Promise<IDBDatabase> {
       await migrateFromLocalStorage();
     } catch (e) {
       console.warn("[IndexedDB] Migration from localStorage failed:", e);
+      // Reset flag so migration is retried on next call
+      migrationAttempted = false;
     }
   }
   return db;

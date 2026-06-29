@@ -1,23 +1,14 @@
-import { Settings as SettingsIcon, ChevronDown, Sparkles, Zap, ClipboardList, Loader2, Sun, Moon, Monitor, ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
-import { useSettingsView, useWorkspace, useGit, useAgents, useChat, useSettings } from "@/store/useAppStore";
-
-const AGENT_META: Record<string, { label: string; icon: React.ElementType; color: string }> = {
-  build: { label: "Build", icon: Zap, color: "text-amber-400" },
-  plan: { label: "Plan", icon: ClipboardList, color: "text-emerald-400" },
-  yolo: { label: "YOLO", icon: Sparkles, color: "text-rose-400" },
-};
+import { Settings as SettingsIcon, ChevronDown, Sparkles, Loader2, Sun, Moon, Monitor, ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
+import { useSettingsView, useWorkspace, useGit, useChat, useSettings } from "@/store/useAppStore";
 
 export function TitleBar() {
   const { open: openSettings } = useSettingsView();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const { status: gitStatus } = useGit();
-  const { activeAgentName } = useAgents();
   const { session, isStreaming, chatSessions, activeSessionId, goBackChat, goForwardChat } = useChat();
   const { settings, update: updateSetting } = useSettings();
   const active = workspaces.find((w) => w.id === activeWorkspaceId);
   const activeSession = chatSessions.find((s) => s.id === activeSessionId);
-  const agentMeta = AGENT_META[activeAgentName] ?? AGENT_META.build;
-  const AgentIcon = agentMeta.icon;
   const sessionStatus = session?.status ?? "idle";
 
   return (
@@ -69,19 +60,19 @@ export function TitleBar() {
       <div className="flex items-center gap-0.5 no-drag mr-1">
         <div className="relative group">
           <button
-            onClick={() => useSettingsView.getState().open("agents")}
+            onClick={() => useSettingsView.getState().open("general")}
             className="flex items-center gap-1.5 px-2 h-7 text-xs text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-md border border-dalam-border-primary transition-colors"
             title="Active agent (click to change)"
           >
             <span className="relative">
-              <AgentIcon className={`w-3.5 h-3.5 ${agentMeta.color}`} />
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
               <span className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-dalam-bg-active ${
                 sessionStatus === "running" ? "bg-dalam-accent-primary animate-pulse" :
                 sessionStatus === "aborted" || sessionStatus === "error" ? "bg-dalam-git-deleted" :
                 "bg-dalam-git-added"
               }`} />
             </span>
-            <span>{agentMeta.label}</span>
+            <span>Assistant</span>
           </button>
         </div>
         {/* Streaming indicator */}

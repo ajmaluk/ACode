@@ -18,7 +18,6 @@
 
 import { createDalamAPI } from "./dalamAPI";
 import { joinPath } from "./pathUtils";
-import { logger } from "./logger";
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -98,7 +97,7 @@ export async function startRecording(
   if (buffers.has(sessionId)) return; // Already recording
 
   buffers.set(sessionId, { turns: [], lastFlush: Date.now(), workspacePath });
-  logger.info("Trajectory", `Started recording session ${sessionId}`, { workspacePath });
+  console.log("Trajectory", `Started recording session ${sessionId}`, { workspacePath });
 
   // Ensure trajectory directory exists
   try {
@@ -109,7 +108,7 @@ export async function startRecording(
       await mkdir(trajDir, { recursive: true });
     }
   } catch (e) {
-    logger.warn("Trajectory", "Failed to create trajectory directory", { error: String(e) });
+    console.warn("Trajectory", "Failed to create trajectory directory", { error: String(e) });
   }
 
   // Start flush timer if not running
@@ -129,7 +128,7 @@ export async function stopRecording(sessionId: string): Promise<void> {
   await flushBuffer(sessionId);
   buffers.delete(sessionId);
 
-  logger.info("Trajectory", `Stopped recording session ${sessionId}`);
+  console.log("Trajectory", `Stopped recording session ${sessionId}`);
 
   // Stop timer if no more sessions
   if (buffers.size === 0 && flushTimer) {
@@ -252,7 +251,7 @@ async function flushBuffer(sessionId: string): Promise<void> {
     const workspacePath = buffer.workspacePath;
 
     if (!workspacePath) {
-      logger.warn("Trajectory", "No workspace path, cannot flush", { sessionId });
+      console.warn("Trajectory", "No workspace path, cannot flush", { sessionId });
       // Restore turns so they aren't lost
       buffer.turns = [...turns, ...buffer.turns];
       return;
@@ -322,7 +321,7 @@ async function flushBuffer(sessionId: string): Promise<void> {
       buffer._appendedContent = fullContent;
       writeSucceeded = true;
     } catch (e) {
-      logger.error("Trajectory", "Failed to write trajectory", {
+      console.error("Trajectory", "Failed to write trajectory", {
         sessionId,
         error: String(e),
       });
@@ -333,7 +332,7 @@ async function flushBuffer(sessionId: string): Promise<void> {
       const buf = buffers.get(sessionId);
       if (buf) buf.turns = [...turns, ...buf.turns];
     }
-    logger.debug("Trajectory", `Flushed ${turns.length} turns for session ${sessionId}`);
+    console.debug("Trajectory", `Flushed ${turns.length} turns for session ${sessionId}`);
   } finally {
     flushing.delete(sessionId);
   }
@@ -376,7 +375,7 @@ export async function readTrajectories(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
     );
   } catch (e) {
-    logger.warn("Trajectory", "Failed to read trajectories", { error: String(e) });
+    console.warn("Trajectory", "Failed to read trajectories", { error: String(e) });
     return [];
   }
 }
@@ -404,10 +403,10 @@ export async function exportTrajectories(
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    logger.info("Trajectory", `Exported ${records.length} trajectory records`);
+    console.log("Trajectory", `Exported ${records.length} trajectory records`);
     return link.download;
   } catch (e) {
-    logger.error("Trajectory", "Export failed", { error: String(e) });
+    console.error("Trajectory", "Export failed", { error: String(e) });
     return null;
   }
 }

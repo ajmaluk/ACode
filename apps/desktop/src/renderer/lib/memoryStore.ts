@@ -142,10 +142,14 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
       // Use provided workspacePath or fall back to active workspace
       let wsPath = workspacePath;
       if (!wsPath) {
-        const { useWorkspace } = await import("@/store/useAppStore");
-        const ws = useWorkspace.getState();
-        const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
-        wsPath = activeWs?.path;
+        try {
+          const { useWorkspace } = await import("@/store/useAppStore");
+          const ws = useWorkspace.getState();
+          const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
+          wsPath = activeWs?.path;
+        } catch {
+          // Store not available (e.g. during module-level cleanup) — skip markdown cleanup
+        }
       }
       if (wsPath) {
         const memDir = jp(wsPath, ".dalam", "memories");
@@ -192,7 +196,7 @@ export async function searchMemories(
     FROM memories m
     JOIN memories_fts ON memories_fts.id = m.id
     WHERE memories_fts MATCH ?`;
-  const safeQuery = query.replace(/"/g, '""');
+  const safeQuery = query;
   // Break multi-word query into individual tokens for better search results
   // Escape FTS5 special characters in each token
   const escapeFts = (t: string) => t.replace(/['"*+\-()^~]/g, ' ');
@@ -830,7 +834,7 @@ function tokenize(text: string): string[] {
   const tokens = new Set<string>();
   // Split on whitespace and common separators, but preserve code-like tokens
   // e.g. "file.ts", "src/lib/utils", "useState", "npm-run" stay intact
-  const raw = text.toLowerCase().split(/[^a-z0-9_/.\-]+/).filter(Boolean);
+  const raw = text.toLowerCase().split(/[^a-z0-9_/.-]+/).filter(Boolean);
   for (const w of raw) {
     if (w.length <= 2 || stopWords.has(w)) continue;
     tokens.add(w);

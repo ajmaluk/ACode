@@ -228,7 +228,11 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
     });
     // Wrap Tauri response as a standard Response-like object
     const respHeaders = new Headers();
-    for (const [k, v] of Object.entries(resp.headers)) respHeaders.set(k, v);
+    if (resp.headers instanceof Headers) {
+      resp.headers.forEach((v, k) => respHeaders.set(k, v));
+    } else if (resp.headers) {
+      for (const [k, v] of Object.entries(resp.headers as Record<string, string>)) respHeaders.set(k, v);
+    }
     return {
       ok: resp.ok,
       status: resp.status,
@@ -350,7 +354,7 @@ async function* streamOpenAI(
       .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
       .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
       .join(" ");
-    const bodyTools = ["write_file", "edit_file", "clipboard_write", "memory_save"];
+    const bodyTools = ["write_file", "clipboard_write", "memory_save"];
     if (bodyTools.includes(tcName) && parsedArgs.content) {
       const contentStr = typeof parsedArgs.content === "string" ? parsedArgs.content : "";
       const escapedContent = contentStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -378,7 +382,10 @@ async function* streamOpenAI(
         }),
       ]);
       const { done, value } = readResult;
-      if (done) break;
+      if (done) {
+        clearLastTimeout();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const { parsed, remaining } = parseSSEEvents(buffer);
       buffer = remaining;
@@ -500,8 +507,7 @@ async function* streamAnthropic(
   const url = baseUrl.replace(/\/+$/, "") + "/v1/messages";
   const systemMsg = messages.find((m) => m.role === "system")?.content || "";
   const chatMessages = messages.filter((m) => m.role !== "system");
-  const body: Record<string, unknown> = { model, system: systemMsg, messages: chatMessages, stream: true };
-  if (maxTokens) body.max_tokens = maxTokens;
+  const body: Record<string, unknown> = { model, system: systemMsg, messages: chatMessages, stream: true, max_tokens: maxTokens || 16384 };
   const resp = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
@@ -512,16 +518,18 @@ async function* streamAnthropic(
   const decoder = new TextDecoder();
   let buffer = "";
   let msgId = "";
-  const STREAM_READ_TIMEOUT_MS = 60_000; // 60s per read — detect hung streams
+  const STREAM_READ_TIMEOUT_MS = 60_000;
   let lastReadTimer: ReturnType<typeof setTimeout> | undefined;
   const clearLastTimer = () => { if (lastReadTimer !== undefined) { clearTimeout(lastReadTimer); lastReadTimer = undefined; } };
-  // Register abort listener ONCE to avoid accumulating listeners per iteration
   let currentClearFnAnth: (() => void) | undefined;
   let abortHandlerAnthropic: (() => void) | null = null;
   if (signal) {
     abortHandlerAnthropic = () => currentClearFnAnth?.();
     signal.addEventListener("abort", abortHandlerAnthropic, { once: true });
   }
+  // Tool call accumulation for Anthropic native tool calling
+  const _anthropicToolBuffers = new Map<string, { name: string; args: string }>();
+  let _anthropicCurrentToolName: string;
   _debugLog("[streamAnthropic] Starting stream, url:", url);
   try {
     while (true) {
@@ -534,7 +542,10 @@ async function* streamAnthropic(
         }),
       ]);
       const { done, value } = readResult;
-      if (done) break;
+      if (done) {
+        clearLastTimer();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const { parsed, remaining } = parseSSEEvents(buffer);
       buffer = remaining;
@@ -545,6 +556,31 @@ async function* streamAnthropic(
             throw new ProviderError(json.error?.message || "Anthropic stream error", "provider");
           }
           if (json.type === "message_start") { msgId = json.message?.id || ""; }
+          if (json.type === "content_block_start" && json.content_block?.type === "tool_use") {
+            _anthropicCurrentToolName = json.content_block.name || "";
+            _anthropicToolBuffers.set(json.content_block.id, { name: _anthropicCurrentToolName, args: "" });
+          }
+          if (json.type === "content_block_delta" && json.delta?.type === "input_json_delta" && json.content_block_id) {
+            const buf = _anthropicToolBuffers.get(json.content_block_id);
+            if (buf) buf.args += json.delta.partial_json || "";
+          }
+          if (json.type === "content_block_stop" && json.content_block_id) {
+            const buf = _anthropicToolBuffers.get(json.content_block_id);
+            if (buf) {
+              try {
+                const parsedArgs = JSON.parse(buf.args || "{}");
+                const attrs = Object.entries(parsedArgs)
+                  .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+                  .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
+                  .join(" ");
+                const xmlTag = attrs ? `<${buf.name} ${attrs}/>` : `<${buf.name}/>`;
+                yield { type: "message-delta", messageId: msgId, content: "\n" + xmlTag + "\n" };
+              } catch {
+                yield { type: "message-delta", messageId: msgId, content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
+              }
+              _anthropicToolBuffers.delete(json.content_block_id);
+            }
+          }
           if (json.type === "content_block_delta" && json.delta?.text) {
             yield { type: "message-delta", messageId: msgId, content: json.delta.text };
           }
@@ -600,7 +636,7 @@ async function* streamChat(
 const JUNK_DIRS = new Set([".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"]);
 const JUNK_FILES = new Set([".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"]);
 
-async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles: number = 10000, _count: {n: number} = {n: 0}, _visited: Set<string> = new Set()): Promise<FileNode[]> {
+async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles: number = 10000, _count: { n: number } = { n: 0 }, _visited: Set<string> = new Set()): Promise<FileNode[]> {
   if (_visited.has(dirPath)) return [];
   _visited.add(dirPath);
   if (_count.n >= maxFiles) return [];
@@ -997,7 +1033,16 @@ const dalamAPI: DalamAPI = {
 
         const toolsDocumentation = `
 === AGENTIC TOOLS HARNESS ===
-You are equipped with tools to interact with the workspace and operating system. To invoke a tool, output the corresponding XML tag in your response. The system will pause, execute the tool, and provide the result in your next turn. You can invoke multiple tools in a single turn.
+CRITICAL: You have tools available. To use them, you MUST output XML tags — not backtick-wrapped text like \`read_file\`. Output the ACTUAL XML tags shown below. The system will detect these tags, execute the tool, and give you the result.
+
+WHEN CREATING FILES — Use write_file, NOT markdown code blocks:
+WRONG: \`\`\`html\\n<!DOCTYPE html>...\\n\`\`\`  (this just shows code to the user)
+RIGHT: <write_file path="index.html"><!DOCTYPE html>...</write_file>  (this creates the file on disk)
+
+WHEN EDITING FILES — Use edit_file with search/replace:
+<edit_file path="file.ts"><search>old code</search><replace>new code</replace></edit_file>
+
+You can output multiple tool tags in one response. Tools execute automatically — no user confirmation needed.
 
 --- File & Workspace Tools ---
 1. Read File:
@@ -1034,90 +1079,90 @@ You are equipped with tools to interact with the workspace and operating system.
    Executes a shell command in the workspace directory and returns its output.
 
 --- Git Tools ---
-6. Git Status:
+8. Git Status:
    <git_status/>
    Gets the git status of the project.
 
-7. Git Commit:
+9. Git Commit:
    <git_commit message="message"/>
    Commits all changes.
 
-8. Git Log:
-   <git_log/>
-   Gets the git commit history.
+10. Git Log:
+    <git_log/>
+    Gets the git commit history.
 
 --- Desktop / System Tools ---
-9. Clipboard Read:
+11. Clipboard Read:
     <clipboard_read/>
     Reads text from the system clipboard.
 
-10. Clipboard Write:
+12. Clipboard Write:
     <clipboard_write>text to copy</clipboard_write>
     Writes text to the system clipboard.
 
-11. Send Notification:
+13. Send Notification:
     <notify title="Title" body="Notification body"/>
     Sends a desktop notification.
 
-12. System Info:
+14. System Info:
     <system_info/>
     Gets OS, architecture, hostname, shell, and locale information.
 
-13. Open URL:
+15. Open URL:
     <open_url url="https://example.com"/>
     Opens a URL in the system default browser.
 
-14. Launch Application:
+16. Launch Application:
     <launch_app name="app_name" args="optional_args" cwd="optional_working_dir"/>
     Launches a desktop application by name (e.g. "code", "firefox").
     Supports optional arguments and working directory.
 
-15. Reveal in Finder:
+17. Reveal in Finder:
     <reveal_in_finder path="absolute_path"/>
     Opens the file manager and reveals the file or directory.
 
 --- Memory Tools ---
-16. Save Memory:
+18. Save Memory:
     <memory_save category="user" tier="high" summary="short summary" tags="tag1,tag2">detailed content</memory_save>
     Saves a memory entry for this workspace. Categories: user, feedback, project, reference, task, decision.
     Tiers: critical, high, medium, low. Use this to remember rules, preferences, key facts, or decisions.
 
-17. Search Memory:
+19. Search Memory:
     <memory_search query="search terms" category="project" limit="5"/>
     Searches the workspace memory store using full-text search. Returns matching memories.
     Optional filters: category (user|feedback|project|reference|task|decision), limit (default 10).
 
-18. Delete Memory:
+20. Delete Memory:
     <memory_delete id="memory-id"/>
     Soft-deletes a memory entry by marking it stale. Stale entries are excluded from search
     results and purged during maintenance. Use memory_search first to find the id to delete.
 
-19. Memory Stats:
+21. Memory Stats:
     <memory_stats/>
     Shows memory store statistics: total count, breakdown by category and tier, and stale count.
 
-20. Memory Maintenance:
+22. Memory Maintenance:
     <memory_maintain/>
     Runs self-improving maintenance: detects stale memories, enforces budget (500 max),
     and purges old stale entries. Returns a summary of actions taken.
 
-21. Extract Memories (LLM):
+23. Extract Memories (LLM):
     <memory_extract/>
     Uses LLM to analyze the current conversation and extract high-quality memories.
     More sophisticated than heuristic extraction. Saves results automatically.
 
-22. Export Memories:
+24. Export Memories:
     <memory_export/>
     Exports all memories to markdown files in .dalam/memories/ for git sharing.
     Teammates can import these files when they clone the repo.
 
-23. Import Memories:
+25. Import Memories:
     <memory_import/>
     Imports memories from markdown files in .dalam/memories/ into the SQLite cache.
     Use after cloning a repo to restore shared memories.
 
 --- Sub-Agent Tools (OpenCode Pattern) ---
-24. Task (Spawn Sub-Agent):
+26. Task (Spawn Sub-Agent):
     <task prompt="detailed task description" subagent_type="general" description="short label"/>
     Spawns a sub-agent to handle a complex, multistep task autonomously.
     Sub-agent types: general (default), explore (fast codebase search).
@@ -1126,6 +1171,23 @@ You are equipped with tools to interact with the workspace and operating system.
     Do NOT use for: simple single-file reads (use read_file), quick searches (use grep_file).
 
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
+
+=== EXAMPLE: How to invoke tools ===
+When the user asks you to read a file, do NOT write: "I'll use the \`read_file\` tool"
+Instead, output the XML tag directly:
+<read_file path="${workspacePath || "."}/README.md"/>
+
+When the user asks you to list files:
+<list_dir path="${workspacePath || "."}"/>
+
+When the user asks you to write a file:
+<write_file path="${workspacePath || "."}/README.md"># New README
+Content here
+</write_file>
+
+You can combine multiple tools in one response:
+<list_dir path="${workspacePath || "."}"/>
+<read_file path="${workspacePath || "."}/package.json"/>
 `;
 
         // Genes
@@ -1135,11 +1197,18 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         const activeGenes = expressGenes(genePool, cleanPrompt, recentMsgs);
         const genesPrompt = formatGenesForPrompt(activeGenes);
 
-        const systemPrompt = (agentName === "plan"
-          ? "You are Dalam in Plan mode. You are a read-only analysis agent. Explore the codebase, understand the task, and produce a clear, actionable plan. Do NOT edit, write, or delete any files. Do NOT run shell commands that modify files. You may read files and search the codebase. When your plan is complete, write it to .dalam/plans/ directory as a markdown file, then end your response with exactly: [PLAN_COMPLETE] — this signals the user to review and approve."
-          : agentName === "yolo"
-            ? "You are Dalam in YOLO mode. You have FULL unrestricted access — read, write, execute anything without asking. Be efficient and direct. Execute tasks without seeking permission."
-            : "You are Dalam, an AI coding assistant. Help users write, debug, and understand code. Be concise and practical. When showing code, use markdown code blocks with the appropriate language. Always ask the user before executing shell commands or making file changes.")
+        const systemPrompt =
+          "You are Dalam, an AI coding assistant with full workspace access. You MUST use tools to create and modify files.\n\n" +
+          "CRITICAL RULES — FOLLOW EXACTLY:\n" +
+          "1. When asked to CREATE a file, output: <write_file path=\"/absolute/path\">full content</write_file>\n" +
+          "2. When asked to EDIT a file, output: <edit_file path=\"/absolute/path\"><search>text</search><replace>new</replace></edit_file>\n" +
+          "3. When asked to READ a file, output: <read_file path=\"/absolute/path\"/>\n" +
+          "4. NEVER output file content as markdown code blocks. Code blocks are displayed to the user — they do NOT create files.\n" +
+          "5. NEVER describe what you will do — just do it by outputting the XML tool tag.\n" +
+          "6. WRONG: ```html\\n<!DOCTYPE html>...\\n```\n" +
+          "   RIGHT: <write_file path=\"index.html\"><!DOCTYPE html>...</write_file>\n" +
+          "7. Use the workspace path: " + (workspacePath || ".") + "\n" +
+          "8. Be concise. Output the tool tag with the complete content — nothing else."
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -1166,7 +1235,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         sessionId,
         prompt,
         conversationHistory: conversationHistory ?? [],
-        agentName: agentName ?? "build",
+        agentName: agentName ?? "yolo",
         attachments: (attachments ?? []).map((a) => ({ name: a.name, mimeType: a.mimeType })),
         timestamp: Date.now(),
       });
@@ -1240,7 +1309,11 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           for (let i = allMsgs.length - 1; i >= 0; i--) {
             const m = allMsgs[i];
             const content = typeof m.content === "string" ? m.content : "";
-            const contentTokens = estTokens(content);
+            // Account for tool call overhead in message token estimation
+            let contentTokens = estTokens(content);
+            if (m.toolCalls?.length) contentTokens += m.toolCalls.length * 20;
+            if (m.fileChanges?.length) contentTokens += m.fileChanges.length * 10;
+            contentTokens += 4; // role overhead
             if (tokenCount + contentTokens > availableForHistory && msgs.length >= 2) break;
             tokenCount += contentTokens;
             msgs.unshift(m);
@@ -1254,7 +1327,6 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
             // Only add if it fits within budget (with small margin)
             if (tokenCount + firstTokens <= availableForHistory * 0.9) {
               msgs.unshift(firstUserMsg);
-              tokenCount += firstTokens;
             }
           }
 
@@ -1297,6 +1369,9 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
         }
 
         let emittedEndInThisIteration = false;
+
+        // Reset rate limit backoff at the start of each request
+        consecutiveRateLimitErrors = 0;
 
         while (loopCount < MAX_LOOP_HARD) {
           loopCount++;
@@ -1378,6 +1453,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           // Previously, code block stripping replaced tool calls with "[code block]"
           // before they could be parsed, causing LLMs like Llama 3.3 to get stuck.
           const parsedFromCodeBlocks = extractToolCallsFromCodeBlocks(fullContent);
+
           const cleanedFromCodeBlocks = fullContent.replace(/```[\s\S]*?```/g, "").replace(/`[^`]+`/g, "");
           const safeTextForParsing = cleanedFromCodeBlocks;
 
@@ -1559,6 +1635,7 @@ Always use absolute paths for file operations. The workspace path is: ${workspac
           // No tools parsed — turn is complete
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
           emittedEndInThisIteration = true;
+          consecutiveRateLimitErrors = 0;
           useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           break;
         }
@@ -2460,7 +2537,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       import("../store/useAppStore").then(({ _toolCallResolvers, _pendingResolutions }) => {
         _toolCallResolvers.delete(toolCallId);
         _pendingResolutions.delete(toolCallId);
-      }).catch(() => {});
+      }).catch(() => { });
     };
 
     const finish = (decision: "approved" | "denied") => {
@@ -2478,7 +2555,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         _pendingResolutions.delete(toolCallId);
         finish(existing);
       }
-    }).catch(() => {});
+    }).catch(() => { });
 
     // Register the resolver callback so resolveToolApproval can call us directly
     import("../store/useAppStore").then(({ _toolCallResolvers }) => {
@@ -2509,7 +2586,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         // Notify the store so the UI tool status is updated
         import("../store/useAppStore").then(({ useChat }) => {
           try { useChat.getState().resolveToolApproval(toolCallId, "denied"); } catch { /* ignore */ }
-        }).catch(() => {});
+        }).catch(() => { });
         finish("denied");
       }
     }, TIMEOUT_MS);
@@ -2562,13 +2639,6 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       await writeFile(args.path, new TextEncoder().encode(newContent));
-      const oldLines = oldContent.split("\n");
-      const newLinesArr = newContent.split("\n");
-      const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
-      for (const line of oldLines) { diffLines.push({ type: "remove", content: line }); }
-      for (const line of newLinesArr) { diffLines.push({ type: "add", content: line }); }
-      const hunks = [{ oldStart: 1, oldLines: oldLines.length, newStart: 1, newLines: newLinesArr.length, lines: diffLines }];
-      emit({ type: "diff-proposed", proposal: { diffId: "auto-" + Math.random().toString(36).slice(2, 9), filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() } });
       return `Wrote ${args.path} (${newContent.length} bytes)`;
     }
 
@@ -2607,25 +2677,17 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     // Replace only the FIRST occurrence (not all) to prevent accidental mass-replacement
     const searchIdx = original.indexOf(args.search);
     const updated = original.slice(0, searchIdx) + args.replace + original.slice(searchIdx + args.search.length);
+    const oldLines = args.search.split("\n");
+    const newLines = args.replace.split("\n");
 
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       await writeFile(args.path, new TextEncoder().encode(updated));
-      const oldLines = args.search.split("\n");
-      const newLines = args.replace.split("\n");
-      const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
-      for (const line of oldLines) { diffLines.push({ type: "remove", content: line }); }
-      for (const line of newLines) { diffLines.push({ type: "add", content: line }); }
-      const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
-      const hunks = [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
-      emit({ type: "diff-proposed", proposal: { diffId: "auto-" + Math.random().toString(36).slice(2, 9), filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() } });
       return `Edited ${args.path} (${oldLines.length} → ${newLines.length} lines)`;
     }
 
     // Otherwise create diff proposal for user approval
     const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
-    const oldLines = args.search.split("\n");
-    const newLines = args.replace.split("\n");
     const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
     for (const line of oldLines) {
       diffLines.push({ type: "remove", content: line });
@@ -2762,15 +2824,15 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       new Promise<never>((_, reject) =>
         setTimeout(() => {
           killed = true;
-          child.kill().catch(() => {});
-          reject(new Error(`Command timed out after ${timeoutMs/1000}s`));
+          child.kill().catch(() => { });
+          reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
         }, timeoutMs)
       ),
     ]);
 
     const maxLen = 50000;
     if (output.length > maxLen) {
-      return output.slice(0, maxLen) + `\n\n[Output truncated at ${Math.round(maxLen/1024)}KB — total was ${Math.round(output.length/1024)}KB. Use head/tail to inspect portions.]`;
+      return output.slice(0, maxLen) + `\n\n[Output truncated at ${Math.round(maxLen / 1024)}KB — total was ${Math.round(output.length / 1024)}KB. Use head/tail to inspect portions.]`;
     }
     return output;
   }
@@ -3169,32 +3231,32 @@ async function executeTool(name: string, args: Record<string, string>, workspace
           const doSpawn = async () => {
             try {
               childProc = await cmd.spawn();
-            const initReq = JSON.stringify({
-              jsonrpc: "2.0",
-              method: "initialize",
-              params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } },
-              id: 1,
-            }) + "\n";
-            await childProc.write(initReq);
-            const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
-            await childProc.write(initNotif);
-            const req = JSON.stringify({
-              jsonrpc: "2.0",
-              method: "tools/call",
-              params: {
-                name: toolName,
-                arguments: args,
-              },
-              id: 2,
-            }) + "\n";
-            await childProc.write(req);
-          } catch (spawnErr) {
-            if (!resolved) {
-              resolved = true;
-              reject(spawnErr instanceof Error ? spawnErr : new Error(String(spawnErr)));
+              const initReq = JSON.stringify({
+                jsonrpc: "2.0",
+                method: "initialize",
+                params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } },
+                id: 1,
+              }) + "\n";
+              await childProc.write(initReq);
+              const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
+              await childProc.write(initNotif);
+              const req = JSON.stringify({
+                jsonrpc: "2.0",
+                method: "tools/call",
+                params: {
+                  name: toolName,
+                  arguments: args,
+                },
+                id: 2,
+              }) + "\n";
+              await childProc.write(req);
+            } catch (spawnErr) {
+              if (!resolved) {
+                resolved = true;
+                reject(spawnErr instanceof Error ? spawnErr : new Error(String(spawnErr)));
+              }
+              return;
             }
-            return;
-          }
           };
 
           doSpawn();
@@ -3242,14 +3304,30 @@ async function executeSubAgentTask(
   emit({ type: "sub-agent-start", subAgentId, prompt, description, subagentType });
 
   // Build sub-agent system prompt based on type
+  const subToolsDoc = `
+TOOLS: Use XML tags to invoke tools. Output the tag directly in your response.
+<read_file path="absolute_path"/>
+<write_file path="absolute_path">content</write_file>
+<edit_file path="absolute_path"><search>text</search><replace>new text</replace></edit_file>
+<list_dir path="absolute_path"/>
+<grep_file path="absolute_path" pattern="text"/>
+<search_files path="workspace_path" pattern="text" glob="*.ts"/>
+<run_command command="shell command"/>
+Workspace: ${workspacePath || "."}`;
+
   let subSystemPrompt: string;
   switch (subagentType) {
     case "explore":
-      subSystemPrompt = `You are a Dalam explore sub-agent. Your job is to quickly search and analyze the codebase to answer questions. Be concise. Read files, search patterns, and return findings. Do NOT edit files.`;
+      subSystemPrompt = `You are a Dalam explore sub-agent. Search and analyze the codebase to answer questions. Be concise. Output XML tool tags directly.
+<read_file path="absolute_path"/>
+<list_dir path="absolute_path"/>
+<grep_file path="absolute_path" pattern="text"/>
+<search_files path="workspace_path" pattern="text" glob="*.ts"/>
+Do NOT edit files. Workspace: ${workspacePath || "."}`;
       break;
     case "general":
     default:
-      subSystemPrompt = `You are a Dalam general sub-agent. Complete the assigned task autonomously. Be thorough but concise. Use available tools to read, write, and execute commands as needed.`;
+      subSystemPrompt = `You are a Dalam general sub-agent. Complete the assigned task autonomously using tools. Output XML tags directly — NEVER output tool names in backticks.${subToolsDoc}`;
       break;
   }
 
@@ -3286,10 +3364,20 @@ async function executeSubAgentTask(
 
       subResult += fullContent;
 
-      // Check if sub-agent is calling tools (detect both inline and code-block-wrapped tool tags)
+      // Check if sub-agent is calling tools — merge inline and code-block sources
       const subToolsInline = await parseToolCalls(fullContent);
       const subToolsCodeBlock = extractToolCallsFromCodeBlocks(fullContent);
-      const subTools = subToolsInline.length > 0 ? subToolsInline : subToolsCodeBlock;
+      // Merge: code block tools take priority, then inline-parsed ones (deduplicated)
+      const sortedStringify = (obj: Record<string, unknown>) => JSON.stringify(obj, Object.keys(obj).sort());
+      const subTools = [...subToolsCodeBlock];
+      const codeBlockKeys = new Set(subToolsCodeBlock.map((t) => `${t.name}:${sortedStringify(t.args)}`));
+      for (const tc of subToolsInline) {
+        const key = `${tc.name}:${sortedStringify(tc.args)}`;
+        if (!codeBlockKeys.has(key)) {
+          subTools.push(tc);
+          codeBlockKeys.add(key);
+        }
+      }
       if (subTools.length === 0) {
         // No tools — sub-agent is done
         break;
@@ -3315,15 +3403,15 @@ async function executeSubAgentTask(
         try {
           // Execute silently — sub-agents don't need parent permission dialogs
           // Filter emit: suppress parent-facing events from sub-agent tool execution
-        const subAgentEmit = (event: StreamEvent) => {
-          // Only forward sub-agent status updates; suppress diff-proposed,
-          // activity-explore, activity-bash, file-changed to parent UI
-          if (event.type === 'diff-proposed' || event.type === 'activity-explore' ||
+          const subAgentEmit = (event: StreamEvent) => {
+            // Only forward sub-agent status updates; suppress diff-proposed,
+            // activity-explore, activity-bash, file-changed to parent UI
+            if (event.type === 'diff-proposed' || event.type === 'activity-explore' ||
               event.type === 'activity-read' || event.type === 'activity-bash' ||
               event.type === 'activity-skill' || event.type === 'file-changed') return;
-          emit(event);
-        };
-        const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, subAgentEmit, true);
+            emit(event);
+          };
+          const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, subAgentEmit, true);
           // Update the tool call status
           const idx = subToolCalls.findIndex((t) => t.id === subToolId);
           if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "completed", result: toolResult };
