@@ -1615,6 +1615,21 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
     </div>
   );
 }, (prevProps, nextProps) => {
+  const prevTC = prevProps.message.toolCalls;
+  const nextTC = nextProps.message.toolCalls;
+  const tcChanged = (prevTC?.length ?? 0) !== (nextTC?.length ?? 0) ||
+    (prevTC && nextTC && prevTC.some((tc, i) =>
+      tc.id !== nextTC[i]?.id || tc.status !== nextTC[i]?.status || tc.result !== nextTC[i]?.result
+    ));
+  const prevFC = prevProps.message.fileChanges;
+  const nextFC = nextProps.message.fileChanges;
+  const fcChanged = (prevFC?.length ?? 0) !== (nextFC?.length ?? 0) ||
+    (prevFC && nextFC && prevFC.some((fc, i) =>
+      fc.path !== nextFC[i]?.path || fc.action !== nextFC[i]?.action
+    ));
+  const prevAct = prevProps.message.activities;
+  const nextAct = nextProps.message.activities;
+  const actChanged = (prevAct?.length ?? 0) !== (nextAct?.length ?? 0);
   return (
     prevProps.pending === nextProps.pending &&
     prevProps.isLast === nextProps.isLast &&
@@ -1623,9 +1638,7 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.role === nextProps.message.role &&
     prevProps.message.thinking === nextProps.message.thinking &&
-    (prevProps.message.activities ?? []).length === (nextProps.message.activities ?? []).length &&
-    (prevProps.message.toolCalls ?? []).length === (nextProps.message.toolCalls ?? []).length &&
-    (prevProps.message.fileChanges ?? []).length === (nextProps.message.fileChanges ?? []).length
+    !tcChanged && !fcChanged && !actChanged
   );
 });
 
@@ -2107,120 +2120,3 @@ function StreamingMessageWrapper({
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function completeStreamingMarkdown(text: string): string {
-  if (!text) return "";
-  const lines = text.split("\n");
-  let inTable = false;
-  let headerColCount = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    const nextLine = lines[i + 1]?.trim() ?? "";
-    const isNextSeparator = nextLine && /^[|:\-\s]+$/.test(nextLine) && nextLine.includes("-");
-
-    if (isNextSeparator && !inTable) {
-      // Current line is table header. Count columns
-      const cols = line.split("|").map(s => s.trim()).filter(Boolean);
-      headerColCount = cols.length;
-      inTable = true;
-    } else if (inTable) {
-      // Check if this is the separator row itself
-      const isSeparator = /^[|:\-\s]+$/.test(line) && line.includes("-");
-      if (isSeparator) {
-        const sepCols = line.split("|").filter(Boolean);
-        if (sepCols.length < headerColCount) {
-          const missing = headerColCount - sepCols.length;
-          // Append missing separators nicely
-          let completedLine = line;
-          if (!completedLine.endsWith("|") && completedLine.includes("|")) {
-            completedLine += "|";
-          }
-          completedLine += "---|".repeat(missing);
-          lines[i] = completedLine;
-        }
-      } else if (line.startsWith("|") || line.includes("|")) {
-        // Normal row. Balance columns to prevent misaligned borders
-        const rowColsCount = line.split("|").filter(Boolean).length;
-        if (rowColsCount < headerColCount) {
-          const missing = headerColCount - rowColsCount;
-          let completedLine = line;
-          if (!completedLine.endsWith("|") && completedLine.includes("|")) {
-            completedLine += "|";
-          }
-          completedLine += " |".repeat(missing);
-          lines[i] = completedLine;
-        }
-      } else {
-        // Table ended
-        inTable = false;
-        headerColCount = 0;
-      }
-    }
-  }
-
-  let completedText = lines.join("\n");
-
-  // Auto-close unclosed code fences during streaming.
-  // Count triple-backtick occurrences; if odd, append a closing fence
-  // so the markdown parser renders the in-progress code block properly.
-  const fenceMatches = completedText.match(/```/g);
-  const fenceCount = fenceMatches ? fenceMatches.length : 0;
-  if (fenceCount % 2 !== 0) {
-    completedText += "\n```";
-  }
-
-  // Auto-close inline formatting tags (bold, italic, strikethrough, inline code)
-  const stack: string[] = [];
-  let idx = 0;
-  while (idx < completedText.length) {
-    if (completedText.startsWith("```", idx)) {
-      // Skip block code contents entirely
-      const endIdx = completedText.indexOf("```", idx + 3);
-      if (endIdx !== -1) {
-        idx = endIdx + 3;
-      } else {
-        break;
-      }
-    } else if (completedText.startsWith("`", idx)) {
-      if (stack[stack.length - 1] === "`") {
-        stack.pop();
-      } else {
-        stack.push("`");
-      }
-      idx += 1;
-    } else if (completedText.startsWith("**", idx) || completedText.startsWith("__", idx)) {
-      const tag = completedText.slice(idx, idx + 2);
-      if (stack[stack.length - 1] === tag) {
-        stack.pop();
-      } else {
-        stack.push(tag);
-      }
-      idx += 2;
-    } else if (completedText.startsWith("*", idx) || completedText.startsWith("_", idx)) {
-      const tag = completedText.slice(idx, idx + 1);
-      if (stack[stack.length - 1] === tag) {
-        stack.pop();
-      } else {
-        stack.push(tag);
-      }
-      idx += 1;
-    } else if (completedText.startsWith("~~", idx)) {
-      if (stack[stack.length - 1] === "~~") {
-        stack.pop();
-      } else {
-        stack.push("~~");
-      }
-      idx += 2;
-    } else {
-      idx += 1;
-    }
-  }
-
-  while (stack.length > 0) {
-    const tag = stack.pop();
-    completedText += tag;
-  }
-
-  return completedText;
-}

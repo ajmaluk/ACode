@@ -85,15 +85,5 @@ export const CTX = {
   DREAM_CYCLE_DAYS:         7,   // weekly consolidation
 } as const;
 
-// ─── Dream agent report ───
-export interface DreamReport {
-  startedAt: number;
-  completedAt?: number;
-  deduplicated: number;
-  merged: number;
-  validated: number;
-  invalidated: number;
-  compressed: number;
-  finalEntries: number;
-}
+// ─── Dream agent report (defined in dreamAgent.ts) ───
 

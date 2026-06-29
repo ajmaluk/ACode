@@ -250,15 +250,18 @@ function ConnectorsSection() {
                 placeholder="Connector name..."
                 className="w-full text-xs px-2.5 py-1.5 rounded-md border border-dalam-border-primary bg-dalam-bg-input text-dalam-text-primary outline-none focus:border-dalam-accent-primary focus:ring-1 focus:ring-dalam-accent-primary transition-all"
               />
-              <select
-                value={newType}
-                onChange={(e) => setNewType(e.target.value as typeof newType)}
-                className="w-full text-xs px-2.5 py-1.5 rounded-md border border-dalam-border-primary bg-dalam-bg-input text-dalam-text-primary outline-none focus:border-dalam-accent-primary focus:ring-1 focus:ring-dalam-accent-primary transition-all cursor-pointer"
-              >
-                <option value="webhook">Webhook</option>
-                <option value="file-watcher">File Watcher</option>
-                <option value="cron">Cron</option>
-              </select>
+              <div className="relative">
+                <select
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as typeof newType)}
+                  className="w-full text-xs px-2.5 py-1.5 pr-7 rounded-md border border-dalam-border-primary bg-dalam-bg-input text-dalam-text-primary outline-none focus:border-dalam-accent-primary focus:ring-1 focus:ring-dalam-accent-primary transition-all cursor-pointer appearance-none"
+                >
+                  <option value="webhook">Webhook</option>
+                  <option value="file-watcher">File Watcher</option>
+                  <option value="cron">Cron</option>
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-dalam-text-muted pointer-events-none" />
+              </div>
               <div className="flex gap-1.5 pt-0.5 justify-end">
                 <button 
                   className="text-xs px-2.5 py-1 rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors font-medium" 

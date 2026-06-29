@@ -71,10 +71,13 @@ export type GitBranchInfo = {
   current: boolean;
 };
 
+export type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh";
+
 export type TerminalTab = {
   id: string;
   title: string;
   cwd: string;
+  shell: ShellType;
   isAgent?: boolean;
 };
 
@@ -385,7 +388,7 @@ export interface DalamAPI {
     watchPath(path: string): Promise<void>;
   };
   terminal: {
-    create(cwd: string, title?: string): Promise<string>;
+    create(cwd: string, shell?: string): Promise<string>;
     writeInput(id: string, input: string): Promise<void>;
     resize(id: string, cols: number, rows: number): Promise<void>;
     kill(id: string): Promise<void>;

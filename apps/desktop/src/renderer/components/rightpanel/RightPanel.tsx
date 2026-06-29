@@ -489,18 +489,24 @@ function ReviewTab() {
 }
 
 function ProgressTab() {
-  const { todos, isStreaming } = useChat();
-  const activeTodos = todos.filter((t) => t.status === "in_progress");
-  const pendingTodos = todos.filter((t) => t.status === "pending");
-  const completedTodos = todos.filter((t) => t.status === "completed");
+  const { todos, taskPlan, taskPlanSummary, isStreaming } = useChat();
+  // Combine todos and taskPlan for display
+  const allTasks = [
+    ...todos.map(t => ({ id: t.id, title: t.content, status: t.status === "in_progress" ? "running" as const : t.status === "completed" ? "done" as const : t.status === "failed" ? "failed" as const : "pending" as const })),
+    ...(taskPlan ?? []).map(t => ({ id: t.id, title: t.title, status: t.status })),
+  ];
+  const activeTasks = allTasks.filter((t) => t.status === "running");
+  const pendingTasks = allTasks.filter((t) => t.status === "pending");
+  const completedTasks = allTasks.filter((t) => t.status === "done");
+  const failedTasks = allTasks.filter((t) => t.status === "failed");
 
-  if (todos.length === 0) {
+  if (allTasks.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
           <ListTodo className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" />
           <p className="text-sm text-dalam-text-muted">No tasks yet</p>
-          <p className="text-xs text-dalam-text-muted/60 mt-1">Tasks will appear here as the agent works</p>
+          <p className="text-xs text-dalam-text-muted/60 mt-1">The agent will create a task plan when working on complex tasks</p>
         </div>
       </div>
     );
@@ -508,46 +514,62 @@ function ProgressTab() {
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
-      {isStreaming && activeTodos.length === 0 && (
+      {isStreaming && activeTasks.length === 0 && (
         <div className="flex items-center gap-2 px-3 py-2 bg-dalam-bg-tertiary rounded-lg">
           <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin" />
           <span className="text-xs text-dalam-text-secondary">Processing...</span>
         </div>
       )}
-      {activeTodos.length > 0 && (
+      {activeTasks.length > 0 && (
         <div>
           <div className="text-[10px] uppercase tracking-wider text-dalam-accent-primary mb-2 flex items-center gap-2">
             <Loader2 className="w-3 h-3 animate-spin" />
             In progress
           </div>
-          {activeTodos.map((t) => (
+          {activeTasks.map((t) => (
             <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
               <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-dalam-text-primary">{t.content}</span>
+              <span className="text-xs text-dalam-text-primary">{t.title}</span>
             </div>
           ))}
         </div>
       )}
-      {pendingTodos.length > 0 && (
+      {pendingTasks.length > 0 && (
         <div>
           <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-2">Pending</div>
-          {pendingTodos.map((t) => (
+          {pendingTasks.map((t) => (
             <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
               <Circle className="w-3.5 h-3.5 text-dalam-text-muted mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-dalam-text-muted">{t.content}</span>
+              <span className="text-xs text-dalam-text-muted">{t.title}</span>
             </div>
           ))}
         </div>
       )}
-      {completedTodos.length > 0 && (
+      {completedTasks.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-dalam-git-added mb-2">Completed</div>
-          {completedTodos.map((t) => (
+          <div className="text-[10px] uppercase tracking-wider text-dalam-git-added mb-2">Completed ({completedTasks.length}/{allTasks.length})</div>
+          {completedTasks.map((t) => (
             <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
               <Check className="w-3.5 h-3.5 text-dalam-git-added mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-dalam-text-primary line-through opacity-70">{t.content}</span>
+              <span className="text-xs text-dalam-text-primary line-through opacity-70">{t.title}</span>
             </div>
           ))}
+        </div>
+      )}
+      {failedTasks.length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-dalam-git-deleted mb-2">Failed</div>
+          {failedTasks.map((t) => (
+            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+              <X className="w-3.5 h-3.5 text-dalam-git-deleted mt-0.5 flex-shrink-0" />
+              <span className="text-xs text-dalam-git-deleted">{t.title}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {taskPlanSummary && (
+        <div className="mt-2 px-3 py-2 bg-dalam-bg-secondary rounded-lg border border-dalam-border-primary">
+          <span className="text-xs text-dalam-text-secondary">{taskPlanSummary}</span>
         </div>
       )}
     </div>

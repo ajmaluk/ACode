@@ -1,10 +1,10 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTerminal, useWorkspace, useChat, useSettings } from "@/store/useAppStore";
 import { Tooltip } from "../ui/Tooltip";
-import { Plus, X, Trash2, Bot, Wifi } from "lucide-react";
+import { Plus, X, Trash2, Bot, Wifi, ChevronDown, TerminalSquare } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { createDalamAPI } from "@/lib/dalamAPI";
 
@@ -46,14 +46,17 @@ const BANNER = `${ANSI.cyan}╭────────────────�
 Type ${ANSI.bold}help${ANSI.reset} to see available commands. Try ${ANSI.bold}ls${ANSI.reset}, ${ANSI.bold}cat src/App.tsx${ANSI.reset}, or ${ANSI.bold}git status${ANSI.reset}.
 `;
 
+type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh";
+
 interface TerminalTabContentProps {
   tabId: string;
   cwd: string;
+  shell: ShellType;
   active: boolean;
   terminalsMapRef: React.MutableRefObject<Map<string, Terminal>>;
 }
 
-function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTabContentProps) {
+function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: TerminalTabContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const procIdRef = useRef<string | null>(null);
@@ -97,8 +100,15 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
     term.loadAddon(webLinks);
     term.open(element);
 
+    // Show shell-specific prompt
+    const isWindowsShell = shell === "powershell" || shell === "cmd" || shell === "pwsh";
+    const promptSymbol = shell === "powershell" || shell === "pwsh" ? "PS" : shell === "cmd" ? "C:\\>" : "$";
+    const shellPrompt = isWindowsShell 
+      ? `\x1b[1;36m${promptSymbol} \x1b[0m`
+      : ANSI.prompt;
+    
     term.writeln(BANNER);
-    term.write(ANSI.prompt);
+    term.write(shellPrompt);
 
     terminalsMapRef.current.set(tabId, term);
     fitAddonRef.current = fit;
@@ -115,7 +125,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
 
     const startIO = async () => {
       try {
-        const procId = await api.terminal.create(cwd);
+        const procId = await api.terminal.create(cwd, shell);
         if (isCleanedUp) {
           api.terminal.kill(procId).catch(() => {});
           return;
@@ -173,7 +183,7 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
 
       term.dispose();
     };
-  }, [tabId, cwd]);
+  }, [tabId, cwd, shell, settings.terminalFont, settings.terminalFontSize]);
 
   useEffect(() => {
     if (active) {
@@ -187,19 +197,36 @@ function TerminalTabContent({ tabId, cwd, active, terminalsMapRef }: TerminalTab
   return <div ref={containerRef} className="w-full h-full" />;
 }
 
+const SHELL_OPTIONS: { value: ShellType; label: string; icon: string }[] = [
+  { value: "bash", label: "Bash", icon: "🐚" },
+  { value: "zsh", label: "Zsh", icon: "z" },
+  { value: "fish", label: "Fish", icon: "🐟" },
+  { value: "powershell", label: "PowerShell", icon: "⚡" },
+  { value: "pwsh", label: "PowerShell Core", icon: "P" },
+  { value: "cmd", label: "Command Prompt", icon: ">" },
+];
+
 export function TerminalPanel() {
-  const { tabs, activeTabId, addTab, closeTab, setActiveTab } = useTerminal();
+  const { tabs, activeTabId, addTab, closeTab, setActiveTab, updateTabShell } = useTerminal();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const isStreaming = useChat((s) => s.isStreaming);
   const session = useChat((s) => s.session);
+  const [showShellDropdown, setShowShellDropdown] = useState(false);
+  const [showAddDropdown, setShowAddDropdown] = useState(false);
 
   const cwd = session?.workspacePath ?? workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? ".";
 
   const terminalsRef = useRef<Map<string, Terminal>>(new Map());
 
-  const handleAddTab = useCallback(() => {
-    addTab(cwd);
+  const handleAddTab = useCallback((shell: ShellType = "bash") => {
+    addTab(cwd, shell);
+    setShowAddDropdown(false);
   }, [addTab, cwd]);
+
+  const handleShellChange = useCallback((tabId: string, shell: ShellType) => {
+    updateTabShell(tabId, shell);
+    setShowShellDropdown(false);
+  }, [updateTabShell]);
 
   return (
     <div className="h-full flex flex-col bg-dalam-bg-primary">
@@ -214,8 +241,8 @@ export function TerminalPanel() {
             }`}
             onClick={() => setActiveTab(t.id)}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-dalam-git-added" />
-            <span className="whitespace-nowrap">{t.title}</span>
+            <span className="truncate max-w-[80px]">{t.title}</span>
+            <span className="text-[9px] text-dalam-text-muted opacity-60">{t.shell}</span>
             {tabs.length > 1 && (
               <button
                 className="ml-1 opacity-0 group-hover:opacity-100 hover:bg-dalam-bg-active rounded p-0.5"
@@ -229,16 +256,72 @@ export function TerminalPanel() {
             )}
           </div>
         ))}
-        <Tooltip content="New terminal" side="top">
-          <button
-            className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-            onClick={handleAddTab}
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-        </Tooltip>
+        
+        {/* Add terminal dropdown */}
+        <div className="relative">
+          <Tooltip content="New terminal" side="top">
+            <button
+              className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+              onClick={() => setShowAddDropdown(!showAddDropdown)}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <ChevronDown className="w-2.5 h-2.5" />
+            </button>
+          </Tooltip>
+          {showAddDropdown && (
+            <div className="absolute top-full left-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[180px]">
+              {SHELL_OPTIONS.map((shell) => (
+                <button
+                  key={shell.value}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+                  onClick={() => handleAddTab(shell.value)}
+                >
+                  <span className="text-sm">{shell.icon}</span>
+                  <span>{shell.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="flex-1" />
+
+        {/* Shell type selector for active tab */}
+        {activeTabId && tabs.find(t => t.id === activeTabId) && (
+          <div className="relative">
+            <Tooltip content="Change shell type" side="top">
+              <button
+                className="flex items-center gap-1 px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors text-[10px]"
+                onClick={() => setShowShellDropdown(!showShellDropdown)}
+              >
+                <TerminalSquare className="w-3 h-3" />
+                <span className="max-w-[70px] truncate">{tabs.find(t => t.id === activeTabId)?.shell}</span>
+                <ChevronDown className="w-2.5 h-2.5" />
+              </button>
+            </Tooltip>
+            {showShellDropdown && (
+              <div className="absolute top-full right-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[180px]">
+                {SHELL_OPTIONS.map((shell) => {
+                  const currentShell = tabs.find(t => t.id === activeTabId)?.shell;
+                  return (
+                    <button
+                      key={shell.value}
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                        shell.value === currentShell
+                          ? "bg-dalam-accent-subtle text-dalam-accent-primary"
+                          : "text-dalam-text-primary hover:bg-dalam-bg-hover"
+                      }`}
+                      onClick={() => handleShellChange(activeTabId, shell.value)}
+                    >
+                      <span className="text-sm">{shell.icon}</span>
+                      <span>{shell.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-1.5 px-3 text-[10px] text-dalam-text-muted">
           {isStreaming ? (
@@ -263,7 +346,6 @@ export function TerminalPanel() {
               if (term) {
                 term.clear();
                 term.scrollToBottom();
-                term.write(ANSI.prompt);
               }
             }}
           >
@@ -282,6 +364,7 @@ export function TerminalPanel() {
             <TerminalTabContent
               tabId={t.id}
               cwd={t.cwd}
+              shell={t.shell}
               active={t.id === activeTabId}
               terminalsMapRef={terminalsRef}
             />

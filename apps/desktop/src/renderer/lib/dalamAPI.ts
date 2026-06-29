@@ -365,7 +365,10 @@ async function* streamOpenAI(
       return `<${tcName} ${bodyAttrs}>${escapedContent}</${tcName}>`;
     }
     if (tcName === "edit_file" && parsedArgs.search && parsedArgs.replace !== undefined) {
-      return `<${tcName} path="${parsedArgs.path || ''}">\n<search>${parsedArgs.search}</search>\n<replace>${parsedArgs.replace}</replace>\n</${tcName}>`;
+      const occAttr = parsedArgs.occurrence ? ` occurrence="${parsedArgs.occurrence}"` : "";
+      const escapedSearch = String(parsedArgs.search).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const escapedReplace = String(parsedArgs.replace).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<${tcName} path="${parsedArgs.path || ''}"${occAttr}>\n<search>${escapedSearch}</search>\n<replace>${escapedReplace}</replace>\n</${tcName}>`;
     }
     return attrs ? `<${tcName} ${attrs}/>` : `<${tcName}/>`;
   }
@@ -771,19 +774,14 @@ const dalamAPI: DalamAPI = {
     const pendingErrors = new Map<string, string>();
 
     return {
-      async create(cwd?: string, title?: string) {
+      async create(cwd?: string, shell?: string) {
         const id = "t-" + Math.random().toString(36).slice(2, 9);
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
           const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
-          // title may be a display name like "Terminal - zsh" — extract the shell
-          const extractShell = (t: string): string => {
-            const afterDash = t.includes(" - ") ? t.split(" - ").pop()!.trim() : t.trim();
-            const known = ["zsh", "bash", "fish", "powershell", "cmd", "pwsh"];
-            const lower = afterDash.toLowerCase();
-            return known.includes(lower) ? lower : (isWindows ? "powershell" : "bash");
-          };
-          const shellCmd = title ? extractShell(title) : (isWindows ? "powershell" : "bash");
+          // Use provided shell or default to platform-appropriate shell
+          const knownShells = ["bash", "zsh", "fish", "powershell", "cmd", "pwsh"];
+          const shellCmd = shell && knownShells.includes(shell) ? shell : (isWindows ? "powershell" : "bash");
 
           const currentSettings = getStoredSettings();
           const args: string[] = [];
@@ -1039,7 +1037,7 @@ WHEN CREATING FILES — Use write_file, NOT markdown code blocks:
 WRONG: \`\`\`html\\n<!DOCTYPE html>...\\n\`\`\`  (this just shows code to the user)
 RIGHT: <write_file path="index.html"><!DOCTYPE html>...</write_file>  (this creates the file on disk)
 
-WHEN EDITING FILES — Use edit_file with search/replace:
+WHEN EDITING FILES — Use edit_file with search/replace (ONLY change the specific lines that need to change — do NOT rewrite the entire file):
 <edit_file path="file.ts"><search>old code</search><replace>new code</replace></edit_file>
 
 You can output multiple tool tags in one response. Tools execute automatically — no user confirmation needed.
@@ -1048,17 +1046,26 @@ You can output multiple tool tags in one response. Tools execute automatically �
 1. Read File:
    <read_file path="absolute_path"/>
    Reads the entire contents of a file.
+   For large files, read only the portion you need:
+   <read_file path="absolute_path" offset="100" limit="50"/>
+   offset = starting line number (1-indexed), limit = number of lines to read.
+   This returns lines with line numbers (e.g. "100: line content").
 
 2. Write File:
    <write_file path="absolute_path">file content</write_file>
    Overwrites or creates a file with the specified content.
+   IMPORTANT: For existing files, prefer edit_file to change only the specific lines that need to change. Use write_file only when creating new files or rewriting the entire file.
 
-3. Edit File:
+3. Edit File (PREFERRED for modifying existing files):
    <edit_file path="absolute_path">
    <search>exact code to find</search>
    <replace>new code to replace it with</replace>
    </edit_file>
-   Performs a search-and-replace edit. The search block must match the file contents exactly.
+   Performs a search-and-replace edit. The search block must match the file contents exactly (including whitespace/indentation).
+   IMPORTANT: Only include the few lines that need to change — do NOT include the entire file in search/replace.
+   If the search text appears multiple times, specify which occurrence (0-indexed):
+   <edit_file path="file.ts" occurrence="0"><search>first match</search><replace>new code</replace></edit_file>
+   occurrence="0" = first match, "1" = second match, etc. Defaults to first match if omitted.
 
 4. List Directory:
    <list_dir path="absolute_path"/>
@@ -1091,84 +1098,142 @@ You can output multiple tool tags in one response. Tools execute automatically �
     <git_log/>
     Gets the git commit history.
 
+11. Git Branch:
+    <git_branch/>
+    Lists all branches. Shows current branch with *.
+
+12. Git Checkout:
+    <git_checkout branch="branch-name"/>
+    Switches to the specified branch.
+
+13. Git Diff File:
+    <git_diff_file path="file_path"/>
+    Shows the diff for a specific file against HEAD.
+
 --- Desktop / System Tools ---
-11. Clipboard Read:
+14. Clipboard Read:
     <clipboard_read/>
     Reads text from the system clipboard.
 
-12. Clipboard Write:
+15. Clipboard Write:
     <clipboard_write>text to copy</clipboard_write>
     Writes text to the system clipboard.
 
-13. Send Notification:
+16. Send Notification:
     <notify title="Title" body="Notification body"/>
     Sends a desktop notification.
 
-14. System Info:
+17. System Info:
     <system_info/>
     Gets OS, architecture, hostname, shell, and locale information.
 
-15. Open URL:
+18. Open URL:
     <open_url url="https://example.com"/>
     Opens a URL in the system default browser.
 
-16. Launch Application:
+19. Launch Application:
     <launch_app name="app_name" args="optional_args" cwd="optional_working_dir"/>
     Launches a desktop application by name (e.g. "code", "firefox").
     Supports optional arguments and working directory.
 
-17. Reveal in Finder:
+20. Reveal in Finder:
     <reveal_in_finder path="absolute_path"/>
     Opens the file manager and reveals the file or directory.
 
 --- Memory Tools ---
-18. Save Memory:
+21. Save Memory:
     <memory_save category="user" tier="high" summary="short summary" tags="tag1,tag2">detailed content</memory_save>
     Saves a memory entry for this workspace. Categories: user, feedback, project, reference, task, decision.
     Tiers: critical, high, medium, low. Use this to remember rules, preferences, key facts, or decisions.
 
-19. Search Memory:
+22. Search Memory:
     <memory_search query="search terms" category="project" limit="5"/>
     Searches the workspace memory store using full-text search. Returns matching memories.
     Optional filters: category (user|feedback|project|reference|task|decision), limit (default 10).
 
-20. Delete Memory:
+23. Delete Memory:
     <memory_delete id="memory-id"/>
     Soft-deletes a memory entry by marking it stale. Stale entries are excluded from search
     results and purged during maintenance. Use memory_search first to find the id to delete.
 
-21. Memory Stats:
+24. Memory Stats:
     <memory_stats/>
     Shows memory store statistics: total count, breakdown by category and tier, and stale count.
 
-22. Memory Maintenance:
+25. Memory Maintenance:
     <memory_maintain/>
     Runs self-improving maintenance: detects stale memories, enforces budget (500 max),
     and purges old stale entries. Returns a summary of actions taken.
 
-23. Extract Memories (LLM):
+26. Extract Memories (LLM):
     <memory_extract/>
     Uses LLM to analyze the current conversation and extract high-quality memories.
     More sophisticated than heuristic extraction. Saves results automatically.
 
-24. Export Memories:
+27. Export Memories:
     <memory_export/>
     Exports all memories to markdown files in .dalam/memories/ for git sharing.
     Teammates can import these files when they clone the repo.
 
-25. Import Memories:
+28. Import Memories:
     <memory_import/>
     Imports memories from markdown files in .dalam/memories/ into the SQLite cache.
     Use after cloning a repo to restore shared memories.
 
 --- Sub-Agent Tools (OpenCode Pattern) ---
-26. Task (Spawn Sub-Agent):
+29. Task (Spawn Sub-Agent):
     <task prompt="detailed task description" subagent_type="general" description="short label"/>
     Spawns a sub-agent to handle a complex, multistep task autonomously.
-    Sub-agent types: general (default), explore (fast codebase search).
-    The sub-agent runs in the background and returns its result when complete.
-    Use for: parallel exploration, isolated tasks, complex multi-step work.
+    Sub-agent types: general (default), explore (read-only codebase search).
+    The sub-agent runs with its own tool loop and returns its result when complete.
+
+    MULTIPLE TASKS: You can output MULTIPLE task tags in ONE response. They execute
+    sequentially but each returns its own result. Use separate tasks for independent
+    work so results can be composed:
+    Example: <task prompt="Research X..." description="Research X"/>
+             <task prompt="Research Y..." description="Research Y"/>
+
+    Use for: parallel exploration, isolated tasks, complex multi-step work,
+    research that can be done independently of other work.
     Do NOT use for: simple single-file reads (use read_file), quick searches (use grep_file).
+
+--- UI Control & Preview Tools ---
+30. Open Panel:
+    <open_panel panel="browser"/>
+    Opens a specific panel in the right sidebar. Panels: git, diff, review, browser, progress, terminal.
+    Use this to show the user specific information (e.g. git status, code diff, browser preview).
+
+31. Screenshot:
+    <screenshot/>
+    Captures what's currently visible in the browser preview or canvas.
+    Use after running a dev server to verify the output visually.
+
+32. Browser Navigate:
+    <browser_navigate url="http://localhost:3000"/>
+    Opens the browser panel and navigates to a URL. Creates a new browser tab if needed.
+    Use for previewing web apps, checking live deployments, or browsing documentation.
+
+33. Run Preview:
+    <run_preview command="npm run dev" port="3000"/>
+    Starts a dev server command in the terminal and opens the browser preview.
+    The agent can then use screenshot to verify the output.
+    Use when the user asks to "run and preview", "start the server", or "see it live".
+
+34. Browser Execute (Agentic Browsing):
+    <browser_execute script="document.title"/>
+    Executes JavaScript in the browser page context. Returns the result.
+    Use for: clicking elements, scrolling, reading page content, filling forms.
+    Examples:
+    <browser_execute script="document.querySelector('button').click()"/>
+    <browser_execute script="window.scrollTo(0, 500)"/>
+    <browser_execute script="document.querySelectorAll('a').length"/>
+    Note: Only works on same-origin pages. For cross-origin, use open_url.
+
+35. Create Task Plan:
+    <create_task_plan tasks="- Set up project structure&#10;- Create main component&#10;- Add styling&#10;- Write tests"/>
+    Creates a task plan and opens the progress panel. Tasks are shown as a checklist.
+    Use at the start of a complex task to show the user your plan.
+    The agent should mark tasks as done using the bash "completed" event as it works.
 
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
 
@@ -1197,16 +1262,47 @@ You can combine multiple tools in one response:
         const activeGenes = expressGenes(genePool, cleanPrompt, recentMsgs);
         const genesPrompt = formatGenesForPrompt(activeGenes);
 
+        // Inject browser context if user mentions @browser, @tab:, or @url: in their prompt
+        let browserContextBlock = "";
+        const hasBrowserRef = cleanPrompt.includes("@browser") || cleanPrompt.includes("@tab:") || cleanPrompt.includes("@url:");
+        if (hasBrowserRef) {
+          try {
+            const { useUI } = await import("../store/useAppStore");
+            const ui = useUI.getState();
+            // Check for specific tab reference: @tab:<tabId> or @url:<url>
+            const tabMatch = cleanPrompt.match(/@tab:(\S+)/);
+            const urlMatch = cleanPrompt.match(/@url:(\S+)/);
+            let targetTab = ui.browserTabs.find((t) => t.id === ui.activeBrowserTabId);
+            if (tabMatch) {
+              targetTab = ui.browserTabs.find((t) => t.id === tabMatch[1] || t.title.toLowerCase().includes(tabMatch[1].toLowerCase()));
+            }
+            if (urlMatch && !targetTab) {
+              targetTab = ui.browserTabs.find((t) => t.url.includes(urlMatch[1]));
+            }
+            if (targetTab) {
+              const allTabs = ui.browserTabs.map(t => `  - ${t.title}: ${t.url}`).join("\n");
+              browserContextBlock = `\n\n=== BROWSER CONTEXT ===\nThe user is referencing the browser panel.\nActive tab: ${targetTab.title} — ${targetTab.url}\nAll open tabs:\n${allTabs}\nUse <browser_navigate url="..."/> to change the URL.\nUse <browser_execute script="..."/> to interact with the page.\nUse <screenshot/> to inspect the current page content.\nUse <open_panel panel="browser"/> to show the browser panel.\n========================`;
+            } else {
+              browserContextBlock = `\n\n=== BROWSER CONTEXT ===\nThe user referenced @browser but no matching tab is found.\nOpen tabs: ${ui.browserTabs.length}\nUse <browser_navigate url="..."/> to open a page first.\n========================`;
+            }
+          } catch { /* UI not available */ }
+        }
+
         const systemPrompt =
           "You are Dalam, an AI coding assistant with full workspace access. You MUST use tools to create and modify files.\n\n" +
           "CRITICAL RULES — FOLLOW EXACTLY:\n" +
           "1. When asked to CREATE a file, output: <write_file path=\"/absolute/path\">full content</write_file>\n" +
-          "2. When asked to EDIT a file, output: <edit_file path=\"/absolute/path\"><search>text</search><replace>new</replace></edit_file>\n" +
+          "2. When asked to EDIT a file, use edit_file with ONLY the specific lines that need to change:\n" +
+          "   <edit_file path=\"/absolute/path\"><search>few lines of old code</search><replace>few lines of new code</replace></edit_file>\n" +
+          "   Do NOT rewrite the entire file — only change what's needed. Include enough context in search to uniquely identify the location.\n" +
           "3. When asked to READ a file, output: <read_file path=\"/absolute/path\"/>\n" +
+          "   For large files, read specific portions: <read_file path=\"/absolute/path\" offset=\"100\" limit=\"50\"/>\n" +
           "4. NEVER output file content as markdown code blocks. Code blocks are displayed to the user — they do NOT create files.\n" +
           "5. NEVER describe what you will do — just do it by outputting the XML tool tag.\n" +
           "6. WRONG: ```html\\n<!DOCTYPE html>...\\n```\n" +
           "   RIGHT: <write_file path=\"index.html\"><!DOCTYPE html>...</write_file>\n" +
+          "   WRONG (rewriting entire file): <edit_file><search>entire file</search><replace>entire new file</replace></edit_file>\n" +
+          "   RIGHT (editing specific lines): <edit_file><search>only the 3 lines that changed</search><replace>only the 3 new lines</replace></edit_file>\n" +
           "7. Use the workspace path: " + (workspacePath || ".") + "\n" +
           "8. Be concise. Output the tool tag with the complete content — nothing else."
           + workspaceMemoryBlock
@@ -1217,7 +1313,8 @@ You can combine multiple tools in one response:
           + mcpToolsDocumentation
           + activeFileContext
           + workspacePinnedBlock
-          + genesPrompt;
+          + genesPrompt
+          + browserContextBlock;
 
         return systemPrompt;
       }
@@ -1562,7 +1659,12 @@ You can combine multiple tools in one response:
                   }
 
                   await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
-                  toolResults.push(`[Tool result for ${tc.name}]\n${result || "(no output)"}`);
+                  // Truncate large results (especially sub-agent) to prevent context overflow
+                  const MAX_RESULT_CHARS = 30000;
+                  const truncatedResult = result.length > MAX_RESULT_CHARS
+                    ? result.slice(0, MAX_RESULT_CHARS) + `\n\n[Result truncated: ${result.length} chars total, showing first ${MAX_RESULT_CHARS}]`
+                    : result;
+                  toolResults.push(`[Tool result for ${tc.name}]\n${truncatedResult || "(no output)"}`);
                 } catch (err) {
                   const errMsg = (err as Error)?.message ?? String(err);
                   emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
@@ -1764,22 +1866,22 @@ You can combine multiple tools in one response:
         for (const [key] of pendingDiffProposals) {
           if (key.startsWith(sessionId)) pendingDiffProposals.delete(key);
         }
-        // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
-        const streamCleanup = streamCleanups.get(sessionId);
-        if (streamCleanup) streamCleanup();
-        // Clean up SessionEnd dedup tracking
-        emittedSessionEnds.delete(sessionId);
         // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
         try {
           const { useChat } = await import("../store/useAppStore");
           const state = useChat.getState();
           if (state.isStreaming && state.activeSessionId === sessionId) {
             _debugLog(`[sendPrompt] finally: isStreaming still true for ${sessionId}, force-clearing`);
-            // Emit message-end before clearing so the UI gets the final message
+            // Emit message-end BEFORE cleanup so the UI gets the final message
             emit({ type: "message-end", messageId: sessionId });
             useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           }
         } catch { /* store not available */ }
+        // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
+        const streamCleanup = streamCleanups.get(sessionId);
+        if (streamCleanup) streamCleanup();
+        // Clean up SessionEnd dedup tracking
+        emittedSessionEnds.delete(sessionId);
         // Only delete callback if this session doesn't have a newer listener
         // (checked via streamCleanups — a newer onStreamEvent would have replaced it)
       }
@@ -2102,13 +2204,13 @@ function parseAttributes(tagStr: string): Record<string, string> {
  */
 const KNOWN_TOOL_NAMES = new Set([
   "read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files",
-  "run_command", "git_status", "git_commit", "git_log",
+  "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_diff_file",
   "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
   "launch_app", "reveal_in_finder",
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
-  "task",
+  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan",
 ]);
 
 function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
@@ -2134,7 +2236,21 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
         const closeIdx = blockContent.indexOf(closeTag, tagMatch.index + fullTag.length);
         if (closeIdx !== -1) {
           const innerContent = blockContent.slice(tagMatch.index + fullTag.length, closeIdx).trim();
-          if (innerContent) args["content"] = innerContent;
+          if (innerContent) {
+            // For edit_file, extract <search> and <replace> tags from inner content
+            if (tagName === "edit_file") {
+              const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(innerContent);
+              const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(innerContent);
+              if (searchMatch && replaceMatch) {
+                args["search"] = searchMatch[1];
+                args["replace"] = replaceMatch[1];
+              } else {
+                args["content"] = innerContent;
+              }
+            } else {
+              args["content"] = innerContent;
+            }
+          }
         }
       }
       toolCalls.push({ name: tagName, args, raw: fullTag });
@@ -2146,11 +2262,14 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
 async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   const toolCalls: ParsedToolCall[] = [];
 
-  // 1. read_file — handle both self-closing <read_file path="..."/> and <read_file path="..."></read_file>
-  const readFileRegex = /<read_file\s+path=["']([^"']+)["']\s*\/?>/gi;
+  // 1. read_file — handle both self-closing <read_file path="..."/> and with offset/limit
+  const readFileRegex = /<read_file\s+([^>]*)\/?>/gi;
   let match;
   while ((match = readFileRegex.exec(text)) !== null) {
-    toolCalls.push({ name: "read_file", args: { path: match[1] }, raw: match[0] });
+    const attrs = parseAttributes(match[1]);
+    if (attrs.path) {
+      toolCalls.push({ name: "read_file", args: attrs, raw: match[0] });
+    }
   }
 
   // 2. write_file
@@ -2159,16 +2278,17 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "write_file", args: { path: match[1], content: match[2] }, raw: match[0] });
   }
 
-  // 3. edit_file
-  const editFileRegex = /<edit_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/edit_file>/gi;
+  // 3. edit_file — support optional occurrence attribute
+  const editFileRegex = /<edit_file\s+([^>]*)>([\s\S]*?)<\/edit_file>/gi;
   while ((match = editFileRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
     const innerText = match[2];
     const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(innerText);
     const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(innerText);
-    if (searchMatch && replaceMatch) {
+    if (searchMatch && replaceMatch && attrs.path) {
       toolCalls.push({
         name: "edit_file",
-        args: { path: match[1], search: searchMatch[1], replace: replaceMatch[1] },
+        args: { ...attrs, search: searchMatch[1], replace: replaceMatch[1] },
         raw: match[0]
       });
     }
@@ -2224,6 +2344,30 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   const gitLogRegex = /<git_log\s*\/?>/gi;
   while ((match = gitLogRegex.exec(text)) !== null) {
     toolCalls.push({ name: "git_log", args: {}, raw: match[0] });
+  }
+
+  // 8b. git_branch — list branches
+  const gitBranchRegex = /<git_branch\s*\/?>/gi;
+  while ((match = gitBranchRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "git_branch", args: {}, raw: match[0] });
+  }
+
+  // 8c. git_checkout — switch branch
+  const gitCheckoutRegex = /<git_checkout\s+([^>]*)\/?>/gi;
+  while ((match = gitCheckoutRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.branch) {
+      toolCalls.push({ name: "git_checkout", args: attrs, raw: match[0] });
+    }
+  }
+
+  // 8d. git_diff_file — diff a specific file
+  const gitDiffFileRegex = /<git_diff_file\s+([^>]*)\/?>/gi;
+  while ((match = gitDiffFileRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.path) {
+      toolCalls.push({ name: "git_diff_file", args: attrs, raw: match[0] });
+    }
   }
 
   // 9. clipboard_read — handle both self-closing and closing tags
@@ -2369,6 +2513,67 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
         raw: match[0],
       });
     }
+  }
+
+  // 25. open_panel — switch right panel tab
+  const openPanelRegex = /<open_panel\s+([^>]*)\/?>/gi;
+  while ((match = openPanelRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.panel) {
+      toolCalls.push({ name: "open_panel", args: attrs, raw: match[0] });
+    }
+  }
+
+  // 26. screenshot — capture screen
+  const screenshotRegex = /<screenshot\s*\/?>/gi;
+  while ((match = screenshotRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "screenshot", args: {}, raw: match[0] });
+  }
+
+  // 27. browser_navigate — navigate browser to URL
+  const browserNavRegex = /<browser_navigate\s+([^>]*)\/?>/gi;
+  while ((match = browserNavRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.url) {
+      toolCalls.push({ name: "browser_navigate", args: attrs, raw: match[0] });
+    }
+  }
+
+  // 28. run_preview — start dev server and show preview
+  const runPreviewRegex = /<run_preview\s+([^>]*)\/?>/gi;
+  while ((match = runPreviewRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.command) {
+      toolCalls.push({ name: "run_preview", args: attrs, raw: match[0] });
+    }
+  }
+
+  // 29. browser_execute — run JavaScript in browser context
+  const browserExecRegex = /<browser_execute\s+([^>]*)\/?>/gi;
+  while ((match = browserExecRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.script) {
+      toolCalls.push({ name: "browser_execute", args: attrs, raw: match[0] });
+    }
+  }
+  // Also handle <browser_execute>script content</browser_execute>
+  const browserExecBlockRegex = /<browser_execute>([\s\S]*?)<\/browser_execute>/gi;
+  while ((match = browserExecBlockRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "browser_execute", args: { script: match[1].trim() }, raw: match[0] });
+  }
+
+  // 30. create_task_plan — create/update task plan
+  const createTaskPlanRegex = /<create_task_plan\s+([^>]*)\/?>/gi;
+  while ((match = createTaskPlanRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.tasks) {
+      toolCalls.push({ name: "create_task_plan", args: attrs, raw: match[0] });
+    }
+  }
+  // Also handle <create_task_plan>task list</create_task_plan>
+  const createTaskPlanBlockRegex = /<create_task_plan>([\s\S]*?)<\/create_task_plan>/gi;
+  while ((match = createTaskPlanBlockRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "create_task_plan", args: { tasks: match[1].trim() }, raw: match[0] });
   }
 
   // 25. Generic MCP Tool calls
@@ -2521,7 +2726,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 }
 
 function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Promise<"approved" | "denied"> {
-  const TIMEOUT_MS = 120_000;
+  const TIMEOUT_MS = 600_000; // 10 minutes — matches the safety timer's tool-approval timeout
   _debugLog(`waitForToolApproval: waiting for tool ${toolCallId}`);
   return new Promise((resolve) => {
     let resolved = false;
@@ -2608,20 +2813,40 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       const fileInfo = await stat(args.path);
       const fileSize = (fileInfo as { size?: number }).size ?? 0;
       if (fileSize > MAX_READ_SIZE) {
-        return `[File too large to read: ${fileSize} bytes. Use list_dir or run_command with head/tail to inspect portions.]`;
+        return `[File too large to read: ${fileSize} bytes. Use offset/limit to read specific portions, or list_dir/grep_file to inspect.]`;
       }
     } catch { /* stat may fail for some fs, proceed with read */ }
     const bytes = await readFile(args.path);
     const ext = args.path.split(".").pop()?.toLowerCase() ?? "";
     const textExts = new Set(["ts", "tsx", "js", "jsx", "json", "md", "mdx", "py", "rs", "css", "html", "yml", "yaml", "toml", "txt", "csv", "xml", "svg", "sh", "bash", "zsh", "fish", "sql", "graphql", "prisma", "env", "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc", "lock", "log", "cfg", "ini", "conf"]);
+    let text: string;
     if (textExts.has(ext) || ext === "") {
-      return new TextDecoder().decode(bytes);
+      text = new TextDecoder().decode(bytes);
+    } else {
+      const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      if (decoded.includes("\0") || (decoded.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
+        return `[Binary file: ${args.path.split("/").pop()} — ${bytes.length} bytes]`;
+      }
+      text = decoded;
     }
-    const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    if (decoded.includes("\0") || (decoded.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
-      return `[Binary file: ${args.path.split("/").pop()} — ${bytes.length} bytes]`;
+    // Support offset (line-based) and limit for reading specific portions
+    const offsetRaw = args.offset !== undefined ? parseInt(String(args.offset), 10) : undefined;
+    const limitRaw = args.limit !== undefined ? parseInt(String(args.limit), 10) : undefined;
+    const offset = offsetRaw !== undefined && !isNaN(offsetRaw) ? Math.max(1, offsetRaw) : undefined;
+    const limit = limitRaw !== undefined && !isNaN(limitRaw) && limitRaw > 0 ? limitRaw : undefined;
+    if (offset !== undefined || limit !== undefined) {
+      const lines = text.split("\n");
+      const totalLines = lines.length;
+      const startLine = Math.max(0, (offset ?? 1) - 1); // 1-indexed to 0-indexed
+      const endLine = limit !== undefined ? Math.min(totalLines, startLine + limit) : totalLines;
+      const selectedLines = lines.slice(startLine, endLine);
+      const lineStart = startLine + 1;
+      const lineEnd = Math.min(endLine, totalLines);
+      const header = `--- ${args.path} (lines ${lineStart}-${lineEnd} of ${totalLines}) ---`;
+      const numbered = selectedLines.map((line, i) => `${lineStart + i}: ${line}`).join("\n");
+      return `${header}\n${numbered}`;
     }
-    return decoded;
+    return text;
   }
 
   if (name === "write_file") {
@@ -2671,11 +2896,40 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     const { readFile, writeFile } = await import("@tauri-apps/plugin-fs");
     const bytes = await readFile(args.path);
     const original = new TextDecoder().decode(bytes);
-    if (!original.includes(args.search)) {
-      return `Error: Search block not found in file: ${args.path}`;
+
+    // Support optional occurrence index (0-based) for targeting specific matches
+    const occurrenceRaw = args.occurrence !== undefined ? parseInt(String(args.occurrence), 10) : 0;
+    const occurrence = isNaN(occurrenceRaw) || occurrenceRaw < 0 ? 0 : occurrenceRaw;
+
+    // Find the N-th occurrence of the search string
+    let searchIdx = -1;
+    let searchCount = 0;
+    let scanFrom = 0;
+    while (searchCount <= occurrence) {
+      const idx = original.indexOf(args.search, scanFrom);
+      if (idx === -1) break;
+      if (searchCount === occurrence) {
+        searchIdx = idx;
+        break;
+      }
+      scanFrom = idx + 1;
+      searchCount++;
     }
-    // Replace only the FIRST occurrence (not all) to prevent accidental mass-replacement
-    const searchIdx = original.indexOf(args.search);
+
+    if (searchIdx === -1) {
+      // Provide context about what was searched and where it might be
+      const totalOccurrences = (() => {
+        let count = 0, from = 0;
+        while ((from = original.indexOf(args.search, from)) !== -1) { count++; from += 1; }
+        return count;
+      })();
+      const searchPreview = args.search.length > 100 ? args.search.slice(0, 100) + "..." : args.search;
+      if (totalOccurrences === 0) {
+        return `Error: Search block not found in ${args.path}.\nSearched for: "${searchPreview}"\nFile has ${original.split("\n").length} lines. Verify the search text matches exactly (including whitespace and indentation).`;
+      }
+      return `Error: Found ${totalOccurrences} occurrence(s) of search block in ${args.path}, but occurrence ${occurrence} does not exist (0-indexed). Use occurrence="0" for the first match, "1" for the second, etc.`;
+    }
+
     const updated = original.slice(0, searchIdx) + args.replace + original.slice(searchIdx + args.search.length);
     const oldLines = args.search.split("\n");
     const newLines = args.replace.split("\n");
@@ -2701,7 +2955,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });
     // File is written only when the diff is approved via approveDiff()
-    return `File edit proposed: ${args.path} (awaiting approval)`;
+    return `File edit proposed: ${args.path} (line ${searchLine}, awaiting approval)`;
   }
 
   if (name === "list_dir") {
@@ -2850,6 +3104,25 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   if (name === "git_log") {
     const log = await dalamAPI.git.log(workspacePath, 10);
     return JSON.stringify(log, null, 2);
+  }
+
+  if (name === "git_branch") {
+    const branches = await dalamAPI.git.branches(workspacePath);
+    return branches.map((b) => `${b.current ? "* " : "  "}${b.name}`).join("\n");
+  }
+
+  if (name === "git_checkout") {
+    const branch = args.branch;
+    if (!branch) return "Error: git_checkout requires a 'branch' argument";
+    await dalamAPI.git.checkout(workspacePath, branch);
+    return `Checked out branch: ${branch}`;
+  }
+
+  if (name === "git_diff_file") {
+    const filePath = args.path;
+    if (!filePath) return "Error: git_diff_file requires a 'path' argument";
+    const diff = await dalamAPI.git.diffFile(workspacePath, filePath);
+    return diff || `No changes in ${filePath}`;
   }
 
   if (name === "clipboard_read") {
@@ -3099,6 +3372,156 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     return `Total: ${totalGB}GB, Available: ${availGB}GB, Used: ${usedGB}GB`;
   }
 
+  // ─── Agentic UI Control Tools ─────────────────────────────────
+
+  if (name === "open_panel") {
+    const panel = args.panel as string;
+    const validPanels = ["git", "diff", "review", "browser", "progress", "terminal"];
+    if (!validPanels.includes(panel)) {
+      return `Error: Invalid panel "${panel}". Valid panels: ${validPanels.join(", ")}`;
+    }
+    const { useUI } = await import("../store/useAppStore");
+    useUI.getState().setRightPanelTab(panel as "git" | "diff" | "review" | "browser" | "progress" | "terminal");
+    useUI.getState().setRightPanelOpen(true);
+    return `Opened ${panel} panel`;
+  }
+
+  if (name === "screenshot") {
+    // Capture the current browser state — returns page metadata for agent inspection
+    const { useUI } = await import("../store/useAppStore");
+    const ui = useUI.getState();
+    if (ui.rightPanelTab !== "browser" || !ui.rightPanelOpen) {
+      ui.setRightPanelTab("browser");
+      ui.setRightPanelOpen(true);
+    }
+    const iframe = document.querySelector("iframe[title]") as HTMLIFrameElement | null;
+    if (iframe) {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc) {
+          // Same-origin: extract rich page metadata
+          const title = doc.title || "(no title)";
+          const url = iframe.src || "(no URL)";
+          const bodyText = doc.body?.innerText?.slice(0, 2000) || "";
+          const links = Array.from(doc.querySelectorAll("a[href]")).slice(0, 20).map(a => ({
+            text: a.textContent?.trim().slice(0, 50) || "",
+            href: a.getAttribute("href") || "",
+          }));
+          const images = Array.from(doc.querySelectorAll("img")).slice(0, 10).map(img => ({
+            src: img.src?.slice(0, 100) || "",
+            alt: img.alt || "",
+          }));
+          const forms = Array.from(doc.querySelectorAll("form")).length;
+          const inputs = Array.from(doc.querySelectorAll("input, textarea, select")).slice(0, 10).map(el => ({
+            type: el.tagName.toLowerCase() === "input" ? (el as HTMLInputElement).type : el.tagName.toLowerCase(),
+            name: el.getAttribute("name") || el.getAttribute("placeholder") || "",
+            value: (el as HTMLInputElement).value?.slice(0, 50) || "",
+          }));
+          const headings = Array.from(doc.querySelectorAll("h1,h2,h3")).slice(0, 10).map(h => h.textContent?.trim().slice(0, 80) || "");
+          return [
+            `Page: ${title}`,
+            `URL: ${url}`,
+            `Headings: ${headings.length > 0 ? headings.join(" | ") : "(none)"}`,
+            `Links: ${links.length} found${links.length > 0 ? " — " + links.slice(0, 5).map(l => `"${l.text}" → ${l.href}`).join(", ") : ""}`,
+            `Images: ${images.length} found`,
+            `Forms: ${forms}, Inputs: ${inputs.length}`,
+            inputs.length > 0 ? `Input fields: ${inputs.map(i => `${i.type}("${i.name}")=${i.value}`).join(", ")}` : "",
+            `Text preview: ${bodyText.slice(0, 500)}`,
+          ].filter(Boolean).join("\n");
+        }
+        // Cross-origin fallback
+        return `Browser URL: ${iframe.src || "(loading...)"}. Page is cross-origin — cannot read content. Use browser_navigate to a same-origin URL.`;
+      } catch {
+        return `Browser URL: ${iframe.src || "(unknown)"}. Cannot read cross-origin content.`;
+      }
+    }
+    return "No browser page open. Use browser_navigate to open a URL first.";
+  }
+
+  if (name === "browser_navigate") {
+    const url = args.url as string;
+    const { useUI } = await import("../store/useAppStore");
+    const ui = useUI.getState();
+    // Ensure browser panel is open
+    if (ui.rightPanelTab !== "browser" || !ui.rightPanelOpen) {
+      ui.setRightPanelTab("browser");
+      ui.setRightPanelOpen(true);
+    }
+    // Create a browser tab if none exists, or navigate the active one
+    const activeTabId = ui.activeBrowserTabId;
+    if (!activeTabId || ui.browserTabs.length === 0) {
+      ui.addBrowserTab({ url, title: url });
+    } else {
+      ui.navigateBrowser(activeTabId, url);
+    }
+    return `Navigated browser to: ${url}`;
+  }
+
+  if (name === "run_preview") {
+    const command = args.command as string;
+    const port = args.port as string | undefined;
+    const previewPort = port || "5173";
+
+    // Run the command in the terminal
+    const { useTerminal } = await import("../store/useAppStore");
+    const cwd = workspacePath || ".";
+    useTerminal.getState().addTab(cwd, "bash");
+
+    // Open browser panel to show the preview
+    const { useUI } = await import("../store/useAppStore");
+    const ui = useUI.getState();
+    ui.setRightPanelTab("browser");
+    ui.setRightPanelOpen(true);
+
+    // Create a browser tab pointing to the dev server
+    const previewUrl = `http://localhost:${previewPort}`;
+    ui.addBrowserTab({ url: previewUrl, title: `Preview: ${command.slice(0, 30)}` });
+
+    return `Started preview: running "${command}" and opening ${previewUrl} in the browser panel. The terminal will show the server output.`;
+  }
+
+  if (name === "browser_execute") {
+    const script = args.script as string;
+    // Execute JavaScript in the browser iframe context
+    const iframe = document.querySelector("iframe[title]") as HTMLIFrameElement | null;
+    if (!iframe) {
+      return "Error: No browser iframe found. Use browser_navigate to open a page first.";
+    }
+    try {
+      // For same-origin iframes, we can access contentDocument
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (doc) {
+        // Execute script in iframe context
+        const result = (iframe.contentWindow as any)?.eval?.(script);
+        return result !== undefined ? String(result) : "Script executed (no return value)";
+      }
+      // Cross-origin: can't access iframe content directly
+      return `Error: Cannot execute script in cross-origin iframe. The browser is showing: ${iframe.src || "(unknown URL)"}. Use browser_navigate to a same-origin URL, or use open_url to open in the system browser.`;
+    } catch (err) {
+      return `Error executing browser script: ${(err as Error)?.message ?? String(err)}`;
+    }
+  }
+
+  if (name === "create_task_plan") {
+    const tasksText = args.tasks as string;
+    const lines = tasksText.split("\n").filter((l: string) => l.trim());
+    const { useChat } = await import("../store/useAppStore");
+    const tasks = lines.map((line: string, i: number) => ({
+      id: `task-${i + 1}`,
+      title: line.replace(/^[-*]\s*/, "").trim(),
+      status: "pending" as const,
+    }));
+    if (tasks.length > 0) {
+      useChat.setState({ taskPlan: tasks, taskPlanSummary: null });
+      // Also open the progress panel so the user can see the tasks
+      const { useUI } = await import("../store/useAppStore");
+      useUI.getState().setRightPanelTab("progress");
+      useUI.getState().setRightPanelOpen(true);
+      return `Created task plan with ${tasks.length} tasks. Progress panel opened.`;
+    }
+    return "Error: No valid tasks provided. Provide newline-separated task titles.";
+  }
+
   if (name.startsWith("mcp_")) {
     // Parse "mcp_{serverName}_{toolName}" — server name may contain underscores
     const afterPrefix = name.slice(4); // remove "mcp_"
@@ -3173,7 +3596,30 @@ async function executeTool(name: string, args: Record<string, string>, workspace
           id: 2,
         }),
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} calling MCP tool`);
+      if (!resp.ok) {
+        // Invalidate stale session on client/server errors and retry once
+        if (resp.status >= 400 && resp.status < 500) {
+          mcpHttpSessions.delete(serverName);
+          const retryHeaders = { ...headers };
+          delete retryHeaders["Mcp-Session-Id"];
+          const retryResp = await corsFetch(url, {
+            method: "POST",
+            headers: retryHeaders,
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              method: "tools/call",
+              params: { name: toolName, arguments: args },
+              id: 2,
+            }),
+          });
+          if (!retryResp.ok) throw new Error(`HTTP ${retryResp.status} calling MCP tool (after session reset)`);
+          const retryJson = await retryResp.json();
+          if (retryJson.error) throw new Error(retryJson.error.message || JSON.stringify(retryJson.error));
+          const retryContent = retryJson.result?.content || [];
+          return retryContent.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
+        }
+        throw new Error(`HTTP ${resp.status} calling MCP tool`);
+      }
       const json = await resp.json();
       if (json.error) {
         throw new Error(json.error.message || JSON.stringify(json.error));
@@ -3190,7 +3636,6 @@ async function executeTool(name: string, args: Record<string, string>, workspace
         const { Command } = await import("@tauri-apps/plugin-shell");
         const cmd = Command.create(command, server.args ?? [], { env: server.env });
 
-        // eslint-disable-next-line no-async-promise-executor -- needed for sequential async operations in promise
         const resultPromise = new Promise<string>((resolve, reject) => {
           let outputBuffer = "";
           let resolved = false;
@@ -3338,13 +3783,23 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
   ];
   const MAX_SUB_ITERATIONS = 10;
   const SUB_TIMEOUT_MS = 2 * 60 * 1000;
+  const SUB_ITERATION_TIMEOUT_MS = 30_000;
   const subStartTime = Date.now();
   let subResult = "";
   let subFailed = false;
+  let consecutiveErrors = 0;
   let subError: string | undefined;
   const subToolCalls: ToolCall[] = [];
 
-  const { settings, modelId, config } = getActiveProvider();
+  let providerConfig: { settings: AppSettings; modelId: string; config: { baseUrl: string; apiKey: string; apiFormat: string } };
+  try {
+    providerConfig = getActiveProvider();
+  } catch (err) {
+    const errMsg = `Provider not configured: ${(err as Error)?.message ?? String(err)}`;
+    emit({ type: "sub-agent-end", subAgentId, status: "failed", error: errMsg });
+    return `[Error: ${errMsg}]`;
+  }
+  const { modelId, config } = providerConfig;
 
   for (let subLoop = 0; subLoop < MAX_SUB_ITERATIONS; subLoop++) {
     if (signal.aborted || Date.now() - subStartTime > SUB_TIMEOUT_MS) break;
@@ -3355,14 +3810,39 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
     }));
 
     try {
-      const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, apiMessages, signal, 4096);
-      let fullContent = "";
-      for await (const event of stream) {
-        if (signal.aborted) break;
-        if (event.type === "message-delta") fullContent += event.content;
+      // Per-iteration timeout: race the stream against a timer to detect hung API calls
+      const iterController = new AbortController();
+      const iterTimer = setTimeout(() => iterController.abort(), SUB_ITERATION_TIMEOUT_MS);
+      // Manual signal composition for broader browser compat (AbortSignal.any needs Chrome 120+)
+      const onParentAbort = () => iterController.abort();
+      signal.addEventListener("abort", onParentAbort, { once: true });
+
+      let stream: AsyncIterable<StreamEvent>;
+      try {
+        stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, apiMessages, iterController.signal, 4096);
+      } catch (streamErr) {
+        clearTimeout(iterTimer);
+        signal.removeEventListener("abort", onParentAbort);
+        if ((streamErr as Error)?.name === "AbortError") break;
+        throw streamErr;
       }
 
+      let fullContent = "";
+      let iterTimedOut = false;
+      try {
+        for await (const event of stream) {
+          if (signal.aborted) break;
+          if (iterController.signal.aborted) { iterTimedOut = true; break; }
+          if (event.type === "message-delta") fullContent += event.content;
+        }
+      } finally {
+        clearTimeout(iterTimer);
+        signal.removeEventListener("abort", onParentAbort);
+      }
+      if (iterTimedOut && !fullContent) break; // Clean exit, don't add timeout to sub-history
+
       subResult += fullContent;
+      consecutiveErrors = 0; // Reset on successful stream
 
       // Check if sub-agent is calling tools — merge inline and code-block sources
       const subToolsInline = await parseToolCalls(fullContent);
@@ -3403,20 +3883,20 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
         try {
           // Execute silently — sub-agents don't need parent permission dialogs
           // Filter emit: suppress parent-facing events from sub-agent tool execution
-          const subAgentEmit = (event: StreamEvent) => {
-            // Only forward sub-agent status updates; suppress diff-proposed,
-            // activity-explore, activity-bash, file-changed to parent UI
-            if (event.type === 'diff-proposed' || event.type === 'activity-explore' ||
-              event.type === 'activity-read' || event.type === 'activity-bash' ||
-              event.type === 'activity-skill' || event.type === 'file-changed') return;
-            emit(event);
-          };
+          // Sub-agent tool execution is self-contained - suppress ALL events.
+          // Only sub-agent-update events (emitted explicitly above) reach the parent.
+          const subAgentEmit = (_event: StreamEvent) => { return; };
           const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, subAgentEmit, true);
           // Update the tool call status
           const idx = subToolCalls.findIndex((t) => t.id === subToolId);
           if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "completed", result: toolResult };
           emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
-          subHistory.push({ role: "user", content: `[Tool result for ${st.name}]\n${toolResult || "(no output)"}` });
+          // Truncate large sub-agent tool results to prevent context overflow
+          const MAX_SUB_RESULT = 15000;
+          const truncatedResult = toolResult.length > MAX_SUB_RESULT
+            ? toolResult.slice(0, MAX_SUB_RESULT) + `\n\n[Truncated: ${toolResult.length} chars]`
+            : toolResult;
+          subHistory.push({ role: "user", content: `[Tool result for ${st.name}]\n${truncatedResult || "(no output)"}` });
         } catch (err) {
           const errMsg = (err as Error)?.message ?? String(err);
           const idx = subToolCalls.findIndex((t) => t.id === subToolId);
@@ -3428,9 +3908,24 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
       // Emit content update after each iteration
       emit({ type: "sub-agent-update", subAgentId, content: subResult });
     } catch (err) {
-      subFailed = true;
-      subError = (err as Error)?.message ?? String(err);
-      break;
+      const errMsg = (err as Error)?.message ?? String(err);
+      const isAbort = (err as Error)?.name === "AbortError";
+      if (isAbort || signal.aborted) {
+        subFailed = true;
+        subError = "Sub-agent aborted by user";
+        break;
+      }
+      // Transient errors: add to history and let LLM retry
+      subHistory.push({ role: "user", content: `[System error on iteration ${subLoop + 1}: ${errMsg}]
+Please try a different approach or summarize your progress so far.` });
+      // Fail if no output after 3 errors, or if the same error repeats 3 times
+      consecutiveErrors++;
+      if ((!subResult && consecutiveErrors >= 3) || consecutiveErrors >= MAX_SUB_ITERATIONS) {
+        subFailed = true;
+        subError = `Sub-agent failed after ${subLoop + 1} attempts (${consecutiveErrors} consecutive errors): ${errMsg}`;
+        break;
+      }
+      continue;
     }
   }
 

@@ -395,6 +395,10 @@ export class CronConnector implements Connector {
         const min = parseInt(minute);
         target.setMinutes(min);
         if (target <= now) target.setMinutes(target.getMinutes() + 1);
+      } else {
+        // For wildcard minute, advance to next full minute to avoid rapid-fire
+        target.setMinutes(target.getMinutes() + 1);
+        target.setSeconds(0, 0);
       }
 
       // Resolve the minute value once for resets
@@ -441,7 +445,8 @@ export class CronConnector implements Connector {
         target.setSeconds(0, 0);
       }
 
-      const delayMs = Math.max(1000, target.getTime() - Date.now());
+      // Safety: ensure minimum 60s gap between firings to prevent rapid-fire
+      const delayMs = Math.max(60_000, target.getTime() - Date.now());
       const timer = setTimeout(() => {
         if (!this.connected || !this.events) return;
         const message: ConnectorMessage = {

@@ -14,8 +14,8 @@ import { z } from "zod";
 
 export const ReadFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
-  offset: z.number().optional(),
-  limit: z.number().optional(),
+  offset: z.string().regex(/^\d+$/, "offset must be a positive integer").optional(),
+  limit: z.string().regex(/^\d+$/, "limit must be a positive integer").optional(),
 });
 
 export const WriteFileArgsSchema = z.object({
@@ -28,6 +28,7 @@ export const EditFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
   search: z.string().min(1, "search string is required"),
   replace: z.string(),
+  occurrence: z.string().regex(/^\d+$/, "occurrence must be a non-negative integer").optional(),
 });
 
 export const ListDirArgsSchema = z.object({
@@ -60,6 +61,16 @@ export const GitCommitArgsSchema = z.object({
 });
 
 export const GitLogArgsSchema = z.object({});
+
+export const GitBranchArgsSchema = z.object({});
+
+export const GitCheckoutArgsSchema = z.object({
+  branch: z.string().min(1, "branch name is required"),
+});
+
+export const GitDiffFileArgsSchema = z.object({
+  path: z.string().min(1, "path is required"),
+});
 
 export const ClipboardReadArgsSchema = z.object({});
 
@@ -115,6 +126,35 @@ export const MemoryExtractArgsSchema = z.object({});
 export const MemoryExportArgsSchema = z.object({});
 export const MemoryImportArgsSchema = z.object({});
 
+export const TaskArgsSchema = z.object({
+  prompt: z.string().min(1, "prompt is required"),
+  subagent_type: z.string().optional().default("general"),
+  description: z.string().optional(),
+});
+
+export const OpenPanelArgsSchema = z.object({
+  panel: z.enum(["git", "diff", "review", "browser", "progress", "terminal"]),
+});
+
+export const ScreenshotArgsSchema = z.object({});
+
+export const BrowserNavigateArgsSchema = z.object({
+  url: z.string().min(1, "url is required"),
+});
+
+export const RunPreviewArgsSchema = z.object({
+  command: z.string().min(1, "command is required"),
+  port: z.string().optional(),
+});
+
+export const BrowserExecuteArgsSchema = z.object({
+  script: z.string().min(1, "script is required"),
+});
+
+export const CreateTaskPlanArgsSchema = z.object({
+  tasks: z.string().min(1, "tasks is required — newline-separated list of task titles"),
+});
+
 // ─── Schema Registry ─────────────────────────────────────────
 
 type ToolSchemaEntry = {
@@ -133,6 +173,9 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   git_status: { schema: GitStatusArgsSchema, requiredFields: [] },
   git_commit: { schema: GitCommitArgsSchema, requiredFields: ["message"] },
   git_log: { schema: GitLogArgsSchema, requiredFields: [] },
+  git_branch: { schema: GitBranchArgsSchema, requiredFields: [] },
+  git_checkout: { schema: GitCheckoutArgsSchema, requiredFields: ["branch"] },
+  git_diff_file: { schema: GitDiffFileArgsSchema, requiredFields: ["path"] },
   clipboard_read: { schema: ClipboardReadArgsSchema, requiredFields: [] },
   clipboard_write: { schema: ClipboardWriteArgsSchema, requiredFields: ["text"] },
   notify: { schema: NotifyArgsSchema, requiredFields: ["title"] },
@@ -148,6 +191,13 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   memory_extract: { schema: MemoryExtractArgsSchema, requiredFields: [] },
   memory_export: { schema: MemoryExportArgsSchema, requiredFields: [] },
   memory_import: { schema: MemoryImportArgsSchema, requiredFields: [] },
+  task: { schema: TaskArgsSchema, requiredFields: ["prompt"] },
+  open_panel: { schema: OpenPanelArgsSchema, requiredFields: ["panel"] },
+  screenshot: { schema: ScreenshotArgsSchema, requiredFields: [] },
+  browser_navigate: { schema: BrowserNavigateArgsSchema, requiredFields: ["url"] },
+  run_preview: { schema: RunPreviewArgsSchema, requiredFields: ["command"] },
+  browser_execute: { schema: BrowserExecuteArgsSchema, requiredFields: ["script"] },
+  create_task_plan: { schema: CreateTaskPlanArgsSchema, requiredFields: ["tasks"] },
 };
 
 // ─── Security Validation ─────────────────────────────────────

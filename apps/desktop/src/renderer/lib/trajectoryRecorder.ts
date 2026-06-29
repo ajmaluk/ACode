@@ -292,7 +292,7 @@ async function flushBuffer(sessionId: string): Promise<void> {
 
     // Try to enrich with store metadata
     try {
-      const { useChat, useAgents } = await import("@/store/useAppStore");
+      const { useChat } = await import("@/store/useAppStore");
       const chatState = useChat.getState();
       const session = chatState.chatSessions.find((s) => s.id === sessionId);
       if (session) {

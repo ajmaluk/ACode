@@ -85,7 +85,7 @@ function SplashScreen() {
           fontFamily: "'Newsreader', 'Iowan Old Style', 'Georgia', serif",
         }}
       >
-        Arun
+        Dalam
       </h1>
 
       {/* Progress bar */}
@@ -240,36 +240,9 @@ export function App() {
     else panel.collapse();
   }, [rightPanelOpen]);
 
-  useEffect(() => {
-    void loadSettings().catch((err: unknown) => console.error("Failed to load settings:", err));
-    void useChat.getState().load().catch((err: unknown) => console.error("Failed to load chat sessions:", err));
-    void initializeConnectors(
-      (msg) => {
-        console.debug("[Connector] message received:", msg);
-        // Show incoming connector message as a system notification in chat
-        const chat = useChat.getState();
-        if (chat.activeSessionId) {
-          chat.injectSystemMessage(
-            `[${msg.platform}] Message from ${msg.senderName ?? msg.senderId}: ${msg.content}`
-          );
-        } else {
-          console.debug("[Connector] No active session — message queued:", msg.content.slice(0, 80));
-        }
-      },
-      (id, status) => { console.debug("[Connector] status change:", id, status); },
-    ).catch((err: unknown) => console.error("Failed to initialize connectors:", err));
-  }, [loadSettings]);
-
-  // Auto-restore last workspace on startup and load all workspace sessions for sidebar
-  useEffect(() => {
-    const { workspaces } = useWorkspace.getState();
-    // Load sessions for all workspaces so sidebar displays them
-    for (const ws of workspaces) {
-      void loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
-        console.error(`Failed to load workspace ${ws.name}:`, err)
-      );
-    }
-  }, []);
+  // NOTE: Settings loading, chat session loading, workspace config loading,
+  // and connector initialization are all handled by the bootstrap useEffect above.
+  // This effect only needs to handle post-boot workspace restoration for sidebar.
 
 
   // Auto-show sidebar when a workspace is active, auto-hide when none.

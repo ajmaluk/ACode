@@ -67,13 +67,13 @@ const TAG_TO_TOOL: Record<string, string> = {
 // Comprehensive list of ALL tool names for display stripping (must match dalamAPI.ts KNOWN_TOOL_NAMES)
 const ALL_TOOL_NAMES = [
   "read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files",
-  "run_command", "git_status", "git_commit", "git_log",
+  "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_diff_file",
   "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
   "launch_app", "reveal_in_finder",
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
-  "task",
+  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan",
   // Legacy aliases used by TAG_TO_TOOL
   "bash", "shell", "search", "grep", "webfetch", "websearch",
 ];
@@ -127,7 +127,7 @@ export function stripXmlToolCallTags(content: string): string {
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "clipboard_read", "system_info", "memory_search", "memory_stats", "task"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "task"]);
 
 /**
  * Parse XML-style tool calls from assistant text content.
@@ -1710,9 +1710,8 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       await api.agent.abort(sessionId);
     } finally {
+      // Cleanup stream AFTER abort completes to avoid race with final stream events
       api.agent.cleanupStream(sessionId);
-      // Always reset _sendInProgress when aborting — the send loop is being terminated
-      set({ _sendInProgress: false });
       // Guard against race with newChat — if session was already cleared,
       // don't overwrite the fresh state with stale abort data
       const currentSession = get().session;
@@ -1733,6 +1732,9 @@ export const useChat = create<ChatState>((set, get) => ({
           ),
           session: { ...currentSession, status: "aborted" },
         });
+      } else {
+        // Session was cleared by newChat — still reset _sendInProgress so user can send
+        set({ _sendInProgress: false });
       }
     }
   },
@@ -1750,7 +1752,6 @@ export const useChat = create<ChatState>((set, get) => ({
           )?.path
         : undefined;
       try {
-        const agentName = useAgents.getState().activeAgentName;
         const sessionMode = "yolo" as import("@dalam/shared-types").AgentSessionMode;
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
@@ -1816,46 +1817,50 @@ export const useChat = create<ChatState>((set, get) => ({
     // This catches truly hung streams without killing active multi-turn agent loops.
     const safetyTimer = _createSafetyTimer(get, set, "normal");
     set({ _safetyTimer: safetyTimer });
+    // Capture sessionId for stale-closure prevention in async error handlers
+    const sendSessionId = session.id;
 
     try {
       const agentName = useAgents.getState().activeAgentName;
       await api.agent.sendPrompt(session.id, content, get().messages, agentName, pendingAttachments);
     } catch (err: unknown) {
-      clearTimeout(safetyTimer);
+      // Re-read timer from state (not local ref) — appendStream may have replaced it
+      const timer = get()._safetyTimer;
+      if (timer) clearTimeout(timer);
       set({ _safetyTimer: null });
       const msg = err instanceof Error ? err.message : "Unknown error";
       const sessionId = get().activeSessionId;
       // Context overflow auto-compaction: handle errors thrown before streaming starts
-      if (sessionId && _isContextOverflowError(msg)) {
-        const retryCount = _contextOverflowRetries[sessionId] ?? 0;
+      if (sendSessionId && _isContextOverflowError(msg)) {
+        const retryCount = _contextOverflowRetries[sendSessionId] ?? 0;
         if (retryCount < MAX_CONTEXT_OVERFLOW_RETRIES) {
-          _contextOverflowRetries[sessionId] = retryCount + 1;
+          _contextOverflowRetries[sendSessionId] = retryCount + 1;
           console.warn(`[Chat] Context overflow in sendMessage - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
           const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
-          const infoSM = sessionId ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), infoMsg] } : get().sessionMessages;
+          const infoSM = { ...get().sessionMessages, [sendSessionId]: [...(get().sessionMessages[sendSessionId] ?? []), infoMsg] };
           set({ isStreaming: false, streamingStartedAt: null, messages: [...get().messages, infoMsg], sessionMessages: infoSM });
-          if (sessionId) savePersistedMessages(infoSM);
+          savePersistedMessages(infoSM);
           const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
           if (lastUserMsg) {
-            void get().compactSessionHistory(sessionId).then(() => {
+            void get().compactSessionHistory(sendSessionId).then(() => {
+              // Don't remove the user message — keep it visible during retry
+              // Only clean up transient streaming state
               set((s) => {
-                const msgs = [...s.messages];
-                for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { msgs.splice(i, 1); break; } }
                 const sid = s.activeSessionId;
-                const msgIds = new Set(msgs.map((m) => m.id));
-                const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
+                const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
                 if (sid) {
+                  const msgIds = new Set(s.messages.map((m) => m.id));
                   result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
                 }
                 return result;
               });
-              // Re-read lastUserMsg inside callback to avoid stale closure
+              // Re-read messages from state (not from closure) to get current user message
               const currentMsgs = get().messages;
               const retryMsg = [...currentMsgs].reverse().find((m) => m.role === "user");
-              const retrySessionId = sessionId; // capture before timeout
+              const retrySessionId = sendSessionId; // use captured value, not stale closure
               if (retryMsg) {
-                // Set _sendInProgress to prevent concurrent sends during the delay
-                set({ _sendInProgress: true });
+                // Reset _sendInProgress so the retry can actually call sendMessage
+                set({ _sendInProgress: false });
                 setTimeout(() => { if (get().activeSessionId === retrySessionId) void get().sendMessage(retryMsg.content); }, 500);
               } else {
                 // All messages were removed by compaction — inform the user
@@ -1867,16 +1872,16 @@ export const useChat = create<ChatState>((set, get) => ({
                 };
                 set((s) => ({
                   messages: [...s.messages, systemMsg],
-      _sendInProgress: false,
-      _deltaBatchBuffer: "",
-      _deltaBatchTimer: null,
+                  _sendInProgress: false,
+                  _deltaBatchBuffer: "",
+                  _deltaBatchTimer: null,
                 }));
               }
             }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
             // Don't reset _sendInProgress here — it will be reset when the retry completes or fails
             return;
           }
-        } else { delete _contextOverflowRetries[sessionId]; }
+        } else { delete _contextOverflowRetries[sendSessionId]; }
       }
       // Standard error handling (non-overflow errors)
       const { isStreaming } = get();
@@ -1961,9 +1966,7 @@ export const useChat = create<ChatState>((set, get) => ({
       case "message-start": {
         const pending = get().pendingToolCalls;
         const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
-        set((s) => ({
-          // Only clear streaming content if there are no unresolved tools — otherwise
-          // we'd wipe the display while the user is approving/denying a tool call.
+        set(() => ({
           ...(hasUnresolved ? {} : { streamingContent: "", thinkingContent: "", pendingActivities: [], _pendingChanges: [] }),
           // Don't clear taskPlan or todos here — they persist across turns within a session
           // They're only cleared when starting a completely new chat
@@ -1971,8 +1974,8 @@ export const useChat = create<ChatState>((set, get) => ({
           isStreaming: true,
           streamingStartedAt: Date.now(),
         }));
-        // Re-create safety timer for subsequent agent loop turns (tool results
-        // delivered → message-end clears the timer → next turn needs protection).
+        // NOTE: Safety timer is already reset by the preamble above this switch.
+        // Only create a new one if no timer exists (e.g., first event after manual clear).
         if (!get()._safetyTimer) {
           const newTimer = _createSafetyTimer(get, set, "turn");
           set({ _safetyTimer: newTimer });
@@ -2234,9 +2237,11 @@ export const useChat = create<ChatState>((set, get) => ({
                 const api = createDalamAPI();
                 const model = useSettings.getState().settings.selectedModel;
                 if (model) {
+                  // Re-read messages from state (not stale closure) for memory extraction
+                  const latestMessages = useChat.getState().messages;
                   // Extract key facts from the conversation and save as memory
                   await extractMemoriesWithLLM(
-                    messages.filter(m => m.role === "user").pop()?.content ?? "",
+                    latestMessages.filter(m => m.role === "user").pop()?.content ?? "",
                     finalContent,
                     (prompt) => api.agent.summarizeMessages(model, [{ role: "user", content: prompt }]),
                     { sessionId, workspacePath: ws.path, maxEntries: 3 }
@@ -2419,9 +2424,9 @@ export const useChat = create<ChatState>((set, get) => ({
           set((s) => ({
             subAgents: s.subAgents.filter((sa) => sa.id !== event.subAgentId),
           }));
-                    get()._autoRemoveTimers.delete(_subRemoveTimer);
-          }, 30000);
-          get()._autoRemoveTimers.add(_subRemoveTimer);
+          get()._autoRemoveTimers.delete(_subRemoveTimer);
+        }, 30000);
+        get()._autoRemoveTimers.add(_subRemoveTimer);
         break;
       }
       case "sub-agent-update": {
@@ -2700,13 +2705,12 @@ export const useChat = create<ChatState>((set, get) => ({
             const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
             if (lastUserMsg) {
               void get().compactSessionHistory(sessionId).then(() => {
+                // Don't remove the user message — keep it visible during retry
                 set((s) => {
-                  const msgs = [...s.messages];
-                  for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { msgs.splice(i, 1); break; } }
                   const sid = s.activeSessionId;
-                  const msgIds = new Set(msgs.map((m) => m.id));
-                const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], messages: msgs };
+                  const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
                   if (sid) {
+                    const msgIds = new Set(s.messages.map((m) => m.id));
                     result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
                   }
                   return result;
@@ -2715,7 +2719,7 @@ export const useChat = create<ChatState>((set, get) => ({
                 const retryMsg = [...get().messages].reverse().find((m) => m.role === "user");
                 if (retryMsg) {
                   const retrySid = sessionId;
-                  set({ _sendInProgress: true });
+                  set({ _sendInProgress: false });
                   setTimeout(() => { if (get().activeSessionId === retrySid) void get().sendMessage(retryMsg.content); }, 500);
                 } else {
                   const sysMsg: ChatMessage = {
@@ -2726,9 +2730,9 @@ export const useChat = create<ChatState>((set, get) => ({
                   };
                   set((s) => ({
                     messages: [...s.messages, sysMsg],
-  _sendInProgress: false,
-  _deltaBatchBuffer: "",
-  _deltaBatchTimer: null,
+                    _sendInProgress: false,
+                    _deltaBatchBuffer: "",
+                    _deltaBatchTimer: null,
                   }));
                 }
               }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
@@ -2827,6 +2831,11 @@ export const useChat = create<ChatState>((set, get) => ({
       const api = createDalamAPI();
       api.agent.cleanupStream(session.id);
     }
+    // Save terminal state before switching sessions
+    const activeSessionId = get().activeSessionId;
+    if (activeSessionId) {
+      useTerminal.getState().saveForSession(activeSessionId);
+    }
     // Only abort if the current session is actually streaming
     if (session && isStreaming) void abort(session.id).catch(() => {});
     if (!id) {
@@ -2868,6 +2877,14 @@ export const useChat = create<ChatState>((set, get) => ({
       }
     } else {
       useTerminal.getState().ensureTabForCwd(chatSession.workspacePath);
+    }
+    // Restore terminal state for the new session
+    if (id) {
+      useTerminal.getState().restoreForSession(id);
+      // Clear diff view — it's per-session
+      useDiffView.getState().close();
+      // Clear browser tabs — they're per-session
+      useUI.getState().clearBrowserTabs();
     }
     const restoredSession: AgentSession | null = chatSession
       ? {
@@ -3484,23 +3501,31 @@ type TerminalState = {
   tabs: TerminalTab[];
   activeTabId: string | null;
   output: Record<string, string>;
-  addTab: (cwd: string) => void;
+  addTab: (cwd: string, shell?: string) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   appendOutput: (id: string, data: string) => void;
   ensureTabForCwd: (cwd: string) => void;
+  updateTabShell: (id: string, shell: string) => void;
+  /** Save terminal state for current session */
+  saveForSession: (sessionId: string) => void;
+  /** Restore terminal state for a session */
+  restoreForSession: (sessionId: string) => void;
 };
 
+// Persist terminal state keyed by session ID (proper Map, not single cache)
+const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
+
 export const useTerminal = create<TerminalState>((set, get) => ({
-  tabs: [{ id: "t-1", title: "zsh", cwd: "." }],
+  tabs: [{ id: "t-1", title: "bash", cwd: ".", shell: "bash" }] as TerminalTab[],
   activeTabId: "t-1",
   output: {},
-  addTab(cwd) {
+  addTab(cwd, shell = "bash") {
     set((s) => {
       const id = "t-" + Math.random().toString(36).slice(2, 9);
-      const title = basename(cwd) || "zsh";
+      const title = basename(cwd) || shell;
       return {
-        tabs: [...s.tabs, { id, title, cwd }],
+        tabs: [...s.tabs, { id, title, cwd, shell } as TerminalTab],
         activeTabId: id,
       };
     });
@@ -3530,12 +3555,36 @@ export const useTerminal = create<TerminalState>((set, get) => ({
     } else {
       if (tabs.length === 1 && tabs[0].id === "t-1" && tabs[0].cwd === ".") {
         set({
-          tabs: [{ id: "t-1", title: basename(cwd) || "zsh", cwd }],
+          tabs: [{ id: "t-1", title: basename(cwd) || "bash", cwd, shell: "bash" }] as TerminalTab[],
           activeTabId: "t-1",
         });
       } else {
         addTab(cwd);
       }
+    }
+  },
+  updateTabShell(id, shell) {
+    set((s) => ({
+      tabs: s.tabs.map((t) => t.id === id ? { ...t, shell: shell as TerminalTab["shell"], title: basename(t.cwd) || shell } : t),
+    }));
+  },
+  saveForSession(sessionId) {
+    const { tabs, activeTabId } = get();
+    _terminalStateCache.set(sessionId, { tabs: tabs as TerminalTab[], activeTabId });
+  },
+  restoreForSession(sessionId) {
+    const cached = _terminalStateCache.get(sessionId);
+    if (cached) {
+      set({ tabs: cached.tabs as TerminalTab[], activeTabId: cached.activeTabId });
+    } else {
+      // First time for this session — initialize with workspace cwd
+      const { activeWorkspaceId, workspaces } = useWorkspace.getState();
+      const ws = workspaces.find(w => w.id === activeWorkspaceId);
+      const cwd = ws?.path ?? ".";
+      set({
+        tabs: [{ id: "t-1", title: basename(cwd) || "bash", cwd, shell: "bash" }] as TerminalTab[],
+        activeTabId: "t-1",
+      });
     }
   },
 }));
@@ -4101,6 +4150,7 @@ type UIState = {
   goForwardBrowser: (id: string) => void;
   refreshBrowser: (id: string) => void;
   updateBrowserTab: (id: string, patch: Partial<BrowserTab>) => void;
+  clearBrowserTabs: () => void;
 };
 
 function deriveTitleFromUrl(url: string): string {
@@ -4164,7 +4214,7 @@ function normalizeBrowserUrl(input: string): string | null {
   return "https://www.google.com/search?q=" + encodeURIComponent(raw);
 }
 
-export const useUI = create<UIState>((set, _get) => ({
+export const useUI = create<UIState>((set, get) => ({
   sidebarOpen: true,
   rightPanelOpen: false,
   browserTabs: [],
@@ -4267,6 +4317,14 @@ export const useUI = create<UIState>((set, _get) => ({
         return { ...t, ...patch };
       }),
     }));
+  },
+  clearBrowserTabs: () => {
+    // Clear refresh timers before wiping
+    const { browserTabs } = get();
+    for (const tab of browserTabs) {
+      if (tab._refreshTimer) clearTimeout(tab._refreshTimer);
+    }
+    set({ browserTabs: [], activeBrowserTabId: null });
   },
 }));
 

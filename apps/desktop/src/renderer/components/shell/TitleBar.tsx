@@ -1,5 +1,5 @@
-import { Settings as SettingsIcon, ChevronDown, Sparkles, Loader2, Sun, Moon, Monitor, ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
-import { useSettingsView, useWorkspace, useGit, useChat, useSettings } from "@/store/useAppStore";
+import { Settings as SettingsIcon, ChevronDown, Sparkles, Loader2, Sun, Moon, Monitor, ChevronLeft, ChevronRight, MoreHorizontal, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { useSettingsView, useWorkspace, useGit, useChat, useSettings, useUI } from "@/store/useAppStore";
 
 export function TitleBar() {
   const { open: openSettings } = useSettingsView();
@@ -7,6 +7,7 @@ export function TitleBar() {
   const { status: gitStatus } = useGit();
   const { session, isStreaming, chatSessions, activeSessionId, goBackChat, goForwardChat } = useChat();
   const { settings, update: updateSetting } = useSettings();
+  const { sidebarOpen, toggleSidebar } = useUI();
   const active = workspaces.find((w) => w.id === activeWorkspaceId);
   const activeSession = chatSessions.find((s) => s.id === activeSessionId);
   const sessionStatus = session?.status ?? "idle";
@@ -19,6 +20,16 @@ export function TitleBar() {
         <div className="w-3 h-3 rounded-full bg-[#28c840] shadow-sm" />
       </div>
       <div className="flex items-center gap-0.5 no-drag mr-2">
+        <button
+          className="btn-icon p-1"
+          title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
+          onClick={() => toggleSidebar()}
+        >
+          {sidebarOpen
+            ? <PanelLeftClose className="w-4 h-4" />
+            : <PanelLeftOpen className="w-4 h-4" />
+          }
+        </button>
         <button className="btn-icon p-1" title="Back" onClick={() => goBackChat()}>
           <ChevronLeft className="w-4 h-4" />
         </button>

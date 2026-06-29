@@ -125,7 +125,6 @@ export function CommandPalette() {
       },
     ],
     [setOpen, openSettings, openWorkspace, loadWorkspace, toggleShortcuts]
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   );
 
   const fileItems = useMemo<Item[]>(() => {

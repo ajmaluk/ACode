@@ -137,7 +137,6 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
   // Delete corresponding markdown files (best-effort)
   if (staleEntries.length > 0) {
     try {
-      const { joinPath: jp } = await import("@/lib/pathUtils");
       const { remove, exists: fsExists } = await import("@tauri-apps/plugin-fs");
       // Use provided workspacePath or fall back to active workspace
       let wsPath = workspacePath;
@@ -152,9 +151,9 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
         }
       }
       if (wsPath) {
-        const memDir = jp(wsPath, ".dalam", "memories");
+        const memDir = joinPath(wsPath, ".dalam", "memories");
         for (const entry of staleEntries) {
-          const mdFile = jp(memDir, `${entry.category}-${entry.id.slice(0, 8)}.md`);
+          const mdFile = joinPath(memDir, `${entry.category}-${entry.id.slice(0, 8)}.md`);
           if (await fsExists(mdFile)) {
             await remove(mdFile).catch(() => {});
           }
@@ -810,7 +809,8 @@ export function jaccardSimilarity(a: string, b: string): number {
   for (const w of wordsA) {
     if (wordsB.has(w)) intersection++;
   }
-  const union = new Set([...wordsA, ...wordsB]).size;
+  // Use mathematical formula instead of allocating a new Set for union
+  const union = wordsA.size + wordsB.size - intersection;
   return union === 0 ? 0 : intersection / union;
 }
 

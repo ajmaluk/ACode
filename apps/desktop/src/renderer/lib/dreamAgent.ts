@@ -396,7 +396,14 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           const response = await api.agent.summarizeMessages(model, [
             { role: "user", content: consolidationPrompt }
           ]);
-          
+
+          // Validate LLM output contains valid YAML frontmatter before overwriting
+          const hasFrontmatter = /^---\s*\n[\s\S]*?\n---\s*\n/.test(response);
+          if (!hasFrontmatter || response.length < 50) {
+            console.warn(`[DreamAgent] LLM consolidation output for ${skillA.name} missing valid frontmatter — skipping write`);
+            continue;
+          }
+
           // Re-write consolidated results back to primary node entry point
           await writeFile(skillA.fullPath, new TextEncoder().encode(response));
           

@@ -286,7 +286,6 @@ export function PromptAutocomplete({
       // biome-ignore lint/suspicious/noExplicitAny: bridge React.KeyboardEvent to native KeyboardEvent
       keyHandlerRef.current = ((e: any) => latestHandler.current(e)) as any;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyHandlerRef]);
 
   if (!trigger || options.length === 0) return null;

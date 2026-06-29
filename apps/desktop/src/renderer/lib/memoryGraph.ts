@@ -627,9 +627,10 @@ export function graphDiameter(nodes: GraphNode[]): number {
     const dist = new Map<string, number>();
     dist.set(start, 0);
     const queue = [start];
+    let head = 0;
     let maxDist = 0;
-    while (queue.length > 0) {
-      const current = queue.shift()!;
+    while (head < queue.length) {
+      const current = queue[head++];
       const d = dist.get(current)!;
       for (const neighbor of adj.get(current) ?? []) {
         if (!dist.has(neighbor)) {

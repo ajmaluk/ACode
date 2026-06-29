@@ -29,6 +29,7 @@ export const PERMISSIONS = [
   "websearch",
   "task",
   "skill",
+  "mcp",
   "doom_loop",
   "external_directory",
   "question",
