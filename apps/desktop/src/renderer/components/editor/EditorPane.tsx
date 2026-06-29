@@ -14,7 +14,7 @@ import {
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup, SubAgentList } from "@/components/chat/ActivityBlocks";
+import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup, SubAgentList, QuestionAccordion } from "@/components/chat/ActivityBlocks";
 
 import { CostDisplay } from "@/components/chat/CostDisplay";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
@@ -1571,6 +1571,11 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
         <TaskPlanBlock tasks={message.taskPlan} summary={message.taskPlanSummary} />
       )}
 
+      {/* Questions asked by the agent */}
+      {!pending && message.questions && message.questions.length > 0 && (
+        <QuestionAccordion questions={message.questions} />
+      )}
+
       {/* Changes card — shows file modifications from this AI turn */}
       {!pending && hasFileChanges && (
         <ChangesCard changes={message.fileChanges!} />
@@ -2054,6 +2059,10 @@ function StreamingMessageWrapper({
     // or when the fallback timeout (350ms) is reached to prevent lag feeling.
     // Use raw-to-raw delta (not stripped-to-raw) for correct boundary detection.
     const raw = streamingContent;
+    // Handle content trimming: if raw is shorter than lastRawLen, content was trimmed
+    if (raw.length < lastRawLenRef.current) {
+      lastRawLenRef.current = 0;
+    }
     const delta = raw.slice(lastRawLenRef.current);
 
     const hasLineBreak = delta.includes("\n");

@@ -73,7 +73,7 @@ const ALL_TOOL_NAMES = [
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
-  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan",
+  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan", "question",
   // Legacy aliases used by TAG_TO_TOOL
   "bash", "shell", "search", "grep", "webfetch", "websearch",
 ];
@@ -127,7 +127,7 @@ export function stripXmlToolCallTags(content: string): string {
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "task"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "task", "question", "open_panel", "screenshot"]);
 
 /**
  * Parse XML-style tool calls from assistant text content.

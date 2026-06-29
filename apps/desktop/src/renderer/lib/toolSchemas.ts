@@ -155,6 +155,11 @@ export const CreateTaskPlanArgsSchema = z.object({
   tasks: z.string().min(1, "tasks is required — newline-separated list of task titles"),
 });
 
+export const QuestionArgsSchema = z.object({
+  question: z.string().min(1, "question is required"),
+  options: z.string().optional(),
+});
+
 // ─── Schema Registry ─────────────────────────────────────────
 
 type ToolSchemaEntry = {
@@ -198,6 +203,7 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   run_preview: { schema: RunPreviewArgsSchema, requiredFields: ["command"] },
   browser_execute: { schema: BrowserExecuteArgsSchema, requiredFields: ["script"] },
   create_task_plan: { schema: CreateTaskPlanArgsSchema, requiredFields: ["tasks"] },
+  question: { schema: QuestionArgsSchema, requiredFields: ["question"] },
 };
 
 // ─── Security Validation ─────────────────────────────────────

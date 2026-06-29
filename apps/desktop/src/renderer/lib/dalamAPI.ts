@@ -233,15 +233,21 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
     } else if (resp.headers) {
       for (const [k, v] of Object.entries(resp.headers as Record<string, string>)) respHeaders.set(k, v);
     }
+    // Cache the body to avoid double consumption
+    let bodyCache: ArrayBuffer | null = null;
+    const getBody = async () => {
+      if (!bodyCache) bodyCache = await resp.arrayBuffer();
+      return bodyCache;
+    };
     return {
       ok: resp.ok,
       status: resp.status,
       statusText: resp.statusText,
       headers: respHeaders,
       body: resp.body,
-      text: async () => new TextDecoder().decode(await resp.arrayBuffer()),
-      json: async () => JSON.parse(new TextDecoder().decode(await resp.arrayBuffer())),
-      arrayBuffer: async () => resp.arrayBuffer(),
+      text: async () => new TextDecoder().decode(await getBody()),
+      json: async () => JSON.parse(new TextDecoder().decode(await getBody())),
+      arrayBuffer: getBody,
       clone: () => new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders }),
     } as Response;
   } catch {
@@ -1235,6 +1241,13 @@ You can output multiple tool tags in one response. Tools execute automatically �
     Use at the start of a complex task to show the user your plan.
     The agent should mark tasks as done using the bash "completed" event as it works.
 
+36. Ask Question:
+    <question question="What framework should I use?" options="React,Vue,Svelte"/>
+    Asks the user a question with predefined options and a custom input field.
+    The user can select an option or type a custom answer.
+    Use when you need clarification, choices, or user input before proceeding.
+    Options are comma-separated. If no options, user gets a free-text input.
+
 Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
 
 === EXAMPLE: How to invoke tools ===
@@ -1304,7 +1317,11 @@ You can combine multiple tools in one response:
           "   WRONG (rewriting entire file): <edit_file><search>entire file</search><replace>entire new file</replace></edit_file>\n" +
           "   RIGHT (editing specific lines): <edit_file><search>only the 3 lines that changed</search><replace>only the 3 new lines</replace></edit_file>\n" +
           "7. Use the workspace path: " + (workspacePath || ".") + "\n" +
-          "8. Be concise. Output the tool tag with the complete content — nothing else."
+          "8. Be concise. Output the tool tag with the complete content — nothing else.\n" +
+          "9. For complex tasks: First create a task plan with <create_task_plan>, then execute each task step by step.\n" +
+          "10. When you need user input or clarification, use <question> to ask the user. Always include options when possible.\n" +
+          "11. After completing a task, summarize what was done. Show file changes with their paths and stats.\n" +
+          "12. When building a project: create files, then use <run_preview> to start the dev server, then use <screenshot> to verify."
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -1604,15 +1621,19 @@ You can combine multiple tools in one response:
               emit({ type: "tool-call", toolCall: { id: tc.id, name: tc.name, args: tc.args, status: tc.status } });
             }
 
-            // Check which tools were auto-approved (permission already granted)
-            // by reading their status from the store right after emit
+            // Check which tools were auto-approved by evaluating permissions directly
             const autoApprovedTools = new Set<string>();
             try {
-              const { useChat } = await import("../store/useAppStore");
-              const pending = useChat.getState().pendingToolCalls;
+              const { useAgents } = await import("../store/useAppStore");
+              const agentState = useAgents.getState();
               for (const tc of toolCallMetas) {
-                const stored = pending.find((t) => t.id === tc.id);
-                if (stored && stored.status === "completed") {
+                // Evaluate permission for this tool
+                const isBashTool = ["shell", "bash", "execute", "run_command", "launch_app"].includes(tc.name);
+                const isReadTool = ["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "task", "question", "open_panel", "screenshot"].includes(tc.name);
+                const permissionKey = isBashTool ? "bash" : isReadTool ? "read" : "edit";
+                const canonicalPattern = tc.name;
+                const action = agentState.evaluatePermission(permissionKey, canonicalPattern);
+                if (action === "allow") {
                   autoApprovedTools.add(tc.id);
                 }
               }
@@ -1880,8 +1901,9 @@ You can combine multiple tools in one response:
         // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
         const streamCleanup = streamCleanups.get(sessionId);
         if (streamCleanup) streamCleanup();
-        // Clean up SessionEnd dedup tracking
-        emittedSessionEnds.delete(sessionId);
+        // Clean up SessionEnd dedup tracking AFTER all cleanup is done
+        // Delay slightly to prevent race with concurrent abort() calls
+        setTimeout(() => emittedSessionEnds.delete(sessionId), 100);
         // Only delete callback if this session doesn't have a newer listener
         // (checked via streamCleanups — a newer onStreamEvent would have replaced it)
       }
@@ -2210,7 +2232,7 @@ const KNOWN_TOOL_NAMES = new Set([
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
-  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan",
+  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan", "question",
 ]);
 
 function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
@@ -2576,6 +2598,20 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "create_task_plan", args: { tasks: match[1].trim() }, raw: match[0] });
   }
 
+  // 31. question — ask user a question
+  const questionRegex = /<question\s+([^>]*)\/?>/gi;
+  while ((match = questionRegex.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.question) {
+      toolCalls.push({ name: "question", args: attrs, raw: match[0] });
+    }
+  }
+  // Also handle <question>text</question>
+  const questionBlockRegex = /<question>([\s\S]*?)<\/question>/gi;
+  while ((match = questionBlockRegex.exec(text)) !== null) {
+    toolCalls.push({ name: "question", args: { question: match[1].trim() }, raw: match[0] });
+  }
+
   // 25. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
@@ -2864,6 +2900,17 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       await writeFile(args.path, new TextEncoder().encode(newContent));
+      // Emit file-changed event for UI tracking
+      emit({
+        type: "file-changed",
+        change: {
+          path: args.path,
+          action: oldContent ? "modified" : "created",
+          additions: newContent.split("\n").length,
+          deletions: oldContent ? oldContent.split("\n").length : 0,
+          preview: newContent.split("\n").slice(0, 20).join("\n"),
+        },
+      });
       return `Wrote ${args.path} (${newContent.length} bytes)`;
     }
 
@@ -2937,6 +2984,22 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       await writeFile(args.path, new TextEncoder().encode(updated));
+      // Emit file-changed event for UI tracking
+      const searchLine = original.substring(0, searchIdx).split("\n").length;
+      emit({
+        type: "file-changed",
+        change: {
+          path: args.path,
+          action: "modified",
+          additions: newLines.length,
+          deletions: oldLines.length,
+          preview: [
+            `@@ -${searchLine},${oldLines.length} +${searchLine},${newLines.length} @@`,
+            ...oldLines.map((l: string) => `- ${l}`),
+            ...newLines.map((l: string) => `+ ${l}`),
+          ].join("\n"),
+        },
+      });
       return `Edited ${args.path} (${oldLines.length} → ${newLines.length} lines)`;
     }
 
@@ -3522,6 +3585,50 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     return "Error: No valid tasks provided. Provide newline-separated task titles.";
   }
 
+  if (name === "question") {
+    const questionText = args.question as string;
+    const optionsStr = args.options as string | undefined;
+    // Parse options from comma-separated string or newline-separated
+    const options = optionsStr
+      ? optionsStr.split(/[,;\n]/).filter((o: string) => o.trim()).map((o: string) => o.trim())
+      : [];
+
+    // Emit ask-question event and wait for user response
+    const { useQuestion } = await import("../store/useAppStore");
+    const answer = await useQuestion.getState().ask({
+      header: "Question",
+      question: questionText,
+      options: options.map((o: string) => ({ label: o, description: "" })),
+    });
+
+    const answerText = answer === null ? "Dismissed" : (answer.customText || answer.selectedLabel);
+
+    // Store the Q&A in the current assistant message
+    const { useChat } = await import("../store/useAppStore");
+    const chatState = useChat.getState();
+    const currentMessages = chatState.messages;
+    let lastAssistantIdx = -1;
+    for (let i = currentMessages.length - 1; i >= 0; i--) {
+      if (currentMessages[i].role === "assistant") { lastAssistantIdx = i; break; }
+    }
+    if (lastAssistantIdx >= 0) {
+      const msg = currentMessages[lastAssistantIdx];
+      const existingQuestions = msg.questions ?? [];
+      const newQuestion = {
+        id: "q-" + Math.random().toString(36).slice(2, 9),
+        question: questionText,
+        options,
+        answer: answerText,
+        timestamp: Date.now(),
+      };
+      const updatedMessages = [...currentMessages];
+      updatedMessages[lastAssistantIdx] = { ...msg, questions: [...existingQuestions, newQuestion] };
+      useChat.setState({ messages: updatedMessages });
+    }
+
+    return `User answered: ${answerText}`;
+  }
+
   if (name.startsWith("mcp_")) {
     // Parse "mcp_{serverName}_{toolName}" — server name may contain underscores
     const afterPrefix = name.slice(4); // remove "mcp_"
@@ -3597,20 +3704,34 @@ async function executeTool(name: string, args: Record<string, string>, workspace
         }),
       });
       if (!resp.ok) {
-        // Invalidate stale session on client/server errors and retry once
+        // Invalidate stale session on client/server errors and retry with fresh init
         if (resp.status >= 400 && resp.status < 500) {
           mcpHttpSessions.delete(serverName);
-          const retryHeaders = { ...headers };
-          delete retryHeaders["Mcp-Session-Id"];
+          // Re-initialize session
+          const freshHeaders: Record<string, string> = { "Content-Type": "application/json" };
+          try {
+            const initResp2 = await corsFetch(url, {
+              method: "POST",
+              headers: freshHeaders,
+              body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: Date.now() }),
+            });
+            if (initResp2.ok) {
+              const initJson2 = await initResp2.json();
+              const newSessionId = initResp2.headers.get("mcp-session-id");
+              if (newSessionId) {
+                freshHeaders["Mcp-Session-Id"] = newSessionId;
+                mcpHttpSessions.set(serverName, newSessionId);
+              }
+              if (!initJson2.error) {
+                await corsFetch(url, { method: "POST", headers: freshHeaders, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) });
+              }
+            }
+          } catch { /* re-init failed, will throw below */ }
+          // Retry tool call with fresh session
           const retryResp = await corsFetch(url, {
             method: "POST",
-            headers: retryHeaders,
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              method: "tools/call",
-              params: { name: toolName, arguments: args },
-              id: 2,
-            }),
+            headers: freshHeaders,
+            body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", params: { name: toolName, arguments: args }, id: Date.now() }),
           });
           if (!retryResp.ok) throw new Error(`HTTP ${retryResp.status} calling MCP tool (after session reset)`);
           const retryJson = await retryResp.json();

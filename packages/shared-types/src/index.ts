@@ -106,6 +106,8 @@ export type ChatMessage = {
   attachments?: FileAttachment[];
   taskPlan?: { id: string; title: string; status: "pending" | "running" | "done" | "failed" }[];
   taskPlanSummary?: string;
+  /** Questions asked by the agent and user's answers */
+  questions?: { id: string; question: string; options: string[]; answer: string; timestamp: number }[];
   /** Internal flag: tool result messages that should be hidden from the chat UI */
   isToolResult?: boolean;
 };

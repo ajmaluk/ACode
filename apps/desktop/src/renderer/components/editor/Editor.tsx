@@ -2,6 +2,7 @@ import MonacoEditor, { loader, type OnMount } from "@monaco-editor/react";
 import { useSettings } from "@/store/useAppStore";
 import { useEffect } from "react";
 
+// Configure Monaco to load from CDN with proper worker setup
 loader.config({
   paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" },
 });
@@ -127,6 +128,7 @@ export function CodeView({ path, content, onChange }: Props) {
 
   return (
     <MonacoEditor
+      key={path ?? "empty"}
       path={path ?? undefined}
       value={content}
       language={monacoLang}
@@ -137,7 +139,7 @@ export function CodeView({ path, content, onChange }: Props) {
         <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
           <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
             <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
-            Loading editor…
+            Loading editor...
           </div>
         </div>
       }

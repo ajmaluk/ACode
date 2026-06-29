@@ -706,7 +706,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
 }
 
 // ============================================================================
-// ChangesCard — file changes (open diff, +/- stats)
+// ChangesCard — file changes with expandable inline diffs
 // ============================================================================
 
 export function ChangesCard({ changes }: { changes: FileChange[] }) {
@@ -724,34 +724,70 @@ export function ChangesCard({ changes }: { changes: FileChange[] }) {
         </span>
       }
     >
-      <ul className="space-y-0.5 max-h-80 overflow-y-auto scrollbar-thin">
+      <div className="space-y-1 max-h-96 overflow-y-auto scrollbar-thin">
         {changes.map((c) => (
-          <li key={c.path}>
-            <FileChangeRow change={c} onOpenDiff={() => { openDiff(c); }} />
-          </li>
+          <FileChangeRow key={c.path} change={c} onOpenDiff={() => openDiff(c)} />
         ))}
-      </ul>
+      </div>
     </ActivityRow>
   );
 }
 
 function FileChangeRow({ change, onOpenDiff }: { change: FileChange; onOpenDiff: () => void }) {
+  const [expanded, setExpanded] = useState(false);
   const fileName = basename(change.path);
   const dirPath = dirname(change.path);
+  const actionIcon = change.action === "created" ? "+" : change.action === "deleted" ? "−" : "✎";
+  const actionColor = change.action === "created" ? "text-dalam-git-added" : change.action === "deleted" ? "text-dalam-git-deleted" : "text-dalam-text-muted";
+
   return (
-    <div className="flex items-center gap-2 group hover:opacity-100 opacity-90 text-[12px]">
-      <span className="font-medium flex-shrink-0">{fileName}</span>
-      <span className="opacity-70 truncate font-mono flex-1 min-w-0 text-[11px]">{dirPath}</span>
-      <span className="text-[11px] font-mono flex-shrink-0">
-        <span className="text-dalam-git-added">+{change.additions}</span>{" "}
-        <span className="text-dalam-git-deleted">−{change.deletions}</span>
-      </span>
+    <div className="rounded-lg border border-dalam-border-primary/40 overflow-hidden">
+      {/* File header — clickable to expand */}
       <button
-        onClick={onOpenDiff}
-        className="text-[10px] text-dalam-accent-primary hover:underline flex-shrink-0"
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-dalam-bg-hover/50 transition-colors text-left"
       >
-        Open diff
+        <span className={`text-[11px] flex-shrink-0 ${actionColor}`}>{actionIcon}</span>
+        <FileCode className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
+        <span className="text-[12px] font-medium flex-shrink-0">{fileName}</span>
+        <span className="opacity-60 truncate font-mono flex-1 min-w-0 text-[11px]">{dirPath}</span>
+        <span className="text-[11px] font-mono flex-shrink-0">
+          {change.additions > 0 && <span className="text-dalam-git-added">+{change.additions}</span>}
+          {change.additions > 0 && change.deletions > 0 && " "}
+          {change.deletions > 0 && <span className="text-dalam-git-deleted">−{change.deletions}</span>}
+        </span>
+        <ChevronDown className={`w-3 h-3 text-dalam-text-muted transition-transform ${expanded ? "rotate-180" : ""}`} />
       </button>
+
+      {/* Expandable diff preview */}
+      {expanded && (
+        <div className="border-t border-dalam-border-primary/30 bg-dalam-bg-primary/50">
+          {change.preview ? (
+            <pre className="text-[11px] font-mono leading-relaxed p-3 overflow-x-auto max-h-60 overflow-y-auto scrollbar-thin">
+              {change.preview.split("\n").map((line, i) => {
+                const isAdd = line.startsWith("+");
+                const isRemove = line.startsWith("-");
+                return (
+                  <div key={i} className={`flex ${isAdd ? "bg-dalam-git-added/10" : isRemove ? "bg-dalam-git-deleted/10" : ""}`}>
+                    <span className="w-8 text-right pr-2 text-dalam-text-muted/40 select-none flex-shrink-0">{i + 1}</span>
+                    <span className={`flex-1 whitespace-pre ${isAdd ? "text-dalam-git-added" : isRemove ? "text-dalam-git-deleted" : "text-dalam-text-secondary"}`}>
+                      {line || "\u00A0"}
+                    </span>
+                  </div>
+                );
+              })}
+            </pre>
+          ) : (
+            <div className="p-3 text-[11px] text-dalam-text-muted">
+              <span className={change.action === "created" ? "text-dalam-git-added" : change.action === "deleted" ? "text-dalam-git-deleted" : ""}>
+                {change.action === "created" ? "New file created" : change.action === "deleted" ? "File deleted" : "File modified"}
+              </span>
+              {" "}— {change.additions} additions, {change.deletions} deletions
+              <button onClick={onOpenDiff} className="ml-2 text-dalam-accent-primary hover:underline">View full diff</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -971,6 +1007,53 @@ export function SubAgentList({ agents }: { agents: SubAgentState[] }) {
       {agents.map((agent) => (
         <SubAgentBlock key={agent.id} agent={agent} />
       ))}
+    </div>
+  );
+}
+
+// ============================================================================
+// QuestionAccordion — shows questions asked by the agent and user's answers
+// ============================================================================
+
+export function QuestionAccordion({ questions }: { questions: { id: string; question: string; options: string[]; answer: string; timestamp: number }[] }) {
+  if (!questions || questions.length === 0) return null;
+  return (
+    <div className="my-1 space-y-1">
+      {questions.map((q) => (
+        <QuestionItem key={q.id} question={q} />
+      ))}
+    </div>
+  );
+}
+
+function QuestionItem({ question }: { question: { id: string; question: string; options: string[]; answer: string; timestamp: number } }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-lg border border-dalam-border-primary/40 overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-dalam-bg-hover/50 transition-colors text-left"
+      >
+        <span className="text-dalam-accent-primary text-sm">?</span>
+        <span className="text-[12px] text-dalam-text-primary flex-1 truncate">{question.question}</span>
+        <span className="text-[10px] text-dalam-accent-primary bg-dalam-accent-subtle px-1.5 py-0.5 rounded">
+          {question.answer}
+        </span>
+        <ChevronDown className={`w-3 h-3 text-dalam-text-muted transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="border-t border-dalam-border-primary/30 bg-dalam-bg-primary/50 px-3 py-2 space-y-1">
+          {question.options.length > 0 && (
+            <div className="text-[11px] text-dalam-text-muted">
+              <span className="font-medium">Options:</span> {question.options.join(", ")}
+            </div>
+          )}
+          <div className="text-[11px]">
+            <span className="font-medium text-dalam-text-primary">Answer:</span>{" "}
+            <span className="text-dalam-accent-primary">{question.answer}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
