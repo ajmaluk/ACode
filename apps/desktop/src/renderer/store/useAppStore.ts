@@ -448,7 +448,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveWorkspace(id) {
-    set({ activeWorkspaceId: id });
+    // Clear all open tabs when switching projects (VS Code behavior)
+    set({ activeWorkspaceId: id, openTabs: [], activeFilePath: null });
     savePersistedWorkspaces(get().workspaces, id);
     const ws = get().workspaces.find((w) => w.id === id);
     if (ws) {
@@ -4134,6 +4135,7 @@ export type BrowserTab = {
 type UIState = {
   sidebarOpen: boolean;
   rightPanelOpen: boolean;
+  viewMode: "chat" | "editor";
   browserTabs: BrowserTab[];
   activeBrowserTabId: string | null;
   rightPanelTab: "git" | "diff" | "review" | "browser" | "progress" | "terminal";
@@ -4141,6 +4143,8 @@ type UIState = {
   toggleSidebar: () => void;
   setRightPanelOpen: (open: boolean) => void;
   toggleRightPanel: () => void;
+  setViewMode: (mode: "chat" | "editor") => void;
+  toggleViewMode: () => void;
   setRightPanelTab: (tab: "git" | "diff" | "review" | "browser" | "progress" | "terminal") => void;
   addBrowserTab: (tab?: Partial<BrowserTab>) => string;
   removeBrowserTab: (id: string) => void;
@@ -4217,6 +4221,7 @@ function normalizeBrowserUrl(input: string): string | null {
 export const useUI = create<UIState>((set, get) => ({
   sidebarOpen: true,
   rightPanelOpen: false,
+  viewMode: "chat",
   browserTabs: [],
   activeBrowserTabId: null,
   rightPanelTab: "git",
@@ -4224,6 +4229,8 @@ export const useUI = create<UIState>((set, get) => ({
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
+  setViewMode: (mode) => set({ viewMode: mode }),
+  toggleViewMode: () => set((s) => ({ viewMode: s.viewMode === "chat" ? "editor" : "chat" })),
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
   addBrowserTab: (tab) => {
     const id = "bt-" + Math.random().toString(36).slice(2, 9);

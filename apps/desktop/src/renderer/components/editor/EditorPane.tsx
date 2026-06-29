@@ -309,6 +309,7 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
 
 export function EditorPane() {
   const { openTabs, activeFilePath, setActiveFile, closeTab, updateTabContent, markSaved, fileTree, openFile } = useWorkspace();
+  const { viewMode, setViewMode } = useUI();
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath) ?? null;
 
@@ -333,10 +334,34 @@ export function EditorPane() {
     return () => window.removeEventListener("keydown", onKey);
   }, [markSaved, toast]);
 
-  if (openTabs.length > 0) {
+  // View mode toggle button (top-left corner)
+  const viewToggle = (
+    <button
+      onClick={() => setViewMode(viewMode === "chat" ? "editor" : "chat")}
+      className="px-2 py-1 text-[11px] rounded-md transition-colors flex items-center gap-1.5"
+      title={viewMode === "chat" ? "Switch to Editor (Ctrl+E)" : "Switch to Chat (Ctrl+E)"}
+    >
+      {viewMode === "chat" ? (
+        <>
+          <Code2 className="w-3.5 h-3.5 text-dalam-accent-primary" />
+          <span className="text-dalam-text-muted">Editor</span>
+        </>
+      ) : (
+        <>
+          <Sparkles className="w-3.5 h-3.5 text-dalam-accent-primary" />
+          <span className="text-dalam-text-muted">Chat</span>
+        </>
+      )}
+    </button>
+  );
+
+  // Editor mode — show tabs and editor (VS Code style)
+  if (viewMode === "editor" || openTabs.length > 0) {
     return (
       <div className="h-full flex flex-col bg-dalam-bg-primary">
         <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
+          {viewToggle}
+          <div className="w-px h-4 bg-dalam-border-primary mx-1" />
           {openTabs.map((t) => {
             const active = t.path === activeFilePath;
             return (
@@ -380,7 +405,17 @@ export function EditorPane() {
     );
   }
 
-  return <ChatView />;
+  // Chat mode — show the chat view
+  return (
+    <div className="h-full flex flex-col bg-dalam-bg-primary">
+      <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary flex-shrink-0 px-2">
+        {viewToggle}
+      </div>
+      <div className="flex-1 min-h-0">
+        <ChatView />
+      </div>
+    </div>
+  );
 }
 
 function EditorStatusBar() {
@@ -1459,8 +1494,13 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
                 </button>
                 <button
                   className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-                  title="Reset to this message (clear below, edit in input)"
+                  title="Reset to this message"
                   onClick={() => {
+                    // Save current state as a version before resetting
+                    const chatState = useChat.getState();
+                    if (chatState.activeSessionId && chatState.messages.length > 0) {
+                      chatState.saveVersion(chatState.activeSessionId, "Before reset");
+                    }
                     // Find all messages after this one and remove them
                     const msgs = useChat.getState().messages;
                     const idx = msgs.findIndex((m) => m.id === message.id);
@@ -1594,26 +1634,6 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
                 <Copy className="w-3 h-3" />
               </button>
             )}
-            <button
-              className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-              title="Reset to before this message"
-              onClick={() => {
-                const msgs = useChat.getState().messages;
-                const idx = msgs.findIndex((m) => m.id === message.id);
-                if (idx > 0) {
-                  // Keep messages before this one (find the last user message before this)
-                  const kept = msgs.slice(0, idx);
-                  useChat.setState({ messages: kept });
-                  // Find the last user message to put back in input
-                  const lastUser = [...kept].reverse().find((m) => m.role === "user");
-                  if (lastUser) onResetToMessage?.(lastUser.content);
-                } else if (idx === 0) {
-                  useChat.setState({ messages: [] });
-                }
-              }}
-            >
-              <RotateCcw className="w-3 h-3" />
-            </button>
           </div>
         </div>
       )}

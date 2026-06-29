@@ -319,6 +319,11 @@ export function App() {
           setPaletteOpen(false);
         }
       }
+      // Ctrl+E: Toggle between chat and editor view
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e" && !isTyping(e.target)) {
+        e.preventDefault();
+        useUI.getState().toggleViewMode();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
