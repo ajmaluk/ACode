@@ -1693,20 +1693,17 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
-    // Clear delta batch timer
-    const deltaTimer = get()._deltaBatchTimer;
-    if (deltaTimer) clearTimeout(deltaTimer);
-    // Flush pending delta batch buffer BEFORE abort signal so the message-end
-    // handler sees the flushed content and persists it in the assistant message.
+    // Flush any residual delta batch buffer BEFORE abort so the message-end
+    // handler sees the full content. Safety net — normally empty since
+    // message-delta now flushes directly to streamingContent.
     const buf = get()._deltaBatchBuffer;
     if (buf) {
       const dt = get()._deltaBatchTimer;
       if (dt) clearTimeout(dt);
-      set((s) => ({
-        streamingContent: s.streamingContent + buf,
-        _deltaBatchBuffer: "",
-        _deltaBatchTimer: null,
-      }));
+      set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "", _deltaBatchTimer: null }));
+    } else {
+      const deltaTimer = get()._deltaBatchTimer;
+      if (deltaTimer) { clearTimeout(deltaTimer); set({ _deltaBatchTimer: null }); }
     }
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
@@ -1937,14 +1934,15 @@ export const useChat = create<ChatState>((set, get) => ({
       } catch { /* ignore */ }
     };
     _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content?.length ?? 0}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
-    // Flush any pending delta batch buffer on non-delta events to ensure no content is lost
+    // Safety net: flush any residual delta batch buffer on non-delta events.
+    // Normally the buffer is empty since message-delta flushes directly,
+    // but this guards against edge cases with abort() race conditions.
     if (event.type !== "message-delta") {
       const buf = get()._deltaBatchBuffer;
       if (buf) {
         const timer = get()._deltaBatchTimer;
         if (timer) clearTimeout(timer);
-        const newContent = get().streamingContent + buf;
-        set({ streamingContent: newContent, _deltaBatchBuffer: "", _deltaBatchTimer: null });
+        set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "", _deltaBatchTimer: null }));
       }
     }
     // Reset safety timer on every stream event — the agent loop is alive
@@ -1982,34 +1980,20 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "message-delta":
-        // Batch message-delta events to reduce React re-renders during fast streaming.
-        // Accumulate content in buffer, flush every 50ms or on non-delta events.
-        // Uses functional set() to atomically read+clear the buffer, preventing race conditions.
+        // Flush each delta directly to streamingContent — no batching timer.
+        // The component's StreamingMessageWrapper has its own 16ms throttle +
+        // boundary detection that prevents excessive React re-renders, and
+        // handles XML tag stripping during its throttled performUpdate.
+        // This eliminates the old 50ms store-level latency.
         set((s) => {
-          const newBuffer = s._deltaBatchBuffer + event.content;
-          if (s._deltaBatchTimer) {
-            // Timer already running — just accumulate
-            return { _deltaBatchBuffer: newBuffer };
+          const newContent = s.streamingContent + event.content;
+          // Trim very long streams to prevent memory issues (keep last 200K chars)
+          if (newContent.length > 200000) {
+            const trimmed = newContent.slice(-200000);
+            const spaceIdx = trimmed.indexOf(" ");
+            return { streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed };
           }
-          // Start a new flush timer — use functional set to atomically read+flush buffer
-          const timer = setTimeout(() => {
-            set((state) => {
-              const buf = state._deltaBatchBuffer;
-              if (!buf) return { _deltaBatchTimer: null };
-              const newContent = state.streamingContent + buf;
-              if (newContent.length > 200000) {
-                const trimmed = newContent.slice(-200000);
-                const spaceIdx = trimmed.indexOf(" ");
-                return {
-                  streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed,
-                  _deltaBatchBuffer: "",
-                  _deltaBatchTimer: null,
-                };
-              }
-              return { streamingContent: newContent, _deltaBatchBuffer: "", _deltaBatchTimer: null };
-            });
-          }, 50);
-          return { _deltaBatchBuffer: newBuffer, _deltaBatchTimer: timer };
+          return { streamingContent: newContent };
         });
         break;
       case "diff-proposed": {
@@ -2964,6 +2948,11 @@ export const useChat = create<ChatState>((set, get) => ({
     const { [id]: _removed4, ...restCompaction } = s.compactionSummaries;
     const newSessions = s.chatSessions.filter((cs) => cs.id !== id);
     const isActive = s.activeSessionId === id;
+    // When removing the active session, auto-switch to the most recent remaining
+    // session so the user doesn't end up on a blank screen.
+    const nextActiveSessionId = isActive
+      ? (newSessions.length > 0 ? [...newSessions].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0].id : null)
+      : s.activeSessionId;
     // Persist to disk (outside set updater to avoid side effects during render)
     savePersistedVersions(restVersions);
     _doSavePersistedMessages(restMessages);
@@ -2974,7 +2963,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // Update state
     set({
       chatSessions: newSessions,
-      activeSessionId: isActive ? null : s.activeSessionId,
+      activeSessionId: nextActiveSessionId,
       sessionVersions: restVersions,
       sessionMessages: restMessages,
       sessionAgentName: restAgents,

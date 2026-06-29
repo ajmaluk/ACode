@@ -171,11 +171,11 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/55 backdrop-blur-sm flex items-start justify-center pt-[12vh] animate-fade-in"
+      className="fixed inset-0 z-50 bg-black/55 dark:bg-black/55 backdrop-blur-sm flex items-start justify-center pt-[12vh] animate-fade-in"
       onClick={() => setOpen(false)}
     >
       <div
-        className="w-[680px] max-w-[92vw] bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl overflow-hidden"
+        className="w-[680px] max-w-[92vw] bg-dalam-bg-secondary dark:bg-dalam-bg-secondary border border-dalam-border-primary dark:border-dalam-border-primary rounded-xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <Command shouldFilter loop className="flex flex-col">
@@ -254,17 +254,17 @@ function Row({ item }: { item: Item }) {
       onSelect={item.perform}
       className="group flex items-center gap-2 px-2 py-1.5 mx-1 rounded cursor-pointer text-sm aria-selected:bg-dalam-accent-subtle data-[selected=true]:bg-dalam-accent-subtle"
     >
-      <span className="text-dalam-text-muted flex-shrink-0">{item.icon}</span>
+      <span className="text-dalam-text-secondary flex-shrink-0">{item.icon}</span>
       <span className="flex-1 text-dalam-text-primary truncate">{item.label}</span>
       {item.hint && (
-        <span className="text-[10px] text-dalam-text-muted truncate max-w-[200px]">{item.hint}</span>
+        <span className="text-[10px] text-dalam-text-secondary truncate max-w-[200px]">{item.hint}</span>
       )}
       {item.shortcut && (
-        <kbd className="text-[10px] text-dalam-text-muted px-1.5 py-0.5 bg-dalam-bg-tertiary rounded flex-shrink-0">
+        <kbd className="text-[10px] text-dalam-text-secondary px-1.5 py-0.5 bg-dalam-bg-tertiary rounded flex-shrink-0">
           {item.shortcut}
         </kbd>
       )}
-      <ChevronRight className="w-3 h-3 text-dalam-text-muted opacity-0 group-aria-selected:opacity-100" />
+      <ChevronRight className="w-3 h-3 text-dalam-text-secondary opacity-0 group-aria-selected:opacity-100" />
     </Command.Item>
   );
 }

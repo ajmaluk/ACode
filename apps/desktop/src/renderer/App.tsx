@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { EditorPane } from "@/components/editor/EditorPane";
@@ -26,8 +26,87 @@ import {
   loadWorkspaceConfigAndSessions,
 } from "@/store/useAppStore";
 
+// Splash / loading screen shown during initial app bootstrap
+function SplashScreen() {
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState("Initializing...");
+
+  useEffect(() => {
+    // Simulate progressive loading steps
+    const steps = [
+      { at: 0, status: "Loading configuration..." },
+      { at: 15, status: "Restoring sessions..." },
+      { at: 30, status: "Building memory index..." },
+      { at: 50, status: "Loading context..." },
+      { at: 70, status: "Connecting services..." },
+      { at: 85, status: "Preparing workspace..." },
+      { at: 100, status: "Ready" },
+    ];
+
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    steps.forEach((step) => {
+      const t = setTimeout(() => {
+        setProgress(step.at);
+        setStatus(step.status);
+      }, step.at * 60); // ~60ms per percent = ~6s total
+      timers.push(t);
+    });
+
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-dalam-bg-primary text-dalam-text-primary">
+      {/* Animated icon */}
+      <div className="relative mb-8 animate-float">
+        <img
+          src="/icon.svg"
+          alt=""
+          className="w-32 h-32 object-contain"
+          style={{
+            animation: "marble-drift 3s ease-in-out infinite",
+          }}
+        />
+        {/* Pulsing glow behind icon */}
+        <div
+          className="absolute inset-0 blur-2xl opacity-60"
+          style={{
+            background: "radial-gradient(circle, rgba(107,0,255,0.4) 0%, transparent 70%)",
+            animation: "pulse-glow 2s ease-in-out infinite",
+          }}
+        />
+      </div>
+
+      {/* App name */}
+      <h1
+        className="text-3xl font-semibold tracking-tight mb-6"
+        style={{
+          fontFamily: "'Newsreader', 'Iowan Old Style', 'Georgia', serif",
+        }}
+      >
+        Arun
+      </h1>
+
+      {/* Progress bar */}
+      <div className="w-64 mb-3">
+        <div className="h-1 bg-dalam-bg-tertiary rounded-full overflow-hidden">
+          <div
+            className="h-full bg-dalam-accent-primary transition-all duration-300 ease-out"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Status text */}
+      <p className="text-xs text-dalam-text-muted tabular-nums">{status}</p>
+    </div>
+  );
+}
+
 export function App() {
   useProgressKeyframes();
+  const [booted, setBooted] = useState(false);
   const { load: loadSettings } = useSettings();
   const { toggle: togglePalette, open: paletteOpen, setOpen: setPaletteOpen } =
     useCommandPalette();
@@ -37,7 +116,76 @@ export function App() {
   const { settings, effectiveTheme } = useSettings();
   const { mcpServers, connectMcpServer } = useSkillsMcp();
 
-  // Connect all enabled MCP servers on startup
+  // Handle initial bootstrap sequence
+  useEffect(() => {
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      try {
+        // Stage 1: Load settings
+        await loadSettings();
+        if (cancelled) return;
+
+        // Stage 2: Load chat sessions & workspace configs
+        await useChat.getState().load();
+        if (cancelled) return;
+
+        // Stage 3: Load workspace data
+        const { workspaces } = useWorkspace.getState();
+        await Promise.all(
+          workspaces.map((ws) =>
+            loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
+              console.error(`Failed to load workspace ${ws.name}:`, err)
+            )
+          )
+        );
+        if (cancelled) return;
+
+        // Stage 4: Initialize connectors
+        await initializeConnectors(
+          (msg) => {
+            console.debug("[Connector] message received:", msg);
+            const chat = useChat.getState();
+            if (chat.activeSessionId) {
+              chat.injectSystemMessage(
+                `[${msg.platform}] Message from ${msg.senderName ?? msg.senderId}: ${msg.content}`
+              );
+            } else {
+              console.debug("[Connector] No active session — message queued:", msg.content.slice(0, 80));
+            }
+          },
+          (id, status) => console.debug("[Connector] status change:", id, status)
+        ).catch((err) => console.error("Failed to initialize connectors:", err));
+
+        // Stage 5: Connect MCP servers
+        const { mcpServers, connectMcpServer: connectMcp } = useSkillsMcp.getState();
+        await Promise.all(
+          mcpServers
+            .filter((s) => s.enabled && s.status === "disconnected")
+            .map((s) => connectMcp(s.name).catch((err) => console.error(`MCP ${s.name} failed:`, err)))
+        );
+
+        // Done — hide splash after minimum display time
+        setTimeout(() => {
+          if (!cancelled) setBooted(true);
+        }, 2500);
+      } catch (err) {
+        console.error("Bootstrap failed:", err);
+        // Still boot even on error so user can see the UI
+        setTimeout(() => {
+          if (!cancelled) setBooted(true);
+        }, 1500);
+      }
+    };
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSettings]);
+
+  // Connect all enabled MCP servers on startup (after boot)
   useEffect(() => {
     mcpServers.forEach((server) => {
       if (server.enabled && server.status === "disconnected") {
@@ -114,7 +262,7 @@ export function App() {
 
   // Auto-restore last workspace on startup and load all workspace sessions for sidebar
   useEffect(() => {
-    const { workspaces, activeWorkspaceId } = useWorkspace.getState();
+    const { workspaces } = useWorkspace.getState();
     // Load sessions for all workspaces so sidebar displays them
     for (const ws of workspaces) {
       void loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
@@ -122,6 +270,7 @@ export function App() {
       );
     }
   }, []);
+
 
   // Auto-show sidebar when a workspace is active, auto-hide when none.
   // Track whether the collapse was manual (user dragged/resized) vs automatic
@@ -201,6 +350,11 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePalette, toggleShortcuts, setPaletteOpen]);
+
+  // Show splash screen during initial load
+  if (!booted) {
+    return <SplashScreen />;
+  }
 
   if (settingsOpen) {
     return (

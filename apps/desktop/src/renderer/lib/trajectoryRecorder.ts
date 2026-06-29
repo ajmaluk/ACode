@@ -101,7 +101,6 @@ export async function startRecording(
 
   // Ensure trajectory directory exists
   try {
-    const api = createDalamAPI();
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     const trajDir = joinPath(workspacePath, ".dalam", TRAJECTORY_DIR);
     if (!(await exists(trajDir))) {
@@ -126,7 +125,16 @@ export async function stopRecording(sessionId: string): Promise<void> {
 
   // Flush remaining turns
   await flushBuffer(sessionId);
-  buffers.delete(sessionId);
+
+  // Only delete the buffer if there are no remaining unsent turns.
+  // If flushBuffer failed, turns were restored to the buffer — keep them
+  // for a future retry rather than silently dropping them.
+  const afterFlush = buffers.get(sessionId);
+  if (!afterFlush || afterFlush.turns.length === 0) {
+    buffers.delete(sessionId);
+  } else {
+    console.warn("Trajectory", `Session ${sessionId} has ${afterFlush.turns.length} unsent turns after stopRecording — keeping buffer for retry`);
+  }
 
   console.log("Trajectory", `Stopped recording session ${sessionId}`);
 
@@ -243,6 +251,8 @@ async function flushBuffer(sessionId: string): Promise<void> {
   flushing.add(sessionId);
 
   const turns = [...buffer.turns];
+  // Clear buffer after snapshot to avoid data loss on concurrent writes.
+  // New turns arriving during the async write will accumulate and be flushed next time.
   buffer.turns = [];
   buffer.lastFlush = Date.now();
 
@@ -328,9 +338,14 @@ async function flushBuffer(sessionId: string): Promise<void> {
     }
 
     if (!writeSucceeded) {
-      // Restore turns to buffer so they can be retried on next flush
+      // Restore turns to buffer so they can be retried on next flush.
+      // Also clear the cached content so the next flush re-reads from disk
+      // instead of writing stale cached content.
       const buf = buffers.get(sessionId);
-      if (buf) buf.turns = [...turns, ...buf.turns];
+      if (buf) {
+        buf.turns = [...turns, ...buf.turns];
+        buf._appendedContent = undefined;
+      }
     }
     console.debug("Trajectory", `Flushed ${turns.length} turns for session ${sessionId}`);
   } finally {

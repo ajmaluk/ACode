@@ -1,15 +1,15 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
-import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useAgents, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
-import type { PrimaryAgentName, FileNode } from "@dalam/shared-types";
+import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
+import type { FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
 import { TopNav } from "@/components/editor/TopNav";
 import {
   X, FileCode, FilePlus, Circle, MoreHorizontal, Columns, ArrowUp,
-  ChevronDown, ChevronRight, Shield, Loader2, Sparkles,
+  ChevronDown, ChevronRight, Loader2, Sparkles,
   FileText, GitBranch, Terminal, Search,
-  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Paperclip, Info, Copy, Code2,
+  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Info, Copy, Code2, Pause, Plus,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -305,10 +305,7 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
   );
 });
 
-// Agent display — single mode, full access
-const AGENT_DISPLAY: Record<PrimaryAgentName, { label: string; description: string; icon: React.ElementType; color: string; short: string }> = {
-  yolo: { label: "Assistant", short: "assistant", description: "Full access — reads, writes, executes everything.", icon: Sparkles, color: "text-amber-400" },
-};
+
 
 export function EditorPane() {
   const { openTabs, activeFilePath, setActiveFile, closeTab, updateTabContent, markSaved, fileTree, openFile } = useWorkspace();
@@ -491,11 +488,8 @@ function ChatView() {
   const { sendMessage, isStreaming, messages, selectedModelId, setSelectedModel, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment } = useChat();
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
-  const { activeAgentName, setActiveAgent } = useAgents();
   const toast = useToast();
-  const agentInfo = AGENT_DISPLAY[activeAgentName] ?? AGENT_DISPLAY.yolo;
   const mod = modKey();
-  const AgentIcon = agentInfo.icon;
   const scrollRef = useRef<HTMLDivElement>(null);
   const mainTextareaRef = useRef<HTMLTextAreaElement>(null);
   const followupTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -508,16 +502,14 @@ function ChatView() {
   const followupAutocompleteKey = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
-  const [showAgentDropdown, setShowAgentDropdown] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [hoveredProvider, setHoveredProvider] = useState<string | null>(null);
   const providerHoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showFollowupAgentDropdown, setShowFollowupAgentDropdown] = useState(false);
   const [showFollowupModelDropdown, setShowFollowupModelDropdown] = useState(false);
   const [hoveredFollowupProvider, setHoveredFollowupProvider] = useState<string | null>(null);
   const followupProviderHoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const followupProviderRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const streamingStartedAt = useChat((s) => s.streamingStartedAt);
+
   const [timestamp] = useState(() => Date.now());
 
   // Auto-resize the textareas dynamically based on scrollHeight
@@ -540,9 +532,7 @@ function ChatView() {
   // Refs for click-outside detection
   const workspaceRef = useRef<HTMLDivElement>(null);
   const branchRef = useRef<HTMLDivElement>(null);
-  const agentRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLDivElement>(null);
-  const followupAgentRef = useRef<HTMLDivElement>(null);
   const followupModelRef = useRef<HTMLDivElement>(null);
   const providerRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
@@ -599,9 +589,7 @@ function ChatView() {
       if ((target as HTMLElement)?.closest?.("[data-model-subdropdown]")) return;
       if (workspaceRef.current && !workspaceRef.current.contains(target)) setShowWorkspaceDropdown(false);
       if (branchRef.current && !branchRef.current.contains(target)) setShowBranchDropdown(false);
-      if (agentRef.current && !agentRef.current.contains(target)) setShowAgentDropdown(false);
       if (modelRef.current && !modelRef.current.contains(target)) setShowModelDropdown(false);
-      if (followupAgentRef.current && !followupAgentRef.current.contains(target)) setShowFollowupAgentDropdown(false);
       if (followupModelRef.current && !followupModelRef.current.contains(target)) setShowFollowupModelDropdown(false);
     };
     document.addEventListener("mousedown", handler);
@@ -985,7 +973,7 @@ Add your project's common commands here so Dalam knows how to build:
                   <div className="relative" ref={workspaceRef}>
                     <button
                       className={`flex items-center gap-1.5 text-sm transition-colors ${workspace ? "text-dalam-text-secondary hover:text-dalam-text-primary" : "text-dalam-text-muted hover:text-dalam-text-secondary"}`}
-                      onClick={() => { setShowWorkspaceDropdown((v) => !v); setShowBranchDropdown(false); setShowAgentDropdown(false); setShowModelDropdown(false); }}
+                      onClick={() => { setShowWorkspaceDropdown((v) => !v); setShowBranchDropdown(false); setShowModelDropdown(false); }}
                       title={workspace ? `Active workspace: ${workspace.name}` : "Select a folder to start working"}
                     >
                       <FolderOpen className={`w-4 h-4 ${workspace ? "text-dalam-text-muted" : "text-amber-400/80"}`} />
@@ -1024,7 +1012,7 @@ Add your project's common commands here so Dalam knows how to build:
                   {gitStatus && (
                     <div className="relative" ref={branchRef}>
                       <button className="flex items-center gap-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-secondary transition-colors"
-                        onClick={() => { setShowBranchDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowAgentDropdown(false); setShowModelDropdown(false); }}>
+                        onClick={() => { setShowBranchDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowModelDropdown(false); }}>
                         <GitBranch className="w-3.5 h-3.5" />
                         <span>{gitStatus.branch}</span>
                         <ChevronDown className="w-3 h-3" />
@@ -1082,36 +1070,12 @@ Add your project's common commands here so Dalam knows how to build:
                 <div className="flex items-center justify-between px-4 pb-2.5">
                   <div className="flex items-center gap-2">
                     <AttachFileButton />
-                    <div className="relative" ref={agentRef}>
-                      <Tooltip content={`Primary agent: ${agentInfo.label}`} side="top">
-                        <button className={`flex items-center gap-1.5 px-2.5 py-1 text-xs hover:bg-dalam-bg-hover rounded-md transition-colors ${agentInfo.color}`}
-                          onClick={() => { setShowAgentDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowModelDropdown(false); }}
-                        >
-                          <AgentIcon className="w-3.5 h-3.5" />
-                          <span>{agentInfo.label}</span>
-                          <ChevronDown className="w-3 h-3" />
-                        </button>
-                      </Tooltip>
-                      {showAgentDropdown && (
-                        <div className="absolute bottom-full left-0 mb-1 w-80 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
-                          <div className="px-3 py-2 border-b border-dalam-border-primary">
-                            <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted">Agent mode</div>
-                            <div className="text-xs text-dalam-text-muted mt-0.5">Full access — reads, writes, executes everything.</div>
-                          </div>
-                          <div className="px-4 py-3 flex items-center gap-3">
-                            <Sparkles className="w-4 h-4 text-amber-400" />
-                            <div className="text-sm text-dalam-text-primary font-medium">Assistant</div>
-                            <span className="text-[9px] uppercase text-dalam-accent-primary tracking-wider">active</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="relative" ref={modelRef}>
                       <Tooltip content={currentModel?.model.name || (selectedModelId || "Select model")} side="top">
                         <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
-                          onClick={() => { setShowModelDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); setShowAgentDropdown(false); }}>
+                          onClick={() => { setShowModelDropdown((v) => !v); setShowWorkspaceDropdown(false); setShowBranchDropdown(false); }}>
                           <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
                           {currentModel?.model.name || (selectedModelId || "Select model")}
                           <ChevronDown className="w-3 h-3" />
@@ -1163,13 +1127,13 @@ Add your project's common commands here so Dalam knows how to build:
                         />
                       )}
                     </div>
-                    <Tooltip content={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"} side="top">
+                    <Tooltip content={isStreaming ? "Stop generating" : !workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"} side="top">
                       <button
-                        className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="w-8 h-8 flex items-center justify-center rounded-full bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                         disabled={!isStreaming && (!value.trim() || !workspace || (!selectedModelId && !settings.selectedModel))}
                         onClick={handleSubmit}
                       >
-                        {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
+                        {isStreaming ? <Pause className="w-4 h-4" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
                       </button>
                     </Tooltip>
                   </div>
@@ -1295,17 +1259,11 @@ Add your project's common commands here so Dalam knows how to build:
             <div className="flex items-center justify-between px-4 pb-3">
               <div className="flex items-center gap-2">
                 <AttachFileButton />
-                <div className="relative" ref={followupAgentRef}>
-                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary rounded-md">
-                    <AgentIcon className="w-3.5 h-3.5" />
-                    <span>Assistant</span>
-                  </span>
-                </div>
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative" ref={followupModelRef}>
                   <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
-                    onClick={() => { setShowFollowupModelDropdown((v) => !v); setShowFollowupAgentDropdown(false); }}>
+                    onClick={() => { setShowFollowupModelDropdown((v) => !v); }}>
                         <span className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
                         {currentModel?.model.name || (selectedModelId || "Select model")}
                         <ChevronDown className="w-3 h-3" />
@@ -1356,12 +1314,12 @@ Add your project's common commands here so Dalam knows how to build:
                   )}
                 </div>
                 <button
-                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="w-8 h-8 flex items-center justify-center rounded-full bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                   disabled={!isStreaming && (!value.trim() || !workspace || (!selectedModelId && !settings.selectedModel))}
                   onClick={handleSubmit}
-                  title={!workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"}
+                  title={isStreaming ? "Stop generating" : !workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"}
                 >
-                  {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
+                  {isStreaming ? <Pause className="w-4 h-4" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
                 </button>
               </div>
             </div>
@@ -1733,7 +1691,7 @@ function AttachFileButton() {
           onClick={() => inputRef.current?.click()}
           aria-label="Add context"
         >
-          <Paperclip className="w-4 h-4" />
+          <Plus className="w-4 h-4" />
         </button>
       </Tooltip>
     </>
@@ -1805,16 +1763,14 @@ const MarkdownContent = React.memo(function MarkdownContent({ content }: { conte
 // Falls to raw <pre> display during streaming; switches to full Markdown when settled.
 const StreamingContent = React.memo(function StreamingContent({ content, pending }: { content: string; pending: boolean }) {
   if (!pending || content.length < 200) {
-    // Short or complete — render normally
     return <MarkdownContent content={content} />;
   }
-  // Streaming with long content: use lightweight rendering to avoid react-markdown re-parsing
   const segments = splitCodeFences(content);
   return (
     <div className="prose-dalam mb-2 last:mb-0">
       {segments.map((seg, idx) =>
         seg.type === "code"
-          ? <CodeBlock key={"sc-" + idx} language={seg.language ?? ""} content={seg.content} />
+          ? <StreamingCodeBlock key={"sc-" + idx} language={seg.language ?? ""} content={seg.content} />
           : <p key={"st-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0">{seg.content}</p>
       )}
     </div>
@@ -1889,6 +1845,81 @@ const CodeBlock = React.memo(function CodeBlock({ language, content }: { languag
   );
 });
 
+// Streaming code block — shows loading state during stream, full code when complete
+const StreamingCodeBlock = React.memo(function StreamingCodeBlock({ language, content }: { language: string; content: string }) {
+  const [isComplete, setIsComplete] = useState(false);
+  const lines = content.split("\n");
+  const isLong = lines.length > 30;
+  const [expanded, setExpanded] = useState(true);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => setIsComplete(true), 200);
+    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
+  }, [content]);
+
+  const escapeHtml = useCallback((s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"), []);
+  const [highlighted, setHighlighted] = useState(() => escapeHtml(content));
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (language && hljs.getLanguage(language)) {
+        try { setHighlighted(hljs.highlight(content, { language }).value); } catch { setHighlighted(escapeHtml(content)); }
+      } else {
+        try { setHighlighted(hljs.highlightAuto(content).value); } catch { setHighlighted(escapeHtml(content)); }
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [content, language, escapeHtml]);
+
+  if (!isComplete) {
+    return (
+      <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary/50 rounded-lg overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-dalam-bg-tertiary/50 border-b border-dalam-border-primary/50">
+          <Loader2 className="w-3 h-3 animate-spin text-dalam-accent-primary" />
+          <span className="text-[10px] text-dalam-text-muted font-mono">{language || "code"}</span>
+          <span className="text-[10px] text-dalam-text-muted/50">· writing...</span>
+        </div>
+        <div className="p-3 text-[12px] font-mono text-dalam-text-primary/30 h-16 overflow-hidden">
+          <pre className="whitespace-pre-wrap break-words">{content.slice(0, 80)}{content.length > 80 ? "..." : ""}</pre>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden animate-fade-in">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
+        <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted">
+          <FileCode className="w-3 h-3" />
+          {language || "code"}
+          <span className="text-dalam-text-muted/50">· {lines.length} lines</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {isLong && (
+            <button
+              className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
+              onClick={() => setExpanded(!expanded)}
+            >{expanded ? "Collapse" : "Expand"}</button>
+          )}
+          <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
+            onClick={() => { void navigator.clipboard.writeText(content); }}>Copy</button>
+        </div>
+      </div>
+      <pre
+        className="p-3 text-[12px] font-mono text-dalam-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
+        style={{ maxHeight: isLong && !expanded ? "240px" : undefined }}
+      ><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
+      {isLong && !expanded && (
+        <button
+          className="w-full py-1.5 text-[10px] text-dalam-accent-primary hover:bg-dalam-bg-hover border-t border-dalam-border-primary transition-colors"
+          onClick={() => setExpanded(true)}
+        >Show all {lines.length} lines</button>
+      )}
+    </div>
+  );
+});
+
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -1899,7 +1930,7 @@ function splitCodeFences(text: string): { type: "text" | "code"; content: string
   const re = /```(\w*)(?:\n([\s\S]*?))?\n?```/g;
   let last = 0;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(text))) {
+  while ((match = re.exec(text)) !== null) {
     if (match.index > last) out.push({ type: "text", content: text.slice(last, match.index) });
     out.push({ type: "code", content: match[2] ?? "", language: match[1] });
     last = match.index + match[0].length;
@@ -2017,7 +2048,7 @@ function StreamingMessageWrapper({
     const hasCodeBlock = delta.includes("```");
     const isBoundary = hasLineBreak || hasSentenceEnd || hasCodeBlock;
 
-    const throttleLimit = 80; // Fallback maximum latency (ms) — was 350ms, too laggy for fast APIs
+    const throttleLimit = 16; // ~1 frame for instant streaming feedback
 
     if (isBoundary || elapsed >= throttleLimit) {
       if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
@@ -2076,6 +2107,7 @@ function StreamingMessageWrapper({
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function completeStreamingMarkdown(text: string): string {
   if (!text) return "";
   const lines = text.split("\n");

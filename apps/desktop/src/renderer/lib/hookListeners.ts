@@ -31,6 +31,7 @@ interface ToolStats {
   calls: number;
   errors: number;
   totalDurationMs: number;
+  lastActivityAt: number;
   byTool: Record<string, { calls: number; errors: number; totalMs: number }>;
 }
 
@@ -50,6 +51,7 @@ function getOrCreateStats(sessionId: string): ToolStats {
       calls: 0,
       errors: 0,
       totalDurationMs: 0,
+      lastActivityAt: Date.now(),
       byTool: {},
     });
   }
@@ -64,10 +66,11 @@ function cleanupStaleStats(): void {
   const now = Date.now();
   const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
   for (const [sessionId] of sessionStats) {
-    // If session has stats but no new activity, consider it stale
-    // This is a safety net — onSessionEnd normally cleans up
     const stats = sessionStats.get(sessionId);
-    if (stats && stats.totalDurationMs === 0 && stats.calls === 0) {
+    if (!stats) continue;
+    // Session is stale if no activity for >10 minutes
+    const isIdle = (now - stats.lastActivityAt) > STALE_THRESHOLD_MS;
+    if (isIdle) {
       sessionStats.delete(sessionId);
     }
   }
@@ -82,6 +85,7 @@ function onPostToolUse(event: PostToolUseEvent): void {
   const stats = getOrCreateStats(event.sessionId);
   stats.calls++;
   stats.totalDurationMs += event.durationMs;
+  stats.lastActivityAt = Date.now();
 
   if (event.error) {
     stats.errors++;
@@ -96,6 +100,7 @@ function onPostToolUse(event: PostToolUseEvent): void {
   toolStats.totalMs += event.durationMs;
   if (event.error) toolStats.errors++;
 
+  console.log(`[ToolUse] ${event.toolName} | ${event.durationMs}ms | session: ${event.sessionId.slice(0, 8)}` + (event.error ? ` | ERROR: ${event.error}` : ""));
 }
 
 // ─── 2. Auto-Save Context on SessionEnd ───
@@ -342,7 +347,7 @@ function onSessionStart(_event: SessionStartEvent): void {
  * Logs when an LLM turn completes, with tool call counts.
  */
 function onStop(event: StopEvent): void {
-  console.warn(
+  console.log(
     `[TurnStop] ${event.sessionId} | ` +
     `${event.messageCount} msgs | ` +
     `${event.toolCallsExecuted} tool call(s)`

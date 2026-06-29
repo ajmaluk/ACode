@@ -403,7 +403,7 @@ export function Sidebar() {
           >
             <ArrowLeft className="w-3.5 h-3.5 text-dalam-text-secondary" />
           </button>
-          <Folder className="w-3.5 h-3.5 text-blue-400/60 flex-shrink-0" />
+          <Folder className="w-3.5 h-3.5 text-dalam-accent-primary/60 flex-shrink-0" />
           <span className="truncate text-xs text-dalam-text-primary font-medium">{activeFileWorkspace.name}</span>
         </div>
         <FileTree />
@@ -460,18 +460,18 @@ export function Sidebar() {
           return (
             <div
               key={ws.id}
-              className={`mb-0.5 transition-colors ${dragOverId === ws.id ? "bg-dalam-accent-primary/10 border-t border-dalam-accent-primary" : ""}`}
+              className={`mb-0.5 transition-colors ${dragOverId === ws.id ? "bg-dalam-accent-subtle border-t border-dalam-accent-primary" : ""}`}
               draggable
               onDragStart={(e) => handleDragStart(e, ws.id)}
               onDragOver={(e) => handleDragOver(e, ws.id)}
               onDrop={(e) => handleDrop(e, ws.id)}
               onDragEnd={handleDragEnd}
             >
-              <div
-                className={`relative w-full text-left px-2 py-1 flex items-center gap-1.5 group/workspace hover:bg-dalam-bg-hover transition-colors ${
-                  ws.id === activeWorkspaceId ? "bg-dalam-bg-secondary" : ""
-                } ${dragId === ws.id ? "opacity-50" : ""}`}
-              >
+                  <div
+                 className={`relative w-full text-left px-2 py-1 flex items-center gap-1.5 group/workspace hover:bg-dalam-bg-hover transition-colors ${
+                   ws.id === activeWorkspaceId ? "bg-dalam-bg-active dark:bg-dalam-bg-active" : ""
+                 } ${dragId === ws.id ? "opacity-50" : ""}`}
+               >
                 <button
                   className="flex items-center gap-1.5 flex-1 min-w-0"
                   onClick={() => { toggleWorkspace(ws.id); setActiveWorkspace(ws.id); }}
@@ -493,25 +493,25 @@ export function Sidebar() {
                 <div className="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-1.5">
                   <Tooltip content="Show files" side="top">
                     <button
-                       className="p-1 rounded hover:bg-dalam-bg-active transition-colors"
-                       onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
+                       className="p-1 rounded hover:bg-dalam-bg-hover dark:hover:bg-dalam-bg-hover transition-colors"
+                        onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
                     >
                       <List className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                  <Tooltip content="New task" side="top">
-                    <button
-                      className="p-1 rounded hover:bg-dalam-bg-active transition-colors"
-                      onClick={() => handleNewTask(ws.id)}
-                    >
+                     <Tooltip content="New task" side="top">
+                       <button
+                         className="p-1 rounded hover:bg-dalam-bg-hover dark:hover:bg-dalam-bg-hover transition-colors"
+                         onClick={() => handleNewTask(ws.id)}
+                       >
                       <MessageSquarePlus className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
                   <div className="relative" data-workspace-menu>
-                    <Tooltip content="More" side="top">
-                      <button
-                        className="p-1 rounded hover:bg-dalam-bg-active transition-colors"
-                        onClick={(e) => {
+                     <Tooltip content="More" side="top">
+                       <button
+                         className="p-1 rounded hover:bg-dalam-bg-hover dark:hover:bg-dalam-bg-hover transition-colors"
+                         onClick={(e) => {
                           e.stopPropagation();
                           if (workspaceMenuPosition && workspaceMenuPosition.id === ws.id) {
                             setWorkspaceMenuPosition(null);

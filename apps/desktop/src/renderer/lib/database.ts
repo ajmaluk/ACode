@@ -179,7 +179,9 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     dbLoadingWorkspace = null;
   }
 
-  if (db) {
+  // Only set dbInstance if nothing is set yet, or we're switching to a
+  // different workspace. This prevents concurrent inits from clobbering.
+  if (db && (!dbInstance || currentWorkspacePath !== workspacePath)) {
     dbInstance = db;
     currentWorkspacePath = workspacePath;
   }
