@@ -14,11 +14,16 @@ import {
   FolderPlus,
   Pencil,
   Trash2,
+  Copy,
+  TerminalSquare,
+  FolderSearch,
 } from "lucide-react";
 import type { FileNode as FileNodeT } from "@dalam/shared-types";
 import { useWorkspace, useDiffView } from "@/store/useAppStore";
 import { showContextMenu, type ContextMenuItem } from "@/components/ui/contextMenuUtils";
 import { useToast } from "@/components/ui/toastStore";
+import { modKey } from "@/lib/platform";
+import { copyToClipboard, revealInFinder, openInTerminal } from "@/lib/editorHelpers";
 
 function renderFileIcon(name: string, className: string) {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -58,6 +63,7 @@ export function FileTree() {
 
   const handleRootContextMenu = (e: React.MouseEvent) => {
     if (!activeWorkspace) return;
+    const mod = modKey();
     showContextMenu(e, [
       {
         type: "item", label: "New File", icon: <FilePlus className="w-3.5 h-3.5" />,
@@ -66,6 +72,20 @@ export function FileTree() {
       {
         type: "item", label: "New Folder", icon: <FolderPlus className="w-3.5 h-3.5" />,
         perform: () => promptCreate(e, activeWorkspace.path, "directory"),
+      },
+      { type: "separator" },
+      {
+        type: "item", label: "Copy Path", icon: <Copy className="w-3.5 h-3.5" />, shortcut: `${mod}⇧C`,
+        perform: () => copyToClipboard(activeWorkspace.path, toast),
+      },
+      {
+        type: "item", label: "Reveal in Finder", icon: <FolderSearch className="w-3.5 h-3.5" />,
+        perform: () => revealInFinder(activeWorkspace.path),
+      },
+      { type: "separator" },
+      {
+        type: "item", label: "Open in Terminal", icon: <TerminalSquare className="w-3.5 h-3.5" />,
+        perform: () => openInTerminal(activeWorkspace.path),
       },
     ]);
   };
@@ -101,7 +121,7 @@ export function FileTree() {
 
 function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
   const [open, setOpen] = useState(depth < 2);
-  const { setActiveFile, activeFilePath, openFile, createFile, createDirectory, deletePath, renamePath } = useWorkspace();
+  const { activeFilePath, openFile, createFile, createDirectory, deletePath, renamePath } = useWorkspace();
   const openDiff = useDiffView((s) => s.openFile);
   const toast = useToast();
   const isDir = node.type === "directory";
@@ -109,6 +129,9 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
   const indent = 4 + depth * 12;
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    const mod = modKey();
+    const ws = useWorkspace.getState().workspaces.find((w) => w.id === useWorkspace.getState().activeWorkspaceId);
+    const basePath = ws?.path ?? "";
     const items: ContextMenuItem[] = isDir
       ? [
           {
@@ -121,18 +144,36 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
           },
           { type: "separator" },
           {
-            type: "item", label: "Rename", icon: <Pencil className="w-3.5 h-3.5" />,
+            type: "item", label: "Copy Path", icon: <Copy className="w-3.5 h-3.5" />, shortcut: `${mod}⇧C`,
+            perform: () => copyToClipboard(node.path, toast),
+          },
+          {
+            type: "item", label: "Copy Relative Path", icon: <Copy className="w-3.5 h-3.5" />,
+            perform: () => copyToClipboard(basePath ? node.path.replace(basePath + "/", "") : node.path, toast),
+          },
+          { type: "separator" },
+          {
+            type: "item", label: "Rename", icon: <Pencil className="w-3.5 h-3.5" />, shortcut: "F2",
             perform: () => promptRename(e, node.name, node.path),
           },
           {
-            type: "item", label: "Delete", icon: <Trash2 className="w-3.5 h-3.5" />, destructive: true,
+            type: "item", label: "Delete", icon: <Trash2 className="w-3.5 h-3.5" />, destructive: true, shortcut: "Del",
             perform: () => promptDelete(e, node.name, node.path),
+          },
+          { type: "separator" },
+          {
+            type: "item", label: "Reveal in Finder", icon: <FolderSearch className="w-3.5 h-3.5" />,
+            perform: () => revealInFinder(node.path),
+          },
+          {
+            type: "item", label: "Open in Terminal", icon: <TerminalSquare className="w-3.5 h-3.5" />,
+            perform: () => openInTerminal(node.path),
           },
         ]
       : [
           {
-            type: "item", label: "Open", icon: <FileCode className="w-3.5 h-3.5" />,
-            perform: () => { setActiveFile(node.path); openFile(node.path); },
+            type: "item", label: "Open", icon: <FileCode className="w-3.5 h-3.5" />, shortcut: "Enter",
+            perform: () => { openFile(node.path); },
           },
           {
             type: "item", label: "Open Diff", icon: <FileCode className="w-3.5 h-3.5" />,
@@ -140,12 +181,30 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
           },
           { type: "separator" },
           {
-            type: "item", label: "Rename", icon: <Pencil className="w-3.5 h-3.5" />,
+            type: "item", label: "Copy Path", icon: <Copy className="w-3.5 h-3.5" />, shortcut: `${mod}⇧C`,
+            perform: () => copyToClipboard(node.path, toast),
+          },
+          {
+            type: "item", label: "Copy Relative Path", icon: <Copy className="w-3.5 h-3.5" />,
+            perform: () => copyToClipboard(basePath ? node.path.replace(basePath + "/", "") : node.path, toast),
+          },
+          { type: "separator" },
+          {
+            type: "item", label: "Rename", icon: <Pencil className="w-3.5 h-3.5" />, shortcut: "F2",
             perform: () => promptRename(e, node.name, node.path),
           },
           {
-            type: "item", label: "Delete", icon: <Trash2 className="w-3.5 h-3.5" />, destructive: true,
+            type: "item", label: "Delete", icon: <Trash2 className="w-3.5 h-3.5" />, destructive: true, shortcut: "Del",
             perform: () => promptDelete(e, node.name, node.path),
+          },
+          { type: "separator" },
+          {
+            type: "item", label: "Reveal in Finder", icon: <FolderSearch className="w-3.5 h-3.5" />,
+            perform: () => revealInFinder(node.path),
+          },
+          {
+            type: "item", label: "Open in Terminal", icon: <TerminalSquare className="w-3.5 h-3.5" />,
+            perform: () => openInTerminal(node.path),
           },
         ];
     showContextMenu(e, items);
@@ -225,7 +284,6 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
         }`}
       style={{ paddingLeft: indent + 16 }}
       onClick={() => {
-        setActiveFile(node.path);
         openFile(node.path);
       }}
       onContextMenu={handleContextMenu}

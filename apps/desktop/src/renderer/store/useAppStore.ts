@@ -28,7 +28,7 @@ import { createDalamAPI } from "@/lib/dalamAPI";
 import { mcpHttpSessions } from "@/lib/dalamAPI";
 import type { SubAgentState } from "@dalam/shared-types";
 import { startRecording, stopRecording, recordUserMessage, recordAssistantMessage } from "@/lib/trajectoryRecorder";
-import { basename, toPosix, joinPath } from "@/lib/pathUtils";
+import { basename, toPosix, joinPath, detectLanguage } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
 import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, tier1PruneToolOutputs, buildCompactionPrompt, parseContextWindow, CTX } from "@/lib/contextManager";
@@ -326,6 +326,7 @@ type WorkspaceState = {
   loadWorkspace: () => Promise<void>;
   setActiveWorkspace: (id: string) => void;
   removeWorkspace: (id: string) => void;
+  reorderWorkspaces: (newOrder: Workspace[]) => void;
   setActiveFile: (path: string | null) => void;
   openFile: (path: string) => Promise<void>;
   closeTab: (path: string) => void;
@@ -339,25 +340,6 @@ type WorkspaceState = {
   deletePath: (path: string) => Promise<void>;
   renamePath: (path: string, newName: string) => Promise<void>;
 };
-
-function detectLanguage(path: string): string {
-  const fileName = path.split("/").pop() ?? path.split("\\").pop() ?? "";
-  if (fileName === "Makefile" || fileName === "makefile" || fileName === "GNUmakefile") return "makefile";
-  if (fileName === "Dockerfile" || fileName.startsWith("Dockerfile.")) return "dockerfile";
-  if (fileName === "Containerfile" || fileName.startsWith("Containerfile.")) return "dockerfile";
-  if (fileName === "CMakeLists.txt") return "cmake";
-  if (fileName.startsWith("Jenkinsfile")) return "groovy";
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  if (ext === "ts" || ext === "tsx") return "typescript";
-  if (ext === "js") return "javascript";
-  if (ext === "json") return "json";
-  if (ext === "md" || ext === "mdx") return "markdown";
-  if (ext === "py") return "python";
-  if (ext === "rs") return "rust";
-  if (ext === "css") return "css";
-  if (ext === "html") return "html";
-  return "plaintext";
-}
 
 async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
   try {
@@ -420,13 +402,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       await initWorkspaceMemory(api, path);
       const tree = await api.fs.listDir(path);
       const name = basename(path) || "workspace";
+      const existing = get().workspaces.find((w) => w.path === path);
       const workspace: Workspace = {
         id: "ws-" + toPosix(path),
         path,
         name,
+        addedAt: existing?.addedAt ?? Date.now(),
         tasks: [],
       };
-      const newWorkspaces = [...get().workspaces.filter((w) => w.path !== path), workspace];
+      const newWorkspaces = [...get().workspaces.filter((w) => w.path !== path), workspace]
+        .sort((a, b) => b.addedAt - a.addedAt);
       set({
         workspaces: newWorkspaces,
         activeWorkspaceId: workspace.id,
@@ -448,13 +433,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   setActiveWorkspace(id) {
-    // Clear all open tabs when switching projects (VS Code behavior)
-    set({ activeWorkspaceId: id, openTabs: [], activeFilePath: null });
+    // Abort any active streaming session before switching
+    const { session, isStreaming } = useChat.getState();
+    if (session && isStreaming) {
+      void useChat.getState().abort(session.id).catch(() => {});
+    }
+    // Clear all open tabs and file tree when switching projects (VS Code behavior)
+    set({ activeWorkspaceId: id, openTabs: [], activeFilePath: null, fileTree: [] });
     savePersistedWorkspaces(get().workspaces, id);
     const ws = get().workspaces.find((w) => w.id === id);
     if (ws) {
       void loadWorkspaceConfigAndSessions(ws.path);
-      // Also refresh the file tree so @ autocomplete works for the new workspace
       void get().loadFileTree(ws.path);
     }
   },
@@ -479,6 +468,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }
     }
   },
+  reorderWorkspaces(newOrder) {
+    const { activeWorkspaceId } = get();
+    set({ workspaces: newOrder });
+    savePersistedWorkspaces(newOrder, activeWorkspaceId);
+  },
   setActiveFile(path) {
     set({ activeFilePath: path });
   },
@@ -487,6 +481,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const { openTabs } = get();
     if (openTabs.find((t) => t.path === path)) {
       set({ activeFilePath: path });
+      // Auto-switch to editor mode when opening a file
+      useUI.getState().setViewMode("editor");
       return;
     }
     try {
@@ -514,6 +510,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         openTabs: [...s.openTabs, tab],
         activeFilePath: path,
       }));
+      // Auto-switch to editor mode when opening a file
+      useUI.getState().setViewMode("editor");
     } catch (err) {
       console.error("Failed to open file:", path, err);
     }
@@ -928,7 +926,7 @@ function _createSafetyTimer(
       chatSessions: state.session
         ? state.chatSessions.map((cs) =>
             cs.id === state.session!.id
-              ? { ...cs, status: "completed", lastActivityAt: Date.now() }
+              ? { ...cs, status: "completed", lastActivityAt: Date.now(), lastVisitedAt: Date.now() }
               : cs
           )
         : state.chatSessions,
@@ -968,7 +966,7 @@ function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<st
   if (toolFailures >= haltThreshold) {
     return { message: `Tool guardrail HALTED: "${toolName}" has accumulated ${toolFailures} failures across this session. The agentic loop has been stopped.`, severity: "halt" };
   }
-  if (toolFailures >= threshold * 2) {
+  if (toolFailures >= threshold) {
     return { message: `Tool guardrail: "${toolName}" has accumulated ${toolFailures} failures across this session. Consider changing strategy.`, severity: "warn" };
   }
   return null;
@@ -1029,6 +1027,61 @@ const MAX_CONTEXT_OVERFLOW_RETRIES = 2;
 
 function _clearContextOverflowRetries(sessionId: string) {
   delete _contextOverflowRetries[sessionId];
+}
+
+/**
+ * Shared context overflow retry logic.
+ * Returns true if retry was initiated, false otherwise.
+ */
+function _handleContextOverflowRetry(sessionId: string): boolean {
+  const retryCount = _contextOverflowRetries[sessionId] ?? 0;
+  if (retryCount >= MAX_CONTEXT_OVERFLOW_RETRIES) {
+    delete _contextOverflowRetries[sessionId];
+    return false;
+  }
+  _contextOverflowRetries[sessionId] = retryCount + 1;
+  const store = useChat.getState();
+  const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
+  const infoSM = { ...store.sessionMessages, [sessionId]: [...(store.sessionMessages[sessionId] ?? []), infoMsg] };
+  useChat.setState({ messages: [...store.messages, infoMsg], sessionMessages: infoSM });
+  savePersistedMessages(infoSM);
+  const lastUserMsg = [...store.messages].reverse().find((m) => m.role === "user");
+  if (!lastUserMsg) return false;
+  console.warn(`[Chat] Context overflow in session - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
+  void store.compactSessionHistory(sessionId).then(() => {
+    useChat.setState((s) => {
+      const sid = s.activeSessionId;
+      const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
+      if (sid) {
+        const msgIds = new Set(s.messages.map((m) => m.id));
+        result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
+      }
+      return result;
+    });
+    const retryMsg = [...useChat.getState().messages].reverse().find((m) => m.role === "user");
+    if (retryMsg) {
+      const retrySid = sessionId;
+      useChat.setState({ _sendInProgress: false });
+      setTimeout(() => { if (useChat.getState().activeSessionId === retrySid) void useChat.getState().sendMessage(retryMsg.content); }, 500);
+    } else {
+      const sysMsg: ChatMessage = {
+        id: "sys-" + Math.random().toString(36).slice(2, 9),
+        role: "system",
+        content: "Context compaction removed all messages. Please resend your request.",
+        timestamp: Date.now(),
+      };
+      useChat.setState((s) => ({
+        messages: [...s.messages, sysMsg],
+        _sendInProgress: false,
+        _deltaBatchBuffer: "",
+        _deltaBatchTimer: null,
+      }));
+    }
+  }).catch((compactErr) => {
+    console.warn("[Chat] Compaction failed:", compactErr);
+    useChat.setState({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false });
+  });
+  return true;
 }
 // Concurrency guard: track workspace loading to prevent duplicate loads
 let _workspaceLoadPromise: Promise<void> | null = null;
@@ -1284,6 +1337,47 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
         console.warn("Failed to create default workspace sessions.json:", e);
       }
     }
+    // Load editor state (open tabs, active file)
+    const editorStatePath = joinPath(dotDalam, "editor.json");
+    if (await exists(editorStatePath)) {
+      try {
+        const content = await api.fs.readFile(editorStatePath);
+        const editorData = JSON.parse(content);
+        if (editorData.openTabs && Array.isArray(editorData.openTabs)) {
+          // Validate that files still exist and reload content for dirty tabs
+          const validTabs: typeof editorData.openTabs = [];
+          for (const tab of editorData.openTabs) {
+            if (tab.path && tab.name) {
+              try {
+                const { exists: fileExists } = await import("@tauri-apps/plugin-fs");
+                if (await fileExists(tab.path)) {
+                  // Always reload content from disk to ensure freshness
+                  const content = await api.fs.readFile(tab.path);
+                  validTabs.push({
+                    ...tab,
+                    content,
+                    dirty: false,
+                    language: detectLanguage(tab.path),
+                  });
+                }
+              } catch {
+                // Skip files that can't be read
+              }
+            }
+          }
+          if (validTabs.length > 0) {
+            useWorkspace.setState({
+              openTabs: validTabs,
+              activeFilePath: editorData.activeFilePath && validTabs.find((t: { path: string }) => t.path === editorData.activeFilePath)
+                ? editorData.activeFilePath
+                : validTabs[validTabs.length - 1]?.path ?? null,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to load editor state:", e);
+      }
+    }
   } catch (err) {
     console.warn("Failed to check workspace paths in loadWorkspaceConfigAndSessions:", err);
   }
@@ -1358,6 +1452,21 @@ async function _doSaveWorkspaceData() {
       alwaysAllowed: existingConfig.alwaysAllowed ?? usePermission.getState().alwaysAllowed,
     };
     await api.fs.writeFile(configPath, JSON.stringify(configData, null, 2));
+
+    // Save editor state (open tabs, active file, explorer state)
+    const editorStatePath = joinPath(dotDalam, "editor.json");
+    const wsState = useWorkspace.getState();
+    const editorState = {
+      openTabs: wsState.openTabs.map((t) => ({
+        path: t.path,
+        name: t.name,
+        dirty: t.dirty,
+        language: t.language,
+        cursor: t.cursor,
+      })),
+      activeFilePath: wsState.activeFilePath,
+    };
+    await api.fs.writeFile(editorStatePath, JSON.stringify(editorState, null, 2));
   } catch (e) {
     console.warn("Failed to save workspace data:", e);
   }
@@ -1460,6 +1569,8 @@ type ChatState = {
   restoredVersionId: string | null;
   preRestoreMessages: import("@dalam/shared-types").ChatMessage[] | null;
   pendingAttachments: FileAttachment[];
+  /** Message queue — follow-up messages waiting to be sent */
+  messageQueue: Array<{ id: string; content: string; attachments?: FileAttachment[]; timestamp: number }>;
   compactionSummaries: Record<string, string>;
   _compactingSessions: Set<string>;
   _safetyTimer: ReturnType<typeof setTimeout> | null;
@@ -1503,6 +1614,13 @@ type ChatState = {
   addPendingAttachment: (file: FileAttachment) => void;
   removePendingAttachment: (id: string) => void;
   clearPendingAttachments: () => void;
+  /** Message queue methods */
+  addToQueue: (content: string, attachments?: FileAttachment[]) => void;
+  removeFromQueue: (id: string) => void;
+  reorderQueue: (fromIdx: number, toIdx: number) => void;
+  editQueueItem: (id: string, content: string) => void;
+  steerQueueItem: (id: string) => void;
+  clearQueue: () => void;
   injectSystemMessage: (content: string) => void;
   load: () => Promise<void>;
 };
@@ -1534,6 +1652,7 @@ export const useChat = create<ChatState>((set, get) => ({
   restoredVersionId: null,
   preRestoreMessages: null,
   pendingAttachments: [],
+  messageQueue: [],
   compactionSummaries: loadPersistedCompactionSummaries(),
   _compactingSessions: new Set<string>(),
   _safetyTimer: null,
@@ -1650,6 +1769,7 @@ export const useChat = create<ChatState>((set, get) => ({
       model,
       startedAt: now,
       lastActivityAt: now,
+      lastVisitedAt: now,
       messageCount: 0,
       status: "idle",
       versionCount: 0,
@@ -1729,7 +1849,7 @@ export const useChat = create<ChatState>((set, get) => ({
           _safetyTimer: null,
           subAgents: [],
           chatSessions: get().chatSessions.map((s) =>
-            s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now() } : s
+            s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now(), lastVisitedAt: Date.now() } : s
           ),
           session: { ...currentSession, status: "aborted" },
         });
@@ -1757,7 +1877,7 @@ export const useChat = create<ChatState>((set, get) => ({
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
         console.error("Failed to start session:", err);
-        set({ _sendInProgress: false });
+        set({ _sendInProgress: false, _suppressSessionRestore: false });
         return;
       }
       // Re-check isStreaming after await to prevent race condition with concurrent sendMessage calls
@@ -1833,56 +1953,9 @@ export const useChat = create<ChatState>((set, get) => ({
       const sessionId = get().activeSessionId;
       // Context overflow auto-compaction: handle errors thrown before streaming starts
       if (sendSessionId && _isContextOverflowError(msg)) {
-        const retryCount = _contextOverflowRetries[sendSessionId] ?? 0;
-        if (retryCount < MAX_CONTEXT_OVERFLOW_RETRIES) {
-          _contextOverflowRetries[sendSessionId] = retryCount + 1;
-          console.warn(`[Chat] Context overflow in sendMessage - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
-          const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
-          const infoSM = { ...get().sessionMessages, [sendSessionId]: [...(get().sessionMessages[sendSessionId] ?? []), infoMsg] };
-          set({ isStreaming: false, streamingStartedAt: null, messages: [...get().messages, infoMsg], sessionMessages: infoSM });
-          savePersistedMessages(infoSM);
-          const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
-          if (lastUserMsg) {
-            void get().compactSessionHistory(sendSessionId).then(() => {
-              // Don't remove the user message — keep it visible during retry
-              // Only clean up transient streaming state
-              set((s) => {
-                const sid = s.activeSessionId;
-                const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
-                if (sid) {
-                  const msgIds = new Set(s.messages.map((m) => m.id));
-                  result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
-                }
-                return result;
-              });
-              // Re-read messages from state (not from closure) to get current user message
-              const currentMsgs = get().messages;
-              const retryMsg = [...currentMsgs].reverse().find((m) => m.role === "user");
-              const retrySessionId = sendSessionId; // use captured value, not stale closure
-              if (retryMsg) {
-                // Reset _sendInProgress so the retry can actually call sendMessage
-                set({ _sendInProgress: false });
-                setTimeout(() => { if (get().activeSessionId === retrySessionId) void get().sendMessage(retryMsg.content); }, 500);
-              } else {
-                // All messages were removed by compaction — inform the user
-                const systemMsg: ChatMessage = {
-                  id: "sys-" + Math.random().toString(36).slice(2, 9),
-                  role: "system",
-                  content: "Context compaction removed all messages. Please resend your request.",
-                  timestamp: Date.now(),
-                };
-                set((s) => ({
-                  messages: [...s.messages, systemMsg],
-                  _sendInProgress: false,
-                  _deltaBatchBuffer: "",
-                  _deltaBatchTimer: null,
-                }));
-              }
-            }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
-            // Don't reset _sendInProgress here — it will be reset when the retry completes or fails
-            return;
-          }
-        } else { delete _contextOverflowRetries[sendSessionId]; }
+        if (_handleContextOverflowRetry(sendSessionId)) {
+          return; // retry initiated
+        }
       }
       // Standard error handling (non-overflow errors)
       const { isStreaming } = get();
@@ -2115,6 +2188,7 @@ export const useChat = create<ChatState>((set, get) => ({
         // Skip creating a message if there's nothing to show (e.g., error already
         // handled the turn and cleared streamingContent)
         if (!finalContent && allToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent) {
+          const now = Date.now();
           set({
             isStreaming: false,
             _sendInProgress: false,
@@ -2125,7 +2199,7 @@ export const useChat = create<ChatState>((set, get) => ({
             chatSessions: liveSession
               ? get().chatSessions.map((cs) =>
                   cs.id === liveSession.id
-                    ? { ...cs, status: "completed", lastActivityAt: Date.now() }
+                    ? { ...cs, status: "completed", lastActivityAt: now, lastVisitedAt: now }
                     : cs
                 )
               : get().chatSessions,
@@ -2214,11 +2288,22 @@ export const useChat = create<ChatState>((set, get) => ({
           chatSessions: liveSession
             ? get().chatSessions.map((s) =>
                 s.id === liveSession.id
-                  ? { ...s, status: "completed", lastActivityAt: Date.now() }
+                  ? { ...s, status: "completed", lastActivityAt: Date.now(), lastVisitedAt: Date.now() }
                   : s
               )
             : get().chatSessions,
         });
+        // Process message queue: auto-send next queued message
+        const { messageQueue } = get();
+        if (messageQueue.length > 0) {
+          const next = messageQueue[0];
+          set({ messageQueue: messageQueue.slice(1) });
+          setTimeout(() => {
+            if (!get().isStreaming) {
+              void get().sendMessage(next.content);
+            }
+          }, 300);
+        }
         // Record assistant message in trajectory
         if (sessionId) {
           recordAssistantMessage(sessionId, finalContent, undefined, allToolCalls.length > 0 ? allToolCalls.map(tc => ({ name: tc.name, arguments: tc.args, result: tc.result })) : undefined);
@@ -2685,6 +2770,11 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "ask-question": {
+        const questionSessionId = get().activeSessionId;
+        // Set session status to questioning when AI asks a question
+        if (questionSessionId) {
+          get().setSessionStatus(questionSessionId, "questioning");
+        }
         void useQuestion.getState().ask({
           header: event.header,
           question: event.question,
@@ -2695,51 +2785,9 @@ export const useChat = create<ChatState>((set, get) => ({
       case "error": {
         const sessionId = get().activeSessionId;
         if (sessionId && _isContextOverflowError(event.error)) {
-          const retryCount = _contextOverflowRetries[sessionId] ?? 0;
-          if (retryCount < MAX_CONTEXT_OVERFLOW_RETRIES) {
-            _contextOverflowRetries[sessionId] = retryCount + 1;
-            console.warn(`[Chat] Context overflow detected - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
-            const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
-            const infoSM = sessionId ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), infoMsg] } : get().sessionMessages;
-            set({ messages: [...get().messages, infoMsg], sessionMessages: infoSM });
-            if (sessionId) savePersistedMessages(infoSM);
-            const lastUserMsg = [...get().messages].reverse().find((m) => m.role === "user");
-            if (lastUserMsg) {
-              void get().compactSessionHistory(sessionId).then(() => {
-                // Don't remove the user message — keep it visible during retry
-                set((s) => {
-                  const sid = s.activeSessionId;
-                  const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
-                  if (sid) {
-                    const msgIds = new Set(s.messages.map((m) => m.id));
-                    result.sessionMessages = { ...s.sessionMessages, [sid]: (s.sessionMessages[sid] ?? []).filter((m) => msgIds.has(m.id)) };
-                  }
-                  return result;
-                });
-                // Re-read inside callback to avoid stale closure
-                const retryMsg = [...get().messages].reverse().find((m) => m.role === "user");
-                if (retryMsg) {
-                  const retrySid = sessionId;
-                  set({ _sendInProgress: false });
-                  setTimeout(() => { if (get().activeSessionId === retrySid) void get().sendMessage(retryMsg.content); }, 500);
-                } else {
-                  const sysMsg: ChatMessage = {
-                    id: "sys-" + Math.random().toString(36).slice(2, 9),
-                    role: "system",
-                    content: "Context compaction removed all messages. Please resend your request.",
-                    timestamp: Date.now(),
-                  };
-                  set((s) => ({
-                    messages: [...s.messages, sysMsg],
-                    _sendInProgress: false,
-                    _deltaBatchBuffer: "",
-                    _deltaBatchTimer: null,
-                  }));
-                }
-              }).catch((compactErr) => { console.warn("[Chat] Compaction failed:", compactErr); set({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false }); });
-              break;
-            }
-          } else { delete _contextOverflowRetries[sessionId]; }
+          if (_handleContextOverflowRetry(sessionId)) {
+            break; // retry initiated
+          }
         }
 
         let lastUserMsgId: string | undefined;
@@ -2840,8 +2888,8 @@ export const useChat = create<ChatState>((set, get) => ({
     // Only abort if the current session is actually streaming
     if (session && isStreaming) void abort(session.id).catch(() => {});
     if (!id) {
-      if (useUI.getState().rightPanelTab === "terminal") {
-        useUI.getState().setRightPanelOpen(false);
+      if (useUI.getState().bottomPanelTab === "terminal") {
+        useUI.getState().setBottomPanelOpen(false);
       }
       set({
         activeSessionId: null,
@@ -2860,11 +2908,16 @@ export const useChat = create<ChatState>((set, get) => ({
         planApproval: null,
         _sendInProgress: false,
         _suppressSessionRestore: false,
+        _safetyTimer: null,
+        _deltaBatchBuffer: "",
+        _deltaBatchTimer: null,
+        todos: [],
+        _pendingChanges: [],
         subAgents: [],
         chatHistory: [],
         chatHistoryIdx: -1,
         doomLoopWarningCount: 0,
-    });
+      });
       return;
     }
     const messages = sessionMessages[id] ?? [];
@@ -2873,8 +2926,8 @@ export const useChat = create<ChatState>((set, get) => ({
     // Reconstruct the AgentSession object from stored data
     const chatSession = get().chatSessions.find((cs) => cs.id === id);
     if (!chatSession || !chatSession.workspacePath) {
-      if (useUI.getState().rightPanelTab === "terminal") {
-        useUI.getState().setRightPanelOpen(false);
+      if (useUI.getState().bottomPanelTab === "terminal") {
+        useUI.getState().setBottomPanelOpen(false);
       }
     } else {
       useTerminal.getState().ensureTabForCwd(chatSession.workspacePath);
@@ -2914,11 +2967,16 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlan: null,
       taskPlanSummary: null,
       _sendInProgress: false,
+      todos: [],
+      _pendingChanges: [],
       subAgents: [],
       _suppressSessionRestore: false,
       chatHistory: [],
       chatHistoryIdx: -1,
+      // Mark session as visited — clears status dots in sidebar
+      ...(id ? { chatSessions: get().chatSessions.map((cs) => cs.id === id ? { ...cs, lastVisitedAt: Date.now() } : cs) } : {}),
     });
+    if (id) savePersistedSessionSummaries(get().chatSessions);
   },
 
   renameSession(id, title) {
@@ -3029,6 +3087,51 @@ export const useChat = create<ChatState>((set, get) => ({
     set({ pendingAttachments: [] });
   },
 
+  addToQueue(content, attachments) {
+    const id = "q-" + Math.random().toString(36).slice(2, 9);
+    set((s) => ({
+      messageQueue: [...s.messageQueue, { id, content, attachments, timestamp: Date.now() }],
+    }));
+  },
+
+  removeFromQueue(id) {
+    set((s) => ({
+      messageQueue: s.messageQueue.filter((q) => q.id !== id),
+    }));
+  },
+
+  reorderQueue(fromIdx, toIdx) {
+    set((s) => {
+      const queue = [...s.messageQueue];
+      const [moved] = queue.splice(fromIdx, 1);
+      queue.splice(toIdx, 0, moved);
+      return { messageQueue: queue };
+    });
+  },
+
+  editQueueItem(id, content) {
+    set((s) => ({
+      messageQueue: s.messageQueue.map((q) => q.id === id ? { ...q, content } : q),
+    }));
+  },
+
+  steerQueueItem(id) {
+    // Move the item to the front and send it immediately
+    const { messageQueue } = get();
+    const item = messageQueue.find((q) => q.id === id);
+    if (!item) return;
+    // Remove from queue
+    set((s) => ({
+      messageQueue: s.messageQueue.filter((q) => q.id !== id),
+    }));
+    // Send it immediately
+    void get().sendMessage(item.content);
+  },
+
+  clearQueue() {
+    set({ messageQueue: [] });
+  },
+
   injectSystemMessage(content) {
     const sessionId = get().activeSessionId;
     if (!sessionId) return;
@@ -3081,16 +3184,21 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   restoreVersion(sessionId, versionId) {
-    const { messages, sessionVersions, sessionMessages, isStreaming } = get();
+    const { messages, sessionVersions, sessionMessages, isStreaming, chatSessions } = get();
     if (isStreaming) return; // Don't restore while streaming
     const versions = sessionVersions[sessionId];
     if (!versions) return;
     const version = versions.find((v) => v.id === versionId);
     if (!version) return;
-    const newSessionMessages = { ...sessionMessages, [sessionId]: [...version.messages] };
+    const restoredMessages = [...version.messages];
+    const newSessionMessages = { ...sessionMessages, [sessionId]: restoredMessages };
+    const lastUserMsg = [...restoredMessages].reverse().find((m) => m.role === "user");
+    const preview = lastUserMsg
+      ? lastUserMsg.content.length > 60 ? lastUserMsg.content.slice(0, 57) + "…" : lastUserMsg.content
+      : undefined;
     set({
       preRestoreMessages: [...messages],
-      messages: [...version.messages],
+      messages: restoredMessages,
       sessionMessages: newSessionMessages,
       restoredVersionId: versionId,
       streamingContent: "",
@@ -3098,26 +3206,65 @@ export const useChat = create<ChatState>((set, get) => ({
       pendingToolCalls: [],
       pendingActivities: [],
       planApproval: null,
+      chatSessions: chatSessions.map((cs) =>
+        cs.id === sessionId
+          ? { ...cs, messageCount: restoredMessages.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
+          : cs
+      ),
     });
     savePersistedMessages(newSessionMessages);
+    savePersistedSessionSummaries(get().chatSessions);
     useWorkspace.getState().setActiveFile(null);
   },
 
   confirmVersionRestore() {
-    set({ restoredVersionId: null, preRestoreMessages: null });
+    const { messages, activeSessionId, sessionMessages, chatSessions } = get();
+    // Persist the current (restored) messages as the session's messages
+    if (activeSessionId) {
+      const newSessionMessages = { ...sessionMessages, [activeSessionId]: [...messages] };
+      const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+      const preview = lastUserMsg
+        ? lastUserMsg.content.length > 60 ? lastUserMsg.content.slice(0, 57) + "…" : lastUserMsg.content
+        : undefined;
+      set({
+        restoredVersionId: null,
+        preRestoreMessages: null,
+        sessionMessages: newSessionMessages,
+        chatSessions: chatSessions.map((cs) =>
+          cs.id === activeSessionId
+            ? { ...cs, messageCount: messages.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
+            : cs
+        ),
+      });
+      savePersistedMessages(newSessionMessages);
+      savePersistedSessionSummaries(get().chatSessions);
+    } else {
+      set({ restoredVersionId: null, preRestoreMessages: null });
+    }
   },
 
   cancelVersionRestore() {
-    const { preRestoreMessages, activeSessionId, sessionMessages } = get();
+    const { preRestoreMessages, activeSessionId, sessionMessages, chatSessions } = get();
     if (!preRestoreMessages || !activeSessionId) return;
-    const newSessionMessages = { ...sessionMessages, [activeSessionId]: [...preRestoreMessages] };
+    const restoredMessages = [...preRestoreMessages];
+    const newSessionMessages = { ...sessionMessages, [activeSessionId]: restoredMessages };
+    const lastUserMsg = [...restoredMessages].reverse().find((m) => m.role === "user");
+    const preview = lastUserMsg
+      ? lastUserMsg.content.length > 60 ? lastUserMsg.content.slice(0, 57) + "…" : lastUserMsg.content
+      : undefined;
     set({
-      messages: [...preRestoreMessages],
+      messages: restoredMessages,
       sessionMessages: newSessionMessages,
       restoredVersionId: null,
       preRestoreMessages: null,
+      chatSessions: chatSessions.map((cs) =>
+        cs.id === activeSessionId
+          ? { ...cs, messageCount: restoredMessages.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
+          : cs
+      ),
     });
     savePersistedMessages(newSessionMessages);
+    savePersistedSessionSummaries(get().chatSessions);
   },
 
   deleteVersion(sessionId, versionId) {
@@ -3406,12 +3553,13 @@ export const useChat = create<ChatState>((set, get) => ({
                 ...cs,
                 status: cs.status === "running" ? ("completed" as const) : cs.status,
                 lastActivityAt: Date.now(),
+                lastVisitedAt: Date.now(),
               }
             : cs
         )
       : chatSessions;
-    if (useUI.getState().rightPanelTab === "terminal") {
-      useUI.getState().setRightPanelOpen(false);
+    if (useUI.getState().bottomPanelTab === "terminal") {
+      useUI.getState().setBottomPanelOpen(false);
     }
     set({
       chatHistory: newHistory,
@@ -3518,15 +3666,14 @@ type TerminalState = {
 const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
 
 export const useTerminal = create<TerminalState>((set, get) => ({
-  tabs: [{ id: "t-1", title: "bash", cwd: ".", shell: "bash" }] as TerminalTab[],
-  activeTabId: "t-1",
+  tabs: [] as TerminalTab[],
+  activeTabId: null,
   output: {},
   addTab(cwd, shell = "bash") {
     set((s) => {
       const id = "t-" + Math.random().toString(36).slice(2, 9);
-      const title = basename(cwd) || shell;
       return {
-        tabs: [...s.tabs, { id, title, cwd, shell } as TerminalTab],
+        tabs: [...s.tabs, { id, title: shell, cwd, shell } as TerminalTab],
         activeTabId: id,
       };
     });
@@ -3554,19 +3701,12 @@ export const useTerminal = create<TerminalState>((set, get) => ({
     if (existing) {
       setActiveTab(existing.id);
     } else {
-      if (tabs.length === 1 && tabs[0].id === "t-1" && tabs[0].cwd === ".") {
-        set({
-          tabs: [{ id: "t-1", title: basename(cwd) || "bash", cwd, shell: "bash" }] as TerminalTab[],
-          activeTabId: "t-1",
-        });
-      } else {
-        addTab(cwd);
-      }
+      addTab(cwd);
     }
   },
   updateTabShell(id, shell) {
     set((s) => ({
-      tabs: s.tabs.map((t) => t.id === id ? { ...t, shell: shell as TerminalTab["shell"], title: basename(t.cwd) || shell } : t),
+      tabs: s.tabs.map((t) => t.id === id ? { ...t, shell: shell as TerminalTab["shell"] } : t),
     }));
   },
   saveForSession(sessionId) {
@@ -3683,11 +3823,11 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
   return new Promise<{ name: string; description: string }[]>((resolve, reject) => {
     let resolved = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let childRef: any = null;
 
     const stdoutHandler = (data: string) => {
       outputBuffer += data;
-      // Try to parse the entire buffer as a single JSON-RPC message
-      // (MCP responses may be multi-line JSON)
       const trimmed = outputBuffer.trim();
       if (trimmed.startsWith("{")) {
         try {
@@ -3696,6 +3836,8 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
             resolved = true;
             if (timeoutId !== undefined) clearTimeout(timeoutId);
             cleanup();
+            // Kill the child process after successful response
+            if (childRef) childRef.kill().catch(() => {});
             resolve(parsed.result?.tools || parsed.tools);
             outputBuffer = "";
           }
@@ -3718,6 +3860,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
     cmd.stderr.on("data", stderrHandler);
 
     void cmd.spawn().then(async (child) => {
+      childRef = child;
       const req = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", params: {}, id: 1 }) + "\n";
       await child.write(req);
 
@@ -4135,17 +4278,24 @@ export type BrowserTab = {
 type UIState = {
   sidebarOpen: boolean;
   rightPanelOpen: boolean;
+  bottomPanelOpen: boolean;
   viewMode: "chat" | "editor";
+  activityBarTab: "explorer" | "search" | "scm" | "agent" | "extensions";
   browserTabs: BrowserTab[];
   activeBrowserTabId: string | null;
   rightPanelTab: "git" | "diff" | "review" | "browser" | "progress" | "terminal";
+  bottomPanelTab: "terminal" | "output" | "problems";
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
   setRightPanelOpen: (open: boolean) => void;
   toggleRightPanel: () => void;
+  setBottomPanelOpen: (open: boolean) => void;
+  toggleBottomPanel: () => void;
   setViewMode: (mode: "chat" | "editor") => void;
   toggleViewMode: () => void;
+  setActivityBarTab: (tab: "explorer" | "search" | "scm" | "agent" | "extensions") => void;
   setRightPanelTab: (tab: "git" | "diff" | "review" | "browser" | "progress" | "terminal") => void;
+  setBottomPanelTab: (tab: "terminal" | "output" | "problems") => void;
   addBrowserTab: (tab?: Partial<BrowserTab>) => string;
   removeBrowserTab: (id: string) => void;
   setActiveBrowserTab: (id: string) => void;
@@ -4221,17 +4371,41 @@ function normalizeBrowserUrl(input: string): string | null {
 export const useUI = create<UIState>((set, get) => ({
   sidebarOpen: true,
   rightPanelOpen: false,
+  bottomPanelOpen: false,
   viewMode: "chat",
+  activityBarTab: "agent",
   browserTabs: [],
   activeBrowserTabId: null,
   rightPanelTab: "git",
+  bottomPanelTab: "terminal",
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
-  setViewMode: (mode) => set({ viewMode: mode }),
-  toggleViewMode: () => set((s) => ({ viewMode: s.viewMode === "chat" ? "editor" : "chat" })),
+  setBottomPanelOpen: (open) => set({ bottomPanelOpen: open }),
+  toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
+  setActivityBarTab: (tab) => set({ activityBarTab: tab }),
+  setViewMode: (mode) => {
+    set({ viewMode: mode });
+    // When switching to chat mode, close all open editor tabs
+    if (mode === "chat") {
+      useWorkspace.setState({ openTabs: [], activeFilePath: null });
+    }
+    // When switching to editor mode, load file tree for the active workspace
+    if (mode === "editor") {
+      const wsId = useWorkspace.getState().activeWorkspaceId;
+      const ws = useWorkspace.getState().workspaces.find((w) => w.id === wsId);
+      if (ws) {
+        void useWorkspace.getState().loadFileTree(ws.path);
+      }
+    }
+  },
+  toggleViewMode: () => {
+    const nextMode = get().viewMode === "chat" ? "editor" : "chat";
+    get().setViewMode(nextMode);
+  },
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
+  setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
   addBrowserTab: (tab) => {
     const id = "bt-" + Math.random().toString(36).slice(2, 9);
     const newTab: BrowserTab = {
@@ -4561,6 +4735,11 @@ export const useQuestion = create<QuestionState>((set) => {
       pendingResolve = null;
       r?.(answer);
       set({ request: null });
+      // Set session status back to running after question is resolved
+      const activeSessionId = useChat.getState().activeSessionId;
+      if (activeSessionId) {
+        useChat.getState().setSessionStatus(activeSessionId, "running");
+      }
     },
   };
 });

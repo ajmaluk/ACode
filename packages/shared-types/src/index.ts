@@ -19,6 +19,9 @@ export interface AppSettings {
   showLineNumbers: boolean;
   wordWrap: boolean;
   codeFontSize: number;
+  showMinimap: boolean;
+  showIndentGuides: boolean;
+  bracketPairColorization: boolean;
   selectedModel: string;
   selectedProvider: string;
   maxTokens?: number;
@@ -42,6 +45,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showLineNumbers: true,
   wordWrap: false,
   codeFontSize: 13,
+  showMinimap: true,
+  showIndentGuides: true,
+  bracketPairColorization: true,
   selectedModel: "",
   selectedProvider: "",
   maxTokens: 4096,
@@ -71,7 +77,7 @@ export type GitBranchInfo = {
   current: boolean;
 };
 
-export type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh";
+export type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh" | "sh";
 
 export type TerminalTab = {
   id: string;
@@ -163,7 +169,7 @@ export type AgentSession = {
   mode: AgentSessionMode;
   startedAt: number;
   messages: ChatMessage[];
-  status: "idle" | "running" | "aborted" | "error";
+  status: "idle" | "running" | "aborted" | "error" | "questioning";
 };
 
 /** @deprecated Use SkillInfo instead — Skill has inconsistent source values */
@@ -194,6 +200,7 @@ export type Workspace = {
   id: string;
   path: string;
   name: string;
+  addedAt: number;
   tasks: Task[];
 };
 
@@ -220,9 +227,11 @@ export type ChatSessionSummary = {
   model?: string;
   startedAt: number;
   lastActivityAt: number;
+  /** Timestamp when the user last visited this session (for status dot logic) */
+  lastVisitedAt?: number;
   messageCount: number;
-  /** "running" reflects an in-flight AI response; "aborted" is user-paused. */
-  status: "idle" | "running" | "completed" | "aborted" | "error";
+  /** "running" reflects an in-flight AI response; "aborted" is user-paused; "questioning" means AI is waiting for user input. */
+  status: "idle" | "running" | "completed" | "aborted" | "error" | "questioning";
   /** A short preview of the last user message, for the sidebar tooltip. */
   preview?: string;
   versionCount: number;
@@ -387,7 +396,7 @@ export interface DalamAPI {
     createDirectory(parentPath: string, name: string): Promise<FileNode>;
     deletePath(path: string): Promise<void>;
     renamePath(path: string, newName: string): Promise<void>;
-    watchPath(path: string): Promise<void>;
+    watchPath(path: string, sessionId?: string): Promise<void>;
   };
   terminal: {
     create(cwd: string, shell?: string): Promise<string>;
@@ -442,6 +451,8 @@ export interface DalamAPI {
     listProcesses(): Promise<{ pid: number; name: string; cpuUsage: number; memoryKb: number }[]>;
     killProcess(pid: number): Promise<void>;
     getDiskSpace(path: string): Promise<{ totalBytes: number; availableBytes: number; usedBytes: number }>;
+    detectAvailableShells(): Promise<{ name: string; path: string }[]>;
+    detectInstalledIdes(): Promise<{ name: string; command: string; kind: string }[]>;
   };
 }
 

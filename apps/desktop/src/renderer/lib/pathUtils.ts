@@ -133,3 +133,67 @@ export function pathsEqual(a: string, b: string, caseInsensitive = false): boole
   if (caseInsensitive) return aa.toLowerCase() === bb.toLowerCase();
   return aa === bb;
 }
+
+// ============================================================================
+// Language detection from file paths
+// ============================================================================
+
+/** Detect the editor language / Monaco language ID from a file path. */
+export function detectLanguage(path: string | null): string {
+  if (!path) return "plaintext";
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const fileName = path.split("/").pop() ?? "";
+
+  // Special filenames
+  if (fileName === "Makefile" || fileName === "makefile") return "makefile";
+  if (fileName === "Dockerfile" || fileName.startsWith("Dockerfile.")) return "dockerfile";
+  if (fileName === "CMakeLists.txt") return "cmake";
+  if (fileName === "Cargo.toml") return "toml";
+  if (fileName === ".gitignore" || fileName === ".dockerignore") return "ignore";
+  if (fileName === "Jenkinsfile") return "groovy";
+  if (fileName === "Gemfile") return "ruby";
+  if (fileName === "Podfile") return "ruby";
+  if (fileName === "Vagrantfile") return "ruby";
+
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
+    js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+    json: "json", jsonc: "json",
+    md: "markdown", mdx: "markdown",
+    py: "python", pyi: "python",
+    rs: "rust",
+    go: "go",
+    java: "java",
+    rb: "ruby",
+    php: "php",
+    swift: "swift",
+    kt: "kotlin", kts: "kotlin",
+    cs: "csharp",
+    cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+    c: "c", h: "c",
+    hcl: "hcl", tf: "hcl",
+    css: "css", scss: "scss", less: "less",
+    html: "html", htm: "html", vue: "html", astro: "html",
+    xml: "xml", svg: "xml",
+    sql: "sql",
+    sh: "shell", bash: "shell", zsh: "shell", fish: "shell", ksh: "shell",
+    ps1: "powershell",
+    yaml: "yaml", yml: "yaml",
+    toml: "toml",
+    ini: "ini", cfg: "ini", conf: "ini",
+    graphql: "graphql", gql: "graphql",
+    sol: "solidity",
+    dart: "dart",
+    lua: "lua",
+    r: "r",
+    ex: "elixir", exs: "elixir",
+    erl: "erlang",
+    hs: "haskell",
+    ml: "ocaml", mli: "ocaml",
+    zig: "zig",
+    nim: "nim",
+    v: "verilog", sv: "verilog", vhdl: "vhdl",
+  };
+
+  return map[ext] ?? "plaintext";
+}

@@ -63,12 +63,13 @@ export const InterruptBar: React.FC = () => {
             type="text"
             value={redirectText}
             onChange={(e) => setRedirectText(e.target.value)}
-            onKeyDown={(e) => {
+            onKeyDown={async (e) => {
               if (e.key === "Enter" && redirectText.trim()) {
-                abort(activeSessionId);
-                sendMessage(redirectText.trim());
+                const text = redirectText.trim();
                 setRedirectText("");
                 setShowRedirect(false);
+                await abort(activeSessionId);
+                sendMessage(text);
               }
               if (e.key === "Escape") {
                 setShowRedirect(false);
@@ -79,12 +80,13 @@ export const InterruptBar: React.FC = () => {
             className="bg-transparent text-sm outline-none flex-1 min-w-[200px] text-dalam-text-primary"
           />
           <button
-            onClick={() => {
+            onClick={async () => {
               if (redirectText.trim()) {
-                abort(activeSessionId);
-                sendMessage(redirectText.trim());
+                const text = redirectText.trim();
                 setRedirectText("");
                 setShowRedirect(false);
+                await abort(activeSessionId);
+                sendMessage(text);
               }
             }}
             className="px-2 py-1 text-xs bg-dalam-accent-primary text-white rounded hover:bg-dalam-accent-primary/90 transition-colors"

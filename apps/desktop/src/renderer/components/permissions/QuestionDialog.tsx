@@ -165,7 +165,7 @@ export function QuestionDialog() {
               onFocus={() => { setSelected(request.options.length); setFocusedInput(true); }}
               onBlur={() => setFocusedInput(false)}
               placeholder="Enter your answer…"
-              className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted"
+              className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted"
             />
           </div>
         </div>

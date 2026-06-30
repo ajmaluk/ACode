@@ -124,10 +124,10 @@ export function ThinkingBlock({ content, streaming }: { content: string; streami
         <span className="italic flex items-center gap-2">
           {streaming ? (
             <>
-              <span className="flex items-center gap-0.5">
-                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary animate-thinking-wave" style={{ animationDelay: "0s" }} />
-                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary animate-thinking-wave" style={{ animationDelay: "0.15s" }} />
-                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary animate-thinking-wave" style={{ animationDelay: "0.3s" }} />
+              <span className="animate-thinking-wave">
+                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary" />
+                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary" />
+                <span className="w-1 h-1 rounded-full bg-dalam-accent-primary" />
               </span>
               Thinking…
             </>
@@ -462,7 +462,7 @@ function getFileIconForName(name: string) {
 
 function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, any> }) {
   const openFile = useWorkspace((s) => s.openFile);
-  const openDiff = useDiffView((s) => s.openFile);
+  const _openDiff = useDiffView((s) => s.openFile);
 
   // list_dir: parse JSON array of { name, path, type }
   if (toolName === "list_dir" && result.startsWith("[")) {
@@ -913,7 +913,7 @@ export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summa
 export function SubAgentBlock({ agent }: { agent: SubAgentState }) {
   const [open, setOpen] = useState(false);
   const isRunning = agent.status === "running";
-  const isFailed = agent.status === "failed";
+  const _isFailed = agent.status === "failed";
   const isCompleted = agent.status === "completed";
 
   const statusIcon = isRunning
@@ -930,7 +930,7 @@ export function SubAgentBlock({ agent }: { agent: SubAgentState }) {
       : "";
 
   return (
-    <div className="my-1 border border-dalam-border/30 rounded-md overflow-hidden">
+    <div className="my-1 border border-dalam-border-primary/30 rounded-md overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -947,7 +947,7 @@ export function SubAgentBlock({ agent }: { agent: SubAgentState }) {
         </span>
       </button>
       {open && (
-        <div className="px-2.5 pb-2 border-t border-dalam-border/20">
+        <div className="px-2.5 pb-2 border-t border-dalam-border-primary/20">
           <div className="mt-1.5 mb-1">
             <span className="text-[10px] text-dalam-text-muted/50 uppercase tracking-wider">Prompt</span>
             <p className="text-[11px] text-dalam-text-secondary/80 mt-0.5 whitespace-pre-wrap break-words">{agent.prompt}</p>

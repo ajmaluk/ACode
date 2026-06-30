@@ -1,16 +1,15 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useGit, useChat, useWorkspace, useDiffView, useUI, useTerminal } from "@/store/useAppStore";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useGit, useChat, useWorkspace, useDiffView, useUI } from "@/store/useAppStore";
 import type { GitStatus } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { computeDiff } from "@/lib/diff";
 import { useToast } from "@/components/ui/toastStore";
-import { TerminalPanel } from "../terminal/TerminalPanel";
 import {
   GitBranch, FileCode, Check, X,
   RefreshCw, Globe, ListTodo, Circle,
   Plus, Loader2, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Eye,
   Code2, PanelRightClose, GitCommitHorizontal,
-  Columns, WandSparkles, History, TerminalSquare,
+  Columns, WandSparkles, History,
 } from "lucide-react";
 
 type Tab = "git" | "diff" | "review" | "browser" | "progress" | "terminal";
@@ -21,36 +20,24 @@ const TABS: { id: Tab; icon: React.ElementType; label: string }[] = [
   { id: "review", icon: WandSparkles, label: "Review" },
   { id: "progress", icon: History, label: "Progress" },
   { id: "browser", icon: Globe, label: "Browser" },
-  { id: "terminal", icon: TerminalSquare, label: "Terminal" },
 ];
 
 export function RightPanel() {
   const { status, refresh, error } = useGit();
-  const { session } = useChat();
   const { activeWorkspaceId } = useWorkspace();
   const { open: diffOpen, current: diffCurrent } = useDiffView();
   const { browserTabs, activeBrowserTabId, rightPanelTab: tab, setRightPanelTab: setTab } = useUI();
   const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0);
 
-  const hasWorkspace = !!(session?.workspacePath);
-
-  const visibleTabs = useMemo(() => {
-    if (hasWorkspace) return TABS;
-    return TABS.filter((t) => t.id !== "terminal");
-  }, [hasWorkspace]);
+  const visibleTabs = useMemo(() => TABS, []);
 
   useEffect(() => { void refresh(); }, [refresh, activeWorkspaceId]);
 
-  // Unified tab-switching + panel-opening effect with priority: terminal > diff > browser > git
+  // Unified tab-switching + panel-opening effect with priority: diff > browser > git
   // Note: `tab` is NOT in deps — it's read from the store snapshot via `useUI.getState()`
   // to avoid the infinite loop caused by setTab() re-triggering this effect.
   useEffect(() => {
     const currentTab = useUI.getState().rightPanelTab;
-    if (currentTab === "terminal" && hasWorkspace) return;
-    // If terminal is active but workspace is gone, fall back to git
-    if (currentTab === "terminal" && !hasWorkspace) {
-      setTab("git");
-    }
     const needsOpen = !useUI.getState().rightPanelOpen;
     if (diffOpen && diffCurrent) {
       if (currentTab !== "diff") setTab("diff");
@@ -66,7 +53,7 @@ export function RightPanel() {
     if (currentTab !== "git" && currentTab !== "browser" && currentTab !== "diff" && currentTab !== "review" && currentTab !== "progress") {
       setTab(activeWorkspaceId ? "git" : "browser");
     }
-  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab, hasWorkspace]);
+  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab]);
 
   return (
     <aside className="h-full flex flex-row-reverse bg-dalam-bg-primary border-l border-dalam-border-primary">
@@ -81,9 +68,6 @@ export function RightPanel() {
               <button
                 key={t.id}
                 onClick={() => {
-                  if (t.id === "terminal" && session?.workspacePath) {
-                    useTerminal.getState().ensureTabForCwd(session.workspacePath);
-                  }
                   setTab(t.id);
                   if (!useUI.getState().rightPanelOpen) useUI.getState().setRightPanelOpen(true);
                 }}
@@ -137,7 +121,6 @@ export function RightPanel() {
           {tab === "review" && <ReviewTab />}
           {tab === "browser" && <BrowserTab />}
           {tab === "progress" && <ProgressTab />}
-          {tab === "terminal" && <TerminalPanel />}
         </div>
       </div>
     </aside>
@@ -160,37 +143,47 @@ function DiffTab() {
       setLoading(true);
       const api = createDalamAPI();
       try {
-        // Modified content: always read the current file
-        const currentContent = await api.fs.readFile(current.path);
-        if (cancelled) return;
-        setModifiedContent(currentContent);
+        const { Command } = await import("@tauri-apps/plugin-shell");
+        const wsPath = useWorkspace.getState().workspaces.find(
+          (w) => w.id === useWorkspace.getState().activeWorkspaceId
+        )?.path ?? "";
+        const relPath = wsPath && current.path.startsWith(wsPath)
+          ? current.path.slice(wsPath.length + 1)
+          : current.path;
 
-        if (current.action === "created") {
-          setOriginalContent("");
-        } else if (current.action === "deleted") {
-          setOriginalContent(currentContent);
+        if (current.action === "deleted") {
+          // File is deleted — read original from git HEAD
           setModifiedContent("");
-        } else {
-          // For modified files: get the original from git (HEAD version)
-          try {
-            const { Command } = await import("@tauri-apps/plugin-shell");
-            const wsPath = useWorkspace.getState().workspaces.find(
-              (w) => w.id === useWorkspace.getState().activeWorkspaceId
-            )?.path ?? "";
-            // git show HEAD: requires a path relative to the repo root
-            const relPath = wsPath && current.path.startsWith(wsPath)
-              ? current.path.slice(wsPath.length + 1)
-              : current.path.split("/").slice(-2).join("/");
-            const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
-            const result = await cmd.execute();
-            if (!cancelled && result.stdout) {
-              setOriginalContent(result.stdout);
-            } else {
-              // Fallback: can't get git version, show full file as added
-              setOriginalContent("");
+          if (wsPath && relPath) {
+            try {
+              const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+              const result = await cmd.execute();
+              if (!cancelled) setOriginalContent(result.stdout ?? "");
+            } catch {
+              if (!cancelled) setOriginalContent("");
             }
-          } catch {
-            // Fallback if git show fails
+          } else {
+            if (!cancelled) setOriginalContent("");
+          }
+        } else if (current.action === "created") {
+          // New file — no original content
+          setOriginalContent("");
+          const currentContent = await api.fs.readFile(current.path);
+          if (!cancelled) setModifiedContent(currentContent);
+        } else {
+          // Modified file — read current and original from git
+          const currentContent = await api.fs.readFile(current.path);
+          if (cancelled) return;
+          setModifiedContent(currentContent);
+          if (wsPath && relPath) {
+            try {
+              const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+              const result = await cmd.execute();
+              if (!cancelled) setOriginalContent(result.stdout ?? "");
+            } catch {
+              if (!cancelled) setOriginalContent("");
+            }
+          } else {
             if (!cancelled) setOriginalContent("");
           }
         }
@@ -330,10 +323,22 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
 
 /** Split (side-by-side) diff view aligned to hunks. */
 function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
-  // For split view, we render each hunk as a side-by-side table.
-  // Each hunk's lines are paired: context lines appear on both sides,
-  // remove on left only, add on right only. Removes and adds that are
-  // adjacent are paired on the same row for proper side-by-side alignment.
+  const leftRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+  const syncingRef = useRef(false);
+
+  const handleScroll = useCallback((source: "left" | "right") => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    const src = source === "left" ? leftRef.current : rightRef.current;
+    const dst = source === "left" ? rightRef.current : leftRef.current;
+    if (src && dst) {
+      dst.scrollTop = src.scrollTop;
+      dst.scrollLeft = src.scrollLeft;
+    }
+    requestAnimationFrame(() => { syncingRef.current = false; });
+  }, []);
+
   const [leftLines, rightLines] = useMemo(() => {
     const left: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
     const right: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
@@ -378,7 +383,7 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
   return (
     <div className="flex gap-0 border border-dalam-border-primary/40 rounded-lg overflow-hidden">
       {/* Left panel: old */}
-      <div className="flex-1 min-w-0 overflow-y-auto border-r border-dalam-border-primary/40">
+      <div ref={leftRef} className="flex-1 min-w-0 overflow-y-auto border-r border-dalam-border-primary/40" onScroll={() => handleScroll("left")}>
         <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">Original</div>
         {Array.from({ length: totalRows }, (_, i) => {
           const entry = leftLines[i];
@@ -395,7 +400,7 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
         })}
       </div>
       {/* Right panel: new */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
+      <div ref={rightRef} className="flex-1 min-w-0 overflow-y-auto" onScroll={() => handleScroll("right")}>
         <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">Modified</div>
         {Array.from({ length: totalRows }, (_, i) => {
           const entry = rightLines[i];
@@ -665,7 +670,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           {/* Commit area */}
           <div className="p-3 border-b border-dalam-border-primary bg-dalam-bg-secondary/20">
             <textarea
-              className="w-full bg-dalam-bg-tertiary border border-dalam-border-primary rounded-lg px-3 py-2 text-xs font-mono text-dalam-text-primary placeholder-dalam-text-muted resize-none outline-none focus:border-dalam-accent-primary transition-colors min-h-[56px]"
+              className="w-full bg-dalam-bg-tertiary border border-dalam-border-primary rounded-lg px-3 py-2 text-xs font-mono text-dalam-text-primary placeholder:text-dalam-text-muted resize-none outline-none focus:border-dalam-accent-primary transition-colors min-h-[56px]"
               placeholder="Commit message"
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
@@ -842,7 +847,7 @@ function BrowserTab() {
         <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx >= activeTab.history.length - 1} onClick={() => activeTab && goForwardBrowser(activeTab.id)} title="Forward"><ArrowRight className="w-3 h-3" /></button>
         <button type="button" className="btn-icon" onClick={() => activeTab && refreshBrowser(activeTab.id)} title="Refresh"><RefreshCw className="w-3 h-3" /></button>
         <input
-          className="flex-1 bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md px-2.5 py-1 text-xs text-dalam-text-primary placeholder-dalam-text-muted outline-none focus:border-dalam-accent-primary transition-colors"
+          className="flex-1 bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md px-2.5 py-1 text-xs text-dalam-text-primary placeholder:text-dalam-text-muted outline-none focus:border-dalam-accent-primary transition-colors"
           placeholder="Search or enter URL"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}

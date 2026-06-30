@@ -28,9 +28,9 @@ const fileWatchers = new Map<string, () => void>();
 const pendingDiffProposals = new Map<string, DiffProposal>();
 export const mcpHttpSessions = new Map<string, string>();
 const emittedSessionEnds = new Set<string>();
-// Persistent rate-limit backoff counter — survives across sendPrompt() calls
-// so that repeated user submissions still back off instead of resetting to 0.
-let consecutiveRateLimitErrors = 0;
+// Per-session rate-limit backoff counter — isolated per session so concurrent
+// sessions don't interfere with each other's backoff state.
+const sessionRateLimitErrors = new Map<string, number>();
 
 // ─── Internal Types ─────────────────────────────────────────
 /** Shape of a provider entry from localStorage */
@@ -68,7 +68,7 @@ interface AnthropicContentBlock {
 }
 
 /** Minimal Zustand store ref for waitForToolApproval */
-interface ChatStoreRef {
+interface _ChatStoreRef {
   getState(): {
     pendingToolCalls: import("@dalam/shared-types").ToolCall[];
     resolveToolApproval: (id: string, decision: "approved" | "denied") => void;
@@ -1321,7 +1321,12 @@ You can combine multiple tools in one response:
           "9. For complex tasks: First create a task plan with <create_task_plan>, then execute each task step by step.\n" +
           "10. When you need user input or clarification, use <question> to ask the user. Always include options when possible.\n" +
           "11. After completing a task, summarize what was done. Show file changes with their paths and stats.\n" +
-          "12. When building a project: create files, then use <run_preview> to start the dev server, then use <screenshot> to verify."
+          "12. When building a project: create files, then use <run_preview> to start the dev server, then use <screenshot> to verify.\n" +
+          "13. TO APPEND TEXT TO END OF FILE: Read the file first, then use edit_file with the last line(s) as search and include old+new text in replace:\n" +
+          "   Example: To add 'By ajmal' at end of README.md:\n" +
+          "   <read_file path=\"/path/to/README.md\"/>\n" +
+          "   Then: <edit_file path=\"/path/to/README.md\"><search>last line of file</search><replace>last line of file\n\nBy ajmal</replace></edit_file>\n" +
+          "14. TO COMPLETE A TASK: After reading files to understand context, you MUST output the edit/write tool tag to make the actual change. Do NOT just read and stop."
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -1471,9 +1476,10 @@ You can combine multiple tools in one response:
             modelLower.includes("mixtral") ||
             modelLower.startsWith("gemma-");
 
-          if (consecutiveRateLimitErrors > 0) {
+          const sessionErrors = sessionRateLimitErrors.get(sessionId) ?? 0;
+          if (sessionErrors > 0) {
             // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 60s max
-            const delay = Math.min(1000 * Math.pow(2, consecutiveRateLimitErrors), 60000);
+            const delay = Math.min(1000 * Math.pow(2, sessionErrors), 60000);
             await new Promise((r) => setTimeout(r, delay));
             return;
           }
@@ -1485,7 +1491,7 @@ You can combine multiple tools in one response:
         let emittedEndInThisIteration = false;
 
         // Reset rate limit backoff at the start of each request
-        consecutiveRateLimitErrors = 0;
+        sessionRateLimitErrors.set(sessionId, 0);
 
         while (loopCount < MAX_LOOP_HARD) {
           loopCount++;
@@ -1594,7 +1600,7 @@ You can combine multiple tools in one response:
           // the ORIGINAL fullContent (not safeTextForParsing which had code blocks
           // already removed, causing garbled fragments in display).
           const { stripXmlToolCallTags: stripForDisplay } = await import("../store/useAppStore");
-          const displayContent = stripForDisplay(fullContent).trim();
+          const _displayContent = stripForDisplay(fullContent).trim();
 
           // Push RAW content to API history so the LLM sees its own tool calls.
           // The UI store independently strips tags for display.
@@ -1751,14 +1757,14 @@ You can combine multiple tools in one response:
               );
             } catch { /* ignore */ }
 
-            consecutiveRateLimitErrors = 0;
+            sessionRateLimitErrors.set(sessionId, 0);
             continue;
           }
 
           // No tools parsed — turn is complete
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
           emittedEndInThisIteration = true;
-          consecutiveRateLimitErrors = 0;
+          sessionRateLimitErrors.set(sessionId, 0);
           useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           break;
         }
@@ -1827,7 +1833,7 @@ You can combine multiple tools in one response:
         } catch { /* failed to read session message count */ }
 
         if (err instanceof ProviderError) {
-          if (err.code === "credit") consecutiveRateLimitErrors++;
+          if (err.code === "credit") sessionRateLimitErrors.set(sessionId, (sessionRateLimitErrors.get(sessionId) ?? 0) + 1);
           emit({ type: "error", error: err.message });
           emit({ type: "message-end", messageId: sessionId });
           if (!emittedSessionEnds.has(sessionId)) {
@@ -2191,6 +2197,15 @@ You can combine multiple tools in one response:
       const { invoke } = await import("@tauri-apps/api/core");
       const info = await invoke<{ total_bytes: number; available_bytes: number; used_bytes: number }>("get_disk_space", { path });
       return { totalBytes: info.total_bytes, availableBytes: info.available_bytes, usedBytes: info.used_bytes };
+    },
+    async detectAvailableShells() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const shells = await invoke<{ name: string; path: string }[]>("detect_available_shells");
+      return shells;
+    },
+    async detectInstalledIdes() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<{ name: string; command: string; kind: string }[]>("detect_installed_ides");
     },
   },
 };
@@ -3439,12 +3454,18 @@ async function executeTool(name: string, args: Record<string, string>, workspace
 
   if (name === "open_panel") {
     const panel = args.panel as string;
-    const validPanels = ["git", "diff", "review", "browser", "progress", "terminal"];
+    if (panel === "terminal") {
+      const { useUI } = await import("../store/useAppStore");
+      useUI.getState().setBottomPanelTab("terminal");
+      useUI.getState().setBottomPanelOpen(true);
+      return "Opened terminal panel";
+    }
+    const validPanels = ["git", "diff", "review", "browser", "progress"];
     if (!validPanels.includes(panel)) {
-      return `Error: Invalid panel "${panel}". Valid panels: ${validPanels.join(", ")}`;
+      return `Error: Invalid panel "${panel}". Valid panels: ${validPanels.join(", ")}, terminal`;
     }
     const { useUI } = await import("../store/useAppStore");
-    useUI.getState().setRightPanelTab(panel as "git" | "diff" | "review" | "browser" | "progress" | "terminal");
+    useUI.getState().setRightPanelTab(panel as "git" | "diff" | "review" | "browser" | "progress");
     useUI.getState().setRightPanelOpen(true);
     return `Opened ${panel} panel`;
   }

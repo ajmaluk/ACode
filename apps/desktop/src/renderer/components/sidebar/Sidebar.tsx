@@ -7,6 +7,8 @@ import {
   usePermission,
   useQuestion,
   useCommandPalette,
+  useUI,
+  useGit,
 } from "@/store/useAppStore";
 import { shortcut, modKey } from "@/lib/platform";
 import {
@@ -32,9 +34,11 @@ import {
   Webhook,
   Clock,
   FileText,
+  GripVertical,
 } from "lucide-react";
 import type { ChatSessionSummary, ChatVersion } from "@dalam/shared-types";
 import { FileTree } from "./FileTree";
+import { ActivityBar } from "./ActivityBar";
 import { Tooltip } from "../ui/Tooltip";
 import {
   getConnectorConfigs,
@@ -49,6 +53,68 @@ function formatRelative(ts: number, now: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
   return `${Math.floor(diff / 86_400_000)}d`;
+}
+
+/** Status dot for sidebar session items */
+function StatusDot({ status, lastVisitedAt, lastActivityAt }: { status: string; lastVisitedAt?: number; lastActivityAt: number }) {
+  // Don't show dot if user has visited since the last activity
+  // But always show for "running" and "questioning" states
+  const userVisited = lastVisitedAt !== undefined && lastVisitedAt >= lastActivityAt;
+
+  // Running state - animated loading indicator with breathing effect
+  if (status === "running") {
+    return (
+      <span className="relative flex h-2.5 w-2.5 flex-shrink-0" title="AI is working...">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 status-dot-running" />
+        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+      </span>
+    );
+  }
+
+  // Questioning state - animated yellow indicator with pulse effect
+  if (status === "questioning") {
+    return (
+      <span className="relative flex h-2.5 w-2.5 flex-shrink-0" title="AI is asking a question...">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75 status-dot-questioning" />
+        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-yellow-500" />
+      </span>
+    );
+  }
+
+  // For other states, don't show if user has visited
+  if (userVisited) return null;
+
+  // Completed state - green dot with subtle glow
+  if (status === "completed") {
+    return (
+      <span className="relative flex h-2 w-2 flex-shrink-0" title="Task completed">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+      </span>
+    );
+  }
+
+  // Error state - red dot with subtle glow
+  if (status === "error") {
+    return (
+      <span className="relative flex h-2 w-2 flex-shrink-0" title="Task failed">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-50" />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+      </span>
+    );
+  }
+
+  // Aborted state - orange dot
+  if (status === "aborted") {
+    return (
+      <span className="relative flex h-2 w-2 flex-shrink-0" title="Task aborted">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-50" />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500" />
+      </span>
+    );
+  }
+
+  return null;
 }
 
 interface SessionRowProps {
@@ -96,13 +162,17 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
 
   const submit = () => {
     const next = draft.trim();
-    if (next && next !== session.title) onRename(next);
+    if (!next) {
+      setDraft(session.title);
+    } else if (next !== session.title) {
+      onRename(next);
+    }
     setEditing(false);
   };
 
   return (
     <div
-      className={`group relative w-full flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded transition-colors cursor-pointer ${
+      className={`group relative w-full flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
         isActive ? "bg-dalam-bg-active" : "hover:bg-dalam-bg-hover"
       }`}
       onClick={() => { if (!editing) { onSelect(); setMenuPosition(null); } }}
@@ -123,9 +193,10 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
         />
       ) : (
         <>
-          <span className="flex-1 min-w-0 truncate text-xs text-dalam-text-secondary">
+          <span className="flex-1 min-w-0 truncate text-[13px] text-dalam-text-secondary">
              {session.title}
           </span>
+          <StatusDot status={session.status} lastVisitedAt={session.lastVisitedAt} lastActivityAt={session.lastActivityAt} />
           <span className="text-[10px] text-dalam-text-muted flex-shrink-0 tabular-nums mr-1">
             {formatRelative(session.lastActivityAt, now)}
           </span>
@@ -297,11 +368,40 @@ export function Sidebar() {
   const { newChat, chatSessions, activeSessionId, setActiveSession, isStreaming, removeSession, renameSession, sessionVersions, deleteVersion } = useChat();
   const { cancel: cancelPermission } = usePermission();
   const { resolve: resolveQuestion } = useQuestion();
+  const { viewMode } = useUI();
   const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
-  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
-  const [showAll, setShowAll] = useState<Record<string, boolean>>({});
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => {
+    try { const v = localStorage.getItem("dalam.sidebar.collapsed"); return v ? new Set(JSON.parse(v)) : new Set(); } catch { return new Set(); }
+  });
+  const [showAll, setShowAll] = useState<Record<string, boolean>>(() => {
+    try { const v = localStorage.getItem("dalam.sidebar.showAll"); return v ? JSON.parse(v) : {}; } catch { return {}; }
+  });
   const [fileTreeView, setFileTreeView] = useState<string | null>(null);
   const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{ id: string; top: number; left: number } | null>(null);
+
+  // Persist collapsedWorkspaces to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("dalam.sidebar.collapsed", JSON.stringify([...collapsedWorkspaces])); } catch { /* ignore */ }
+  }, [collapsedWorkspaces]);
+
+  // Persist showAll to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("dalam.sidebar.showAll", JSON.stringify(showAll)); } catch { /* ignore */ }
+  }, [showAll]);
+
+  // Auto-collapse workspaces with no sessions
+  const sessionsByWorkspace = useMemo(() => {
+    const map = new Map<string, ChatSessionSummary[]>();
+    for (const s of chatSessions) {
+      const list = map.get(s.workspacePath) ?? [];
+      list.push(s);
+      map.set(s.workspacePath, list);
+    }
+    for (const [, list] of map) {
+      list.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    }
+    return map;
+  }, [chatSessions]);
 
   // No need for force re-render — SessionRow manages its own timestamp interval
 
@@ -321,20 +421,6 @@ export function Sidebar() {
     };
   }, [workspaceMenuPosition]);
 
-  const sessionsByWorkspace = useMemo(() => {
-    const map = new Map<string, ChatSessionSummary[]>();
-    for (const s of chatSessions) {
-      const key = s.workspacePath;
-      const list = map.get(key) ?? [];
-      list.push(s);
-      map.set(key, list);
-    }
-    for (const [, list] of map) {
-      list.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-    }
-    return map;
-  }, [chatSessions]);
-
   const toggleWorkspace = (wsId: string) => {
     setCollapsedWorkspaces((prev) => {
       const next = new Set(prev);
@@ -345,93 +431,178 @@ export function Sidebar() {
   };
 
   const [dragId, setDragId] = useState<string | null>(null);
+  const dragIdRef = useRef<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragPosition, setDragPosition] = useState<"above" | "below" | null>(null);
+  const dragPositionRef = useRef<"above" | "below">("below");
 
   const handleDragStart = (e: React.DragEvent, wsId: string) => {
+    dragIdRef.current = wsId;
     setDragId(wsId);
+    setIsDragging(true);
     e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", wsId);
   };
 
   const handleDragOver = (e: React.DragEvent, wsId: string) => {
     e.preventDefault();
-    if (dragId && dragId !== wsId) {
+    e.dataTransfer.dropEffect = "move";
+    const currentDragId = dragIdRef.current;
+    if (currentDragId && currentDragId !== wsId) {
       setDragOverId(wsId);
+      const rect = e.currentTarget.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      const pos = e.clientY < midY ? "above" : "below";
+      dragPositionRef.current = pos;
+      setDragPosition(pos);
     }
+  };
+
+  const handleDragLeave = (e: React.DragEvent, wsId: string) => {
+    const related = e.relatedTarget as HTMLElement | null;
+    if (related && e.currentTarget.contains(related)) return;
+    setDragOverId((prev) => prev === wsId ? null : prev);
+    setDragPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
-    if (dragId && dragId !== targetId) {
+    const currentDragId = dragIdRef.current;
+    if (currentDragId && currentDragId !== targetId) {
       const { workspaces } = useWorkspace.getState();
-      const fromIdx = workspaces.findIndex((w) => w.id === dragId);
+      const fromIdx = workspaces.findIndex((w) => w.id === currentDragId);
       const toIdx = workspaces.findIndex((w) => w.id === targetId);
       if (fromIdx !== -1 && toIdx !== -1) {
         const reordered = [...workspaces];
         const [moved] = reordered.splice(fromIdx, 1);
-        const insertIdx = fromIdx < toIdx ? toIdx - 1 : toIdx;
+        const pos = dragPositionRef.current;
+        let insertIdx: number;
+        if (fromIdx < toIdx) {
+          insertIdx = pos === "above" ? toIdx - 1 : toIdx;
+        } else {
+          insertIdx = pos === "above" ? toIdx : toIdx + 1;
+        }
+        insertIdx = Math.max(0, Math.min(insertIdx, reordered.length));
         reordered.splice(insertIdx, 0, moved);
-        useWorkspace.setState({ workspaces: reordered });
+        useWorkspace.getState().reorderWorkspaces(reordered);
       }
     }
+    dragIdRef.current = null;
     setDragId(null);
     setDragOverId(null);
+    setIsDragging(false);
+    setDragPosition(null);
   };
 
   const handleDragEnd = () => {
+    dragIdRef.current = null;
     setDragId(null);
     setDragOverId(null);
+    setIsDragging(false);
+    setDragPosition(null);
   };
 
   const handleNewTask = (wsId: string) => {
-    // Only update the workspace ID — skip setActiveWorkspace's async session load
-    // which would race with newChat() and restore old sessions over fresh state
-    useWorkspace.setState({ activeWorkspaceId: wsId });
+    setActiveWorkspace(wsId);
     cancelPermission();
     resolveQuestion(null);
     newChat();
+    // Ensure we're in chat mode for the new task
+    if (useUI.getState().viewMode !== "chat") {
+      useUI.getState().setViewMode("chat");
+    }
   };
 
   const VISIBLE_LIMIT = 5;
 
-  const activeFileWorkspace = workspaces.find((w) => w.id === fileTreeView);
+  // In editor mode, auto-show the file explorer for the active workspace
+  const effectiveFileTreeView = viewMode === "editor" && activeWorkspaceId ? activeWorkspaceId : fileTreeView;
+  const effectiveFileWorkspace = workspaces.find((w) => w.id === effectiveFileTreeView);
 
-  if (fileTreeView && activeFileWorkspace) {
-    return (
-      <aside className="h-full flex flex-col bg-dalam-bg-secondary">
-        <div className="px-2 py-1.5 flex items-center gap-1.5 border-b border-dalam-border-primary flex-shrink-0">
-          <button
-            className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
-            onClick={() => setFileTreeView(null)}
-            title="Back to tasks"
-          >
-            <ArrowLeft className="w-3.5 h-3.5 text-dalam-text-secondary" />
-          </button>
-          <Folder className="w-3.5 h-3.5 text-dalam-accent-primary/60 flex-shrink-0" />
-          <span className="truncate text-xs text-dalam-text-primary font-medium">{activeFileWorkspace.name}</span>
+  // Editor mode: show ActivityBar + content panel
+  if (viewMode === "editor") {
+    if (effectiveFileWorkspace) {
+      return (
+        <div className="h-full flex">
+          <ActivityBar />
+          <aside className="flex-1 min-w-0 flex flex-col bg-dalam-bg-secondary">
+            <div className="px-2 py-1.5 flex items-center gap-1.5 border-b border-dalam-border-primary flex-shrink-0">
+              <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                <Folder className="w-3.5 h-3.5 text-dalam-accent-primary/60 flex-shrink-0" />
+                <span className="truncate text-xs text-dalam-text-primary font-medium">{effectiveFileWorkspace.name}</span>
+              </span>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+              <FileTree />
+            </div>
+          </aside>
         </div>
-        <FileTree />
-      </aside>
+      );
+    }
+    // Editor mode with activity bar but no file tree selected
+    return (
+      <div className="h-full flex">
+        <ActivityBar />
+        <aside className="flex-1 min-w-0 flex flex-col bg-dalam-bg-secondary">
+          <div className="px-3 py-2.5 flex flex-col gap-1 border-b border-dalam-border-primary flex-shrink-0">
+            <button
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+              onClick={() => { cancelPermission(); resolveQuestion(null); newChat(); }}
+            >
+              <Plus className="w-4 h-4" />
+              <span>New task</span>
+              <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut("N")}</span>
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+            {workspaces.map((ws) => {
+              const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
+              return (
+                <div key={ws.id} className="px-2 py-1">
+                  <button
+                    className="w-full flex items-center gap-1.5 px-2 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded transition-colors"
+                    onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
+                  >
+                    <Folder className="w-3 h-3 text-dalam-text-muted" />
+                    <span className="truncate">{ws.name}</span>
+                    {wsSessions.length > 0 && <span className="text-[10px] text-dalam-text-muted ml-auto">{wsSessions.length}</span>}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
     );
   }
 
+  // Agentic mode: no ActivityBar, just the sidebar content
   return (
     <aside className="h-full flex flex-col bg-dalam-bg-secondary">
-      {/* Primary actions */}
-      <div className="px-3 py-2 flex flex-col gap-0.5 border-b border-dalam-border-primary flex-shrink-0">
+        {/* Primary actions */}
+      <div className="px-3 py-2.5 flex flex-col gap-1 border-b border-dalam-border-primary flex-shrink-0">
         <button
-          className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
-          onClick={() => { cancelPermission(); resolveQuestion(null); newChat(); }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+          onClick={() => {
+            cancelPermission();
+            resolveQuestion(null);
+            newChat();
+            if (useUI.getState().viewMode !== "chat") {
+              useUI.getState().setViewMode("chat");
+            }
+          }}
         >
           <Plus className="w-4 h-4" />
           <span>New task</span>
           <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut("N")}</span>
         </button>
-        <button className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors" onClick={() => useCommandPalette.getState().toggle()}>
+        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors" onClick={() => useCommandPalette.getState().toggle()}>
           <Search className="w-4 h-4" />
           <span>Search</span>
           <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut("K")}</span>
         </button>
-        <button className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors" onClick={() => { openSettings(); useSettingsView.getState().setActiveTab("skills"); }}>
+        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors" onClick={() => openSettings("skills")}>
           <Sparkles className="w-4 h-4" />
           <span>Skills</span>
         </button>
@@ -439,12 +610,15 @@ export function Sidebar() {
       </div>
 
       {/* Workspaces header */}
-      <div className="flex items-center justify-between px-3 py-2 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-2.5 flex-shrink-0">
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] uppercase tracking-wider text-dalam-text-muted font-medium">Workspaces</span>
           <ChevronRight className="w-3 h-3 text-dalam-text-muted" />
         </div>
         <div className="flex items-center gap-0.5">
+          {isDragging && (
+            <span className="text-[10px] text-dalam-accent-primary animate-pulse mr-2">Reordering...</span>
+          )}
           <button className="btn-icon" onClick={openWorkspace} title="Add workspace">
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -454,30 +628,51 @@ export function Sidebar() {
       {/* Workspace + session list */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {workspaces.map((ws) => {
-          const isExpanded = !collapsedWorkspaces.has(ws.id);
           const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
+          // When dragging, collapse all workspaces
+          const isExpanded = isDragging ? false : !collapsedWorkspaces.has(ws.id) && wsSessions.length > 0;
           const showAllSessions = showAll[ws.id] ?? false;
           const visibleSessions = showAllSessions ? wsSessions : wsSessions.slice(0, VISIBLE_LIMIT);
           const hasMore = wsSessions.length > VISIBLE_LIMIT;
+          const isDragOver = dragOverId === ws.id;
 
           return (
             <div
               key={ws.id}
-              className={`mb-0.5 transition-colors ${dragOverId === ws.id ? "bg-dalam-accent-subtle border-t border-dalam-accent-primary" : ""}`}
-              draggable
-              onDragStart={(e) => handleDragStart(e, ws.id)}
+              className={`mb-0.5 transition-all duration-150 ${
+                isDragOver
+                  ? dragPosition === "above"
+                    ? "border-t-2 border-dalam-accent-primary"
+                    : "border-b-2 border-dalam-accent-primary"
+                  : ""
+              }`}
               onDragOver={(e) => handleDragOver(e, ws.id)}
+              onDragLeave={(e) => handleDragLeave(e, ws.id)}
               onDrop={(e) => handleDrop(e, ws.id)}
               onDragEnd={handleDragEnd}
             >
-                  <div
-                 className={`relative w-full text-left px-2 py-1 flex items-center gap-1.5 group/workspace hover:bg-dalam-bg-hover transition-colors ${
-                   ws.id === activeWorkspaceId ? "bg-dalam-bg-active dark:bg-dalam-bg-active" : ""
-                 } ${dragId === ws.id ? "opacity-50" : ""}`}
-               >
+              <div
+                className={`relative w-full text-left pl-2 pr-2 py-1.5 flex items-center gap-1.5 group/workspace rounded-lg mx-1 transition-colors ${
+                  dragId === ws.id ? "bg-dalam-bg-tertiary opacity-50" : ""
+                } ${isDragOver && dragId !== ws.id ? "bg-dalam-bg-tertiary" : ""
+                } ${ws.id === activeWorkspaceId && !dragId && !isDragOver ? "bg-dalam-bg-active" : ""}`}
+              >
+                {/* Drag handle — only this initiates drag */}
+                <div
+                  className="absolute left-0 top-0 bottom-0 w-5 flex items-center justify-center opacity-0 group-hover/workspace:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, ws.id)}
+                >
+                  <GripVertical className="w-3 h-3 text-dalam-text-muted/50" />
+                </div>
                 <button
-                  className="flex items-center gap-1.5 flex-1 min-w-0"
-                  onClick={() => { toggleWorkspace(ws.id); setActiveWorkspace(ws.id); }}
+                  className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+                  onClick={() => {
+                    if (!isDragging) {
+                      toggleWorkspace(ws.id);
+                      setActiveWorkspace(ws.id);
+                    }
+                  }}
                 >
                   {isExpanded ? (
                     <ChevronDown className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
@@ -490,30 +685,33 @@ export function Sidebar() {
                     <Folder className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                   )}
                   <span className="truncate text-[13px] text-dalam-text-primary font-medium">{ws.name}</span>
+                  {wsSessions.length > 0 && (
+                    <span className="text-[10px] text-dalam-text-muted flex-shrink-0">{wsSessions.length}</span>
+                  )}
                 </button>
 
                 {/* Workspace action icons - visible on hover, positioned absolute */}
-                <div className="absolute right-1.5 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-1.5">
+                <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5 bg-dalam-bg-tertiary rounded px-0.5">
                   <Tooltip content="Show files" side="top">
                     <button
-                       className="p-1 rounded hover:bg-dalam-bg-hover dark:hover:bg-dalam-bg-hover transition-colors"
-                        onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
+                       className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                        onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); useUI.getState().setViewMode("editor"); }}
                     >
                       <List className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                     <Tooltip content="New task" side="top">
-                       <button
-                         className="p-1 rounded hover:bg-dalam-bg-hover dark:hover:bg-dalam-bg-hover transition-colors"
+                      <Tooltip content="New task" side="top">
+                        <button
+                          className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                          onClick={() => handleNewTask(ws.id)}
                        >
                       <MessageSquarePlus className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                  <div className="relative" data-workspace-menu>
+                   <div className="relative" data-workspace-menu>
                      <Tooltip content="More" side="top">
                        <button
-                         className="p-1 rounded hover:bg-dalam-bg-hover dark:hover:bg-dalam-bg-hover transition-colors"
+                         className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                          onClick={(e) => {
                           e.stopPropagation();
                           if (workspaceMenuPosition && workspaceMenuPosition.id === ws.id) {
@@ -557,7 +755,7 @@ export function Sidebar() {
               </div>
 
               {isExpanded && (
-                <div className="ml-3 mb-0.5 flex flex-col pr-2">
+                <div className="ml-3 mb-0.5 flex flex-col">
                   {visibleSessions.length > 0 ? (
                     <>
                       {visibleSessions.map((s) => (
@@ -590,9 +788,9 @@ export function Sidebar() {
                       )}
                     </>
                   ) : (
-                    <div className="flex flex-col items-center gap-1 px-1.5 py-2 text-center">
-                      <MessageSquare className="w-3.5 h-3.5 text-dalam-text-muted" />
-                      <p className="text-[10px] text-dalam-text-muted leading-snug">
+                    <div className="flex flex-col items-center gap-1.5 px-2 py-3 text-center">
+                      <MessageSquare className="w-4 h-4 text-dalam-text-muted/50" />
+                      <p className="text-[11px] text-dalam-text-muted/60 leading-snug">
                         No sessions yet.
                         <br />
                         Press <span className="font-mono text-dalam-text-secondary">{modKey()}N</span> to start.
@@ -655,30 +853,52 @@ function formatVersionDate(ts: number): string {
   return d.toLocaleDateString();
 }
 
-function VersionHistory({ sessionId, versions, onRestore, onDelete, onClose }: {
+function VersionHistory({ sessionId: _sessionId, versions, onRestore, onDelete, onClose }: {
   sessionId: string;
   versions: ChatVersion[];
   onRestore: (versionId: string) => void;
   onDelete: (versionId: string) => void;
   onClose: () => void;
 }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="w-96 max-h-[70vh] bg-dalam-bg-primary border border-dalam-border-primary rounded-xl shadow-2xl flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return ReactDOM.createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="version-history-title"
+    >
+      <div
+        ref={dialogRef}
+        className="w-96 max-h-[70vh] bg-dalam-bg-primary border border-dalam-border-primary rounded-xl shadow-2xl flex flex-col overflow-hidden outline-none"
+        onClick={(e) => e.stopPropagation()}
+        tabIndex={-1}
+      >
         <div className="flex items-center justify-between px-4 py-3 border-b border-dalam-border-primary">
-          <h3 className="text-sm font-semibold text-dalam-text-primary">Version History</h3>
-          <button className="btn-icon" onClick={onClose}><XCircle className="w-4 h-4" /></button>
+          <h3 id="version-history-title" className="text-sm font-semibold text-dalam-text-primary">Version History</h3>
+          <button className="btn-icon" onClick={onClose} aria-label="Close"><XCircle className="w-4 h-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
           {versions.length === 0 ? (
             <div className="text-center text-xs text-dalam-text-muted py-8">No versions saved yet.</div>
           ) : (
             <div className="space-y-1">
-              {[...versions].reverse().map((v, i) => (
+              {[...versions].reverse().map((v) => (
                 <div key={v.id} className="group flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-dalam-bg-hover transition-colors">
                   <div className="w-2 h-2 rounded-full bg-dalam-accent-primary/60 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs text-dalam-text-primary truncate">{v.label}</div>
+                    <div className="text-xs text-dalam-text-primary truncate">{v.label || "Untitled version"}</div>
                     <div className="text-[10px] text-dalam-text-muted">{formatVersionDate(v.timestamp)} · {v.messages.length} message{v.messages.length !== 1 ? "s" : ""}</div>
                   </div>
                   <div className="hidden group-hover:flex items-center gap-1">
@@ -698,6 +918,7 @@ function VersionHistory({ sessionId, versions, onRestore, onDelete, onClose }: {
           Versions are saved automatically before each message.
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

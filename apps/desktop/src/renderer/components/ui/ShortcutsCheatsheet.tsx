@@ -13,9 +13,9 @@ function getSections() {
       shortcuts: [
         { keys: [mod, "K"], desc: "Open command palette" },
         { keys: [mod, "P"], desc: "Quick open file" },
-        { keys: [mod, shift, "F"], desc: "Search across project" },
         { keys: [mod, "O"], desc: "Open folder" },
         { keys: [mod, "S"], desc: "Save current file" },
+        { keys: [mod, shift, "S"], desc: "Save all files" },
       ],
     },
     {
@@ -25,14 +25,15 @@ function getSections() {
         { keys: [mod, "B"], desc: "Toggle sidebar" },
         { keys: [mod, "J"], desc: "Toggle terminal" },
         { keys: [mod, "/"], desc: "Toggle comment" },
-        { keys: [alt, shift, "↑/↓"], desc: "Move line up/down" },
+        { keys: [mod, "F"], desc: "Find" },
+        { keys: [alt, "F"], desc: "Find and replace" },
+        { keys: [mod, "E"], desc: "Toggle agent/editor mode" },
       ],
     },
     {
       title: "Agent",
       shortcuts: [
         { keys: [mod, "N"], desc: "New task" },
-        { keys: [mod, shift, "L"], desc: "Focus chat" },
         { keys: ["Esc"], desc: "Abort current run" },
         { keys: ["@"], desc: "Mention a file" },
         { keys: ["/"], desc: "Slash command" },
@@ -42,10 +43,13 @@ function getSections() {
     {
       title: "Navigation",
       shortcuts: [
-        { keys: [mod, shift, "O"], desc: "Go to symbol" },
-        { keys: [mod, "T"], desc: "Reopen closed tab" },
-        { keys: [mod, "`"], desc: "Toggle terminal" },
+        { keys: [mod, "G"], desc: "Go to line" },
+        { keys: [mod, "["], desc: "Back" },
+        { keys: [mod, "]"], desc: "Forward" },
+        { keys: [mod, "`"], desc: "New terminal" },
         { keys: [mod, ","], desc: "Open settings" },
+        { keys: [mod, "="], desc: "Zoom in" },
+        { keys: [mod, "-"], desc: "Zoom out" },
         { keys: ["?"], desc: "Show this cheatsheet" },
       ],
     },

@@ -37,6 +37,8 @@ pub fn run() {
         system::list_processes,
         system::kill_process,
         system::get_disk_space,
+        system::detect_available_shells,
+        system::detect_installed_ides,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

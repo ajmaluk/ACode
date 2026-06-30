@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Command } from "cmdk";
 import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useChat, useUI } from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
+import { modKey, shortcut } from "@/lib/platform";
 import {
   Settings,
   FolderOpen,
@@ -16,7 +17,6 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { getRecentFiles } from "@/lib/dalamAPI";
-import { modKey } from "@/lib/platform";
 
 type Item = {
   id: string;
@@ -93,7 +93,7 @@ export function CommandPalette() {
         hint: "Open the empty prompt",
         group: "Agent",
         icon: <Sparkles className="w-3.5 h-3.5" />,
-        shortcut: `${modKey()}N`,
+        shortcut: shortcut("N"),
         perform: () => {
           useChat.getState().newChat();
           setOpen(false);
@@ -105,14 +105,14 @@ export function CommandPalette() {
         group: "View",
         icon: <TerminalSquare className="w-3.5 h-3.5" />,
         shortcut: `${modKey()}\``,
-        perform: () => { const ui = useUI.getState(); ui.setRightPanelTab("terminal"); if (!ui.rightPanelOpen) ui.toggleRightPanel(); setOpen(false); },
+        perform: () => { const ui = useUI.getState(); ui.setBottomPanelTab("terminal"); ui.setBottomPanelOpen(true); setOpen(false); },
       },
       {
         id: "search-files",
         label: "Search files in project",
         group: "View",
         icon: <Search className="w-3.5 h-3.5" />,
-        shortcut: `${modKey()}P`,
+        shortcut: shortcut("P"),
         perform: () => { void (async () => { const { openTabs } = useWorkspace.getState(); if (openTabs.length > 0) { useUI.getState().toggleSidebar(); } setOpen(false); })(); },
       },
       {
@@ -120,7 +120,7 @@ export function CommandPalette() {
         label: "Go to symbol",
         group: "View",
         icon: <Code2 className="w-3.5 h-3.5" />,
-        shortcut: `${modKey()}⇧O`,
+        shortcut: shortcut("O", { shift: true }),
         perform: () => { setOpen(false); },
       },
     ],
@@ -184,7 +184,7 @@ export function CommandPalette() {
               value={query}
               onValueChange={setQuery}
               placeholder="Type a command, search files, or jump to a setting…"
-              className="flex-1 bg-transparent border-0 outline-none py-3 text-sm text-dalam-text-primary placeholder-dalam-text-muted"
+              className="flex-1 bg-transparent border-0 outline-none py-3 text-sm text-dalam-text-primary placeholder:text-dalam-text-muted"
               autoFocus
             />
             {query ? (

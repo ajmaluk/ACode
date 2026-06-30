@@ -219,7 +219,7 @@ pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
 #[command]
 pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
     let output = Command::new("git")
-        .args(["checkout", &branch])
+        .args(["checkout", "--", &branch])
         .current_dir(&path)
         .output()
         .map_err(|e| format!("git checkout failed: {}", e))?;
@@ -255,6 +255,11 @@ pub fn git_diff_file(path: String, file_path: String) -> Result<String, String> 
         .current_dir(&path)
         .output()
         .map_err(|e| format!("git diff failed: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git diff failed: {}", stderr));
+    }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

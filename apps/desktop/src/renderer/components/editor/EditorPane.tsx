@@ -1,15 +1,17 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
 import ReactDOM from "react-dom";
-import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
+import { useWorkspace, useSettings, useChat, useGit, useModelProviders, useSettingsView, useUI, useTerminal, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
 import type { FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
-import { TopNav } from "@/components/editor/TopNav";
+import { FindBar } from "@/components/editor/FindBar";
+import { QuickOpen } from "@/components/editor/QuickOpen";
+import { GoToLine } from "@/components/editor/GoToLine";
 import {
-  X, FileCode, FilePlus, Circle, MoreHorizontal, Columns, ArrowUp,
+  X, FileCode, FilePlus, Circle, ArrowUp,
   ChevronDown, ChevronRight, Loader2, Sparkles,
-  FileText, GitBranch, Terminal, Search,
-  FolderOpen, Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Info, Copy, Code2, Pause, Plus,
+  FileText, GitBranch, Terminal, Search, FolderOpen,
+  Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Info, Copy, Code2, Plus, Square,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -17,9 +19,10 @@ import { createDalamAPI } from "@/lib/dalamAPI";
 import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup, SubAgentList, QuestionAccordion } from "@/components/chat/ActivityBlocks";
 
 import { CostDisplay } from "@/components/chat/CostDisplay";
+import { MessageQueue } from "@/components/chat/MessageQueue";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { basename } from "@/lib/pathUtils";
-import { modKey } from "@/lib/platform";
+import { modKey, platform } from "@/lib/platform";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "highlight.js";
@@ -27,7 +30,7 @@ import hljs from "highlight.js";
 // ============================================================================
 // WorkingTimer — shows elapsed time since streaming started
 // ============================================================================
-function WorkingTimer({ startTime }: { startTime: number }) {
+const WorkingTimer = React.memo(function WorkingTimer({ startTime }: { startTime: number }) {
   const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
   useEffect(() => {
     const interval = setInterval(() => {
@@ -43,7 +46,7 @@ function WorkingTimer({ startTime }: { startTime: number }) {
       Working for {timeStr}
     </span>
   );
-}
+});
 
 // ============================================================================
 // InlineActivityRow — shows a single tool/activity in progress (Cursor-style)
@@ -110,7 +113,7 @@ function InlineActivityRow({
 // ============================================================================
 // StreamingActivityPanel — shows all activities inline during streaming
 // ============================================================================
-function StreamingActivityPanel({
+const StreamingActivityPanel = React.memo(function StreamingActivityPanel({
   activities,
   toolCalls,
   thinkingContent,
@@ -247,7 +250,7 @@ function StreamingActivityPanel({
       )}
     </div>
   );
-}
+});
 
 // Helper to get file icon based on extension
 function getFileIcon(ext: string): React.ElementType {
@@ -309,13 +312,65 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
 
 export function EditorPane() {
   const { openTabs, activeFilePath, setActiveFile, closeTab, updateTabContent, markSaved, fileTree, openFile } = useWorkspace();
-  const { viewMode, setViewMode } = useUI();
+  const { viewMode } = useUI();
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath) ?? null;
+  const prevViewModeRef = useRef(viewMode);
 
+  // --- Editor overlay state ---
+  const [showFindBar, setShowFindBar] = useState(false);
+  const [findReplaceMode, setFindReplaceMode] = useState(false);
+  const [showQuickOpen, setShowQuickOpen] = useState(false);
+  const [showGoToLine, setShowGoToLine] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const monacoEditorRef = useRef<any>(null);
+
+  // Reset overlay state when view mode changes
+  useEffect(() => {
+    if (prevViewModeRef.current !== viewMode) {
+      setShowFindBar(false);
+      setShowQuickOpen(false);
+      setShowGoToLine(false);
+      setFindReplaceMode(false);
+    }
+    prevViewModeRef.current = viewMode;
+  }, [viewMode]);
+
+  // Listen for custom events from menu bar
+  useEffect(() => {
+    const onFind = () => { setShowFindBar(true); setFindReplaceMode(false); };
+    const onFindReplace = () => { setShowFindBar(true); setFindReplaceMode(true); };
+    const onQuickOpen = () => setShowQuickOpen(true);
+    const onGoToLine = () => setShowGoToLine(true);
+    const onToggleComment = () => {
+      const editor = monacoEditorRef.current;
+      if (editor) editor.trigger("menu", "editor.action.commentLine", null);
+    };
+
+    window.addEventListener("editor:find", onFind);
+    window.addEventListener("editor:find-replace", onFindReplace);
+    window.addEventListener("editor:quick-open", onQuickOpen);
+    window.addEventListener("editor:go-to-line", onGoToLine);
+    window.addEventListener("editor:toggle-comment", onToggleComment);
+    return () => {
+      window.removeEventListener("editor:find", onFind);
+      window.removeEventListener("editor:find-replace", onFindReplace);
+      window.removeEventListener("editor:quick-open", onQuickOpen);
+      window.removeEventListener("editor:go-to-line", onGoToLine);
+      window.removeEventListener("editor:toggle-comment", onToggleComment);
+    };
+  }, []);
+
+  // Keyboard shortcuts
   useEffect(() => {
     const onKey = async (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      const mod = e.metaKey || e.ctrlKey;
+      const alt = e.altKey;
+      const shift = e.shiftKey;
+
+      // Cmd/Ctrl+S: Save file
+      if (mod && !shift && e.key.toLowerCase() === "s") {
         e.preventDefault();
         const { activeFilePath, openTabs } = useWorkspace.getState();
         const tab = openTabs.find((t) => t.path === activeFilePath);
@@ -329,78 +384,222 @@ export function EditorPane() {
           toast.error("Save failed", (err as Error)?.message ?? "Unknown error");
         }
       }
+
+      // Cmd/Ctrl+Shift+S: Save all
+      if (mod && shift && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        const { openTabs } = useWorkspace.getState();
+        const dirty = openTabs.filter((t) => t.dirty);
+        if (dirty.length === 0) return;
+        try {
+          const api = createDalamAPI();
+          for (const tab of dirty) {
+            await api.fs.writeFile(tab.path, tab.content);
+            markSaved(tab.path);
+          }
+          toast.success("All files saved", `${dirty.length} file(s)`);
+        } catch (err) {
+          toast.error("Save all failed", (err as Error)?.message ?? "Unknown error");
+        }
+      }
+
+      // Cmd/Ctrl+W: Close active tab
+      if (mod && !shift && e.key.toLowerCase() === "w") {
+        const { activeFilePath } = useWorkspace.getState();
+        if (activeFilePath) {
+          e.preventDefault();
+          closeTab(activeFilePath);
+        }
+      }
+
+      // Cmd/Ctrl+P: Quick open
+      if (mod && !shift && e.key.toLowerCase() === "p" && !alt) {
+        e.preventDefault();
+        setShowQuickOpen((v) => !v);
+      }
+
+      // Cmd/Ctrl+G: Go to line
+      if (mod && !shift && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        setShowGoToLine(true);
+      }
+
+      // Cmd/Ctrl+F: Find
+      if (mod && !shift && e.key.toLowerCase() === "f" && !alt) {
+        e.preventDefault();
+        setShowFindBar(true);
+        setFindReplaceMode(false);
+      }
+
+      // Cmd/Ctrl+Alt+F: Find and Replace
+      if (mod && alt && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setShowFindBar(true);
+        setFindReplaceMode(true);
+      }
+
+      // Cmd/Ctrl+Shift+F: Find in files
+      if (mod && shift && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        useUI.getState().setBottomPanelTab("terminal");
+        useUI.getState().setBottomPanelOpen(true);
+      }
+
+      // Cmd/Ctrl+J: Toggle terminal
+      if (mod && !shift && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        const ui = useUI.getState();
+        const session = useChat.getState().session;
+        if (session?.workspacePath) {
+          useTerminal.getState().ensureTabForCwd(session.workspacePath);
+        }
+        ui.setBottomPanelTab("terminal");
+        ui.setBottomPanelOpen(true);
+      }
+
+      // Alt+Z: Toggle word wrap
+      if (alt && e.key.toLowerCase() === "z" && !mod) {
+        e.preventDefault();
+        const { settings, update } = useSettings.getState();
+        void update("wordWrap", !settings.wordWrap);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [markSaved, toast]);
+  }, [markSaved, toast, closeTab]);
 
-  // View mode toggle button (top-left corner)
-  const viewToggle = (
-    <button
-      onClick={() => setViewMode(viewMode === "chat" ? "editor" : "chat")}
-      className="px-2 py-1 text-[11px] rounded-md transition-colors flex items-center gap-1.5"
-      title={viewMode === "chat" ? "Switch to Editor (Ctrl+E)" : "Switch to Chat (Ctrl+E)"}
-    >
-      {viewMode === "chat" ? (
-        <>
-          <Code2 className="w-3.5 h-3.5 text-dalam-accent-primary" />
-          <span className="text-dalam-text-muted">Editor</span>
-        </>
-      ) : (
-        <>
-          <Sparkles className="w-3.5 h-3.5 text-dalam-accent-primary" />
-          <span className="text-dalam-text-muted">Chat</span>
-        </>
-      )}
-    </button>
-  );
+  // Close tab context menu on outside click
+  useEffect(() => {
+    if (!tabContextMenu) return;
+    const handler = () => setTabContextMenu(null);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [tabContextMenu]);
 
-  // Editor mode — show tabs and editor (VS Code style)
-  if (viewMode === "editor" || openTabs.length > 0) {
+  // FindBar handlers — wire to Monaco's find controller
+  const handleFindSearch = useCallback((_query: string, _options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean }) => {
+    const editor = monacoEditorRef.current;
+    if (!editor) return;
+    const action = editor.getAction("actions.find");
+    if (action) {
+      void action.run();
+      setTimeout(() => {
+        editor.trigger("findBar", "editor.action.nextMatchFindAction", null);
+      }, 50);
+    }
+  }, []);
+
+  const handleFindReplace = useCallback((_replacement: string) => {
+    const editor = monacoEditorRef.current;
+    if (!editor) return;
+    editor.trigger("findBar", "editor.action.replaceOne", null);
+  }, []);
+
+  const handleFindReplaceAll = useCallback((_replacement: string) => {
+    const editor = monacoEditorRef.current;
+    if (!editor) return;
+    editor.trigger("findBar", "editor.action.replaceAll", null);
+  }, []);
+
+  // Editor mode — VS Code-style layout with tabs, editor
+  if (viewMode === "editor") {
     return (
       <div className="h-full flex flex-col bg-dalam-bg-primary">
-        <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
-          {viewToggle}
-          <div className="w-px h-4 bg-dalam-border-primary mx-1" />
-          {openTabs.map((t) => {
-            const active = t.path === activeFilePath;
-            return (
-              <div key={t.path}
-                className={`group flex items-center gap-1.5 px-3 h-full border-r border-dalam-border-primary cursor-pointer transition-colors ${active ? "bg-dalam-bg-primary text-dalam-text-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
-                onClick={() => setActiveFile(t.path)}
-                onAuxClick={(e) => { if (e.button === 1) closeTab(t.path); }}
-                title={`${t.path}${t.dirty ? " (unsaved)" : ""}`}>
-                <FileCode className="w-3.5 h-3.5 flex-shrink-0" />
-                <span className="text-xs whitespace-nowrap">{t.name}</span>
-                <button
-                  className={`ml-1 rounded p-0.5 ${active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100"} hover:bg-dalam-bg-active transition-opacity`}
-                  onClick={(e) => { e.stopPropagation(); closeTab(t.path); }}
-                  title={t.dirty ? "Close (unsaved)" : "Close"}
-                  aria-label={`Close ${t.name}`}
-                >
-                  {t.dirty
-                    ? <Circle className="w-2.5 h-2.5 fill-current text-dalam-accent-primary" />
-                    : <X className="w-3 h-3" />}
-                </button>
-              </div>
-            );
-          })}
-          <MemoizedOpenFileButton fileTree={fileTree} openFile={openFile} />
-          <div className="flex-1" />
-          <div className="flex items-center gap-0.5 pr-1">
-            <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="Split editor" onClick={() => toast.info("Split", "Coming soon")}>
-              <Columns className="w-3.5 h-3.5" />
-            </button>
-            <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="More actions" onClick={() => toast.info("More", "Coming soon")}>
-              <MoreHorizontal className="w-3.5 h-3.5" />
-            </button>
+        <div className="flex-1 min-h-0 flex flex-col">
+          {/* Tab bar */}
+          <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary overflow-x-auto flex-shrink-0 scrollbar-thin">
+            {openTabs.map((t) => {
+              const active = t.path === activeFilePath;
+              return (
+                <div key={t.path}
+                  className={`group flex items-center gap-1.5 px-3 h-full border-r border-dalam-border-primary cursor-pointer transition-colors ${active ? "bg-dalam-bg-primary text-dalam-text-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
+                  onClick={() => setActiveFile(t.path)}
+                  onAuxClick={(e) => { if (e.button === 1) closeTab(t.path); }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setTabContextMenu({ x: e.clientX, y: e.clientY, path: t.path });
+                  }}
+                  title={`${t.path}${t.dirty ? " (unsaved)" : ""}`}>
+                  {t.dirty && <Circle className="w-2 h-2 fill-current text-dalam-accent-primary flex-shrink-0" />}
+                  <FileCode className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="text-xs whitespace-nowrap">{t.name}</span>
+                  <button
+                    className={`ml-1 rounded p-0.5 ${active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100"} hover:bg-dalam-bg-active transition-opacity`}
+                    onClick={(e) => { e.stopPropagation(); closeTab(t.path); }}
+                    title={t.dirty ? "Close (unsaved)" : "Close"}
+                    aria-label={`Close ${t.name}`}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
+            <MemoizedOpenFileButton fileTree={fileTree} openFile={openFile} />
+            <div className="flex-1" />
+            <div className="flex items-center gap-0.5 pr-1">
+              <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="Toggle word wrap" onClick={() => { void useSettings.getState().update("wordWrap", !useSettings.getState().settings.wordWrap); }}>
+                <Hash className="w-3.5 h-3.5" />
+              </button>
+              <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="Toggle minimap" onClick={() => { void useSettings.getState().update("showMinimap", !useSettings.getState().settings.showMinimap); }}>
+                <Square className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
+
+          {/* Tab context menu */}
+          {tabContextMenu && (
+            <TabContextMenu
+              x={tabContextMenu.x}
+              y={tabContextMenu.y}
+              tabPath={tabContextMenu.path}
+              onClose={() => setTabContextMenu(null)}
+            />
+          )}
+
+          {activeTab && <Breadcrumb />}
+
+          {/* Find bar — key includes findReplaceMode so it remounts when toggling replace */}
+          {showFindBar && activeTab && (
+            <FindBar
+              key={findReplaceMode ? "replace" : "find"}
+              onSearch={handleFindSearch}
+              onReplace={handleFindReplace}
+              onReplaceAll={handleFindReplaceAll}
+              onClose={() => setShowFindBar(false)}
+              matchCount={0}
+              currentMatch={0}
+              showReplace={findReplaceMode}
+            />
+          )}
+
+          {/* Editor content or empty state */}
+          <div className="flex-1 min-h-0 relative">
+            {activeTab ? (
+              <CodeView path={activeTab.path} content={activeTab.content} onChange={(v) => updateTabContent(activeTab.path, v)} onEditorReady={(e) => { monacoEditorRef.current = e; }} />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-dalam-text-muted">
+                <div className="w-16 h-16 mb-4 rounded-2xl bg-dalam-bg-active flex items-center justify-center">
+                  <Code2 className="w-8 h-8 text-dalam-text-muted/50" />
+                </div>
+                <p className="text-sm font-medium mb-1">No file open</p>
+                <p className="text-xs text-dalam-text-muted/60 mb-4">Select a file from the explorer or use Ctrl+P to quick open</p>
+              </div>
+            )}
+          </div>
+          <EditorStatusBar />
         </div>
-        {activeTab && <Breadcrumb />}
-        <div className="flex-1 min-h-0 relative">
-          {activeTab && <CodeView path={activeTab.path} content={activeTab.content} onChange={(v) => updateTabContent(activeTab.path, v)} />}
-        </div>
-        {activeTab && <EditorStatusBar />}
+
+        {/* Overlays */}
+        {showQuickOpen && <QuickOpen onClose={() => setShowQuickOpen(false)} />}
+        {showGoToLine && activeTab && (
+          <GoToLine
+            maxLine={activeTab.content.split("\n").length}
+            onGoToLine={(line) => {
+              window.dispatchEvent(new CustomEvent("editor:go-to-line-number", { detail: { line } }));
+            }}
+            onClose={() => setShowGoToLine(false)}
+          />
+        )}
       </div>
     );
   }
@@ -408,9 +607,6 @@ export function EditorPane() {
   // Chat mode — show the chat view
   return (
     <div className="h-full flex flex-col bg-dalam-bg-primary">
-      <div className="h-9 flex items-center bg-dalam-bg-secondary border-b border-dalam-border-primary flex-shrink-0 px-2">
-        {viewToggle}
-      </div>
       <div className="flex-1 min-h-0">
         <ChatView />
       </div>
@@ -424,31 +620,54 @@ function EditorStatusBar() {
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath);
   const mod = modKey();
-  if (!activeTab) return null;
-  const language = activeTab.path.split(".").pop()?.toLowerCase() ?? "text";
-  const cursor = activeTab.cursor;
+  const language = activeTab ? activeTab.path.split(".").pop()?.toLowerCase() ?? "text" : "";
+  const cursor = activeTab?.cursor;
+  const wordWrap = settings.wordWrap;
+  const lineCount = activeTab ? activeTab.content.split("\n").length : 0;
   return (
     <div className="h-6 flex items-center justify-between bg-dalam-bg-tertiary border-t border-dalam-border-primary px-3 text-[11px] text-dalam-text-muted flex-shrink-0 select-none">
       <div className="flex items-center gap-3 min-w-0 overflow-hidden">
-        <span className="flex items-center gap-1.5 flex-shrink-0">
-          <FileCode className="w-3 h-3" />
-          {activeTab.name}
-        </span>
-        <span className="px-1.5 py-0.5 rounded bg-dalam-bg-active text-dalam-text-secondary uppercase tracking-wider text-[10px] flex-shrink-0">{language}</span>
+        {activeTab && (
+          <span className="flex items-center gap-1.5 flex-shrink-0">
+            <FileCode className="w-3 h-3" />
+            <span className="truncate max-w-[200px]" title={activeTab.path}>{activeTab.name}</span>
+            {activeTab.dirty && <Circle className="w-1.5 h-1.5 fill-current text-dalam-accent-primary flex-shrink-0" />}
+          </span>
+        )}
+        <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
+        {language && (
+          <span
+            className="px-1.5 py-0.5 rounded text-dalam-text-secondary uppercase tracking-wider text-[10px] flex-shrink-0 cursor-default"
+            title={`Language: ${language}`}
+          >
+            {language}
+          </span>
+        )}
         {cursor && (
           <span className="flex items-center gap-1 flex-shrink-0">
             <span>Ln {cursor.line}, Col {cursor.column}</span>
           </span>
         )}
-        <span className="flex items-center gap-1 flex-shrink-0">
-          <span>Spaces: 2</span>
-        </span>
-        <span className="flex items-center gap-1 flex-shrink-0">
-          <span>UTF-8</span>
-        </span>
+        {lineCount > 0 && (
+          <span className="flex-shrink-0">
+            {lineCount.toLocaleString()} {lineCount === 1 ? "line" : "lines"}
+          </span>
+        )}
+        <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
+        <span className="flex-shrink-0">Spaces: 2</span>
+        <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
+        <span className="flex-shrink-0">UTF-8</span>
+        <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
+        <button
+          className="flex-shrink-0 hover:text-dalam-text-primary transition-colors"
+          onClick={() => { void useSettings.getState().update("wordWrap", !wordWrap); }}
+          title={`Toggle word wrap (${platform() === "mac" ? "⌥" : "Alt"}Z)`}
+        >
+          {wordWrap ? "Wrap" : "No wrap"}
+        </button>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
-        {activeTab.dirty ? (
+        {activeTab?.dirty ? (
           <button
             onClick={async () => {
               try {
@@ -465,16 +684,113 @@ function EditorStatusBar() {
             <Circle className="w-2 h-2 fill-current text-dalam-accent-primary" />
             <span>Unsaved</span>
           </button>
-        ) : (
+        ) : activeTab ? (
           <span className="flex items-center gap-1 text-dalam-text-muted">
             <Check className="w-3 h-3" />
-            Saved
+            <span>Saved</span>
           </span>
-        )}
-        <span className="flex items-center gap-1 flex-shrink-0 text-dalam-text-muted">
-          <span>Font {settings.codeFontSize}px</span>
-        </span>
+        ) : null}
+        <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
+        <span className="flex-shrink-0">{settings.codeFontSize}px</span>
       </div>
+    </div>
+  );
+}
+
+function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabPath: string; onClose: () => void }) {
+  const { closeTab, openTabs } = useWorkspace();
+  const mod = modKey();
+
+  const closeOthers = () => {
+    for (const t of openTabs) {
+      if (t.path !== tabPath) closeTab(t.path);
+    }
+    onClose();
+  };
+
+  const closeAll = () => {
+    for (const t of openTabs) closeTab(t.path);
+    onClose();
+  };
+
+  const closeToRight = () => {
+    const idx = openTabs.findIndex((t) => t.path === tabPath);
+    if (idx >= 0) {
+      for (let i = idx + 1; i < openTabs.length; i++) {
+        closeTab(openTabs[i].path);
+      }
+    }
+    onClose();
+  };
+
+  const closeToLeft = () => {
+    const idx = openTabs.findIndex((t) => t.path === tabPath);
+    if (idx >= 0) {
+      for (let i = 0; i < idx; i++) {
+        closeTab(openTabs[i].path);
+      }
+    }
+    onClose();
+  };
+
+  const closeSaved = () => {
+    for (const t of openTabs) {
+      if (!t.dirty) closeTab(t.path);
+    }
+    onClose();
+  };
+
+  const copyPath = async () => {
+    try {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(tabPath);
+    } catch {
+      await navigator.clipboard.writeText(tabPath);
+    }
+    onClose();
+  };
+
+  const items = [
+    { label: "Close", shortcut: `${mod}W`, action: () => { closeTab(tabPath); onClose(); } },
+    { label: "Close Others", action: closeOthers },
+    { label: "Close All", action: closeAll },
+    { label: "Close To Right", action: closeToRight },
+    { label: "Close To Left", action: closeToLeft },
+    { label: "Close Saved", action: closeSaved },
+    { type: "separator" as const },
+    { label: "Copy Path", shortcut: `${mod}⇧C`, action: copyPath },
+    { label: "Copy Relative Path", action: async () => {
+      try {
+        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+        await writeText(tabPath);
+      } catch {
+        await navigator.clipboard.writeText(tabPath);
+      }
+      onClose();
+    }},
+  ];
+
+  return (
+    <div
+      className="fixed z-50 min-w-[200px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-md shadow-2xl py-1 animate-fade-in"
+      style={{ left: x, top: y }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {items.map((item, idx) => {
+        if (item.type === "separator") return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />;
+        return (
+          <button
+            key={idx}
+            className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-[11px] text-dalam-text-primary hover:bg-dalam-accent-subtle hover:text-dalam-text-primary transition-colors"
+            onClick={() => item.action()}
+          >
+            <span>{item.label}</span>
+            {"shortcut" in item && item.shortcut && (
+              <kbd className="text-[10px] text-dalam-text-muted whitespace-nowrap">{item.shortcut}</kbd>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -517,10 +833,133 @@ function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions
   );
 }
 
+function ResetConfirmDialog({ fileChanges, loading, onConfirm, onCancel }: {
+  fileChanges: { path: string; action: string; additions: number; deletions: number }[];
+  loading: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const toggleFile = (path: string) => {
+    setExpandedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
+      <div className="w-[440px] max-h-[70vh] bg-dalam-bg-primary border border-dalam-border-primary rounded-xl shadow-2xl flex flex-col overflow-hidden animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-dalam-border-primary flex items-center gap-2">
+          {loading ? (
+            <Loader2 className="w-4 h-4 text-dalam-accent-primary animate-spin" />
+          ) : (
+            <RotateCcw className="w-4 h-4 text-dalam-accent-primary" />
+          )}
+          <h3 className="text-sm font-semibold text-dalam-text-primary">
+            {loading ? "Computing changes..." : "Reset to this message"}
+          </h3>
+        </div>
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-3">
+          {loading ? (
+            <div className="flex items-center justify-center py-8 text-xs text-dalam-text-muted">
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              Analyzing file changes...
+            </div>
+          ) : fileChanges.length === 0 ? (
+            <div className="text-center text-xs text-dalam-text-muted py-8">No file changes will be reverted.</div>
+          ) : (
+            <div className="space-y-1">
+              <div className="text-[11px] text-dalam-text-muted mb-2">
+                The following files will be reverted:
+              </div>
+              {fileChanges.map((fc) => (
+                <div key={fc.path} className="border border-dalam-border-primary/50 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-dalam-bg-hover transition-colors"
+                    onClick={() => toggleFile(fc.path)}
+                  >
+                    <ChevronDown className={`w-3 h-3 text-dalam-text-muted transition-transform flex-shrink-0 ${expandedFiles.has(fc.path) ? "" : "-rotate-90"}`} />
+                    <FileCode className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
+                    <span className="flex-1 min-w-0 text-xs text-dalam-text-primary truncate font-mono">{fc.path}</span>
+                    {fc.additions > 0 && <span className="text-[10px] text-dalam-git-added font-mono">+{fc.additions}</span>}
+                    {fc.deletions > 0 && <span className="text-[10px] text-dalam-git-deleted font-mono">-{fc.deletions}</span>}
+                  </button>
+                  {expandedFiles.has(fc.path) && (
+                    <div className="px-3 pb-2 text-[10px] text-dalam-text-muted border-t border-dalam-border-primary/30 pt-1">
+                      <div className="flex items-center gap-3">
+                        <span className="text-dalam-text-secondary">{fc.action}</span>
+                        <span className="text-dalam-git-added">+{fc.additions} added</span>
+                        <span className="text-dalam-git-deleted">-{fc.deletions} removed</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="px-4 py-3 border-t border-dalam-border-primary flex items-center justify-end gap-2">
+          <button
+            className="px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-lg transition-colors"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-3 py-1.5 text-xs bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            <RotateCcw className="w-3 h-3" />
+            Reset
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RestorePopup({ removedMessages, onRestore, onDismiss }: {
+  removedMessages: import("@dalam/shared-types").ChatMessage[];
+  onRestore: () => void;
+  onDismiss: () => void;
+}) {
+  if (removedMessages.length === 0) return null;
+  const userMsgCount = removedMessages.filter((m) => m.role === "user").length;
+  const assistantMsgCount = removedMessages.filter((m) => m.role === "assistant").length;
+  return (
+    <div className="mb-2 px-3">
+      <div className="max-w-2xl mx-auto bg-dalam-bg-secondary border border-dalam-accent-primary/30 rounded-lg shadow-lg px-3 py-2 flex items-center gap-2 animate-fade-in">
+        <History className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
+        <div className="flex-1 min-w-0 text-[11px] text-dalam-text-secondary">
+          <span className="text-dalam-text-primary font-medium">{removedMessages.length} message{removedMessages.length !== 1 ? "s" : ""}</span>
+          {" "}removed ({userMsgCount} user, {assistantMsgCount} assistant)
+        </div>
+        <button
+          className="px-2 py-1 text-[11px] bg-dalam-accent-primary/10 hover:bg-dalam-accent-primary/20 text-dalam-accent-primary rounded-md transition-colors font-medium"
+          onClick={onRestore}
+        >
+          Restore
+        </button>
+        <button
+          className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+          onClick={onDismiss}
+          title="Dismiss"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ChatView() {
   const { workspaces, activeWorkspaceId, setActiveWorkspace, openWorkspace, fileTree } = useWorkspace();
   const { settings } = useSettings();
-  const { sendMessage, isStreaming, messages, selectedModelId, setSelectedModel, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment } = useChat();
+  const { sendMessage, isStreaming, messages, selectedModelId, setSelectedModel, chatSessions, planApproval, approvePlan, rejectPlan, restoredVersionId, sessionVersions, activeSessionId, cancelVersionRestore, confirmVersionRestore, pendingAttachments, removePendingAttachment, messageQueue } = useChat();
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
   const toast = useToast();
@@ -547,12 +986,35 @@ function ChatView() {
 
   const [timestamp] = useState(() => Date.now());
 
+  // Reset confirmation dialog state
+  const [resetConfirmState, setResetConfirmState] = useState<{
+    messageId: string;
+    messageContent: string;
+    messageAttachments?: import("@dalam/shared-types").FileAttachment[];
+    loading: boolean;
+    fileChanges: { path: string; action: string; additions: number; deletions: number }[];
+  } | null>(null);
+
+  // Stack of removed message groups for restore functionality
+  const [removedMessagesStack, setRemovedMessagesStack] = useState<{
+    messages: import("@dalam/shared-types").ChatMessage[];
+    versionId: string;
+  }[]>([]);
+
+  // Control restore popup visibility
+  const [showRestorePopup, setShowRestorePopup] = useState(false);
+
   // Auto-resize the textareas dynamically based on scrollHeight
   useEffect(() => {
     const mainTextarea = mainTextareaRef.current;
     if (mainTextarea) {
       mainTextarea.style.height = "auto";
-      mainTextarea.style.height = `${Math.min(mainTextarea.scrollHeight, 320)}px`;
+      mainTextarea.style.height = `${Math.min(mainTextarea.scrollHeight, 400)}px`;
+    }
+    const followupTextarea = followupTextareaRef.current;
+    if (followupTextarea) {
+      followupTextarea.style.height = "auto";
+      followupTextarea.style.height = `${Math.min(followupTextarea.scrollHeight, 400)}px`;
     }
   }, [value]);
 
@@ -629,6 +1091,159 @@ function ChatView() {
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Handle reset confirmation - compute file changes from messages that will be removed
+  const handleResetClick = useCallback((messageId: string, messageContent: string, attachments?: import("@dalam/shared-types").FileAttachment[]) => {
+    const chatState = useChat.getState();
+    if (chatState.isStreaming) return;
+    const msgs = chatState.messages;
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    // Messages that will be removed (from idx onward)
+    const removedMsgs = msgs.slice(idx);
+    // Collect file changes from removed messages
+    const allFileChanges: { path: string; action: string; additions: number; deletions: number }[] = [];
+    const fileChangeMap = new Map<string, { path: string; action: string; additions: number; deletions: number }>();
+    for (const msg of removedMsgs) {
+      if (msg.fileChanges) {
+        for (const fc of msg.fileChanges) {
+          const existing = fileChangeMap.get(fc.path);
+          if (existing) {
+            existing.additions += fc.additions;
+            existing.deletions += fc.deletions;
+          } else {
+            fileChangeMap.set(fc.path, { path: fc.path, action: fc.action, additions: fc.additions, deletions: fc.deletions });
+          }
+        }
+      }
+    }
+    allFileChanges.push(...fileChangeMap.values());
+    // Show confirmation dialog
+    setResetConfirmState({
+      messageId,
+      messageContent,
+      messageAttachments: attachments,
+      loading: false,
+      fileChanges: allFileChanges,
+    });
+  }, []);
+
+  // Confirm the reset operation
+  const handleResetConfirm = useCallback(() => {
+    if (!resetConfirmState) return;
+    const chatState = useChat.getState();
+    const { activeSessionId, messages, sessionMessages, sessionVersions, chatSessions } = chatState;
+    if (!activeSessionId) return;
+    const idx = messages.findIndex((m) => m.id === resetConfirmState.messageId);
+    if (idx < 0) return;
+    // Save version before resetting
+    if (messages.length > 0) {
+      chatState.saveVersion(activeSessionId, "Before reset");
+    }
+    // Keep messages before the target (not including the target)
+    const kept = messages.slice(0, idx);
+    const removed = messages.slice(idx);
+    // Update sessionMessages
+    const sessionMsgs = { ...sessionMessages, [activeSessionId]: kept };
+    // Save removed messages to stack for restore
+    const versions = sessionVersions[activeSessionId] ?? [];
+    const lastVersion = versions.slice(-1)[0];
+    setRemovedMessagesStack((prev) => [...prev, { messages: removed, versionId: lastVersion?.id ?? "" }]);
+    // Update preview and chatSessions
+    const lastUserMsg = [...kept].reverse().find((m) => m.role === "user");
+    const preview = lastUserMsg
+      ? lastUserMsg.content.length > 60 ? lastUserMsg.content.slice(0, 57) + "…" : lastUserMsg.content
+      : undefined;
+    const updatedSessions = chatSessions.map((cs) =>
+      cs.id === activeSessionId
+        ? { ...cs, messageCount: kept.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
+        : cs
+    );
+    // Update state and persist
+    useChat.setState({
+      messages: kept,
+      sessionMessages: sessionMsgs,
+      chatSessions: updatedSessions,
+    });
+    // Persist sessionMessages
+    try {
+      localStorage.setItem("dalam.sessionMessages.v1", JSON.stringify(sessionMsgs));
+    } catch { /* ignore quota errors */ }
+    // Persist session summaries
+    try {
+      localStorage.setItem("dalam.chatSessions.v1", JSON.stringify(updatedSessions));
+    } catch { /* ignore */ }
+    // Populate input
+    setValue(resetConfirmState.messageContent);
+    // Set attachments
+    if (resetConfirmState.messageAttachments && resetConfirmState.messageAttachments.length > 0) {
+      for (const att of resetConfirmState.messageAttachments) {
+        chatState.addPendingAttachment(att);
+      }
+    }
+    // Close dialog
+    setResetConfirmState(null);
+    // Show restore popup
+    setShowRestorePopup(true);
+    // If no messages remain, the default screen will show automatically
+  }, [resetConfirmState]);
+
+  // Cancel the reset operation
+  const handleResetCancel = useCallback(() => {
+    setResetConfirmState(null);
+  }, []);
+
+  // Handle restore from popup
+  const handleRestoreMessages = useCallback(() => {
+    if (removedMessagesStack.length === 0) return;
+    const chatState = useChat.getState();
+    const { activeSessionId, messages, sessionMessages, chatSessions } = chatState;
+    if (!activeSessionId) return;
+    // Combine all removed messages from the stack
+    const allRemoved = removedMessagesStack.flatMap((group) => group.messages);
+    // Restore: add removed messages back
+    const restored = [...messages, ...allRemoved];
+    const sessionMsgs = { ...sessionMessages, [activeSessionId]: restored };
+    const lastUserMsg = [...restored].reverse().find((m) => m.role === "user");
+    const preview = lastUserMsg
+      ? lastUserMsg.content.length > 60 ? lastUserMsg.content.slice(0, 57) + "…" : lastUserMsg.content
+      : undefined;
+    const updatedSessions = chatSessions.map((cs) =>
+      cs.id === activeSessionId
+        ? { ...cs, messageCount: restored.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
+        : cs
+    );
+    useChat.setState({
+      messages: restored,
+      sessionMessages: sessionMsgs,
+      chatSessions: updatedSessions,
+      restoredVersionId: null,
+      preRestoreMessages: null,
+    });
+    // Persist to localStorage
+    try {
+      localStorage.setItem("dalam.sessionMessages.v1", JSON.stringify(sessionMsgs));
+    } catch { /* ignore */ }
+    // Persist session summaries
+    try {
+      localStorage.setItem("dalam.chatSessions.v1", JSON.stringify(updatedSessions));
+    } catch { /* ignore */ }
+    // Clear the stack and hide popup
+    setRemovedMessagesStack([]);
+    setShowRestorePopup(false);
+    setValue("");
+  }, [removedMessagesStack]);
+
+  // Dismiss restore popup
+  const handleDismissRestore = useCallback(() => {
+    setShowRestorePopup(false);
+    setRemovedMessagesStack([]);
+  }, []);
+
+  // Handle reset to message (populate input with message content)
+  const handleResetToMessage = useCallback((content: string) => {
+    setValue(content);
   }, []);
 
   const handleSubmit = () => {
@@ -967,7 +1582,6 @@ Add your project's common commands here so Dalam knows how to build:
 
   return (
     <div className="h-full flex flex-col bg-dalam-bg-primary">
-      <TopNav />
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {!hasMessages && !isStreaming ? (
@@ -1086,7 +1700,7 @@ Add your project's common commands here so Dalam knows how to build:
                   )}
                   <textarea
                     ref={mainTextareaRef}
-                    className="w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none leading-relaxed overflow-y-auto min-h-[28px] max-h-80"
+                    className="chat-input w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted resize-none overflow-y-auto min-h-[28px] max-h-[400px]"
                     placeholder="Ask Dalam anything, @ to add files, / for commands, $ for skills, # for related conversations"
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
@@ -1168,7 +1782,7 @@ Add your project's common commands here so Dalam knows how to build:
                         disabled={!isStreaming && (!value.trim() || !workspace || (!selectedModelId && !settings.selectedModel))}
                         onClick={handleSubmit}
                       >
-                        {isStreaming ? <Pause className="w-4 h-4" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
+                        {isStreaming ? <Square className="w-4 h-4 fill-current" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
                       </button>
                     </Tooltip>
                   </div>
@@ -1212,7 +1826,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
               </div>
             )}
-            {messages.filter(m => !m.isToolResult && !m.content?.startsWith("[Tool result for ")).map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={(content) => setValue(content)} isLast={idx === arr.length - 1} />)}
+            {messages.filter(m => !m.isToolResult && !m.content?.startsWith("[Tool result for ")).map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={handleResetToMessage} onResetClick={handleResetClick} isLast={idx === arr.length - 1} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1252,9 +1866,29 @@ Add your project's common commands here so Dalam knows how to build:
         />
       )}
 
+      {/* Reset confirmation dialog */}
+      {resetConfirmState && (
+        <ResetConfirmDialog
+          fileChanges={resetConfirmState.fileChanges}
+          loading={resetConfirmState.loading}
+          onConfirm={handleResetConfirm}
+          onCancel={handleResetCancel}
+        />
+      )}
+
       {/* Only show follow-up input when there are actual messages */}
       {hasMessages && (
         <div className="p-3 flex-shrink-0 bg-dalam-bg-primary">
+          {/* Restore popup — shown after reset */}
+          {showRestorePopup && removedMessagesStack.length > 0 && (
+            <RestorePopup
+              removedMessages={removedMessagesStack.flatMap((g) => g.messages)}
+              onRestore={handleRestoreMessages}
+              onDismiss={handleDismissRestore}
+            />
+          )}
+          {/* Message queue — follow-up messages waiting to be sent */}
+          <MessageQueue />
           <div className="max-w-2xl w-full mx-auto bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
             <div className="px-4 py-3 relative">
               {pendingAttachments.length > 0 && (
@@ -1279,8 +1913,8 @@ Add your project's common commands here so Dalam knows how to build:
                 </div>
               )}
               <textarea ref={followupTextareaRef}
-                className="w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-80"
-                placeholder="Ask for follow-up changes" value={value} onChange={(e) => setValue(e.target.value)}
+                className="chat-input w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-[400px]"
+                placeholder={messageQueue.length > 0 ? "Keep typing to queue follow-up changes" : "Ask for follow-up changes"} value={value} onChange={(e) => setValue(e.target.value)}
                 onKeyDown={handleFollowupKeyDown} rows={1} />
               <PromptAutocomplete
                 value={value}
@@ -1354,7 +1988,7 @@ Add your project's common commands here so Dalam knows how to build:
                   onClick={handleSubmit}
                   title={isStreaming ? "Stop generating" : !workspace ? "Open a folder first" : !selectedModelId ? "Select a model first" : "Send"}
                 >
-                  {isStreaming ? <Pause className="w-4 h-4" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
+                  {isStreaming ? <Square className="w-4 h-4 fill-current" /> : <ArrowUp className="w-4 h-4" strokeWidth={2.5} />}
                 </button>
               </div>
             </div>
@@ -1434,7 +2068,7 @@ function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, provider
 
 const EMPTY_ACTIVITIES: never[] = [];
 
-const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetToMessage, isLast }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; onResetToMessage?: (content: string) => void; isLast?: boolean }) {
+const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetToMessage: _onResetToMessage, onResetClick, isLast }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; onResetToMessage?: (content: string) => void; onResetClick?: (messageId: string, messageContent: string, attachments?: import("@dalam/shared-types").FileAttachment[]) => void; isLast?: boolean }) {
   const toast = useToast();
   const segments = useMemo(() => splitCodeFences(message.content), [message.content]);
   // For settled messages, activities come from message.activities (no store subscription needed).
@@ -1495,22 +2129,7 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
                 <button
                   className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
                   title="Reset to this message"
-                  onClick={() => {
-                    // Save current state as a version before resetting
-                    const chatState = useChat.getState();
-                    if (chatState.activeSessionId && chatState.messages.length > 0) {
-                      chatState.saveVersion(chatState.activeSessionId, "Before reset");
-                    }
-                    // Find all messages after this one and remove them
-                    const msgs = useChat.getState().messages;
-                    const idx = msgs.findIndex((m) => m.id === message.id);
-                    if (idx >= 0) {
-                      const kept = msgs.slice(0, idx + 1);
-                      useChat.setState({ messages: kept });
-                      // Set the message content in the input for editing
-                      onResetToMessage?.(message.content);
-                    }
-                  }}
+                  onClick={() => onResetClick?.(message.id, message.content, message.attachments)}
                 >
                   <RotateCcw className="w-3 h-3" />
                 </button>
@@ -1654,11 +2273,26 @@ const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetT
     ));
   const prevAct = prevProps.message.activities;
   const nextAct = nextProps.message.activities;
-  const actChanged = (prevAct?.length ?? 0) !== (nextAct?.length ?? 0);
+  const actChanged = (prevAct?.length ?? 0) !== (nextAct?.length ?? 0) ||
+    (prevAct && nextAct && prevAct.some((a, i) => {
+      const b = nextAct[i];
+      if (!b || a.type !== b.type) return true;
+      // Compare type-specific fields
+      switch (a.type) {
+        case "think": return b.type === "think" && a.content !== b.content;
+        case "explore": return b.type === "explore" && a.query !== b.query;
+        case "read": return b.type === "read" && a.path !== b.path;
+        case "skill": return b.type === "skill" && a.name !== b.name;
+        case "bash": return b.type === "bash" && (a.command !== b.command || a.result !== b.result);
+        case "plan": return b.type === "plan" && a.plan !== b.plan;
+        default: return false;
+      }
+    }));
   return (
     prevProps.pending === nextProps.pending &&
     prevProps.isLast === nextProps.isLast &&
     prevProps.onResetToMessage === nextProps.onResetToMessage &&
+    prevProps.onResetClick === nextProps.onResetClick &&
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.role === nextProps.message.role &&
@@ -1798,9 +2432,9 @@ const MarkdownContent = React.memo(function MarkdownContent({ content }: { conte
 });
 
 // Lightweight streaming renderer — avoids expensive react-markdown re-parsing on each delta.
-// Falls to raw <pre> display during streaming; switches to full Markdown when settled.
+// Uses full MarkdownContent for short content or when settled; lightweight renderer for long streaming content.
 const StreamingContent = React.memo(function StreamingContent({ content, pending }: { content: string; pending: boolean }) {
-  if (!pending || content.length < 200) {
+  if (!pending || content.length < 100) {
     return <MarkdownContent content={content} />;
   }
   const segments = splitCodeFences(content);
@@ -1809,7 +2443,7 @@ const StreamingContent = React.memo(function StreamingContent({ content, pending
       {segments.map((seg, idx) =>
         seg.type === "code"
           ? <StreamingCodeBlock key={"sc-" + idx} language={seg.language ?? ""} content={seg.content} />
-          : <p key={"st-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0">{seg.content}</p>
+          : <p key={"st-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0 leading-relaxed">{seg.content}</p>
       )}
     </div>
   );
@@ -1865,8 +2499,6 @@ const CodeBlock = React.memo(function CodeBlock({ language, content }: { languag
             >{expanded ? "Collapse" : "Expand"}</button>
           )}
           <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors" onClick={handleApply}>Apply</button>
-          <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
-            onClick={() => { void navigator.clipboard.writeText(content); toast.success("Copied"); }}><Copy className="w-3 h-3" /></button>
         </div>
       </div>
       <pre
@@ -1883,19 +2515,11 @@ const CodeBlock = React.memo(function CodeBlock({ language, content }: { languag
   );
 });
 
-// Streaming code block — shows loading state during stream, full code when complete
+// Streaming code block — shows highlighted code immediately during stream
 const StreamingCodeBlock = React.memo(function StreamingCodeBlock({ language, content }: { language: string; content: string }) {
-  const [isComplete, setIsComplete] = useState(false);
   const lines = content.split("\n");
   const isLong = lines.length > 30;
   const [expanded, setExpanded] = useState(true);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => setIsComplete(true), 200);
-    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
-  }, [content]);
 
   const escapeHtml = useCallback((s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"), []);
   const [highlighted, setHighlighted] = useState(() => escapeHtml(content));
@@ -1906,27 +2530,12 @@ const StreamingCodeBlock = React.memo(function StreamingCodeBlock({ language, co
       } else {
         try { setHighlighted(hljs.highlightAuto(content).value); } catch { setHighlighted(escapeHtml(content)); }
       }
-    }, 150);
+    }, 100);
     return () => clearTimeout(timer);
   }, [content, language, escapeHtml]);
 
-  if (!isComplete) {
-    return (
-      <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary/50 rounded-lg overflow-hidden">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-dalam-bg-tertiary/50 border-b border-dalam-border-primary/50">
-          <Loader2 className="w-3 h-3 animate-spin text-dalam-accent-primary" />
-          <span className="text-[10px] text-dalam-text-muted font-mono">{language || "code"}</span>
-          <span className="text-[10px] text-dalam-text-muted/50">· writing...</span>
-        </div>
-        <div className="p-3 text-[12px] font-mono text-dalam-text-primary/30 h-16 overflow-hidden">
-          <pre className="whitespace-pre-wrap break-words">{content.slice(0, 80)}{content.length > 80 ? "..." : ""}</pre>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden animate-fade-in">
+    <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
         <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted">
           <FileCode className="w-3 h-3" />
@@ -1940,8 +2549,6 @@ const StreamingCodeBlock = React.memo(function StreamingCodeBlock({ language, co
               onClick={() => setExpanded(!expanded)}
             >{expanded ? "Collapse" : "Expand"}</button>
           )}
-          <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
-            onClick={() => { void navigator.clipboard.writeText(content); }}>Copy</button>
         </div>
       </div>
       <pre
@@ -1964,7 +2571,7 @@ function formatTime(ts: number): string {
 
 function splitCodeFences(text: string): { type: "text" | "code"; content: string; language?: string }[] {
   const out: { type: "text" | "code"; content: string; language?: string }[] = [];
-  // Match ```lang\n...``` OR ```lang``` (no newline after opening fence)
+  // Match complete code fences: ```lang\n...```
   const re = /```(\w*)(?:\n([\s\S]*?))?\n?```/g;
   let last = 0;
   let match: RegExpExecArray | null;
@@ -1985,6 +2592,7 @@ function splitCodeFences(text: string): { type: "text" | "code"; content: string
       if (newlineIdx !== -1) {
         const language = codePart.slice(0, newlineIdx).trim();
         const content = codePart.slice(newlineIdx + 1);
+        // Incomplete code fence (no closing ```) — show as code block
         out.push({ type: "code", content, language });
       } else {
         out.push({ type: "code", content: "", language: codePart.trim() });

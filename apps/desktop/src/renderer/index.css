@@ -13,37 +13,37 @@
 :root,
 [data-theme="dark"] {
   /* Surfaces (soft gray — matching Z Code aesthetic) */
-  --dalam-bg-primary: #1E1E1E;
-  --dalam-bg-secondary: #252526;
-  --dalam-bg-tertiary: #2d2d2d;
-  --dalam-bg-hover: #383838;
-  --dalam-bg-active: #444444;
+  --dalam-bg-primary: 30 30 30;
+  --dalam-bg-secondary: 37 37 38;
+  --dalam-bg-tertiary: 45 45 45;
+  --dalam-bg-hover: 56 56 56;
+  --dalam-bg-active: 68 68 68;
   --dalam-bg-overlay: rgba(30, 30, 30, 0.88);
-  --dalam-bg-input: #1a1a1a;
+  --dalam-bg-input: 26 26 26;
 
   /* Borders */
-  --dalam-border-primary: #3c3c3c;
-  --dalam-border-secondary: #4a4a4a;
-  --dalam-border-focus: #4f8ef7;
+  --dalam-border-primary: 60 60 60;
+  --dalam-border-secondary: 74 74 74;
+  --dalam-border-focus: 79 142 247;
 
   /* Text */
-  --dalam-text-primary: #ededed;
-  --dalam-text-secondary: #a8a8a8;
-  --dalam-text-muted: #6e6e6e;
-  --dalam-text-disabled: #4a4a4a;
-  --dalam-text-inverse: #0d0d0d;
+  --dalam-text-primary: 237 237 237;
+  --dalam-text-secondary: 168 168 168;
+  --dalam-text-muted: 110 110 110;
+  --dalam-text-disabled: 74 74 74;
+  --dalam-text-inverse: 13 13 13;
 
   /* Brand / accent */
-  --dalam-accent-primary: #4f8ef7;
-  --dalam-accent-hover: #3a7de4;
+  --dalam-accent-primary: 79 142 247;
+  --dalam-accent-hover: 58 125 228;
   --dalam-accent-subtle: rgba(79, 142, 247, 0.12);
   --dalam-accent-text: #ffffff;
 
   /* Git status */
-  --dalam-git-modified: #e2c08d;
-  --dalam-git-added: #73c991;
-  --dalam-git-deleted: #f06c6c;
-  --dalam-git-untracked: #73c991;
+  --dalam-git-modified: 226 192 141;
+  --dalam-git-added: 115 201 145;
+  --dalam-git-deleted: 240 108 108;
+  --dalam-git-untracked: 115 201 145;
   --dalam-git-modified-bg: rgba(226, 192, 141, 0.12);
   --dalam-git-added-bg: rgba(115, 201, 145, 0.12);
   --dalam-git-deleted-bg: rgba(240, 108, 108, 0.12);
@@ -65,37 +65,37 @@
 [data-theme="light"] {
   color-scheme: light;
   /* Surfaces (clean white — matching Z Code) */
-  --dalam-bg-primary: #ffffff;
-  --dalam-bg-secondary: #f8f8f8;
-  --dalam-bg-tertiary: #f0f0f0;
-  --dalam-bg-hover: #e8e8e8;
-  --dalam-bg-active: #e0e0e0;
+  --dalam-bg-primary: 255 255 255;
+  --dalam-bg-secondary: 248 248 248;
+  --dalam-bg-tertiary: 245 245 245;
+  --dalam-bg-hover: 232 232 232;
+  --dalam-bg-active: 224 224 224;
   --dalam-bg-overlay: rgba(255, 255, 255, 0.92);
-  --dalam-bg-input: #ffffff;
+  --dalam-bg-input: 255 255 255;
 
   /* Borders */
-  --dalam-border-primary: #e0e0e0;
-  --dalam-border-secondary: #d0d0d0;
-  --dalam-border-focus: #2563eb;
+  --dalam-border-primary: 224 224 224;
+  --dalam-border-secondary: 208 208 208;
+  --dalam-border-focus: 37 99 235;
 
   /* Text */
-  --dalam-text-primary: #1a1a1a;
-  --dalam-text-secondary: #4a4a4a;
-  --dalam-text-muted: #7a7a7a;
-  --dalam-text-disabled: #b0b0b0;
-  --dalam-text-inverse: #ffffff;
+  --dalam-text-primary: 26 26 26;
+  --dalam-text-secondary: 74 74 74;
+  --dalam-text-muted: 122 122 122;
+  --dalam-text-disabled: 176 176 176;
+  --dalam-text-inverse: 255 255 255;
 
   /* Brand / accent */
-  --dalam-accent-primary: #2563eb;
-  --dalam-accent-hover: #1d4ed8;
+  --dalam-accent-primary: 37 99 235;
+  --dalam-accent-hover: 29 78 216;
   --dalam-accent-subtle: rgba(37, 99, 235, 0.08);
   --dalam-accent-text: #ffffff;
 
   /* Git status */
-  --dalam-git-modified: #b58800;
-  --dalam-git-added: #1a7f37;
-  --dalam-git-deleted: #cf222e;
-  --dalam-git-untracked: #1a7f37;
+  --dalam-git-modified: 181 136 0;
+  --dalam-git-added: 26 127 55;
+  --dalam-git-deleted: 207 34 46;
+  --dalam-git-untracked: 26 127 55;
   --dalam-git-modified-bg: rgba(181, 136, 0, 0.12);
   --dalam-git-added-bg: rgba(26, 127, 55, 0.10);
   --dalam-git-deleted-bg: rgba(207, 34, 46, 0.10);
@@ -127,8 +127,8 @@
   }
 
   body {
-    background-color: var(--dalam-bg-primary);
-    color: var(--dalam-text-primary);
+    background-color: rgb(var(--dalam-bg-primary));
+    color: rgb(var(--dalam-text-primary));
     font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-feature-settings: "cv11", "ss01", "cv02";
     -webkit-font-smoothing: antialiased;
@@ -151,14 +151,14 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--dalam-bg-hover);
+    background: rgb(var(--dalam-bg-hover));
     border-radius: 6px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--dalam-border-secondary);
+    background: rgb(var(--dalam-border-secondary));
     background-clip: padding-box;
     border: 2px solid transparent;
   }
@@ -173,7 +173,7 @@
   }
 
   :focus-visible {
-    outline: 2px solid var(--dalam-accent-primary);
+    outline: 2px solid rgb(var(--dalam-accent-primary));
     outline-offset: 1px;
     border-radius: 4px;
   }
@@ -198,6 +198,18 @@
     -webkit-backdrop-filter: blur(12px);
   }
 
+  .glass-panel {
+    background: rgb(var(--dalam-bg-secondary) / 0.85);
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+  }
+
+  .glass-subtle {
+    background: rgb(var(--dalam-bg-primary) / 0.92);
+    backdrop-filter: blur(8px) saturate(120%);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+  }
+
   .panel-resizer {
     background: transparent;
     transition: background 150ms ease;
@@ -210,7 +222,7 @@
 
   .panel-resizer:hover,
   .panel-resizer[data-resize-handle-active] {
-    background: var(--dalam-accent-primary);
+    background: rgb(var(--dalam-accent-primary));
   }
 
   .panel-resizer.horizontal::after {
@@ -226,7 +238,7 @@
   }
 
   .skeleton {
-    background: var(--dalam-bg-tertiary);
+    background: rgb(var(--dalam-bg-tertiary));
     border-radius: 0.375rem;
     animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
@@ -234,13 +246,13 @@
   .btn-icon {
     padding: 0.375rem;
     border-radius: 0.375rem;
-    color: var(--dalam-text-secondary);
+    color: rgb(var(--dalam-text-secondary));
     transition: color 120ms ease, background-color 120ms ease, transform 80ms ease;
   }
 
   .btn-icon:hover {
-    color: var(--dalam-text-primary);
-    background-color: var(--dalam-bg-hover);
+    color: rgb(var(--dalam-text-primary));
+    background-color: rgb(var(--dalam-bg-hover));
   }
 
   .btn-icon:active {
@@ -248,28 +260,28 @@
   }
 
   .btn-icon.active {
-    background-color: var(--dalam-bg-active);
-    color: var(--dalam-text-primary);
+    background-color: rgb(var(--dalam-bg-active));
+    color: rgb(var(--dalam-text-primary));
   }
 
   .input-base {
-    background: var(--dalam-bg-input);
-    border: 1px solid var(--dalam-border-primary);
+    background: rgb(var(--dalam-bg-input));
+    border: 1px solid rgb(var(--dalam-border-primary));
     border-radius: 0.375rem;
     padding: 0.375rem 0.75rem;
     font-size: 0.875rem;
-    color: var(--dalam-text-primary);
+    color: rgb(var(--dalam-text-primary));
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
 
   .input-base::placeholder {
-    color: var(--dalam-text-muted);
+    color: rgb(var(--dalam-text-muted));
   }
 
   .input-base:focus {
     outline: none;
-    border-color: var(--dalam-accent-primary);
-    box-shadow: 0 0 0 1px var(--dalam-accent-primary);
+    border-color: rgb(var(--dalam-accent-primary));
+    box-shadow: 0 0 0 1px rgb(var(--dalam-accent-primary));
   }
 
   .chip {
@@ -280,9 +292,9 @@
     border-radius: 0.25rem;
     font-size: 0.625rem;
     font-weight: 500;
-    background: var(--dalam-bg-tertiary);
-    color: var(--dalam-text-secondary);
-    border: 1px solid var(--dalam-border-primary);
+    background: rgb(var(--dalam-bg-tertiary));
+    color: rgb(var(--dalam-text-secondary));
+    border: 1px solid rgb(var(--dalam-border-primary));
   }
 
   .menu-item {
@@ -292,18 +304,18 @@
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     font-size: 0.875rem;
-    color: var(--dalam-text-primary);
+    color: rgb(var(--dalam-text-primary));
     cursor: pointer;
     transition: background-color 120ms ease;
   }
 
   .menu-item:hover {
-    background: var(--dalam-bg-hover);
+    background: rgb(var(--dalam-bg-hover));
   }
 
   .surface {
-    background: var(--dalam-bg-secondary);
-    border: 1px solid var(--dalam-border-primary);
+    background: rgb(var(--dalam-bg-secondary));
+    border: 1px solid rgb(var(--dalam-border-primary));
     border-radius: 0.5rem;
   }
 
@@ -344,12 +356,12 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: var(--dalam-bg-hover);
+    background: rgb(var(--dalam-bg-hover));
     border-radius: 999px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background: var(--dalam-text-muted);
+    background: rgb(var(--dalam-text-muted));
   }
 
   .text-balance {
@@ -363,23 +375,23 @@
 
 @layer utilities {
   .bg-dalam-bg-primary {
-    background-color: var(--dalam-bg-primary);
+    background-color: rgb(var(--dalam-bg-primary));
   }
 
   .bg-dalam-bg-secondary {
-    background-color: var(--dalam-bg-secondary);
+    background-color: rgb(var(--dalam-bg-secondary));
   }
 
   .bg-dalam-bg-tertiary {
-    background-color: var(--dalam-bg-tertiary);
+    background-color: rgb(var(--dalam-bg-tertiary));
   }
 
   .bg-dalam-bg-hover {
-    background-color: var(--dalam-bg-hover);
+    background-color: rgb(var(--dalam-bg-hover));
   }
 
   .bg-dalam-bg-active {
-    background-color: var(--dalam-bg-active);
+    background-color: rgb(var(--dalam-bg-active));
   }
 
   .bg-dalam-bg-overlay {
@@ -387,15 +399,15 @@
   }
 
   .bg-dalam-bg-input {
-    background-color: var(--dalam-bg-input);
+    background-color: rgb(var(--dalam-bg-input));
   }
 
   .bg-dalam-accent-primary {
-    background-color: var(--dalam-accent-primary);
+    background-color: rgb(var(--dalam-accent-primary));
   }
 
   .bg-dalam-accent-hover {
-    background-color: var(--dalam-accent-hover);
+    background-color: rgb(var(--dalam-accent-hover));
   }
 
   .bg-dalam-accent-subtle {
@@ -403,59 +415,59 @@
   }
 
   .text-dalam-text-primary {
-    color: var(--dalam-text-primary);
+    color: rgb(var(--dalam-text-primary));
   }
 
   .text-dalam-text-secondary {
-    color: var(--dalam-text-secondary);
+    color: rgb(var(--dalam-text-secondary));
   }
 
   .text-dalam-text-muted {
-    color: var(--dalam-text-muted);
+    color: rgb(var(--dalam-text-muted));
   }
 
   .text-dalam-text-disabled {
-    color: var(--dalam-text-disabled);
+    color: rgb(var(--dalam-text-disabled));
   }
 
   .text-dalam-accent-primary {
-    color: var(--dalam-accent-primary);
+    color: rgb(var(--dalam-accent-primary));
   }
 
   .text-dalam-accent-hover {
-    color: var(--dalam-accent-hover);
+    color: rgb(var(--dalam-accent-hover));
   }
 
   .text-dalam-git-added {
-    color: var(--dalam-git-added);
+    color: rgb(var(--dalam-git-added));
   }
 
   .text-dalam-git-deleted {
-    color: var(--dalam-git-deleted);
+    color: rgb(var(--dalam-git-deleted));
   }
 
   .text-dalam-git-modified {
-    color: var(--dalam-git-modified);
+    color: rgb(var(--dalam-git-modified));
   }
 
   .text-dalam-git-untracked {
-    color: var(--dalam-git-untracked);
+    color: rgb(var(--dalam-git-untracked));
   }
 
   .border-dalam-border-primary {
-    border-color: var(--dalam-border-primary);
+    border-color: rgb(var(--dalam-border-primary));
   }
 
   .border-dalam-border-secondary {
-    border-color: var(--dalam-border-secondary);
+    border-color: rgb(var(--dalam-border-secondary));
   }
 
   .border-dalam-border-focus {
-    border-color: var(--dalam-border-focus);
+    border-color: rgb(var(--dalam-border-focus));
   }
 
   .border-dalam-accent-primary {
-    border-color: var(--dalam-accent-primary);
+    border-color: rgb(var(--dalam-accent-primary));
   }
 
   .bg-dalam-git-added {
@@ -471,29 +483,30 @@
   }
 }
 
-/* Color-mix helpers for opacity variants */
+/* Color-mix helpers for opacity variants — Tailwind handles these via rgb() vars now,
+   but these provide fallback for any edge cases */
 .text-dalam-text-muted\/30 {
-  color: color-mix(in srgb, var(--dalam-text-muted) 30%, transparent);
+  color: rgb(var(--dalam-text-muted) / 0.3);
 }
 
 .text-dalam-text-muted\/40 {
-  color: color-mix(in srgb, var(--dalam-text-muted) 40%, transparent);
+  color: rgb(var(--dalam-text-muted) / 0.4);
 }
 
 .text-dalam-text-muted\/50 {
-  color: color-mix(in srgb, var(--dalam-text-muted) 50%, transparent);
+  color: rgb(var(--dalam-text-muted) / 0.5);
 }
 
 .text-dalam-text-muted\/60 {
-  color: color-mix(in srgb, var(--dalam-text-muted) 60%, transparent);
+  color: rgb(var(--dalam-text-muted) / 0.6);
 }
 
 .border-dalam-border-primary\/30 {
-  border-color: color-mix(in srgb, var(--dalam-border-primary) 30%, transparent);
+  border-color: rgb(var(--dalam-border-primary) / 0.3);
 }
 
 .text-dalam-text-primary\/50 {
-  color: color-mix(in srgb, var(--dalam-text-primary) 50%, transparent);
+  color: rgb(var(--dalam-text-primary) / 0.5);
 }
 
 .bg-black\/60 {
@@ -586,21 +599,21 @@
 }
 
 [data-theme="light"] .text-dalam-git-modified {
-  color: #b58800;
+  color: rgb(181 136 0);
 }
 
 [data-theme="light"] .text-dalam-git-added {
-  color: #1a7f37;
+  color: rgb(26 127 55);
 }
 
 [data-theme="light"] .text-dalam-git-deleted {
-  color: #cf222e;
+  color: rgb(207 34 46);
 }
 
 /* Monaco editor background fix for light theme */
 [data-theme="light"] .monaco-editor,
 [data-theme="light"] .monaco-editor .overflow-guard {
-  background-color: var(--dalam-bg-primary) !important;
+  background-color: rgb(var(--dalam-bg-primary)) !important;
 }
 
 /* xterm overrides */
@@ -619,7 +632,16 @@
 button,
 [role="button"],
 a {
-  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, transform 80ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+/* Subtle focus ring for input elements — exclude chat input */
+input:focus-visible,
+textarea:not(.chat-input):focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: rgb(var(--dalam-accent-primary));
+  box-shadow: 0 0 0 2px rgb(var(--dalam-accent-primary) / 0.15);
 }
 
 kbd {
@@ -629,7 +651,7 @@ kbd {
 /* Markdown prose styles for chat */
 .prose-dalam {
   user-select: text;
-  color: var(--dalam-text-primary);
+  color: rgb(var(--dalam-text-primary));
 }
 
 .prose-dalam p {
@@ -646,7 +668,7 @@ kbd {
 
 .prose-dalam strong {
   font-weight: 600;
-  color: var(--dalam-text-primary);
+  color: rgb(var(--dalam-text-primary));
 }
 
 .prose-dalam em {
@@ -654,7 +676,7 @@ kbd {
 }
 
 .prose-dalam a {
-  color: var(--dalam-accent-primary);
+  color: rgb(var(--dalam-accent-primary));
   text-decoration: none;
 }
 
@@ -693,10 +715,10 @@ kbd {
 .prose-dalam code {
   font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
   font-size: 0.8em;
-  background: var(--dalam-bg-tertiary);
+  background: rgb(var(--dalam-bg-tertiary));
   padding: 0.15em 0.35em;
   border-radius: 0.25rem;
-  color: var(--dalam-accent-primary);
+  color: rgb(var(--dalam-accent-primary));
 }
 
 .prose-dalam pre code {
@@ -708,16 +730,16 @@ kbd {
 }
 
 .prose-dalam blockquote {
-  border-left: 3px solid var(--dalam-accent-primary);
+  border-left: 3px solid rgb(var(--dalam-accent-primary));
   padding-left: 0.75em;
   margin: 0.5em 0;
-  color: var(--dalam-text-muted);
+  color: rgb(var(--dalam-text-muted));
   font-style: italic;
 }
 
 .prose-dalam hr {
   border: none;
-  border-top: 1px solid var(--dalam-border-primary);
+  border-top: 1px solid rgb(var(--dalam-border-primary));
   margin: 0.75em 0;
 }
 
@@ -729,7 +751,7 @@ kbd {
 
 .prose-dalam th,
 .prose-dalam td {
-  border: 1px solid var(--dalam-border-primary);
+  border: 1px solid rgb(var(--dalam-border-primary));
   padding: 0.35em 0.65em;
   text-align: left;
   font-size: 0.8em;
@@ -737,7 +759,7 @@ kbd {
 
 .prose-dalam th {
   font-weight: 600;
-  background: var(--dalam-bg-tertiary);
+  background: rgb(var(--dalam-bg-tertiary));
 }
 
 .prose-dalam img {
@@ -753,7 +775,50 @@ kbd {
 
 .prose-dalam input[type="checkbox"] {
   margin-right: 0.35em;
-  accent-color: var(--dalam-accent-primary);
+  accent-color: rgb(var(--dalam-accent-primary));
+}
+
+/* ============================================================================
+   Status dot animations
+   ============================================================================ */
+
+@keyframes status-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
+}
+
+@keyframes status-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes status-breathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0);
+  }
+}
+
+.status-dot-running {
+  animation: status-breathe 1.5s ease-in-out infinite;
+}
+
+.status-dot-questioning {
+  animation: status-pulse 1s ease-in-out infinite;
 }
 
 /* ============================================================================
@@ -855,7 +920,7 @@ kbd {
   display: inline-block;
   width: 3px;
   height: 100%;
-  background: var(--dalam-accent-primary);
+  background: rgb(var(--dalam-accent-primary));
   border-radius: 2px;
   animation: thinking-wave 1.2s ease-in-out infinite;
 }

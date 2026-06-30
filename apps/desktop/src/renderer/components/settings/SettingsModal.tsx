@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
-  useSettingsView, useSettings, useSkillsMcp, useModelProviders, useAgents, useWorkspace,
-  type SettingsTab, type ModelProvider, type PrimaryAgentName, type AgentInfo, type PermissionRule, type PermissionAction,
+  useSettingsView, useSettings, useSkillsMcp, useModelProviders, useWorkspace,
+  type SettingsTab, type ModelProvider,
 } from "@/store/useAppStore";
 import { useToasts, useToast } from "@/components/ui/toastStore";
 import { createDalamAPI } from "@/lib/dalamAPI";
@@ -13,7 +13,7 @@ import { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder
 import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
   Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
-  Bot, Zap, ClipboardList, FolderOpen, Shield, CheckCircle2, Network,
+  Zap, ClipboardList, FolderOpen, CheckCircle2, Network,
   Info, MessageSquare,
 } from "lucide-react";
 
@@ -81,8 +81,8 @@ export function SettingsModal() {
             {activeTab === "skills" && <SkillsTab />}
             {activeTab === "mcp" && <McpTab />}
             {activeTab === "memory-graph" && <MemoryGraphTab />}
-            {activeTab === "plugins" && <PluginsTab />}              {activeTab === "connectors" && <ConnectorsTab />}
-
+            {activeTab === "plugins" && <PluginsTab />}
+            {activeTab === "connectors" && <ConnectorsTab />}
             {activeTab === "commands" && <CommandsTab />}
             {activeTab === "indexing" && <IndexingTab />}
             {activeTab === "onboard" && <OnboardTab />}
@@ -99,16 +99,6 @@ function Card({ title, description, children }: { title: string; description?: s
       <div className="mb-4"><h3 className="text-sm font-medium text-dalam-text-primary">{title}</h3>{description && <p className="text-xs text-dalam-text-muted mt-1">{description}</p>}</div>
       {children}
     </div>
-  );
-}
-
-function Section({ title, hint, children }: { title: string; hint?: string; children?: React.ReactNode }) {
-  return (
-    <section className="mb-8">
-      <h3 className="text-xs uppercase tracking-wider text-dalam-text-muted mb-1">{title}</h3>
-      {hint && <p className="text-xs text-dalam-text-muted mb-3">{hint}</p>}
-      {children}
-    </section>
   );
 }
 
@@ -133,7 +123,7 @@ function GeneralTab() {
       <Card title="Theme" description="Choose the appearance theme used by the application UI.">
         <div className="flex justify-end">
           <div className="relative">
-            <select className="input-base w-48 appearance-none pr-8" value={settings.theme} onChange={(e) => update("theme", e.target.value as any)}>
+            <select className="input-base w-48 appearance-none pr-8" value={settings.theme} onChange={(e) => update("theme", e.target.value as "dark" | "light" | "system")}>
               <option value="dark">Dark</option>
               <option value="light">Light</option>
               <option value="system">System default</option>
@@ -201,11 +191,20 @@ function CodePreviewTab() {
       <Card title="Dark code theme" description="Theme used for code blocks while the interface is in dark mode.">
         <div className="flex justify-end"><div className="relative"><select className="input-base w-56 appearance-none pr-8" value={settings.codeThemeDark} onChange={(e) => update("codeThemeDark", e.target.value)}><option value="dalam-dark">Dalam Dark</option><option value="github-dark">GitHub Dark</option><option value="one-dark">One Dark</option><option value="dracula">Dracula</option></select><ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dalam-text-muted pointer-events-none" /></div></div>
       </Card>
-      <Card title="Show line numbers" description="Display line numbers in code previews.">
-        <div className="flex justify-end"><Toggle checked={settings.showLineNumbers} onChange={() => update("showLineNumbers", !settings.showLineNumbers)} label="Show line numbers in code previews" /></div>
+      <Card title="Show line numbers" description="Display line numbers in the code editor.">
+        <div className="flex justify-end"><Toggle checked={settings.showLineNumbers} onChange={() => update("showLineNumbers", !settings.showLineNumbers)} label="Show line numbers" /></div>
       </Card>
-      <Card title="Wrap long lines" description="Wrap long content inside the preview area automatically.">
-        <div className="flex justify-end"><Toggle checked={settings.wordWrap} onChange={() => update("wordWrap", !settings.wordWrap)} label="Wrap long lines inside preview area" /></div>
+      <Card title="Wrap long lines" description="Wrap long content inside the editor automatically.">
+        <div className="flex justify-end"><Toggle checked={settings.wordWrap} onChange={() => update("wordWrap", !settings.wordWrap)} label="Wrap long lines" /></div>
+      </Card>
+      <Card title="Minimap" description="Show a minimap overview of the code on the right side of the editor.">
+        <div className="flex justify-end"><Toggle checked={settings.showMinimap ?? true} onChange={() => update("showMinimap", !(settings.showMinimap ?? true))} label="Show minimap" /></div>
+      </Card>
+      <Card title="Indent guides" description="Show vertical lines to guide indentation levels.">
+        <div className="flex justify-end"><Toggle checked={settings.showIndentGuides ?? true} onChange={() => update("showIndentGuides", !(settings.showIndentGuides ?? true))} label="Show indent guides" /></div>
+      </Card>
+      <Card title="Bracket pair colorization" description="Colorize matching brackets with different colors for easier identification.">
+        <div className="flex justify-end"><Toggle checked={settings.bracketPairColorization ?? true} onChange={() => update("bracketPairColorization", !(settings.bracketPairColorization ?? true))} label="Enable bracket pair colorization" /></div>
       </Card>
       <Card title="Code font size" description="Adjust the default font size used by code previews.">
         <div className="flex items-center gap-4">
@@ -337,6 +336,12 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
   const [testError, setTestError] = useState("");
   const [showAddModel, setShowAddModel] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   if (provider.type === "custom") return <CustomProviderDetail key={provider.id} provider={provider} />;
 
@@ -371,7 +376,8 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
               ? { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
               : { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
           ),
-        });
+          signal: ac.signal,
+        } as RequestInit);
         resp = {
           ok: tauriResp.ok,
           status: tauriResp.status,
@@ -394,6 +400,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
         });
       }
       clearTimeout(timeoutId);
+      if (!mountedRef.current) return;
       if (resp.ok) {
         setTestStatus("ok");
         updateProvider(provider.id, { models: provider.models.map(m => m.modelId === modelId ? { ...m, connected: true } : m) });
@@ -404,6 +411,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
       }
     } catch (err) {
       clearTimeout(timeoutId);
+      if (!mountedRef.current) return;
       setTestStatus("error");
       setTestError(ac.signal.aborted ? "Connection timed out (15s)" : String(err));
     }
@@ -699,45 +707,6 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
 // ============================================================================
 // Subagents section (single mode — no primary agent selection)
 // ============================================================================
-
-function SubagentsSection() {
-  const { agents } = useAgents();
-  const subagents = agents.filter((a) => a.mode === "subagent");
-
-  return (
-    <Section
-      title="Subagents"
-      hint="Specialized agents the primary agent can delegate to. Subagents run in their own context and return a summary."
-    >
-      <div className="border border-dalam-border-primary rounded-lg overflow-hidden">
-        {subagents.map((agent: AgentInfo, idx: number) => (
-          <div
-            key={agent.name}
-            className={`flex items-start gap-3 px-3 py-2.5 hover:bg-dalam-bg-hover transition-colors ${
-              idx < subagents.length - 1 ? "border-b border-dalam-border-primary" : ""
-            }`}
-          >
-            <div className="w-8 h-8 rounded-md bg-dalam-bg-tertiary flex items-center justify-center flex-shrink-0 mt-0.5">
-              <Bot className="w-4 h-4 text-dalam-text-muted" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-dalam-text-primary font-medium">{agent.name}</span>
-                {agent.color && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: agent.color }} />}
-                <span className="chip">{agent.category}</span>
-                {agent.native && <span className="chip text-dalam-accent-primary">built-in</span>}
-              </div>
-              <div className="text-xs text-dalam-text-muted mt-0.5">{agent.description}</div>
-              <div className="mt-1 text-[10px] text-dalam-text-muted font-mono">
-                {agent.permission.length} permission rules
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </Section>
-  );
-}
 
 function SkillsTab() {
   const { skills, toggleSkill, addSkill, removeSkill } = useSkillsMcp();
@@ -1442,14 +1411,27 @@ function ConnectorsTab() {
 
 function CommandsTab() {
   const mod = modKey();
-  const [commands, setCommands] = useState<{ id: string; name: string; shortcut: string; description: string }[]>([
-    { id: "new-chat", name: "New task", shortcut: `${mod}N`, description: "Start a new chat session" },
-    { id: "toggle-sidebar", name: "Toggle sidebar", shortcut: `${mod}B`, description: "Show or hide the sidebar" },
-    { id: "open-settings", name: "Open settings", shortcut: `${mod},`, description: "Open the settings panel" },
-    { id: "command-palette", name: "Command palette", shortcut: `${mod}K`, description: "Open the command palette" },
-    { id: "toggle-panel", name: "Toggle panel", shortcut: `${mod}J`, description: "Show or hide the right panel" },
-  ]);
+  const [commands, setCommands] = useState<{ id: string; name: string; shortcut: string; description: string }[]>(() => {
+    const defaults = [
+      { id: "new-chat", name: "New task", shortcut: `${mod}N`, description: "Start a new chat session" },
+      { id: "toggle-sidebar", name: "Toggle sidebar", shortcut: `${mod}B`, description: "Show or hide the sidebar" },
+      { id: "open-settings", name: "Open settings", shortcut: `${mod},`, description: "Open the settings panel" },
+      { id: "command-palette", name: "Command palette", shortcut: `${mod}K`, description: "Open the command palette" },
+      { id: "toggle-panel", name: "Toggle panel", shortcut: `${mod}J`, description: "Show or hide the right panel" },
+    ];
+    try {
+      const saved = localStorage.getItem("dalam.commands.shortcuts");
+      if (saved) {
+        const savedMap = new Map<string, string>(JSON.parse(saved).map((s: { id: string; shortcut: string }) => [s.id, s.shortcut]));
+        return defaults.map((d) => savedMap.has(d.id) ? { ...d, shortcut: savedMap.get(d.id)! } : d);
+      }
+    } catch { /* ignore */ }
+    return defaults;
+  });
   const [editing, setEditing] = useState<string | null>(null);
+  const commandsRef = useRef(commands);
+  // Update ref after render (not during render)
+  useEffect(() => { commandsRef.current = commands; });
 
   useEffect(() => {
     if (!editing) return;
@@ -1465,15 +1447,14 @@ function CommandsTab() {
       if (e.shiftKey) parts.push(platform() === "mac" ? "⇧" : "Shift");
       const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
       parts.push(key);
-      // Compute updated array BEFORE setting state, so both state and localStorage use the same data
-      const updated = commands.map((c) => c.id === editing ? { ...c, shortcut: parts.join(platform() === "mac" ? "" : " ") } : c);
+      const updated = commandsRef.current.map((c) => c.id === editing ? { ...c, shortcut: parts.join(platform() === "mac" ? "" : " ") } : c);
       setCommands(updated);
       setEditing(null);
       localStorage.setItem("dalam.commands.shortcuts", JSON.stringify(updated.map((c) => ({ id: c.id, shortcut: c.shortcut }))));
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [editing, commands]);
+  }, [editing]);
 
   return (
     <>

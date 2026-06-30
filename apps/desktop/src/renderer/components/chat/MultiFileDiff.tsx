@@ -36,35 +36,33 @@ export const MultiFileDiffSummary: React.FC = () => {
   const totalDeletions = pendingDiffs.reduce((s, d) => s + d.deletions, 0);
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-border bg-surface/50 overflow-hidden">
+    <div className="mx-4 mb-3 rounded-lg border border-dalam-border-primary bg-dalam-bg-secondary/50 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-surface">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-dalam-border-primary bg-dalam-bg-secondary">
         <div className="flex items-center gap-2 text-sm">
-          <span className="font-medium">
+          <span className="font-medium text-dalam-text-primary">
             {pendingDiffs.length} file{pendingDiffs.length !== 1 ? "s" : ""} changed
           </span>
-          <span className="text-xs text-green-500">+{totalAdditions}</span>
-          <span className="text-xs text-red-500">-{totalDeletions}</span>
+          <span className="text-xs text-dalam-git-added">+{totalAdditions}</span>
+          <span className="text-xs text-dalam-git-deleted">-{totalDeletions}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => {
-              // Snapshot IDs before approving to avoid race with state changes
               const ids = pendingDiffs.map((d) => d.id);
               ids.forEach((id) => resolveToolApproval(id, "approved"));
             }}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-added/80 hover:bg-dalam-git-added text-white rounded transition-colors"
           >
             <Check size={12} />
             Approve All
           </button>
           <button
             onClick={() => {
-              // Snapshot IDs before rejecting to avoid race with state changes
               const ids = pendingDiffs.map((d) => d.id);
               ids.forEach((id) => resolveToolApproval(id, "denied"));
             }}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-deleted/80 hover:bg-dalam-git-deleted text-white rounded transition-colors"
           >
             <X size={12} />
             Reject All
@@ -73,30 +71,30 @@ export const MultiFileDiffSummary: React.FC = () => {
       </div>
 
       {/* File list */}
-      <div className="divide-y divide-border">
+      <div className="divide-y divide-dalam-border-primary">
         {pendingDiffs.map((diff) => (
           <div
             key={diff.id}
-            className="flex items-center justify-between px-3 py-1.5 hover:bg-surface-hover transition-colors"
+            className="flex items-center justify-between px-3 py-1.5 hover:bg-dalam-bg-hover transition-colors"
           >
             <div className="flex items-center gap-2 min-w-0">
-              <FileText size={14} className="text-muted shrink-0" />
-              <span className="text-xs font-mono truncate">{diff.filePath}</span>
+              <FileText size={14} className="text-dalam-text-muted shrink-0" />
+              <span className="text-xs font-mono truncate text-dalam-text-primary">{diff.filePath}</span>
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <span className="text-[10px] text-green-500">+{diff.additions}</span>
-              <span className="text-[10px] text-red-500">-{diff.deletions}</span>
+              <span className="text-[10px] text-dalam-git-added">+{diff.additions}</span>
+              <span className="text-[10px] text-dalam-git-deleted">-{diff.deletions}</span>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => resolveToolApproval(diff.id, "approved")}
-                  className="p-0.5 text-green-500 hover:text-green-400 transition-colors"
+                  className="p-0.5 text-dalam-git-added hover:opacity-80 transition-colors"
                   title="Approve"
                 >
                   <Check size={12} />
                 </button>
                 <button
                   onClick={() => resolveToolApproval(diff.id, "denied")}
-                  className="p-0.5 text-red-500 hover:text-red-400 transition-colors"
+                  className="p-0.5 text-dalam-git-deleted hover:opacity-80 transition-colors"
                   title="Reject"
                 >
                   <X size={12} />
