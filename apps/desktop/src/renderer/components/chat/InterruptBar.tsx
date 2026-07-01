@@ -28,6 +28,17 @@ export const InterruptBar: React.FC = () => {
     }
   }, [showRedirect]);
 
+  // Clear redirect UI when streaming ends
+  useEffect(() => {
+    if (!isStreaming) {
+      const id = requestAnimationFrame(() => {
+        setShowRedirect(false);
+        setRedirectText("");
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [isStreaming]);
+
   if (!isStreaming || !activeSessionId) return null;
 
   return (
@@ -69,6 +80,10 @@ export const InterruptBar: React.FC = () => {
                 setRedirectText("");
                 setShowRedirect(false);
                 await abort(activeSessionId);
+                const deadline = Date.now() + 5000;
+                while (useChat.getState().isStreaming && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, 50));
+                }
                 sendMessage(text);
               }
               if (e.key === "Escape") {
@@ -86,6 +101,10 @@ export const InterruptBar: React.FC = () => {
                 setRedirectText("");
                 setShowRedirect(false);
                 await abort(activeSessionId);
+                const deadline = Date.now() + 5000;
+                while (useChat.getState().isStreaming && Date.now() < deadline) {
+                  await new Promise((r) => setTimeout(r, 50));
+                }
                 sendMessage(text);
               }
             }}

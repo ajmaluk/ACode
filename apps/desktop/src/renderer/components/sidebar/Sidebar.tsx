@@ -8,7 +8,6 @@ import {
   useQuestion,
   useCommandPalette,
   useUI,
-  useGit,
 } from "@/store/useAppStore";
 import { shortcut, modKey } from "@/lib/platform";
 import {
@@ -28,7 +27,6 @@ import {
   Undo2,
   MoreVertical,
   List,
-  ArrowLeft,
   MessageSquarePlus,
   Zap,
   Webhook,
@@ -215,6 +213,8 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
                   });
                 }
               }}
+              aria-expanded={!!menuPosition}
+              aria-haspopup="menu"
             >
               <MoreVertical className="w-3 h-3 text-dalam-text-muted" />
             </button>
@@ -224,15 +224,16 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
                   className="fixed bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1 w-40"
                   style={{ top: menuPosition.top, left: menuPosition.left }}
                   data-session-menu
+                  role="menu"
                 >
-                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); setEditing(true); setMenuPosition(null); }}>
+                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" role="menuitem" onClick={(e) => { e.stopPropagation(); setEditing(true); setMenuPosition(null); }}>
                     <Pencil className="w-3 h-3" /> Rename
                   </button>
-                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onShowVersions(); setMenuPosition(null); }}>
+                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" role="menuitem" onClick={(e) => { e.stopPropagation(); onShowVersions(); setMenuPosition(null); }}>
                     <History className="w-3 h-3" /> Versions
                   </button>
-                  <div className="border-t border-dalam-border-primary my-1" />
-                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2" onClick={(e) => { e.stopPropagation(); onRemove(); setMenuPosition(null); }}>
+                  <div className="border-t border-dalam-border-primary my-1" role="separator" />
+                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2" role="menuitem" onClick={(e) => { e.stopPropagation(); onRemove(); setMenuPosition(null); }}>
                     <Trash2 className="w-3 h-3" /> Delete
                   </button>
                 </div>,
@@ -654,19 +655,19 @@ export function Sidebar() {
               <div
                 className={`relative w-full text-left pl-2 pr-2 py-1.5 flex items-center gap-1.5 group/workspace rounded-lg mx-1 transition-colors ${
                   dragId === ws.id ? "bg-dalam-bg-tertiary opacity-50" : ""
-                } ${isDragOver && dragId !== ws.id ? "bg-dalam-bg-tertiary" : ""
-                } ${ws.id === activeWorkspaceId && !dragId && !isDragOver ? "bg-dalam-bg-active" : ""}`}
+                } ${isDragOver && dragId !== ws.id ? "bg-dalam-bg-tertiary" : ""}`}
+                draggable
+                onDragStart={(e) => handleDragStart(e, ws.id)}
               >
-                {/* Drag handle — only this initiates drag */}
+                {/* Drag handle visual indicator */}
                 <div
                   className="absolute left-0 top-0 bottom-0 w-5 flex items-center justify-center opacity-0 group-hover/workspace:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, ws.id)}
                 >
                   <GripVertical className="w-3 h-3 text-dalam-text-muted/50" />
                 </div>
                 <button
                   className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+                  draggable={false}
                   onClick={() => {
                     if (!isDragging) {
                       toggleWorkspace(ws.id);
@@ -691,10 +692,11 @@ export function Sidebar() {
                 </button>
 
                 {/* Workspace action icons - visible on hover, positioned absolute */}
-                <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5 bg-dalam-bg-tertiary rounded px-0.5">
+                <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5 bg-dalam-bg-tertiary rounded px-0.5" draggable={false}>
                   <Tooltip content="Show files" side="top">
                     <button
                        className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                       draggable={false}
                         onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); useUI.getState().setViewMode("editor"); }}
                     >
                       <List className="w-3.5 h-3.5 text-dalam-text-muted" />
@@ -703,29 +705,33 @@ export function Sidebar() {
                       <Tooltip content="New task" side="top">
                         <button
                           className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                          draggable={false}
                          onClick={() => handleNewTask(ws.id)}
                        >
                       <MessageSquarePlus className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                   <div className="relative" data-workspace-menu>
-                     <Tooltip content="More" side="top">
-                       <button
-                         className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
-                         onClick={(e) => {
-                          e.stopPropagation();
-                          if (workspaceMenuPosition && workspaceMenuPosition.id === ws.id) {
-                            setWorkspaceMenuPosition(null);
-                          } else {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            setWorkspaceMenuPosition({
-                              id: ws.id,
-                              top: rect.bottom + 4,
-                              left: rect.right - 144
-                            });
-                          }
-                        }}
-                      >
+                    <div className="relative" data-workspace-menu>
+                      <Tooltip content="More" side="top">
+                        <button
+                          className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                          draggable={false}
+                          onClick={(e) => {
+                           e.stopPropagation();
+                           if (workspaceMenuPosition && workspaceMenuPosition.id === ws.id) {
+                             setWorkspaceMenuPosition(null);
+                           } else {
+                             const rect = e.currentTarget.getBoundingClientRect();
+                             setWorkspaceMenuPosition({
+                               id: ws.id,
+                               top: rect.bottom + 4,
+                               left: rect.right - 144
+                             });
+                           }
+                         }}
+                          aria-expanded={workspaceMenuPosition?.id === ws.id}
+                          aria-haspopup="menu"
+                        >
                         <MoreVertical className="w-3.5 h-3.5 text-dalam-text-muted" />
                       </button>
                     </Tooltip>
@@ -735,9 +741,11 @@ export function Sidebar() {
                           className="fixed bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1 w-36"
                           style={{ top: workspaceMenuPosition.top, left: workspaceMenuPosition.left }}
                           data-workspace-menu
+                          role="menu"
                         >
                           <button
                             className="w-full text-left px-2.5 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
+                            role="menuitem"
                             onClick={(e) => {
                               e.stopPropagation();
                               removeWorkspace(ws.id);

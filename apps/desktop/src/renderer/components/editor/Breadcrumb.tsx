@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useCallback } from "react";
 import { useWorkspace } from "@/store/useAppStore";
 import { useToast } from "@/components/ui/toastStore";
 import { ChevronRight, FileCode, Copy, TerminalSquare, FolderSearch } from "lucide-react";
@@ -17,8 +17,12 @@ export function Breadcrumb() {
   const parts = activeFilePath ? splitPath(activeFilePath) : [];
   const totalSegments = parts.length; // parts includes filename at the end
 
-  // Reset focus when file changes
-  useEffect(() => { setFocused(null); }, [activeFilePath]);
+  // Reset focus when file changes (render-phase state adjustment per React docs)
+  const [prevFilePath, setPrevFilePath] = useState(activeFilePath);
+  if (activeFilePath !== prevFilePath) {
+    setPrevFilePath(activeFilePath);
+    setFocused(null);
+  }
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!totalSegments) return;

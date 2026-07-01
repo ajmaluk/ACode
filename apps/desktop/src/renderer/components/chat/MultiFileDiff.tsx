@@ -9,13 +9,14 @@
  * ============================================================
  */
 
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { useChat } from "@/store/useAppStore";
 import { Check, X, FileText } from "lucide-react";
 
 export const MultiFileDiffSummary: React.FC = () => {
   const pendingToolCalls = useChat((s) => s.pendingToolCalls);
   const resolveToolApproval = useChat((s) => s.resolveToolApproval);
+  const [batchResolving, setBatchResolving] = useState(false);
 
   // Collect all pending diffs
   const pendingDiffs = useMemo(() => {
@@ -48,21 +49,37 @@ export const MultiFileDiffSummary: React.FC = () => {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => {
-              const ids = pendingDiffs.map((d) => d.id);
-              ids.forEach((id) => resolveToolApproval(id, "approved"));
+            onClick={async () => {
+              setBatchResolving(true);
+              try {
+                const ids = pendingDiffs.map((d) => d.id);
+                await Promise.all(ids.map((id) => resolveToolApproval(id, "approved")));
+              } catch {
+                // Individual failures handled upstream by resolveToolApproval
+              } finally {
+                setBatchResolving(false);
+              }
             }}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-added/80 hover:bg-dalam-git-added text-white rounded transition-colors"
+            disabled={batchResolving}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-added/80 hover:bg-dalam-git-added text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Check size={12} />
             Approve All
           </button>
           <button
-            onClick={() => {
-              const ids = pendingDiffs.map((d) => d.id);
-              ids.forEach((id) => resolveToolApproval(id, "denied"));
+            onClick={async () => {
+              setBatchResolving(true);
+              try {
+                const ids = pendingDiffs.map((d) => d.id);
+                await Promise.all(ids.map((id) => resolveToolApproval(id, "denied")));
+              } catch {
+                // Individual failures handled upstream by resolveToolApproval
+              } finally {
+                setBatchResolving(false);
+              }
             }}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-deleted/80 hover:bg-dalam-git-deleted text-white rounded transition-colors"
+            disabled={batchResolving}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-deleted/80 hover:bg-dalam-git-deleted text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X size={12} />
             Reject All

@@ -593,7 +593,7 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
 }
 
 function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
-  const { resolveToolApproval } = useChat();
+  const resolveToolApproval = useChat((s) => s.resolveToolApproval);
   const openDiff = useDiffView((s) => s.openFile);
   const needsApproval = toolCall.status === "awaiting-approval";
   const [resolving, setResolving] = useState(false);
@@ -680,8 +680,11 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
               disabled={resolving}
               onClick={async () => {
                 setResolving(true);
-                await resolveToolApproval(toolCall.id, "approved", "Approved by user");
-                setResolving(false);
+                try {
+                  await resolveToolApproval(toolCall.id, "approved", "Approved by user");
+                } finally {
+                  setResolving(false);
+                }
               }}
               className="flex items-center gap-1 px-2 py-1 bg-dalam-git-added/20 hover:bg-dalam-git-added/30 text-dalam-git-added text-xs rounded transition-colors disabled:opacity-50"
             >
@@ -691,8 +694,11 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
               disabled={resolving}
               onClick={async () => {
                 setResolving(true);
-                await resolveToolApproval(toolCall.id, "denied", "Denied by user");
-                setResolving(false);
+                try {
+                  await resolveToolApproval(toolCall.id, "denied", "Denied by user");
+                } finally {
+                  setResolving(false);
+                }
               }}
               className="flex items-center gap-1 px-2 py-1 bg-dalam-git-deleted/20 hover:bg-dalam-git-deleted/30 text-dalam-git-deleted text-xs rounded transition-colors disabled:opacity-50"
             >

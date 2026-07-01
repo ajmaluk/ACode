@@ -30,6 +30,7 @@ export function revealInFinder(path: string): void {
 export function openInTerminal(path: string): void {
   useTerminal.getState().ensureTabForCwd(path);
   const ui = useUI.getState();
+  if (ui.viewMode !== "editor") ui.setViewMode("editor");
   ui.setBottomPanelTab("terminal");
   ui.setBottomPanelOpen(true);
 }

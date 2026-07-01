@@ -94,6 +94,8 @@ const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
  * Also handles malformed XML (unescaped quotes in attributes, broken tags).
  */
 export function stripXmlToolCallTags(content: string): string {
+  // Fast path: skip all regex if content has no angle brackets
+  if (!content.includes("<")) return content;
   let result = content;
   // Strip opening+content+closing blocks: <tool ...>content</tool>
   // and self-closing tags: <tool .../>
@@ -178,7 +180,7 @@ export function parseXmlToolCalls(content: string): {
     }
 
     toolCalls.push({
-      id: "xml-tc-" + Math.random().toString(36).slice(2, 9),
+      id: "xml-tc-" + crypto.randomUUID(),
       name: toolName,
       args,
       status: "completed" as const,
@@ -232,7 +234,10 @@ export const useSettings = create<SettingsState>((set, get) => ({
         loaded: true,
       }));
       if (all.selectedModel) {
-        useChat.getState().setSelectedModel(all.selectedModel);
+        // Use event bus instead of direct getState() call to avoid circular dependency
+        import("./events").then(({ eventBus }) => {
+          eventBus.emit("chat:model-selected", { modelId: all.selectedModel! });
+        });
       }
     } catch (err) {
       console.error("Failed to load settings, using defaults:", err);
@@ -305,7 +310,7 @@ function loadPersistedWorkspaces(): { workspaces: Workspace[]; activeId: string 
         activeId: data.activeId ?? null,
       };
     }
-  } catch { /* ignore */ }
+  } catch { console.warn("[Storage] Failed to load persisted workspaces"); }
   return { workspaces: [], activeId: null };
 }
 
@@ -434,10 +439,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
   setActiveWorkspace(id) {
     // Abort any active streaming session before switching
-    const { session, isStreaming } = useChat.getState();
-    if (session && isStreaming) {
-      void useChat.getState().abort(session.id).catch(() => {});
-    }
+    // Use event bus to avoid circular dependency
+    import("./events").then(({ eventBus }) => {
+      eventBus.emit("workspace:switched", { workspaceId: id, path: "" });
+    });
     // Clear all open tabs and file tree when switching projects (VS Code behavior)
     set({ activeWorkspaceId: id, openTabs: [], activeFilePath: null, fileTree: [] });
     savePersistedWorkspaces(get().workspaces, id);
@@ -482,7 +487,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (openTabs.find((t) => t.path === path)) {
       set({ activeFilePath: path });
       // Auto-switch to editor mode when opening a file
-      useUI.getState().setViewMode("editor");
+      // Use event bus to avoid circular dependency
+      import("./events").then(({ eventBus }) => {
+        eventBus.emit("workspace:file-opened", { path });
+      });
       return;
     }
     try {
@@ -511,7 +519,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         activeFilePath: path,
       }));
       // Auto-switch to editor mode when opening a file
-      useUI.getState().setViewMode("editor");
+      // Use event bus to avoid circular dependency
+      import("./events").then(({ eventBus }) => {
+        eventBus.emit("workspace:file-opened", { path });
+      });
     } catch (err) {
       console.error("Failed to open file:", path, err);
     }
@@ -631,6 +642,25 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 }));
+
+// Subscribe to view mode changes to handle cross-store logic
+// This replaces the direct getState() calls that caused circular dependencies
+import("./events").then(({ eventBus }) => {
+  eventBus.on("ui:view-mode-changed", ({ mode }) => {
+    if (mode === "chat") {
+      // When switching to chat mode, close all open editor tabs
+      useWorkspace.setState({ openTabs: [], activeFilePath: null });
+    }
+    if (mode === "editor") {
+      // When switching to editor mode, load file tree for the active workspace
+      const wsId = useWorkspace.getState().activeWorkspaceId;
+      const ws = useWorkspace.getState().workspaces.find((w) => w.id === wsId);
+      if (ws) {
+        void useWorkspace.getState().loadFileTree(ws.path);
+      }
+    }
+  });
+});
 
 type GitState = {
   status: GitStatus | null;
@@ -903,7 +933,7 @@ function _createSafetyTimer(
     const sid = state.activeSessionId;
     if (sid) api.agent.cleanupStream(sid);
     const systemMsg: ChatMessage = {
-      id: "msg-" + Math.random().toString(36).slice(2, 9),
+      id: "msg-" + crypto.randomUUID(),
       role: "system",
       content: mode === "tool-approval"
         ? "Agent loop timed out — no activity for 10 minutes during tool approval."
@@ -912,6 +942,16 @@ function _createSafetyTimer(
     };
     // Clear any pending auto-remove timers to prevent orphaned callbacks
     get()._autoRemoveTimers.forEach((t) => clearTimeout(t));
+    const updatedSessions = state.session
+      ? state.chatSessions.map((cs) =>
+          cs.id === state.session!.id
+            ? { ...cs, status: "completed" as const, lastActivityAt: Date.now(), lastVisitedAt: Date.now() }
+            : cs
+        )
+      : state.chatSessions;
+    const updatedSessionMessages = sid
+      ? { ...state.sessionMessages, [sid]: [...(state.sessionMessages[sid] ?? []), systemMsg] }
+      : state.sessionMessages;
     set({
       isStreaming: false,
       streamingStartedAt: null,
@@ -922,15 +962,13 @@ function _createSafetyTimer(
       pendingToolCalls: [],
       pendingActivities: [],
       _safetyTimer: null,
+      _pendingChanges: [],
       messages: [...state.messages, systemMsg],
-      chatSessions: state.session
-        ? state.chatSessions.map((cs) =>
-            cs.id === state.session!.id
-              ? { ...cs, status: "completed", lastActivityAt: Date.now(), lastVisitedAt: Date.now() }
-              : cs
-          )
-        : state.chatSessions,
+      chatSessions: updatedSessions,
+      sessionMessages: updatedSessionMessages,
     });
+    savePersistedSessionSummaries(updatedSessions);
+    savePersistedMessages(updatedSessionMessages);
   }, timeout);
 }
 
@@ -947,7 +985,7 @@ const _toolFailureCounts: Record<string, Record<string, number>> = {};
 type DoomLoopResult = { message: string; severity: "warn" | "halt" };
 
 function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<string, unknown>): DoomLoopResult | null {
-  const sig = `${toolName}:${JSON.stringify(toolArgs)}`;
+  const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
   const history = _toolCallHistory[sessionId] ?? [];
   const failures = _toolFailureCounts[sessionId] ?? {};
   const currentCount = (failures[sig] ?? 0) + 1;
@@ -1041,14 +1079,14 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
   }
   _contextOverflowRetries[sessionId] = retryCount + 1;
   const store = useChat.getState();
-  const infoMsg: ChatMessage = { id: "sys-" + Math.random().toString(36).slice(2, 9), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
+  const infoMsg: ChatMessage = { id: "sys-" + crypto.randomUUID(), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
   const infoSM = { ...store.sessionMessages, [sessionId]: [...(store.sessionMessages[sessionId] ?? []), infoMsg] };
   useChat.setState({ messages: [...store.messages, infoMsg], sessionMessages: infoSM });
   savePersistedMessages(infoSM);
   const lastUserMsg = [...store.messages].reverse().find((m) => m.role === "user");
   if (!lastUserMsg) return false;
   console.warn(`[Chat] Context overflow in session - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
-  void store.compactSessionHistory(sessionId).then(() => {
+      void store.compactSessionHistory(sessionId).then(() => {
     useChat.setState((s) => {
       const sid = s.activeSessionId;
       const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
@@ -1061,11 +1099,18 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
     const retryMsg = [...useChat.getState().messages].reverse().find((m) => m.role === "user");
     if (retryMsg) {
       const retrySid = sessionId;
-      useChat.setState({ _sendInProgress: false });
-      setTimeout(() => { if (useChat.getState().activeSessionId === retrySid) void useChat.getState().sendMessage(retryMsg.content); }, 500);
+      // Only auto-retry if user hasn't already manually retried (prevents double-send)
+      setTimeout(() => {
+        const state = useChat.getState();
+        if (state.activeSessionId !== retrySid) return; // Session switched
+        if (state._sendInProgress) return; // User already retried manually
+        if (state.isStreaming) return; // Already streaming
+        if (state.streamingContent) return; // New content arrived (different from fresh state)
+        void useChat.getState().sendMessage(retryMsg.content);
+      }, 500);
     } else {
       const sysMsg: ChatMessage = {
-        id: "sys-" + Math.random().toString(36).slice(2, 9),
+        id: "sys-" + crypto.randomUUID(),
         role: "system",
         content: "Context compaction removed all messages. Please resend your request.",
         timestamp: Date.now(),
@@ -1791,6 +1836,8 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlan: null,
       taskPlanSummary: null,
       streamingContent: "",
+      _deltaBatchBuffer: "",
+      _deltaBatchTimer: null,
       thinkingContent: "",
       _pendingChanges: [],
       chatSessions: [
@@ -1849,10 +1896,11 @@ export const useChat = create<ChatState>((set, get) => ({
           _safetyTimer: null,
           subAgents: [],
           chatSessions: get().chatSessions.map((s) =>
-            s.id === sessionId ? { ...s, status: "aborted", lastActivityAt: Date.now(), lastVisitedAt: Date.now() } : s
+            s.id === sessionId ? { ...s, status: "aborted" as const, lastActivityAt: Date.now(), lastVisitedAt: Date.now() } : s
           ),
           session: { ...currentSession, status: "aborted" },
         });
+        savePersistedSessionSummaries(get().chatSessions);
       } else {
         // Session was cleared by newChat — still reset _sendInProgress so user can send
         set({ _sendInProgress: false });
@@ -1893,7 +1941,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
     const { pendingAttachments } = get();
     const userMsg: ChatMessage = {
-      id: "msg-" + Math.random().toString(36).slice(2, 9),
+      id: "msg-" + crypto.randomUUID(),
       role: "user",
       content,
       timestamp: Date.now(),
@@ -1962,7 +2010,7 @@ export const useChat = create<ChatState>((set, get) => ({
       // If appendStream already handled the error (streaming ended), don't add duplicate error message
       if (!isStreaming) { set({ _sendInProgress: false }); return; }
       const errorMsg: ChatMessage = {
-        id: "err-" + Math.random().toString(36).slice(2, 9),
+        id: "err-" + crypto.randomUUID(),
         role: "assistant",
         content: `**Error**: ${msg}\n\nCheck your provider settings and try again.`,
         timestamp: Date.now(),
@@ -2189,6 +2237,13 @@ export const useChat = create<ChatState>((set, get) => ({
         // handled the turn and cleared streamingContent)
         if (!finalContent && allToolCalls.length === 0 && pendingActivities.length === 0 && !thinkingContent) {
           const now = Date.now();
+          const completedSessions = liveSession
+            ? get().chatSessions.map((cs) =>
+                cs.id === liveSession.id
+                  ? { ...cs, status: "completed" as const, lastActivityAt: now, lastVisitedAt: now }
+                  : cs
+              )
+            : get().chatSessions;
           set({
             isStreaming: false,
             _sendInProgress: false,
@@ -2196,14 +2251,10 @@ export const useChat = create<ChatState>((set, get) => ({
             pendingActivities: [],
             streamingContent: "",
             thinkingContent: "",
-            chatSessions: liveSession
-              ? get().chatSessions.map((cs) =>
-                  cs.id === liveSession.id
-                    ? { ...cs, status: "completed", lastActivityAt: now, lastVisitedAt: now }
-                    : cs
-                )
-              : get().chatSessions,
+            _pendingChanges: [],
+            chatSessions: completedSessions,
           });
+          savePersistedSessionSummaries(completedSessions);
           break;
         }
 
@@ -2274,7 +2325,7 @@ export const useChat = create<ChatState>((set, get) => ({
           ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), assistantMsg] }
           : get().sessionMessages;
         set({
-          messages: [...messages, assistantMsg],
+          messages: [...get().messages, assistantMsg],
           sessionMessages: newSessionMessages,
           streamingContent: "",
           thinkingContent: "",
@@ -2294,12 +2345,15 @@ export const useChat = create<ChatState>((set, get) => ({
             : get().chatSessions,
         });
         // Process message queue: auto-send next queued message
+        // Use _queueProcessing guard to prevent races with concurrent user input
         const { messageQueue } = get();
         if (messageQueue.length > 0) {
           const next = messageQueue[0];
           set({ messageQueue: messageQueue.slice(1) });
           setTimeout(() => {
-            if (!get().isStreaming) {
+            // Double-check: only send if still not streaming AND this queue item hasn't been superseded
+            const state = get();
+            if (!state.isStreaming && !state._sendInProgress && state.messageQueue.indexOf(next) === -1) {
               void get().sendMessage(next.content);
             }
           }, 300);
@@ -2395,13 +2449,13 @@ export const useChat = create<ChatState>((set, get) => ({
             // Persist "always allow" so future tools of the same kind are auto-approved
             if (decision === "always") {
               usePermission.getState().allowAlways({
-                id: "perm-" + Math.random().toString(36).slice(2, 9),
-                createdAt: Date.now(),
-                kind: permissionKey,
-                title: tool.name,
-                description,
-                ...(commandStr ? { command: commandStr } : {}),
-                ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
+              id: "perm-" + crypto.randomUUID(),
+              createdAt: Date.now(),
+              kind: permissionKey,
+              title: tool.name,
+              description,
+              ...(commandStr ? { command: commandStr } : {}),
+              ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
               });
             }
           }).catch((err) => {
@@ -2426,24 +2480,28 @@ export const useChat = create<ChatState>((set, get) => ({
               : tc
           );
           // If the tool call was already cleared by message-end (race condition),
-          // the result is orphaned. Try to apply it to the last assistant message's
-          // toolCalls array directly, so it's not lost.
+          // the result is orphaned. Search ALL messages (not just last) for the
+          // assistant message with matching toolCalls, so it's not lost.
           const found = s.pendingToolCalls.some((tc) => tc.id === event.toolCallId);
           if (!found && s.pendingToolCalls.length === 0 && s.messages.length > 0) {
-            const lastMsg = s.messages[s.messages.length - 1];
-            if (lastMsg.role === "assistant" && lastMsg.toolCalls?.length) {
-              const patchedToolCalls = lastMsg.toolCalls.map((tc) =>
+            // Search backwards through all messages to find the matching tool call
+            for (let msgIdx = s.messages.length - 1; msgIdx >= 0; msgIdx--) {
+              const msg = s.messages[msgIdx];
+              if (msg.role !== "assistant" || !msg.toolCalls?.length) continue;
+              const hasMatchingTc = msg.toolCalls.some((tc) => tc.id === event.toolCallId);
+              if (!hasMatchingTc) continue;
+              const patchedToolCalls = msg.toolCalls.map((tc) =>
                 tc.id === event.toolCallId
                   ? { ...tc, status: (typeof event.result === "string" && event.result.startsWith("Error:") ? "failed" : "completed") as "completed" | "failed", result: event.result }
                   : tc
               );
-              const patchedMsg = { ...lastMsg, toolCalls: patchedToolCalls };
-              const patchedMessages = [...s.messages.slice(0, -1), patchedMsg];
+              const patchedMsg = { ...msg, toolCalls: patchedToolCalls };
+              const patchedMessages = [...s.messages.slice(0, msgIdx), patchedMsg, ...s.messages.slice(msgIdx + 1)];
               // Also patch sessionMessages
               const sid = s.activeSessionId;
               const patchedSessionMessages = sid ? {
                 ...s.sessionMessages,
-                [sid]: [...(s.sessionMessages[sid] ?? []).slice(0, -1), patchedMsg],
+                [sid]: [...(s.sessionMessages[sid] ?? []).slice(0, msgIdx), patchedMsg, ...(s.sessionMessages[sid] ?? []).slice(msgIdx + 1)],
               } : s.sessionMessages;
               return {
                 pendingToolCalls: updated,
@@ -2588,7 +2646,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
-              id: "pa-" + Math.random().toString(36).slice(2, 9),
+              id: "pa-" + crypto.randomUUID(),
               type: "explore" as const,
               query: event.query,
               ...(event.kind ? { kind: event.kind } : {}),
@@ -2603,7 +2661,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
-              id: "pa-" + Math.random().toString(36).slice(2, 9),
+              id: "pa-" + crypto.randomUUID(),
               type: "read" as const,
               path: event.path,
               content: event.content,
@@ -2618,7 +2676,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [
             ...s.pendingActivities,
             {
-              id: "pa-" + Math.random().toString(36).slice(2, 9),
+              id: "pa-" + crypto.randomUUID(),
               type: "skill" as const,
               name: event.name,
               content: event.content,
@@ -2684,7 +2742,7 @@ export const useChat = create<ChatState>((set, get) => ({
               ]);
               if (summaryText) {
                 const summaryMsg: ChatMessage = {
-                  id: "sys-" + Math.random().toString(36).slice(2, 9),
+                  id: "sys-" + crypto.randomUUID(),
                   role: "system",
                   content: `**Budget exhausted** — Here's a summary of progress:\n\n${summaryText}`,
                   timestamp: Date.now(),
@@ -2707,7 +2765,7 @@ export const useChat = create<ChatState>((set, get) => ({
           set((s) => ({
             pendingActivities: [
               ...s.pendingActivities,
-              { id: "pa-" + Math.random().toString(36).slice(2, 9), type: "bash" as const, command: event.command, result: event.result },
+              { id: "pa-" + crypto.randomUUID(), type: "bash" as const, command: event.command, result: event.result },
             ].slice(-500) as typeof s.pendingActivities,
           }));
         }
@@ -2717,7 +2775,7 @@ export const useChat = create<ChatState>((set, get) => ({
         set((s) => ({
           pendingActivities: [
             ...s.pendingActivities,
-            { id: "pa-" + Math.random().toString(36).slice(2, 9), type: "plan" as const, plan: event.plan },
+            { id: "pa-" + crypto.randomUUID(), type: "plan" as const, plan: event.plan },
           ].slice(-500) as typeof s.pendingActivities,
         }));
         break;
@@ -2752,7 +2810,7 @@ export const useChat = create<ChatState>((set, get) => ({
           // Persist "always allow" so future tools of the same kind are auto-approved
           if (decision === "always") {
             usePermission.getState().allowAlways({
-              id: "perm-" + Math.random().toString(36).slice(2, 9),
+              id: "perm-" + crypto.randomUUID(),
               createdAt: Date.now(),
               kind: permKind,
               title: "Permission required",
@@ -2795,7 +2853,7 @@ export const useChat = create<ChatState>((set, get) => ({
           if (get().messages[i].role === "user") { lastUserMsgId = get().messages[i].id; break; }
         }
         const errorMsg: ChatMessage = {
-          id: "err-" + Math.random().toString(36).slice(2, 9),
+          id: "err-" + crypto.randomUUID(),
           role: "assistant",
           content: `**Error**: ${event.error}\n\nCheck your provider settings and try again.`,
           timestamp: Date.now(),
@@ -2810,6 +2868,7 @@ export const useChat = create<ChatState>((set, get) => ({
           if (timer) clearTimeout(timer);
           return {
             isStreaming: false,
+            _sendInProgress: false,
             streamingContent: "",
             thinkingContent: "",
             pendingToolCalls: [],
@@ -2872,8 +2931,11 @@ export const useChat = create<ChatState>((set, get) => ({
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
     get()._clearAutoRemoveTimers();
-    _pendingResolutions.clear();
-    _toolCallResolvers.clear();
+    // NOTE: Don't clear _pendingResolutions or _toolCallResolvers here.
+    // They survive across session switches so pending tool approvals can still
+    // resolve after the user switches back to the original session.
+    // _pendingResolutions.clear();
+    // _toolCallResolvers.clear();
     const { session, abort, sessionMessages, sessionAgentName, isStreaming } = get();
     // Clean up stream listener for the old session before switching
     if (session) {
@@ -2907,6 +2969,7 @@ export const useChat = create<ChatState>((set, get) => ({
         taskPlanSummary: null,
         planApproval: null,
         _sendInProgress: false,
+        messageQueue: [],
         _suppressSessionRestore: false,
         _safetyTimer: null,
         _deltaBatchBuffer: "",
@@ -2967,6 +3030,7 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlan: null,
       taskPlanSummary: null,
       _sendInProgress: false,
+      messageQueue: [],
       todos: [],
       _pendingChanges: [],
       subAgents: [],
@@ -3003,6 +3067,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
+    _toolCallResolvers.clear();
     void get().abort(id).catch(() => {});
     void stopRecording(id).catch(() => {});
     // cleanupStream is handled inside abort()'s finally block
@@ -3013,6 +3078,7 @@ export const useChat = create<ChatState>((set, get) => ({
     delete _lastCompactionAttempt[id];
     delete _compactionTier[id];
     delete _antiThrashTimestamps[id];
+    _terminalStateCache.delete(id);
     // Abort any in-progress compaction
     const nextCompacting = new Set(get()._compactingSessions);
     nextCompacting.delete(id);
@@ -3088,7 +3154,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   addToQueue(content, attachments) {
-    const id = "q-" + Math.random().toString(36).slice(2, 9);
+    const id = "q-" + crypto.randomUUID();
     set((s) => ({
       messageQueue: [...s.messageQueue, { id, content, attachments, timestamp: Date.now() }],
     }));
@@ -3103,6 +3169,8 @@ export const useChat = create<ChatState>((set, get) => ({
   reorderQueue(fromIdx, toIdx) {
     set((s) => {
       const queue = [...s.messageQueue];
+      if (fromIdx < 0 || fromIdx >= queue.length) return {};
+      if (toIdx < 0 || toIdx >= queue.length) return {};
       const [moved] = queue.splice(fromIdx, 1);
       queue.splice(toIdx, 0, moved);
       return { messageQueue: queue };
@@ -3120,12 +3188,27 @@ export const useChat = create<ChatState>((set, get) => ({
     const { messageQueue } = get();
     const item = messageQueue.find((q) => q.id === id);
     if (!item) return;
-    // Remove from queue
-    set((s) => ({
-      messageQueue: s.messageQueue.filter((q) => q.id !== id),
-    }));
-    // Send it immediately
-    void get().sendMessage(item.content);
+    // Atomically check streaming state and either move to front or remove+send
+    // This prevents the race where streaming starts between check and removal
+    set((s) => {
+      // Re-check isStreaming inside set to get fresh state
+      if (s.isStreaming) {
+        // Streaming started — move to front instead of sending
+        const filtered = s.messageQueue.filter((q) => q.id !== id);
+        return { messageQueue: [item, ...filtered] };
+      }
+      // Not streaming — remove from queue and send
+      const updatedQueue = s.messageQueue.filter((q) => q.id !== id);
+      return { messageQueue: updatedQueue };
+    });
+    // Send outside of set to avoid race — only if still not streaming
+    setTimeout(() => {
+      const state = get();
+      if (!state.isStreaming) {
+        void state.sendMessage(item.content);
+      }
+      // If streaming started, item is already at front of queue and will be sent later
+    }, 0);
   },
 
   clearQueue() {
@@ -3136,7 +3219,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const sessionId = get().activeSessionId;
     if (!sessionId) return;
     const sysMsg: ChatMessage = {
-      id: "sys-" + Math.random().toString(36).slice(2, 9),
+      id: "sys-" + crypto.randomUUID(),
       role: "system",
       content,
       timestamp: Date.now(),
@@ -3163,7 +3246,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const versions = sessionVersions[sessionId] ?? [];
     const parentId = versions.length > 0 ? versions[versions.length - 1].id : undefined;
     const version: import("@dalam/shared-types").ChatVersion = {
-      id: "ver-" + Math.random().toString(36).slice(2, 9),
+      id: "ver-" + crypto.randomUUID(),
       sessionId,
       label,
       messages: [...messages],
@@ -3371,7 +3454,7 @@ export const useChat = create<ChatState>((set, get) => ({
             // Replace compacted messages with summary + kept messages (from live messages)
             const toKeep = liveMessages.filter((_, i) => !toCompactIndices.has(i));
             const summaryMsg: ChatMessage = {
-              id: "compact-" + Math.random().toString(36).slice(2, 9),
+              id: "compact-" + crypto.randomUUID(),
               role: "system",
               content: `[Conversation summary]\n${summary}`,
               timestamp: Date.now(),
@@ -3509,9 +3592,12 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   newChat() {
-    const { session, messages } = get();
+    const { session } = get();
     // Abort first to stop any in-progress streaming before clearing state
     if (session) void get().abort(session.id).catch(() => {});
+    // Re-read state after abort — abort's finally block may have modified chatSessions
+    const latestSession = get().session;
+    const latestMessages = get().messages;
     // Clean up all timers and state
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
@@ -3521,34 +3607,34 @@ export const useChat = create<ChatState>((set, get) => ({
     const deltaBatchTimer = get()._deltaBatchTimer;
     if (deltaBatchTimer) clearTimeout(deltaBatchTimer);
     // Stop trajectory recording for old session
-    if (session) void stopRecording(session.id).catch(() => {});
+    if (latestSession) void stopRecording(latestSession.id).catch(() => {});
     // Clear doom loop + context overflow + compaction state
-    if (session) {
-      _clearDoomLoopState(session.id);
+    if (latestSession) {
+      _clearDoomLoopState(latestSession.id);
       set({ doomLoopWarningCount: 0 });
-      _clearContextOverflowRetries(session.id);
-      delete _compactionTier[session.id];
-      delete _lastCompactionCounts[session.id];
-      delete _lastCompactionAttempt[session.id];
-      delete _antiThrashTimestamps[session.id];
+      _clearContextOverflowRetries(latestSession.id);
+      delete _compactionTier[latestSession.id];
+      delete _lastCompactionCounts[latestSession.id];
+      delete _lastCompactionAttempt[latestSession.id];
+      delete _antiThrashTimestamps[latestSession.id];
       // Abort any in-progress compaction to prevent it writing back after session is removed
       const nextCompacting = new Set(get()._compactingSessions);
-      nextCompacting.delete(session.id);
+      nextCompacting.delete(latestSession.id);
       set({ _compactingSessions: nextCompacting });
     }
-    if (session && messages.length > 0) {
-      get().saveVersion(session.id, "Session checkpoint");
+    if (latestSession && latestMessages.length > 0) {
+      get().saveVersion(latestSession.id, "Session checkpoint");
     }
     const { chatHistory, chatHistoryIdx, chatSessions } = get();
     const trimmedHistory = chatHistoryIdx >= 0
       ? chatHistory.slice(0, chatHistoryIdx + 1)
       : chatHistory;
-    const newHistory = messages.length > 0
-      ? [...trimmedHistory, messages].slice(-20)
+    const newHistory = latestMessages.length > 0
+      ? [...trimmedHistory, latestMessages].slice(-20)
       : trimmedHistory;
-    const finalizedSessions = session && messages.length > 0
+    const finalizedSessions = latestSession && latestMessages.length > 0
       ? chatSessions.map((cs) =>
-          cs.id === session.id
+          cs.id === latestSession!.id
             ? {
                 ...cs,
                 status: cs.status === "running" ? ("completed" as const) : cs.status,
@@ -3602,23 +3688,27 @@ export const useChat = create<ChatState>((set, get) => ({
       const newHistory = msgs.length > 0 && !matchesLast ? [...chatHistory, msgs] : chatHistory;
       const targetIdx = msgs.length > 0 && !matchesLast ? Math.max(0, newHistory.length - 2) : newHistory.length - 1;
       if (targetIdx < 0 || targetIdx >= newHistory.length) return false;
+      const restoredMessages = newHistory[targetIdx] ?? [];
       set({
         chatHistory: newHistory,
         chatHistoryIdx: targetIdx,
-        messages: newHistory[targetIdx] ?? [],
+        messages: restoredMessages,
         pendingToolCalls: [],
         streamingContent: "",
         thinkingContent: "",
         isStreaming: false,
         _pendingChanges: [],
       });
+      // Don't touch sessionMessages during navigation — debounced saveWorkspaceData
+      // would persist historical snapshots and corrupt the user's actual conversation.
       return true;
     }
     if (chatHistoryIdx <= 0) return false;
     const newIdx = chatHistoryIdx - 1;
+    const restoredMessages = chatHistory[newIdx] ?? [];
     set({
       chatHistoryIdx: newIdx,
-      messages: chatHistory[newIdx] ?? [],
+      messages: restoredMessages,
       pendingToolCalls: [],
       streamingContent: "",
       thinkingContent: "",
@@ -3633,27 +3723,45 @@ export const useChat = create<ChatState>((set, get) => ({
     if (isStreaming) return false;
     if (chatHistoryIdx < 0 || chatHistoryIdx >= chatHistory.length - 1) return false;
     const newIdx = chatHistoryIdx + 1;
+    const restoredMessages = chatHistory[newIdx] ?? [];
     set({
       chatHistoryIdx: newIdx,
-      messages: chatHistory[newIdx] ?? [],
+      messages: restoredMessages,
       pendingToolCalls: [],
       streamingContent: "",
       thinkingContent: "",
       isStreaming: false,
       _pendingChanges: [],
     });
+    // Don't touch sessionMessages during navigation — same reason as goBackChat.
     return true;
   },
 }));
+
+// Subscribe to model selection events from settings
+import("./events").then(({ eventBus }) => {
+  eventBus.on("chat:model-selected", ({ modelId }) => {
+    useChat.getState().setSelectedModel(modelId);
+  });
+  // Handle workspace switching - abort streaming when workspace changes
+  eventBus.on("workspace:switched", ({ workspaceId: _workspaceId }) => {
+    const { session, isStreaming } = useChat.getState();
+    if (session && isStreaming) {
+      void useChat.getState().abort(session.id).catch(() => {});
+    }
+  });
+});
 
 type TerminalState = {
   tabs: TerminalTab[];
   activeTabId: string | null;
   output: Record<string, string>;
-  addTab: (cwd: string, shell?: string) => void;
+  pendingCommands: Record<string, string>;
+  addTab: (cwd: string, shell?: string, command?: string) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
   appendOutput: (id: string, data: string) => void;
+  consumePendingCommand: (id: string) => string | undefined;
   ensureTabForCwd: (cwd: string) => void;
   updateTabShell: (id: string, shell: string) => void;
   /** Save terminal state for current session */
@@ -3669,14 +3777,23 @@ export const useTerminal = create<TerminalState>((set, get) => ({
   tabs: [] as TerminalTab[],
   activeTabId: null,
   output: {},
-  addTab(cwd, shell = "bash") {
-    set((s) => {
-      const id = "t-" + Math.random().toString(36).slice(2, 9);
-      return {
-        tabs: [...s.tabs, { id, title: shell, cwd, shell } as TerminalTab],
-        activeTabId: id,
-      };
-    });
+  pendingCommands: {},
+  addTab(cwd, shell = "bash", command?) {
+    const id = "t-" + crypto.randomUUID();
+    set((s) => ({
+      tabs: [...s.tabs, { id, title: shell, cwd, shell } as TerminalTab],
+      activeTabId: id,
+      pendingCommands: command ? { ...s.pendingCommands, [id]: command } : s.pendingCommands,
+    }));
+  },
+  consumePendingCommand(id) {
+    const { pendingCommands } = get();
+    const cmd = pendingCommands[id];
+    if (cmd !== undefined) {
+      const { [id]: _, ...rest } = pendingCommands;
+      set({ pendingCommands: rest });
+    }
+    return cmd;
   },
   closeTab(id) {
     set((s) => {
@@ -3963,6 +4080,17 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
       if (server.transport === "http") {
         const url = server.url;
         if (!url) throw new Error("HTTP Endpoint URL is required");
+        // SSRF protection: validate URL before fetching
+        try {
+          const parsed = new URL(url);
+          if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only HTTP/HTTPS URLs are allowed");
+          const hostname = parsed.hostname;
+          const blocked = [/^localhost$/i, /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./, /^169\.254\./, /^0\./, /^::1$/, /^\[::1\]$/];
+          if (blocked.some(p => p.test(hostname))) throw new Error("Private/internal URLs are not allowed for MCP servers");
+        } catch (e) {
+          if (e instanceof Error && e.message.includes("not allowed")) throw e;
+          throw new Error("Invalid MCP server URL", { cause: e });
+        }
         const resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4283,7 +4411,7 @@ type UIState = {
   activityBarTab: "explorer" | "search" | "scm" | "agent" | "extensions";
   browserTabs: BrowserTab[];
   activeBrowserTabId: string | null;
-  rightPanelTab: "git" | "diff" | "review" | "browser" | "progress" | "terminal";
+  rightPanelTab: "git" | "diff" | "review" | "browser" | "progress";
   bottomPanelTab: "terminal" | "output" | "problems";
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
@@ -4294,7 +4422,7 @@ type UIState = {
   setViewMode: (mode: "chat" | "editor") => void;
   toggleViewMode: () => void;
   setActivityBarTab: (tab: "explorer" | "search" | "scm" | "agent" | "extensions") => void;
-  setRightPanelTab: (tab: "git" | "diff" | "review" | "browser" | "progress" | "terminal") => void;
+  setRightPanelTab: (tab: "git" | "diff" | "review" | "browser" | "progress") => void;
   setBottomPanelTab: (tab: "terminal" | "output" | "problems") => void;
   addBrowserTab: (tab?: Partial<BrowserTab>) => string;
   removeBrowserTab: (id: string) => void;
@@ -4386,18 +4514,14 @@ export const useUI = create<UIState>((set, get) => ({
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
   setActivityBarTab: (tab) => set({ activityBarTab: tab }),
   setViewMode: (mode) => {
+    const prevMode = get().viewMode;
     set({ viewMode: mode });
-    // When switching to chat mode, close all open editor tabs
-    if (mode === "chat") {
-      useWorkspace.setState({ openTabs: [], activeFilePath: null });
-    }
-    // When switching to editor mode, load file tree for the active workspace
-    if (mode === "editor") {
-      const wsId = useWorkspace.getState().activeWorkspaceId;
-      const ws = useWorkspace.getState().workspaces.find((w) => w.id === wsId);
-      if (ws) {
-        void useWorkspace.getState().loadFileTree(ws.path);
-      }
+    // Use event bus for cross-store communication instead of direct getState() calls
+    // This breaks the circular dependency between useUI and useWorkspace
+    if (prevMode !== mode) {
+      import("./events").then(({ eventBus }) => {
+        eventBus.emit("ui:view-mode-changed", { mode });
+      });
     }
   },
   toggleViewMode: () => {
@@ -4407,7 +4531,7 @@ export const useUI = create<UIState>((set, get) => ({
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
   setBottomPanelTab: (tab) => set({ bottomPanelTab: tab }),
   addBrowserTab: (tab) => {
-    const id = "bt-" + Math.random().toString(36).slice(2, 9);
+    const id = "bt-" + crypto.randomUUID();
     const newTab: BrowserTab = {
       id,
       title: tab?.title ?? "New tab",
@@ -4508,6 +4632,13 @@ export const useUI = create<UIState>((set, get) => ({
     set({ browserTabs: [], activeBrowserTabId: null });
   },
 }));
+
+// Subscribe to workspace file opened events to switch to editor mode
+import("./events").then(({ eventBus }) => {
+  eventBus.on("workspace:file-opened", () => {
+    useUI.getState().setViewMode("editor");
+  });
+});
 
 // ---- Permission system ----------------------------------------------------
 
@@ -4615,7 +4746,7 @@ export const usePermission = create<PermissionState>((set, get) => {
     if (pendingResolve) { pendingResolve("deny"); pendingResolve = null; }
     const full: PermissionRequest = {
       ...req,
-      id: "perm-" + Math.random().toString(36).slice(2, 9),
+      id: "perm-" + crypto.randomUUID(),
       createdAt: Date.now(),
     };
     set({ request: full });
@@ -4680,7 +4811,7 @@ export async function withPermission<T>(
   const result = await run();
   if (shouldAlways) {
     usePermission.getState().allowAlways({
-      id: "perm-" + Math.random().toString(36).slice(2, 9),
+      id: "perm-" + crypto.randomUUID(),
       createdAt: Date.now(),
       ...params,
     });
@@ -4719,7 +4850,7 @@ export const useQuestion = create<QuestionState>((set) => {
     if (pendingResolve) { pendingResolve(null); pendingResolve = null; }
     const full: QuestionRequest = {
       ...req,
-      id: "q-" + Math.random().toString(36).slice(2, 9),
+      id: "q-" + crypto.randomUUID(),
       createdAt: Date.now(),
     };
     set({ request: full });

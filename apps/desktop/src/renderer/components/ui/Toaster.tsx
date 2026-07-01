@@ -33,7 +33,7 @@ export function Toaster() {
   const { toasts, dismiss } = useToasts();
 
   return (
-    <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 pointer-events-none">
+    <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 pointer-events-none" aria-live="assertive">
       {toasts.map((t) => {
         const style = KIND_STYLES[t.kind];
         return (

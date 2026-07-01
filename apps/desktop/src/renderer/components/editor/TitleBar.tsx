@@ -67,6 +67,10 @@ function useEditorMenus(): { label: string; items: MenuAction[] }[] {
 
   const toggleTerminal = () => {
     const ui = useUI.getState();
+    // Switch to editor mode first (terminal only visible in editor mode)
+    if (ui.viewMode !== "editor") {
+      ui.setViewMode("editor");
+    }
     const session = useChat.getState().session;
     if (session?.workspacePath) {
       useTerminal.getState().ensureTabForCwd(session.workspacePath);
@@ -99,8 +103,8 @@ function useEditorMenus(): { label: string; items: MenuAction[] }[] {
     {
       label: "Edit",
       items: [
-        { type: "item", label: "Undo", shortcut: shortcut("Z"), perform: () => document.execCommand("undo") },
-        { type: "item", label: "Redo", shortcut: shortcut("Z", { shift: true }), perform: () => document.execCommand("redo") },
+        { type: "item", label: "Undo", shortcut: shortcut("Z"), perform: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true })) },
+        { type: "item", label: "Redo", shortcut: shortcut("Z", { shift: true }), perform: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true })) },
         { type: "separator" },
         { type: "item", label: "Find", shortcut: shortcut("F"), perform: () => window.dispatchEvent(new CustomEvent("editor:find")) },
         { type: "item", label: "Replace", shortcut: shortcut("F", { alt: true }), perform: () => window.dispatchEvent(new CustomEvent("editor:find-replace")) },
@@ -186,7 +190,7 @@ export function TitleBar() {
       }
     })();
     return () => { active = false; };
-  }, [activeWorkspace?.path]);
+  }, [activeWorkspace]);
 
   const inChat = messages.length > 0 || chatHistoryIdx >= 0;
   const canGoBack = chatHistoryIdx >= 0 || chatHistory.length > 0;
@@ -222,7 +226,6 @@ export function TitleBar() {
         if (!cancelled) setIdesLoading(false);
       }
     };
-    setIdesLoading(true);
     void fetchIdes();
     return () => { cancelled = true; };
   }, [filePickerOpen]);
@@ -236,11 +239,13 @@ export function TitleBar() {
       if (app === "finder") {
         await api.system.revealInFinder(path);
       } else if (app === "terminal") {
+        const ui = useUI.getState();
+        if (ui.viewMode !== "editor") ui.setViewMode("editor");
         if (session?.workspacePath) {
           useTerminal.getState().ensureTabForCwd(session.workspacePath);
         }
-        useUI.getState().setBottomPanelTab("terminal");
-        useUI.getState().setBottomPanelOpen(true);
+        ui.setBottomPanelTab("terminal");
+        ui.setBottomPanelOpen(true);
       } else {
         // For any detected IDE command, launch it with the workspace path
         const ide = detectedIdes.find((i) => i.command === app);
@@ -288,6 +293,8 @@ export function TitleBar() {
                 }`}
                 onClick={() => setOpenIdx(openIdx === i ? null : i)}
                 onMouseEnter={() => openIdx !== null && setOpenIdx(i)}
+                aria-expanded={openIdx === i}
+                aria-haspopup="menu"
               >
                 {m.label}
               </button>
@@ -337,8 +344,10 @@ export function TitleBar() {
         <div className="relative ml-1" ref={filePickerRef}>
           <Tooltip content={inChat ? "Open working directory in…" : "Open a different folder"} side="bottom">
             <button
-              onClick={() => { if (inChat) setFilePickerOpen((v) => !v); else void openWorkspace(); }}
+              onClick={() => { if (inChat) { setFilePickerOpen((v) => !v); setIdesLoading(true); } else void openWorkspace(); }}
               className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors max-w-[300px]"
+              aria-expanded={filePickerOpen}
+              aria-haspopup="menu"
             >
               <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
               <span className="font-medium truncate">{activeWorkspace.name}</span>
@@ -346,10 +355,10 @@ export function TitleBar() {
             </button>
           </Tooltip>
           {filePickerOpen && (
-            <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 w-64 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
-              <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary">Open with</div>
+            <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 w-64 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl z-50 overflow-hidden" role="menu">
+              <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary" role="none">Open with</div>
               {/* Always-available options */}
-              <button onClick={() => openInApp("terminal")}
+              <button onClick={() => openInApp("terminal")} role="menuitem"
                 className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors">
                 <TerminalSquare className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -357,7 +366,7 @@ export function TitleBar() {
                   <div className="text-[10px] text-dalam-text-muted truncate">Open in integrated terminal</div>
                 </div>
               </button>
-              <button onClick={() => openInApp("finder")}
+              <button onClick={() => openInApp("finder")} role="menuitem"
                 className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors">
                 <FolderTree className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -368,9 +377,9 @@ export function TitleBar() {
               {/* Dynamically detected IDEs */}
               {detectedIdes.length > 0 && (
                 <div className="border-t border-dalam-border-primary">
-                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-dalam-text-muted">Detected editors</div>
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-dalam-text-muted" role="none">Detected editors</div>
                   {detectedIdes.map((ide) => (
-                    <button key={ide.command} onClick={() => openInApp(ide.command)}
+                    <button key={ide.command} onClick={() => openInApp(ide.command)} role="menuitem"
                       className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors">
                       <MonitorDot className="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />
                       <div className="flex-1 min-w-0">
@@ -382,17 +391,17 @@ export function TitleBar() {
                 </div>
               )}
               {detectedIdes.length === 0 && !idesLoading && (
-                <div className="px-3 py-2 text-[10px] text-dalam-text-muted border-t border-dalam-border-primary">
+                <div className="px-3 py-2 text-[10px] text-dalam-text-muted border-t border-dalam-border-primary" role="none">
                   No additional editors detected
                 </div>
               )}
               {idesLoading && (
-                <div className="px-3 py-1.5 text-[10px] text-dalam-text-muted border-t border-dalam-border-primary">
+                <div className="px-3 py-1.5 text-[10px] text-dalam-text-muted border-t border-dalam-border-primary" role="none">
                   Detecting editors…
                 </div>
               )}
-              <div className="border-t border-dalam-border-primary">
-                <button onClick={() => { setFilePickerOpen(false); void openWorkspace(); }}
+              <div className="border-t border-dalam-border-primary" role="separator">
+                <button onClick={() => { setFilePickerOpen(false); void openWorkspace(); }} role="menuitem"
                   className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors">
                   <FolderOpen className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -473,9 +482,11 @@ export function TitleBar() {
           <Tooltip content="Open terminal" side="bottom">
             <button className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
               onClick={() => {
+                const ui = useUI.getState();
+                if (ui.viewMode !== "editor") ui.setViewMode("editor");
                 if (session.workspacePath) useTerminal.getState().ensureTabForCwd(session.workspacePath);
-                useUI.getState().setBottomPanelTab("terminal");
-                useUI.getState().setBottomPanelOpen(true);
+                ui.setBottomPanelTab("terminal");
+                ui.setBottomPanelOpen(true);
               }}>
               <TerminalSquare className="w-3.5 h-3.5" />
             </button>
@@ -510,10 +521,11 @@ function MenuPanel({ items, onClose }: { items: MenuAction[]; onClose: () => voi
     <div
       className="absolute left-0 top-7 min-w-[220px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-md shadow-2xl py-1 z-50 animate-fade-in"
       onMouseDown={(e) => e.stopPropagation()}
+      role="menu"
     >
       {items.map((action, idx) => {
         if (action.type === "separator") {
-          return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />;
+          return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" role="separator" />;
         }
         if (action.type === "item") {
           return (
@@ -521,6 +533,7 @@ function MenuPanel({ items, onClose }: { items: MenuAction[]; onClose: () => voi
               key={idx}
               disabled={action.disabled}
               onClick={() => { action.perform(); onClose(); }}
+              role="menuitem"
               className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-[11px] text-dalam-text-primary hover:bg-dalam-accent-subtle hover:text-dalam-text-primary transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
             >
               <span>{action.label}</span>

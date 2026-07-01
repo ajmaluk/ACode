@@ -103,6 +103,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
     let isCleanedUp = false;
     let unsubData: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
+    let shellProcId: string | null = null;
 
     const startIO = async () => {
       try {
@@ -112,14 +113,24 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
           return;
         }
         procIdRef.current = procId;
+        shellProcId = procId;
 
         unsubData = api.terminal.onData(procId, (data) => {
-          term.write(data);
+          if (activeRef.current) {
+            term.write(data);
+          }
         });
 
         inputDisposable = term.onData((data) => {
-          api.terminal.writeInput(procId, data).catch(() => {});
+          if (procIdRef.current === procId) {
+            api.terminal.writeInput(procId, data).catch(() => {});
+          }
         });
+
+        const pendingCmd = useTerminal.getState().consumePendingCommand(tabId);
+        if (pendingCmd) {
+          api.terminal.writeInput(procId, pendingCmd + "\n").catch(() => {});
+        }
       } catch (err) {
         term.writeln(`\r\n\x1b[31mError spawning terminal: ${String(err)}\x1b[0m`);
       }

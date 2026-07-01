@@ -19,7 +19,7 @@ const timerRegistry = new Map<string, ReturnType<typeof setTimeout>>();
 export const useToasts = create<ToastState>((set, get) => ({
   toasts: [],
   push(t) {
-    const id = "t-" + Math.random().toString(36).slice(2, 9);
+    const id = "t-" + crypto.randomUUID();
     set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
     const duration = t.durationMs ?? 3500;
     if (duration > 0) {

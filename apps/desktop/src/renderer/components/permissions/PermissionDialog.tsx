@@ -157,7 +157,7 @@ export function PermissionDialog() {
             Use Tab / arrow keys to choose, then press Enter to confirm
           </div>
           <button
-            onClick={() => decide(selected)}
+            onClick={() => decide(selectedRef.current)}
             className="px-3 py-1.5 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
           >
             Confirm {options[selected].label}

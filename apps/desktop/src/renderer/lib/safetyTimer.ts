@@ -63,7 +63,7 @@ export function resetSafetyTimer(
     const sid = state.activeSessionId;
     if (sid) api.agent.cleanupStream(sid);
     const systemMsg: ChatMessage = {
-      id: "msg-" + Math.random().toString(36).slice(2, 9),
+      id: "msg-" + crypto.randomUUID(),
       role: "system",
       content:
         mode === "tool-approval"

@@ -1,4 +1,4 @@
-import { useUI, useGit, useWorkspace, useSettingsView } from "@/store/useAppStore";
+import { useUI, useGit, useSettingsView } from "@/store/useAppStore";
 import {
   FolderTree, Search, GitBranch, Sparkles, Puzzle, Settings,
 } from "lucide-react";
@@ -17,7 +17,6 @@ const TOP_ITEMS: { id: ActivityTab; icon: React.ElementType; label: string }[] =
 export function ActivityBar() {
   const { activityBarTab, setActivityBarTab, setSidebarOpen } = useUI();
   const { status } = useGit();
-  const { activeWorkspaceId } = useWorkspace();
   const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0);
 
   const handleClick = (tab: ActivityTab) => {
@@ -42,6 +41,7 @@ export function ActivityBar() {
             <Tooltip key={item.id} content={item.label} side="right">
               <button
                 onClick={() => handleClick(item.id)}
+                aria-label={item.label}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-100 relative group ${
                   isActive
                     ? "bg-dalam-accent-subtle text-dalam-accent-primary"
@@ -68,6 +68,7 @@ export function ActivityBar() {
         <Tooltip content="Settings" side="right">
           <button
             onClick={() => useSettingsView.getState().open()}
+            aria-label="Settings"
             className="w-9 h-9 flex items-center justify-center rounded-lg text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-all"
           >
             <Settings className="w-[17px] h-[17px]" />

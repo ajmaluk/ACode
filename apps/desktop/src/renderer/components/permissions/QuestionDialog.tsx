@@ -33,36 +33,20 @@ export function QuestionDialog() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        customTextRef.current = "";
+        selectedRef.current = 0;
         resolve(null);
-      } else if (focusedInputRef.current) {
-        if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-          e.preventDefault();
-          focusedInputRef.current = false;
-          selectedRef.current = request.options.length > 0 ? request.options.length - 1 : 0;
-          setSelected(selectedRef.current);
-          inputRef.current?.blur();
-          containerRef.current?.focus();
-        } else if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
-          e.preventDefault();
-          focusedInputRef.current = false;
-          selectedRef.current = 0;
-          setSelected(selectedRef.current);
-          inputRef.current?.blur();
-          containerRef.current?.focus();
-        } else if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          const text = customTextRef.current.trim();
-          if (text) {
-            resolve({ selectedLabel: "Custom", customText: text });
-          }
-        }
         return;
-      } else if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
+      }
+      
+      // Handle option selection state
+      if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
         e.preventDefault();
         const max = request.options.length;
         selectedRef.current = Math.min(selectedRef.current + 1, max);
         setSelected(selectedRef.current);
-        if (selectedRef.current > request.options.length - 1) {
+        // Auto-focus input when navigating past last option
+        if (selectedRef.current >= request.options.length && request.options.length > 0) {
           focusedInputRef.current = true;
           setFocusedInput(true);
           setTimeout(() => inputRef.current?.focus(), 0);
@@ -187,8 +171,8 @@ export function QuestionDialog() {
               onClick={() => {
                 if (focusedInput && customText.trim()) {
                   resolve({ selectedLabel: "Custom", customText: customText.trim() });
-                } else if (selected < request.options.length) {
-                  resolve({ selectedLabel: request.options[selected].label });
+                } else if (selectedRef.current < request.options.length) {
+                  resolve({ selectedLabel: request.options[selectedRef.current].label });
                 } else {
                   resolve(null);
                 }

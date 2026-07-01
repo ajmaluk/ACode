@@ -12,7 +12,7 @@ import {
   Columns, WandSparkles, History,
 } from "lucide-react";
 
-type Tab = "git" | "diff" | "review" | "browser" | "progress" | "terminal";
+type Tab = "git" | "diff" | "review" | "browser" | "progress";
 
 const TABS: { id: Tab; icon: React.ElementType; label: string }[] = [
   { id: "git", icon: GitBranch, label: "Git" },
@@ -784,7 +784,7 @@ function BrowserTab() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (activeTab) setInputValue(activeTab.url);
-  }, [activeTab?.url, activeTab?.id]);
+  }, [activeTab]);
 
   const onNavigate = (e: React.FormEvent) => {
     e.preventDefault();

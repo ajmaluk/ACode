@@ -305,13 +305,39 @@ async function fetchJsonWithRetry(
   }, maxRetries, baseDelayMs);
 }
 
+/** Build an XML tag from a completed tool call name + parsed JSON args */
+function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): string {
+  const attrs = Object.entries(parsedArgs)
+    .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+    .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}"`)
+    .join(" ");
+  const bodyTools = ["write_file", "clipboard_write", "memory_save"];
+  if (bodyTools.includes(tcName) && parsedArgs.content) {
+    const contentStr = typeof parsedArgs.content === "string" ? parsedArgs.content : "";
+    const escapedContent = contentStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const bodyAttrs = Object.entries(parsedArgs)
+      .filter(([k, v]) => k !== "content" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
+      .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}"`)
+      .join(" ");
+    return `<${tcName} ${bodyAttrs}>${escapedContent}</${tcName}>`;
+  }
+  if (tcName === "edit_file" && parsedArgs.search && parsedArgs.replace !== undefined) {
+    const occAttr = parsedArgs.occurrence ? ` occurrence="${parsedArgs.occurrence}"` : "";
+    const escapedPath = String(parsedArgs.path || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const escapedSearch = String(parsedArgs.search).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const escapedReplace = String(parsedArgs.replace).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<${tcName} path="${escapedPath}"${occAttr}>\n<search>${escapedSearch}</search>\n<replace>${escapedReplace}</replace>\n</${tcName}>`;
+  }
+  return attrs ? `<${tcName} ${attrs}/>` : `<${tcName}/>`;
+}
+
 async function* streamOpenAI(
   baseUrl: string, apiKey: string, model: string,
   messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
   const body: Record<string, unknown> = { model, messages, stream: true };
-  if (maxTokens) body.max_tokens = maxTokens;
+  if (maxTokens !== undefined && maxTokens !== null) body.max_tokens = maxTokens;
   const resp = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -354,30 +380,7 @@ async function* streamOpenAI(
     return depth === 0 && !inString;
   }
 
-  /** Build an XML tag from a completed tool call name + parsed JSON args */
-  function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): string {
-    const attrs = Object.entries(parsedArgs)
-      .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
-      .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
-      .join(" ");
-    const bodyTools = ["write_file", "clipboard_write", "memory_save"];
-    if (bodyTools.includes(tcName) && parsedArgs.content) {
-      const contentStr = typeof parsedArgs.content === "string" ? parsedArgs.content : "";
-      const escapedContent = contentStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const bodyAttrs = Object.entries(parsedArgs)
-        .filter(([k, v]) => k !== "content" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
-        .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
-        .join(" ");
-      return `<${tcName} ${bodyAttrs}>${escapedContent}</${tcName}>`;
-    }
-    if (tcName === "edit_file" && parsedArgs.search && parsedArgs.replace !== undefined) {
-      const occAttr = parsedArgs.occurrence ? ` occurrence="${parsedArgs.occurrence}"` : "";
-      const escapedSearch = String(parsedArgs.search).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const escapedReplace = String(parsedArgs.replace).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return `<${tcName} path="${parsedArgs.path || ''}"${occAttr}>\n<search>${escapedSearch}</search>\n<replace>${escapedReplace}</replace>\n</${tcName}>`;
-    }
-    return attrs ? `<${tcName} ${attrs}/>` : `<${tcName}/>`;
-  }
+  // Uses module-level _emitToolCallXml
 
   try {
     while (true) {
@@ -514,7 +517,9 @@ async function* streamAnthropic(
   messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
   const url = baseUrl.replace(/\/+$/, "") + "/v1/messages";
-  const systemMsg = messages.find((m) => m.role === "system")?.content || "";
+  // Combine ALL system messages (first is system prompt, second may be compaction summary)
+  const systemParts = messages.filter((m) => m.role === "system").map((m) => m.content);
+  const systemMsg = systemParts.join("\n\n");
   const chatMessages = messages.filter((m) => m.role !== "system");
   const body: Record<string, unknown> = { model, system: systemMsg, messages: chatMessages, stream: true, max_tokens: maxTokens || 16384 };
   const resp = await fetchWithRetry(url, {
@@ -578,11 +583,7 @@ async function* streamAnthropic(
             if (buf) {
               try {
                 const parsedArgs = JSON.parse(buf.args || "{}");
-                const attrs = Object.entries(parsedArgs)
-                  .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
-                  .map(([k, v]) => `${k}="${String(v).replace(/"/g, '&quot;')}"`)
-                  .join(" ");
-                const xmlTag = attrs ? `<${buf.name} ${attrs}/>` : `<${buf.name}/>`;
+                const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
                 yield { type: "message-delta", messageId: msgId, content: "\n" + xmlTag + "\n" };
               } catch {
                 yield { type: "message-delta", messageId: msgId, content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
@@ -623,6 +624,17 @@ async function* streamAnthropic(
         }
       }
     }
+    // Flush remaining Anthropic tool buffers
+    for (const [, buf] of _anthropicToolBuffers) {
+      try {
+        const parsedArgs = JSON.parse(buf.args || "{}");
+        const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+        yield { type: "message-delta", messageId: msgId, content: "\n" + xmlTag + "\n" };
+      } catch {
+        yield { type: "message-delta", messageId: msgId, content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
+      }
+    }
+    _anthropicToolBuffers.clear();
   } finally {
     reader.releaseLock();
     if (abortHandlerAnthropic && signal) {
@@ -781,7 +793,7 @@ const dalamAPI: DalamAPI = {
 
     return {
       async create(cwd?: string, shell?: string) {
-        const id = "t-" + Math.random().toString(36).slice(2, 9);
+        const id = "t-" + crypto.randomUUID();
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
           const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
@@ -870,7 +882,7 @@ const dalamAPI: DalamAPI = {
 
   agent: {
     async startSession(options: { workspacePath: string; model: string; mode: AgentSessionMode }) {
-      const sessionId = "ses-" + Math.random().toString(36).slice(2, 14);
+      const sessionId = "ses-" + crypto.randomUUID();
       sessionStartTimes.set(sessionId, Date.now());
       // Hook: SessionStart
       await hookBus.emit("SessionStart", {
@@ -1615,7 +1627,7 @@ You can combine multiple tools in one response:
           if (parsedTools.length > 0) {
             // FIX 2: Parallel tool approval and execution
             const toolCallMetas = parsedTools.map((pt) => ({
-              id: "tc-" + Math.random().toString(36).slice(2, 9),
+              id: "tc-" + crypto.randomUUID(),
               name: pt.name,
               args: pt.args,
               status: "pending" as const,
@@ -1651,12 +1663,14 @@ You can combine multiple tools in one response:
               _debugLog(`[sendPrompt] Turn ${loopCount}: executing tool ${tc.id} (${tc.name})`);
               // Check abort signal before each tool execution
               if (ac.signal.aborted) {
+                emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 break;
               }
               const decision = await waitForToolApproval(tc.id, ac.signal);
               _debugLog(`[sendPrompt] Turn ${loopCount}: tool ${tc.id} approval decision: ${decision}`);
               if (ac.signal.aborted) {
+                emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 break;
               }
@@ -1708,7 +1722,7 @@ You can combine multiple tools in one response:
             // Push combined tool results as single user message
             if (toolResults.length > 0) {
               const toolResultContent = toolResults.join("\n\n");
-              currentHistory.push({ id: "tr-" + Math.random().toString(36).slice(2, 9), role: "user" as const, content: toolResultContent, timestamp: Date.now() });
+              currentHistory.push({ id: "tr-" + crypto.randomUUID(), role: "user" as const, content: toolResultContent, timestamp: Date.now() });
               totalToolCalls += toolResults.length;
 
               // Persist tool results to sessionMessages so the LLM sees them on the next turn
@@ -1719,7 +1733,7 @@ You can combine multiple tools in one response:
                 const sid = store.activeSessionId;
                 if (sid) {
                   const toolResultMsg: ChatMessage = {
-                    id: "tr-" + Math.random().toString(36).slice(2, 9),
+                    id: "tr-" + crypto.randomUUID(),
                     role: "user",
                     content: toolResultContent,
                     timestamp: Date.now(),
@@ -1790,17 +1804,22 @@ You can combine multiple tools in one response:
             if (finalizerContent) {
               totalFullContent += finalizerContent;
               currentHistory.push({
-                id: "tf-" + Math.random().toString(36).slice(2, 9),
+                id: "tf-" + crypto.randomUUID(),
                 role: "assistant",
                 content: finalizerContent,
                 timestamp: Date.now(),
               });
             }
+            // Always emit message-end for finalizer turn
+            emit({ type: "message-end", messageId: sessionId });
+            emittedEndInThisIteration = true;
           } catch {
             emit({ type: "message-delta", messageId: sessionId, content: "\n\n[Agent reached iteration limit. No summary available.]" });
-          }
-          if (!emittedEndInThisIteration) {
-            emit({ type: "message-end", messageId: sessionId });
+            // Emit message-end even on error
+            if (!emittedEndInThisIteration) {
+              emit({ type: "message-end", messageId: sessionId });
+              emittedEndInThisIteration = true;
+            }
           }
         }
 
@@ -1882,7 +1901,7 @@ You can combine multiple tools in one response:
         sessionStartTimes.delete(sessionId);
         // Clean up file watchers — only clean watchers registered by this call
         for (const [key, unwatch] of fileWatchers) {
-          if (key.startsWith(sessionId)) {
+          if (key.startsWith(sessionId + ":")) {
             try { unwatch(); } catch { /* ignore */ }
             fileWatchers.delete(key);
           }
@@ -1891,7 +1910,7 @@ You can combine multiple tools in one response:
         // so we cannot match them here. They will be cleaned up by the MCP module on error/close.
         // Clean up pending diff proposals for this session only
         for (const [key] of pendingDiffProposals) {
-          if (key.startsWith(sessionId)) pendingDiffProposals.delete(key);
+          if (key.startsWith(sessionId + ":")) pendingDiffProposals.delete(key);
         }
         // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
         try {
@@ -2004,8 +2023,8 @@ You can combine multiple tools in one response:
           const msgs = chatState.sessionMessages[sessionId];
           if (msgs) {
             const approvalMsg: import("@dalam/shared-types").ChatMessage = {
-              id: "diff-approval-" + Math.random().toString(36).slice(2, 9),
-              role: "system",
+              id: "diff-approval-" + crypto.randomUUID(),
+              role: "user",
               content: `User approved the file write. ${pending.filePath} has been updated (${pending.hunks.reduce((n, h) => n + h.newLines, 0)} lines added, ${pending.hunks.reduce((n, h) => n + h.oldLines, 0)} removed). Continue with your task.`,
               timestamp: Date.now(),
             };
@@ -2217,7 +2236,8 @@ interface ParsedToolCall {
 }
 
 function decodeHtmlEntities(s: string): string {
-  return s.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  // Decode in correct order: & first (to avoid double-decoding), then < and >
+  return s.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
 }
 
 function parseAttributes(tagStr: string): Record<string, string> {
@@ -2298,9 +2318,16 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
 
 async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   const toolCalls: ParsedToolCall[] = [];
+  // Quoted-string-aware attribute pattern: matches "..." or '...' (handles > inside quotes)
+  const ATTRCapture = '((?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\')\\s*)*';
+  const ATTRSelfClose = ATTRCapture + '\\s*\\/?>';
+  const ATTRClose = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/';
+
+  // Capture content between opening and closing tags (non-self-closing tags)
+  const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\1\\s*>';
 
   // 1. read_file — handle both self-closing <read_file path="..."/> and with offset/limit
-  const readFileRegex = /<read_file\s+([^>]*)\/?>/gi;
+  const readFileRegex = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
   let match;
   while ((match = readFileRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
@@ -2309,23 +2336,28 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 2. write_file
-  const writeFileRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
+  // 2. write_file — greedy match to handle closing tags in content
+  const writeFileRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)<\/write_file>/gi;
   while ((match = writeFileRegex.exec(text)) !== null) {
     toolCalls.push({ name: "write_file", args: { path: match[1], content: match[2] }, raw: match[0] });
   }
 
   // 3. edit_file — support optional occurrence attribute
-  const editFileRegex = /<edit_file\s+([^>]*)>([\s\S]*?)<\/edit_file>/gi;
+  // Use greedy match to prevent premature closing on </edit_file> in content
+  const editFileRegex = /<edit_file\s+path=["']([^"']+)["']\s*occurence=["'](\d+)["']?\s*>([\s\S]*)<\/edit_file>/gi;
   while ((match = editFileRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    const innerText = match[2];
+    const innerText = match[3];
     const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(innerText);
     const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(innerText);
-    if (searchMatch && replaceMatch && attrs.path) {
+    if (searchMatch && replaceMatch) {
       toolCalls.push({
         name: "edit_file",
-        args: { ...attrs, search: searchMatch[1], replace: replaceMatch[1] },
+        args: { 
+          path: match[1], 
+          occurrence: match[2],
+          search: searchMatch[1], 
+          replace: replaceMatch[1] 
+        },
         raw: match[0]
       });
     }
@@ -2337,32 +2369,28 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
   }
 
-  // 5. grep_file — use [^>]* instead of [\s\S]*? to prevent catastrophic backtracking
-  const grepFileRegex = /<grep_file\s+([^>]*)\/?>/gi;
+  // 5. grep_file — quoted-string-aware to prevent > truncation in patterns
+  const grepFileRegex = new RegExp(`<grep_file\\s+${ATTRSelfClose}`, "gi");
   while ((match = grepFileRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.path && attrs.pattern) {
       toolCalls.push({ name: "grep_file", args: { path: attrs.path, pattern: attrs.pattern, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
     }
   }
 
-  // 6. search_files — use [^>]* instead of [\s\S]*? to prevent catastrophic backtracking
-  const searchFilesRegex = /<search_files\s+([^>]*)\/?>/gi;
+  // 6. search_files — quoted-string-aware to prevent > truncation
+  const searchFilesRegex = new RegExp(`<search_files\\s+${ATTRSelfClose}`, "gi");
   while ((match = searchFilesRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.pattern) {
       toolCalls.push({ name: "search_files", args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
     }
   }
 
   // 7. run_command — handle both self-closing and closing tags
-  const runCommandRegex = /<run_command\s+command="([^"]*)"\s*\/?>/gi;
-  const runCommandRegex2 = /<run_command\s+command='([^']*)'\s*\/?>/gi;
+  const runCommandRegex = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
   while ((match = runCommandRegex.exec(text)) !== null) {
-    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1]) }, raw: match[0] });
-  }
-  while ((match = runCommandRegex2.exec(text)) !== null) {
-    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1]) }, raw: match[0] });
+    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
   }
 
   // 6. git_status — handle both self-closing and closing tags
@@ -2390,7 +2418,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   }
 
   // 8c. git_checkout — switch branch
-  const gitCheckoutRegex = /<git_checkout\s+([^>]*)\/?>/gi;
+  const gitCheckoutRegex = new RegExp(`<git_checkout\\s+${ATTRSelfClose}`, "gi");
   while ((match = gitCheckoutRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.branch) {
@@ -2399,7 +2427,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   }
 
   // 8d. git_diff_file — diff a specific file
-  const gitDiffFileRegex = /<git_diff_file\s+([^>]*)\/?>/gi;
+  const gitDiffFileRegex = new RegExp(`<git_diff_file\\s+${ATTRSelfClose}`, "gi");
   while ((match = gitDiffFileRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.path) {
@@ -2419,10 +2447,10 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "clipboard_write", args: { text: match[1] }, raw: match[0] });
   }
 
-  // 11. notify — use [^>]* to prevent catastrophic backtracking
-  const notifyRegex = /<notify\s+([^>]*)\/?>/gi;
+  // 11. notify — quoted-string-aware
+  const notifyRegex = new RegExp(`<notify\\s+${ATTRSelfClose}`, "gi");
   while ((match = notifyRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.title) {
       toolCalls.push({ name: "notify", args: { title: attrs.title, body: attrs.body ?? "" }, raw: match[0] });
     }
@@ -2434,10 +2462,10 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "system_info", args: {}, raw: match[0] });
   }
 
-  // 13. open_url — use [^>]* to prevent catastrophic backtracking
-  const openUrlRegex = /<open_url\s+([^>]*)\/?>/gi;
+  // 13. open_url — quoted-string-aware
+  const openUrlRegex = new RegExp(`<open_url\\s+${ATTRSelfClose}`, "gi");
   while ((match = openUrlRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.url) {
       toolCalls.push({ name: "open_url", args: { url: attrs.url }, raw: match[0] });
     }
@@ -2446,7 +2474,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 14. launch_app — use [^>]* to prevent catastrophic backtracking
   const launchAppRegex = /<launch_app\s+([^>]*)\/?>/gi;
   while ((match = launchAppRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.name) {
       toolCalls.push({ name: "launch_app", args: { name: attrs.name, args: attrs.args, cwd: attrs.cwd }, raw: match[0] });
     }
@@ -2455,7 +2483,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 15. reveal_in_finder — use [^>]* to prevent catastrophic backtracking
   const revealRegex = /<reveal_in_finder\s+([^>]*)\/?>/gi;
   while ((match = revealRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.path) {
       toolCalls.push({ name: "reveal_in_finder", args: { path: attrs.path }, raw: match[0] });
     }
@@ -2481,7 +2509,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 17. memory_search — use [^>]* to prevent catastrophic backtracking
   const memorySearchRegex = /<memory_search\s+([^>]*)\/?>/gi;
   while ((match = memorySearchRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.query) {
       toolCalls.push({
         name: "memory_search",
@@ -2494,7 +2522,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 18. memory_delete
   const memoryDeleteRegex = /<memory_delete\s+([^>]*)\/?>/gi;
   while ((match = memoryDeleteRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.id) {
       toolCalls.push({
         name: "memory_delete",
@@ -2537,7 +2565,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 24. task (sub-agent spawn) — OpenCode pattern
   const taskRegex = /<task\s+([^>]*)\/?>/gi;
   while ((match = taskRegex.exec(text)) !== null) {
-    const attrs = parseAttributes(match[0]);
+    const attrs = parseAttributes(match[1]);
     if (attrs.prompt) {
       toolCalls.push({
         name: "task",
@@ -2797,6 +2825,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
     };
 
     const finish = (decision: "approved" | "denied") => {
+      // Guard against stale resolution after abort
       if (resolved) return;
       resolved = true;
       cleanup();
@@ -2860,13 +2889,21 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   if (name === "read_file") {
     const { readFile, stat } = await import("@tauri-apps/plugin-fs");
     const MAX_READ_SIZE = 1024 * 1024; // 1MB limit for agent reads
+    let fileSize = 0;
+    let statFailed = false;
     try {
       const fileInfo = await stat(args.path);
-      const fileSize = (fileInfo as { size?: number }).size ?? 0;
+      fileSize = (fileInfo as { size?: number }).size ?? 0;
       if (fileSize > MAX_READ_SIZE) {
         return `[File too large to read: ${fileSize} bytes. Use offset/limit to read specific portions, or list_dir/grep_file to inspect.]`;
       }
-    } catch { /* stat may fail for some fs, proceed with read */ }
+    } catch {
+      // stat() failed — mark as failed but DON'T proceed with full read
+      statFailed = true;
+    }
+    if (statFailed) {
+      return `[Unable to read file: ${args.path}. The file may not exist or access was denied.]`;
+    }
     const bytes = await readFile(args.path);
     const ext = args.path.split(".").pop()?.toLowerCase() ?? "";
     const textExts = new Set(["ts", "tsx", "js", "jsx", "json", "md", "mdx", "py", "rs", "css", "html", "yml", "yaml", "toml", "txt", "csv", "xml", "svg", "sh", "bash", "zsh", "fish", "sql", "graphql", "prisma", "env", "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc", "lock", "log", "cfg", "ini", "conf"]);
@@ -2930,7 +2967,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     }
 
     // Otherwise create diff proposal for user approval
-    const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
+    const diffId = "diff-" + crypto.randomUUID();
     const oldLines = oldContent.split("\n");
     const newLinesArr = newContent.split("\n");
     const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
@@ -2954,6 +2991,9 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     }
     if (typeof args.replace !== "string") {
       return "Error: edit_file requires a 'replace' argument (string)";
+    }
+    if (args.search.trim() === "") {
+      return "Error: edit_file 'search' argument cannot be empty. Provide the exact text to find in the file.";
     }
     const { readFile, writeFile } = await import("@tauri-apps/plugin-fs");
     const bytes = await readFile(args.path);
@@ -3019,7 +3059,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     }
 
     // Otherwise create diff proposal for user approval
-    const diffId = "diff-" + Math.random().toString(36).slice(2, 9);
+    const diffId = "diff-" + crypto.randomUUID();
     const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
     for (const line of oldLines) {
       diffLines.push({ type: "remove", content: line });
@@ -3456,8 +3496,10 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     const panel = args.panel as string;
     if (panel === "terminal") {
       const { useUI } = await import("../store/useAppStore");
-      useUI.getState().setBottomPanelTab("terminal");
-      useUI.getState().setBottomPanelOpen(true);
+      const ui = useUI.getState();
+      if (ui.viewMode !== "editor") ui.setViewMode("editor");
+      ui.setBottomPanelTab("terminal");
+      ui.setBottomPanelOpen(true);
       return "Opened terminal panel";
     }
     const validPanels = ["git", "diff", "review", "browser", "progress"];
@@ -3549,7 +3591,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     // Run the command in the terminal
     const { useTerminal } = await import("../store/useAppStore");
     const cwd = workspacePath || ".";
-    useTerminal.getState().addTab(cwd, "bash");
+    useTerminal.getState().addTab(cwd, "bash", command);
 
     // Open browser panel to show the preview
     const { useUI } = await import("../store/useAppStore");
@@ -3636,7 +3678,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       const msg = currentMessages[lastAssistantIdx];
       const existingQuestions = msg.questions ?? [];
       const newQuestion = {
-        id: "q-" + Math.random().toString(36).slice(2, 9),
+        id: "q-" + crypto.randomUUID(),
         question: questionText,
         options,
         answer: answerText,
@@ -3864,6 +3906,100 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     }
   }
 
+  // ─── Agentic UI Control Tools ─────────────────────────────────
+
+  if (name === "set_theme") {
+    const theme = args.theme as string;
+    if (!["light", "dark", "system"].includes(theme)) {
+      return `Error: Invalid theme "${theme}". Must be "light", "dark", or "system".`;
+    }
+    const { useSettings } = await import("../store/useAppStore");
+    useSettings.getState().update("theme", theme as "light" | "dark" | "system");
+    return `Theme changed to "${theme}".`;
+  }
+
+  if (name === "toggle_theme") {
+    const { useSettings } = await import("../store/useAppStore");
+    const current = useSettings.getState().settings.theme;
+    const next = current === "dark" ? "light" : current === "light" ? "system" : "dark";
+    useSettings.getState().update("theme", next);
+    return `Theme toggled to "${next}" (was "${current}").`;
+  }
+
+  if (name === "set_view_mode") {
+    const mode = args.mode as string;
+    if (!["editor", "chat"].includes(mode)) {
+      return `Error: Invalid view mode "${mode}". Must be "editor" or "chat".`;
+    }
+    const { useUI } = await import("../store/useAppStore");
+    useUI.getState().setViewMode(mode as "editor" | "chat");
+    return `View mode changed to "${mode}".`;
+  }
+
+  if (name === "toggle_view_mode") {
+    const { useUI } = await import("../store/useAppStore");
+    const current = useUI.getState().viewMode;
+    const next = current === "editor" ? "chat" : "editor";
+    useUI.getState().setViewMode(next);
+    return `View mode toggled to "${next}" (was "${current}").`;
+  }
+
+  if (name === "toggle_right_panel") {
+    const { useUI } = await import("../store/useAppStore");
+    useUI.getState().toggleRightPanel();
+    const isOpen = useUI.getState().rightPanelOpen;
+    return `Right panel ${isOpen ? "opened" : "closed"}.`;
+  }
+
+  if (name === "toggle_bottom_panel") {
+    const { useUI } = await import("../store/useAppStore");
+    useUI.getState().toggleBottomPanel();
+    const isOpen = useUI.getState().bottomPanelOpen;
+    return `Bottom panel ${isOpen ? "opened" : "closed"}.`;
+  }
+
+  if (name === "set_right_panel_tab") {
+    const tab = args.tab as string;
+    const validTabs = ["git", "diff", "review", "browser", "progress"];
+    if (!validTabs.includes(tab)) {
+      return `Error: Invalid panel tab "${tab}". Valid tabs: ${validTabs.join(", ")}.`;
+    }
+    const { useUI } = await import("../store/useAppStore");
+    useUI.getState().setRightPanelTab(tab as any);
+    useUI.getState().setRightPanelOpen(true);
+    return `Right panel switched to "${tab}" tab.`;
+  }
+
+  if (name === "set_bottom_panel_tab") {
+    const tab = args.tab as string;
+    const validTabs = ["terminal", "output", "problems"];
+    if (!validTabs.includes(tab)) {
+      return `Error: Invalid bottom panel tab "${tab}". Valid tabs: ${validTabs.join(", ")}.`;
+    }
+    const { useUI } = await import("../store/useAppStore");
+    useUI.getState().setBottomPanelTab(tab as any);
+    useUI.getState().setBottomPanelOpen(true);
+    return `Bottom panel switched to "${tab}" tab.`;
+  }
+
+  if (name === "new_terminal") {
+    const { useTerminal, useChat, useWorkspace } = await import("../store/useAppStore");
+    const cwd = args.cwd || useChat.getState().session?.workspacePath || useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId)?.path || ".";
+    const shell = args.shell as any || "bash";
+    useTerminal.getState().addTab(cwd, shell);
+    return `Opened new ${shell} terminal in ${cwd}.`;
+  }
+
+  if (name === "terminal_write") {
+    const { useTerminal } = await import("../store/useAppStore");
+    const terminalId = args.terminal_id || useTerminal.getState().activeTabId;
+    if (!terminalId) return "Error: No active terminal. Use new_terminal first.";
+    const command = args.command as string;
+    if (!command) return "Error: 'command' argument is required.";
+    useTerminal.getState().writeToTerminal(terminalId, command);
+    return `Command sent to terminal: ${command}`;
+  }
+
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -3885,7 +4021,7 @@ async function executeSubAgentTask(
 
   if (!prompt) return "[Error: task prompt is required]";
 
-  const subAgentId = "sub-" + Math.random().toString(36).slice(2, 9);
+  const subAgentId = "sub-" + crypto.randomUUID();
 
   // Emit sub-agent lifecycle events for UI visibility (accordion tracking)
   emit({ type: "sub-agent-start", subAgentId, prompt, description, subagentType });
@@ -4018,7 +4154,7 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
           subHistory.push({ role: "user", content: `[Tool error for ${st.name}]\n${rejectResult}` });
           continue;
         }
-        const subToolId = "stc-" + Math.random().toString(36).slice(2, 9);
+        const subToolId = "stc-" + crypto.randomUUID();
         const tc: ToolCall = { id: subToolId, name: st.name, args: st.args, status: "running" };
         subToolCalls.push(tc);
         emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });

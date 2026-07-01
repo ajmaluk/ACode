@@ -105,7 +105,7 @@ export function CommandPalette() {
         group: "View",
         icon: <TerminalSquare className="w-3.5 h-3.5" />,
         shortcut: `${modKey()}\``,
-        perform: () => { const ui = useUI.getState(); ui.setBottomPanelTab("terminal"); ui.setBottomPanelOpen(true); setOpen(false); },
+        perform: () => { const ui = useUI.getState(); if (ui.viewMode !== "editor") ui.setViewMode("editor"); ui.setBottomPanelTab("terminal"); ui.setBottomPanelOpen(true); setOpen(false); },
       },
       {
         id: "search-files",

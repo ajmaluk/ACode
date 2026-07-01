@@ -67,7 +67,7 @@ export function App() {
   const { toggle: toggleShortcuts } = useShortcuts();
   const { openState: settingsOpen } = useSettingsView();
   const { sidebarOpen, rightPanelOpen, viewMode } = useUI();
-  const { goBackChat, goForwardChat, chatHistory, chatHistoryIdx } = useChat();
+  const { chatHistory, chatHistoryIdx } = useChat();
   const canGoBack = chatHistoryIdx >= 0 || chatHistory.length > 0;
   const canGoForward = chatHistoryIdx >= 0 && chatHistoryIdx < chatHistory.length - 1;
   const { workspaces, activeWorkspaceId } = useWorkspace();
@@ -268,12 +268,17 @@ export function App() {
         // Terminal
         case "terminal.new":
         case "terminal.toggle": {
+          // Switch to editor mode first (terminal only visible in editor mode)
+          const uiState = useUI.getState();
+          if (uiState.viewMode !== "editor") {
+            uiState.setViewMode("editor");
+          }
           const session = chat.session;
           if (session?.workspacePath) {
             useTerminal.getState().ensureTabForCwd(session.workspacePath);
           }
-          ui.setBottomPanelTab("terminal");
-          ui.setBottomPanelOpen(true);
+          uiState.setBottomPanelTab("terminal");
+          uiState.setBottomPanelOpen(true);
           break;
         }
 
@@ -355,7 +360,7 @@ export function App() {
       panel.collapse();
       useUI.getState().setSidebarOpen(false);
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, sidebarOpen]);
 
   const paletteOpenRef = useRef(paletteOpen);
 
@@ -408,7 +413,10 @@ export function App() {
       }
       if (mod && e.key === "`" && !isTyping(e.target)) {
         e.preventDefault();
-        useUI.getState().toggleBottomPanel();
+        // Only toggle bottom panel in editor mode
+        if (useUI.getState().viewMode === "editor") {
+          useUI.getState().toggleBottomPanel();
+        }
         return;
       }
       if (mod && e.key === "[" && !isTyping(e.target)) {
@@ -620,17 +628,29 @@ export function App() {
           </PanelGroup>
         </div>
 
-        {/* Bottom Panel (Terminal, Output, Problems) */}
-        {bottomPanelOpen && (
-          <BottomPanel />
+        {/* Bottom Panel (Terminal, Output, Problems) — editor mode only */}
+        {viewMode === "editor" && bottomPanelOpen && (
+          <ErrorBoundary>
+            <BottomPanel />
+          </ErrorBoundary>
         )}
       </div>
 
-      <CommandPalette />
-      <ShortcutsCheatsheet />
-      <WelcomeScreen />
-      <PermissionDialog />
-      <QuestionDialog />
+      <ErrorBoundary>
+        <CommandPalette />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <ShortcutsCheatsheet />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <WelcomeScreen />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <PermissionDialog />
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <QuestionDialog />
+      </ErrorBoundary>
       <Toaster />
       </div>
     </ContextMenuProvider>

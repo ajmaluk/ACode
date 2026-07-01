@@ -372,9 +372,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
             ? { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
             : { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
           body: JSON.stringify(
-            provider.apiFormat === "anthropic"
-              ? { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
-              : { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
+            { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
           ),
           signal: ac.signal,
         } as RequestInit);
@@ -392,9 +390,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
             ? { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
             : { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
           body: JSON.stringify(
-            provider.apiFormat === "anthropic"
-              ? { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
-              : { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
+            { model: modelId, max_tokens: 10, messages: [{ role: "user", content: "hi" }] }
           ),
           signal: ac.signal,
         });
@@ -1502,7 +1498,7 @@ function TrajectoryExportCard() {
   useEffect(() => {
     if (!activeWorkspace) return;
     getTrajectoryStats(activeWorkspace.path).then(setStats).catch(() => {});
-  }, [activeWorkspace?.id]);
+  }, [activeWorkspace]);
 
   if (!activeWorkspace) {
     return <p className="text-sm text-dalam-text-muted">Open a workspace to view trajectory data.</p>;
@@ -1651,7 +1647,7 @@ function InstructionsTab() {
     if (!activeWorkspace) return;
     const api = createDalamAPI();
     loadInstructions(api, activeWorkspace.path).then(setLayers).finally(() => setLoading(false));
-  }, [activeWorkspace?.id]);
+  }, [activeWorkspace]);
 
   if (!activeWorkspace) {
     return (

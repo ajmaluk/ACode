@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useUI, useChat, useTerminal, useWorkspace } from "@/store/useAppStore";
 import { TerminalPanel } from "./TerminalPanel";
 import {
-  TerminalSquare, X, ChevronDown, PanelBottomClose,
+  TerminalSquare, PanelBottomClose,
   AlertTriangle, Info,
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";

@@ -429,7 +429,7 @@ export function solidifyGene(
 
   const gene: Gene = {
     ...candidate,
-    id: `gene-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `gene-${Date.now().toString(36)}-${crypto.randomUUID()}`,
     createdAt: Date.now(),
     lastActivatedAt: 0,
   };
@@ -500,7 +500,7 @@ export function formatGenesForPrompt(genes: Gene[]): string {
 // ─── Utility ─────────────────────────────────────────────────
 
 export function createGeneId(): string {
-  return `gene-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+  return `gene-${Date.now().toString(36)}-${crypto.randomUUID()}`;
 }
 
 export function getGeneSuccessRate(gene: Gene): number {

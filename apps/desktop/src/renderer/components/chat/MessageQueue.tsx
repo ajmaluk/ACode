@@ -1,13 +1,19 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useChat } from "@/store/useAppStore";
 import { GripVertical, ArrowUp, Pencil, Trash2 } from "lucide-react";
 
 export function MessageQueue() {
-  const { messageQueue, removeFromQueue, reorderQueue, editQueueItem, steerQueueItem } = useChat();
+  const messageQueue = useChat((s) => s.messageQueue);
+  const removeFromQueue = useChat((s) => s.removeFromQueue);
+  const reorderQueue = useChat((s) => s.reorderQueue);
+  const editQueueItem = useChat((s) => s.editQueueItem);
+  const steerQueueItem = useChat((s) => s.steerQueueItem);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
+  const editValueRef = useRef(editValue);
+  useEffect(() => { editValueRef.current = editValue; });
 
   const handleDragStart = useCallback((idx: number) => {
     dragItem.current = idx;
@@ -31,10 +37,12 @@ export function MessageQueue() {
   }, []);
 
   const handleSaveEdit = useCallback((id: string) => {
-    editQueueItem(id, editValue);
+    const value = editValueRef.current;
+    if (value.trim() === "") return;
+    editQueueItem(id, value);
     setEditingId(null);
     setEditValue("");
-  }, [editValue, editQueueItem]);
+  }, [editQueueItem]);
 
   if (messageQueue.length === 0) return null;
 
