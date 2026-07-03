@@ -21,7 +21,7 @@
  * The parent only needs to render the textarea + this component as siblings
  * inside a `relative` container.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Terminal,
   FileText,
@@ -159,27 +159,9 @@ export function PromptAutocomplete({
   const [activeIdx, setActiveIdx] = useState(0);
   const activeIdxRef = useRef(0);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeIdxRef.current = activeIdx;
   }, [activeIdx]);
-
-  // Keep the caret in sync with the textarea. Mouse / arrow / select events
-  // all move the caret, so we listen for them all.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const sync = () => setCaret(el.selectionStart ?? value.length);
-    el.addEventListener("keyup", sync);
-    el.addEventListener("click", sync);
-    el.addEventListener("select", sync);
-    el.addEventListener("focus", sync);
-    return () => {
-      el.removeEventListener("keyup", sync);
-      el.removeEventListener("click", sync);
-      el.removeEventListener("select", sync);
-      el.removeEventListener("focus", sync);
-    };
-  }, [textareaRef, value.length]);
 
   const trigger = useMemo(() => detectTrigger(value, caret), [value, caret]);
 
@@ -215,10 +197,23 @@ export function PromptAutocomplete({
       .map((s) => ({ kind: "related" as const, id: s.id, title: s.title, status: s.status }));
   }, [trigger, fileTree, chatSessions]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setActiveIdx(0);
-  }, [options.length, trigger?.type, trigger?.query]);
+  // Keep the caret in sync with the textarea. Mouse / arrow / select events
+  // all move the caret, so we listen for them all.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const sync = () => setCaret(el.selectionStart ?? value.length);
+    el.addEventListener("keyup", sync);
+    el.addEventListener("click", sync);
+    el.addEventListener("select", sync);
+    el.addEventListener("focus", sync);
+    return () => {
+      el.removeEventListener("keyup", sync);
+      el.removeEventListener("click", sync);
+      el.removeEventListener("select", sync);
+      el.removeEventListener("focus", sync);
+    };
+  }, [textareaRef, value.length]);
 
   const accept = (idx: number) => {
     if (!trigger) return;
@@ -278,12 +273,13 @@ export function PromptAutocomplete({
   // Publish the handler so the parent can call it from its textarea onKeyDown.
   // Use a ref to always have the latest handler without re-registering the effect.
   const latestHandler = useRef(handleKeyDown);
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestHandler.current = handleKeyDown;
   });
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (keyHandlerRef) {
-      // biome-ignore lint/suspicious/noExplicitAny: bridge React.KeyboardEvent to native KeyboardEvent
+      // Bridge React.KeyboardEvent to native KeyboardEvent — intentional type coercion
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       keyHandlerRef.current = ((e: any) => latestHandler.current(e)) as any;
     }
   }, [keyHandlerRef]);

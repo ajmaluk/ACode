@@ -36,14 +36,7 @@ function toolResultMsg(toolName: string, result = "ok"): ChatMessage {
   };
 }
 
-function toolErrorMsg(toolName: string, error = "failed"): ChatMessage {
-  return {
-    id: "te-" + Math.random().toString(36).slice(2),
-    role: "user",
-    content: `[TOOL ERROR: ${toolName}] ${error}`,
-    timestamp: Date.now(),
-  };
-}
+
 
 // ─── Boundary Alignment Tests ───────────────────────────────
 
@@ -91,21 +84,19 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
         userMsg("middle message 3"),
         userMsg("recent message 1"),
         userMsg("recent message 2"),
-      ];
+      ];    const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
+    const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
+    const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
 
-      const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
-      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
-
-      // Verify pairs are never split
-      if (keptIndices.has(3)) {
-        expect(keptIndices.has(2)).toBe(true);
-      }
-      if (compactedIndices.has(2)) {
-        expect(compactedIndices.has(3)).toBe(true);
-      }
-    });
+    // Verify pairs are never split
+    if (keptIndices.has(3)) {
+      expect(keptIndices.has(2)).toBe(true);
+    }
+    if (compactedIndices.has(2)) {
+      expect(compactedIndices.has(3)).toBe(true);
+    }
+  });
 
     it("compacts both assistant and tool results together when neither is protected", () => {
       // A long conversation where both the assistant(toolCalls) and tool results
@@ -195,9 +186,8 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
         userMsg("recent 2"),
       ];
 
-      const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
+      const { toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
       const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
 
       // The plain assistant (index 3) should NOT be pulled in just because
@@ -292,7 +282,7 @@ describe("tier1PruneToolOutputs", () => {
       toolResultMsg("git_status", "short"),
       userMsg("recent"),
     ];
-    const { pruned, tokensReclaimed } = tier1PruneToolOutputs(messages);
+    const { tokensReclaimed } = tier1PruneToolOutputs(messages);
     expect(tokensReclaimed).toBe(0);
   });
 
@@ -423,10 +413,6 @@ describe("_alignBoundaryPairs — Case 2: tool result protected pulls assistant 
     ];
     // Protect the first user message (index 0) — the tool result at index 2 should
     // pull its assistant at index 1 into the keep set via Case 2 backward alignment
-    const baseIndices = new Set([0]);
-    const aligned = _alignBoundaryPairs(messages, baseIndices);
-    // The tool result at index 2 is not in baseIndices, but if it were,
-    // it would pull assistant at index 1. Let's test the forward case instead:
     // Protect assistant at index 1 (has toolCalls) → tool result at index 2 should be pulled in
     const baseIndices2 = new Set([0, 1]);
     const aligned2 = _alignBoundaryPairs(messages, baseIndices2);
@@ -568,5 +554,213 @@ describe("tier2PruneToolOutputs — pruning threshold", () => {
     ];
     const { tokensReclaimed } = pruneToolOutputs(messages);
     expect(tokensReclaimed).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================
+// buildCompactionPrompt tests
+// ============================================================
+describe("buildCompactionPrompt", () => {
+  it("includes SUMMARY_TEMPLATE when no previous summary", () => {
+    const messages = [userMsg("hello"), assistantMsg("hi")];
+    const prompt = buildCompactionPrompt(messages);
+    expect(prompt.length).toBeGreaterThan(0);
+    const userContent = prompt.find(p => p.role === "user")?.content || "";
+    expect(userContent).toContain("structured summary");
+    expect(userContent).toContain("Goal");
+    expect(userContent).toContain("Pending");
+  });
+
+  it("prepends previous summary when provided", () => {
+    const messages = [userMsg("hello"), assistantMsg("world")];
+    const prompt = buildCompactionPrompt(messages, "Previous summary content");
+    const userMessages = prompt.filter(p => p.role === "user");
+    // Should start with update instruction referencing previous summary
+    const firstUserContent = userMessages[0]?.content || "";
+    expect(firstUserContent).toContain("[PREVIOUS CONVERSATION SUMMARY]");
+    expect(firstUserContent).toContain("Previous summary content");
+  });
+
+  it("includes formatted messages after instructions", () => {
+    const messages = [userMsg("hello"), assistantMsg("world")];
+    const prompt = buildCompactionPrompt(messages);
+    // Last messages should be the formatted conversation
+    const messageContents = prompt.map(p => p.content);
+    expect(messageContents.some(c => c.includes("hello"))).toBe(true);
+    expect(messageContents.some(c => c.includes("world"))).toBe(true);
+  });
+
+  it("handles empty message array", () => {
+    const prompt = buildCompactionPrompt([]);
+    const userContent = prompt.find(p => p.role === "user")?.content || "";
+    expect(userContent).toContain("conversation compaction");
+  });
+});
+
+// ============================================================
+// computePressure edge case tests
+// ============================================================
+describe("computePressure", () => {
+  it("returns 'none' for 0 usage", () => {
+    const { pressure, ratio } = computePressure(0, 128000);
+    expect(pressure).toBe("none");
+    expect(ratio).toBe(0);
+  });
+
+  it("returns 'none' for 49% usage", () => {
+    const { pressure } = computePressure(62720, 128000);
+    expect(pressure).toBe("none");
+  });
+
+  it("returns 'low' for exactly 50% usage", () => {
+    const { pressure } = computePressure(64000, 128000);
+    expect(pressure).toBe("low");
+  });
+
+  it("returns 'low' for 69% usage", () => {
+    const { pressure } = computePressure(88320, 128000);
+    expect(pressure).toBe("low");
+  });
+
+  it("returns 'medium' for exactly 70% usage", () => {
+    const { pressure } = computePressure(89600, 128000);
+    expect(pressure).toBe("medium");
+  });
+
+  it("returns 'medium' for 84% usage", () => {
+    const { pressure } = computePressure(107520, 128000);
+    expect(pressure).toBe("medium");
+  });
+
+  it("returns 'high' for exactly 85% usage", () => {
+    const { pressure } = computePressure(108800, 128000);
+    expect(pressure).toBe("high");
+  });
+
+  it("handles 100% usage", () => {
+    const { pressure, ratio } = computePressure(128000, 128000);
+    expect(pressure).toBe("high");
+    expect(ratio).toBe(1);
+  });
+
+  it("handles over 100% usage", () => {
+    const { pressure } = computePressure(200000, 128000);
+    expect(pressure).toBe("high");
+  });
+
+  it("handles zero maxTokens", () => {
+    const { pressure, ratio } = computePressure(1000, 0);
+    expect(pressure).toBe("high");
+    expect(ratio).toBe(Infinity);
+  });
+
+  it("handles negative maxTokens (invalid config)", () => {
+    const { pressure, ratio } = computePressure(1000, -1);
+    expect(pressure).toBe("high");
+    expect(ratio).toBe(Infinity);
+  });
+});
+
+// ============================================================
+// estimateTokens edge case tests
+// ============================================================
+describe("estimateTokens", () => {
+  it("returns 0 for empty string", () => expect(estimateTokens("")).toBe(0));
+
+  it("returns 0 for null/undefined input", () => {
+    // @ts-expect-error testing null edge case
+    expect(estimateTokens(null)).toBe(0);
+    // @ts-expect-error testing undefined edge case
+    expect(estimateTokens(undefined)).toBe(0);
+  });
+
+  it("estimates tokens for plain english text", () => {
+    const tokens = estimateTokens("The quick brown fox jumps over the lazy dog");
+    expect(tokens).toBeGreaterThan(0);
+    expect(tokens).toBeLessThan(20);
+  });
+
+  it("estimates tokens for code", () => {
+    const code = `function hello(name: string): string {
+  return \`Hello, \${name}!\`;
+}`;
+    const tokens = estimateTokens(code);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it("handles CJK characters (roughly 1.5 chars/token)", () => {
+    const cjk = "这是一个测试字符串用于验证中文分词";
+    const tokens = estimateTokens(cjk);
+    expect(tokens).toBeGreaterThan(0);
+    // CJK is ~1.5 chars/token, so 15 chars ≈ 10 tokens
+    expect(tokens).toBeLessThanOrEqual(15);
+  });
+
+  it("handles mixed CJK and ASCII", () => {
+    const mixed = "你好 world 测试 test 123";
+    const tokens = estimateTokens(mixed);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it("handles whitespace-only string", () => {
+    const tokens = estimateTokens("   \t\n  ");
+    expect(tokens).toBeGreaterThan(0); // whitespace counts as tokens
+  });
+
+  it("handles newlines", () => {
+    const tokens = estimateTokens("\n\n\n");
+    expect(tokens).toBe(3); // each newline = 1 token
+  });
+
+  it("handles code fence toggling for empty code blocks", () => {
+    const text = "Some text\n```\n```\nMore text";
+    const tokens = estimateTokens(text);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it("handles very long single-line string", () => {
+    const text = "x".repeat(10000);
+    const tokens = estimateTokens(text);
+    expect(tokens).toBeGreaterThan(0);
+    expect(tokens).toBeLessThan(100);
+  });
+
+  it("is deterministic for same input", () => {
+    const text = "Hello, world! This is a test.";
+    expect(estimateTokens(text)).toBe(estimateTokens(text));
+  });
+});
+
+// ============================================================
+// computeContextStats edge case tests
+// ============================================================
+describe("computeContextStats", () => {
+  it("handles empty message array", () => {
+    const stats = computeContextStats([], 128000);
+    expect(stats.pressure).toBe("none");
+    expect(stats.needsCompaction).toBe(false);
+    expect(stats.totalTokens).toBe(0);
+    expect(stats.shouldPrune).toBe(false);
+  });
+
+  it("computes shouldCompact at 95% ratio", () => {
+    // Make messages with enough tokens to hit 95%
+    const bigMsg = userMsg("x".repeat(250000));
+    const stats = computeContextStats([bigMsg], 100000, 0, 0);
+    expect(stats.shouldCompact).toBe(true);
+  });
+
+  it("computes shouldPrune when tokens exceed usable - PRUNE_PROTECT", () => {
+    const bigMsg = userMsg("x".repeat(40000));
+    const stats = computeContextStats([bigMsg], 45000, 1000, 1000);
+    expect(stats.shouldPrune).toBe(true);
+  });
+
+  it("provides nextCheckpointTrigger for various ratios", () => {
+    const stats1 = computeContextStats([userMsg("x".repeat(50))], 1000, 100, 100);
+    expect(stats1.nextCheckpointTrigger).toBeDefined();
+
+    const stats2 = computeContextStats([userMsg("x".repeat(500))], 1000, 100, 100);
+    expect(stats2.nextCheckpointTrigger).toBeNull();
   });
 });

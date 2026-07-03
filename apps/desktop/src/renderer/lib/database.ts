@@ -69,6 +69,42 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 
 // Triggers and Indexes are executed individually in initDatabase to ensure driver compatibility
 
+// ─── Path Normalization ──────────────────────────────────────
+
+/**
+ * Normalize a workspace path for use in SQLite connection strings.
+ * Converts Windows backslashes to forward slashes and ensures the path
+ * starts with a leading slash (as required by sqlite: URI scheme).
+ *
+ * Windows examples:
+ *   "C:\\Users\\me\\project" → "C:/Users/me/project"
+ *   "D:\\dev\\app"           → "D:/dev/app"
+ *   "\\\" (already posix)    → "/"
+ *
+ * Unix examples:
+ *   "/home/user/project" → "/home/user/project"
+ *
+ * Returns the full sqlite: URI string.
+ */
+export function normalizeDbPath(workspacePath: string): string {
+  // Convert backslashes to forward slashes (Windows compatibility)
+  let normalized = workspacePath.replace(/\\/g, "/");
+
+  // Empty string → minimal relative path
+  if (normalized === "") {
+    return "sqlite:/.dalam/project.db";
+  }
+
+  // Strip trailing slashes (except root path "/" which stays as-is)
+  if (normalized.length > 1) {
+    normalized = normalized.replace(/\/+$/, "");
+  }
+
+  // Ensure absolute path prefix for sqlite: URI scheme
+  const absPath = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  return `sqlite:${absPath}/.dalam/project.db`;
+}
+
 // ─── Initialization ──────────────────────────────────────────
 
 /**
@@ -103,17 +139,24 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     return null;
   }
 
-  const absPath = workspacePath.startsWith("/") ? workspacePath : `/${workspacePath}`;
-  const dbPath = `sqlite:${absPath}/.dalam/project.db`;
+  const dbPath = normalizeDbPath(workspacePath);
 
   // Ensure .dalam directory exists before opening database
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    const dotDalam = absPath + "/.dalam";
+    // Use normalizeDbPath's internal logic: backslash -> /, then strip the sqlite: prefix
+    // to get the canonical path for filesystem operations
+    const dbPathForDir = normalizeDbPath(workspacePath).replace(/^sqlite:/, "");
+    const dotDalam = dbPathForDir.replace(/\/project\.db$/, "");
     if (!(await exists(dotDalam))) {
       await mkdir(dotDalam, { recursive: true });
     }
-  } catch {
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      console.debug("[Database] Workspace inaccessible, memory disabled:", workspacePath);
+      return null;
+    }
     // mkdir may fail if already exists or permissions — proceed anyway
   }
 

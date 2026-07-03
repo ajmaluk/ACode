@@ -197,3 +197,19 @@ export function detectLanguage(path: string | null): string {
 
   return map[ext] ?? "plaintext";
 }
+
+/**
+ * Recursively find the first file node in a FileNode tree (skipping .gitignore).
+ * Useful for 'Open First File' actions in editor and chat views.
+ */
+export function findFirstFile(nodes: import('@dalam/shared-types').FileNode[]): string | null {
+  for (const n of nodes) {
+    if (n.type === 'file' && n.name !== '.gitignore') return n.path;
+    if (n.children) {
+      const inner = findFirstFile(n.children);
+      if (inner) return inner;
+    }
+  }
+  return null;
+}
+

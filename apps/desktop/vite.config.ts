@@ -23,5 +23,26 @@ export default defineConfig({
     outDir: "out/renderer",
     emptyOutDir: true,
     target: "es2022",
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // ── Vendor libraries (node_modules) ──
+          if (id.includes('node_modules')) {
+            if (id.includes('/react-dom/') || id.includes('/react/')) return 'vendor-react';
+            if (id.includes('/@monaco-editor/')) return 'vendor-monaco';
+            if (id.includes('/@xterm/')) return 'vendor-xterm';
+            if (id.includes('/highlight.js/')) return 'vendor-highlight';
+            if (id.includes('/react-markdown/') || id.includes('/remark-gfm/') || id.includes('/rehype-')) return 'vendor-markdown';
+            if (id.includes('/lucide-react/')) return 'vendor-icons';
+            if (id.includes('/@tauri-apps/')) return 'vendor-tauri';
+            if (id.includes('/zustand/') || id.includes('/zod/') || id.includes('/js-tiktoken/')) return 'vendor-state';
+          }
+          // ── App modules — store+lib are tightly coupled (circular), keep together ──
+          if (id.includes('/store/') || id.includes('/lib/')) return 'app-core';
+          if (id.includes('/components/chat/') || id.includes('/components/terminal/') || id.includes('/components/rightpanel/')) return 'app-panels';
+        },
+      },
+    },
   },
 });

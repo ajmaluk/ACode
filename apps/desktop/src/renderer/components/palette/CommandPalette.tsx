@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Command } from "cmdk";
 import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useChat, useUI } from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
@@ -35,10 +35,10 @@ export function CommandPalette() {
   const { toggle: toggleShortcuts } = useShortcuts();
   const [recent, setRecent] = useState<string[]>([]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (open) setRecent(getRecentFiles());
-  }, [open]);
+  // Load recent files when component mounts
+  if (open && recent.length === 0) {
+    setRecent(getRecentFiles());
+  }
 
   const items = useMemo<Item[]>(
     () => [
@@ -113,7 +113,7 @@ export function CommandPalette() {
         group: "View",
         icon: <Search className="w-3.5 h-3.5" />,
         shortcut: shortcut("P"),
-        perform: () => { void (async () => { const { openTabs } = useWorkspace.getState(); if (openTabs.length > 0) { useUI.getState().toggleSidebar(); } setOpen(false); })(); },
+        perform: () => { setOpen(false); },
       },
       {
         id: "go-symbol",

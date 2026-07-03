@@ -3,7 +3,7 @@ import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from "rea
 import { TitleBar } from "@/components/editor/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { EditorPane } from "@/components/editor/EditorPane";
-import { PanelRight, PanelLeftClose, PanelLeftOpen, ChevronLeft, ChevronRight, MessageSquare, Code2, Moon, Sun, Monitor } from "lucide-react";
+import { PanelLeft, PanelRight, ChevronLeft, ChevronRight, MessageSquare, Code2, Moon, Sun, Monitor } from "lucide-react";
 import { RightPanel } from "@/components/rightpanel/RightPanel";
 import { BottomPanel } from "@/components/terminal/BottomPanel";
 import { CommandPalette } from "@/components/palette/CommandPalette";
@@ -66,7 +66,7 @@ export function App() {
     useCommandPalette();
   const { toggle: toggleShortcuts } = useShortcuts();
   const { openState: settingsOpen } = useSettingsView();
-  const { sidebarOpen, rightPanelOpen, viewMode } = useUI();
+  const { rightPanelOpen, sidebarOpen, viewMode } = useUI();
   const { chatHistory, chatHistoryIdx } = useChat();
   const canGoBack = chatHistoryIdx >= 0 || chatHistory.length > 0;
   const canGoForward = chatHistoryIdx >= 0 && chatHistoryIdx < chatHistory.length - 1;
@@ -93,9 +93,14 @@ export function App() {
         const { workspaces } = useWorkspace.getState();
         await Promise.all(
           workspaces.map((ws) =>
-            loadWorkspaceConfigAndSessions(ws.path).catch((err) =>
-              console.error(`Failed to load workspace ${ws.name}:`, err)
-            )
+            loadWorkspaceConfigAndSessions(ws.path).catch((err) => {
+              const msg = (err as Error)?.message ?? String(err);
+              if (msg.includes("forbidden") || msg.includes("scope")) {
+                console.debug(`[Workspace] Skipped inaccessible workspace: ${ws.name}`);
+              } else {
+                console.warn(`Failed to load workspace ${ws.name}:`, err);
+              }
+            })
           )
         );
         if (cancelled) return;
@@ -127,16 +132,16 @@ export function App() {
         // Stage 6: Set up native menus (macOS system menu bar)
         await setupNativeMenus();
 
-        // Done — hide splash after minimum display time
+        // Done — hide splash after minimum display time (short enough to feel responsive)
         setTimeout(() => {
           if (!cancelled) setBooted(true);
-        }, 2500);
+        }, 800);
       } catch (err) {
         console.error("Bootstrap failed:", err);
         // Still boot even on error so user can see the UI
         setTimeout(() => {
           if (!cancelled) setBooted(true);
-        }, 1500);
+        }, 500);
       }
     };
 
@@ -229,9 +234,7 @@ export function App() {
           break;
 
         // View
-        case "view.toggle-sidebar":
-          ui.toggleSidebar();
-          break;
+
         case "view.toggle-right-panel":
           ui.toggleRightPanel();
           break;
@@ -318,49 +321,16 @@ export function App() {
     }
   }, [settings.theme, effectiveTheme]);
 
-  // Imperative refs for the side panels so we can collapse/expand without
+  // Imperative ref for the right panel so we can collapse/expand without
   // unmounting them (which would break react-resizable-panels autoSave and
   // cause layout jumps).
-  const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
   const rightPanelRef = useRef<ImperativePanelHandle>(null);
-
-  // Sidebar is auto-managed by workspace state (see activeWorkspaceId effect below).
-  // This effect only handles manual toggle from onCollapse/onExpand callbacks.
-  useEffect(() => {
-    const panel = sidebarPanelRef.current;
-    if (!panel) return;
-    if (sidebarOpen) panel.expand();
-    else panel.collapse();
-  }, [sidebarOpen]);
 
   useEffect(() => {
     const panel = rightPanelRef.current;
     if (!panel) return;
     if (rightPanelOpen) panel.expand();
-    else panel.collapse();
-  }, [rightPanelOpen]);
-
-  // NOTE: Settings loading, chat session loading, workspace config loading,
-  // and connector initialization are all handled by the bootstrap useEffect above.
-  // This effect only needs to handle post-boot workspace restoration for sidebar.
-
-
-  // Auto-show sidebar when a workspace is active, auto-hide when none.
-  // Track whether the collapse was manual (user dragged/resized) vs automatic
-  // (no workspace) so we don't override manual collapse when a workspace becomes active.
-  const manualCollapseRef = useRef(false);
-  useEffect(() => {
-    const panel = sidebarPanelRef.current;
-    if (!panel) return;
-    if (activeWorkspaceId && !sidebarOpen && !manualCollapseRef.current) {
-      panel.expand();
-      useUI.getState().setSidebarOpen(true);
-    } else if (!activeWorkspaceId && sidebarOpen) {
-      manualCollapseRef.current = false; // Reset on auto-collapse
-      panel.collapse();
-      useUI.getState().setSidebarOpen(false);
-    }
-  }, [activeWorkspaceId, sidebarOpen]);
+    else panel.collapse();  }, [rightPanelOpen]);
 
   const paletteOpenRef = useRef(paletteOpen);
 
@@ -394,16 +364,15 @@ export function App() {
         useSettingsView.getState().open();
         return;
       }
-      // Sidebar toggle: Ctrl+B / Cmd+B toggles sidebar (only if workspace active)
-      if (mod && e.key.toLowerCase() === "b" && !isTyping(e.target) && useWorkspace.getState().activeWorkspaceId) {
-        e.preventDefault();
-        manualCollapseRef.current = false;
-        useUI.getState().toggleSidebar();
-        return;
-      }
+
       if (mod && e.key.toLowerCase() === "n" && !isTyping(e.target)) {
         e.preventDefault();
         useChat.getState().newChat();
+        return;
+      }
+      if (mod && e.key === "b" && !isTyping(e.target)) {
+        e.preventDefault();
+        useUI.getState().toggleSidebar();
         return;
       }
       if (mod && e.key === "\\" && !isTyping(e.target)) {
@@ -485,39 +454,39 @@ export function App() {
 
       {/* macOS: thin traffic-light padding bar with controls */}
       {isMac && (
-        <div className="h-8 flex-shrink-0 flex items-center justify-between px-3 bg-dalam-bg-secondary border-b border-dalam-border-primary" data-tauri-drag-region>
+        <div className="h-9 flex-shrink-0 flex items-center justify-between px-3 bg-dalam-bg-secondary border-b border-dalam-border-primary" data-tauri-drag-region>
           {/* Left side: sidebar toggle + back/forward + workspace name */}
-          <div className="flex items-center gap-1" data-tauri-drag-region={undefined}>
+          <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
             <button
               onClick={() => useUI.getState().toggleSidebar()}
-              className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-              title="Toggle sidebar"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+              title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
             >
-              {sidebarOpen ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeftOpen className="w-3.5 h-3.5" />}
+              <PanelLeft className="w-4 h-4" />
             </button>
-            <div className="w-px h-3.5 bg-dalam-border-primary mx-0.5" />
+            <div className="w-px h-4 bg-dalam-border-primary mx-1" />
             <button
               onClick={() => useChat.getState().goBackChat()}
               disabled={!canGoBack}
-              className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               title="Previous session"
             >
-              <ChevronLeft className="w-3.5 h-3.5" />
+              <ChevronLeft className="w-4 h-4" />
             </button>
             <button
               onClick={() => useChat.getState().goForwardChat()}
               disabled={!canGoForward}
-              className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               title="Next session"
             >
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-4 h-4" />
             </button>
-            <span className="text-[11px] text-dalam-text-muted font-medium select-none ml-1" data-tauri-drag-region>
+            <span className="text-[11px] text-dalam-text-muted font-medium select-none ml-1.5" data-tauri-drag-region>
               {activeWorkspace?.name ?? "Dalam"}
             </span>
           </div>
           {/* Right side: mode switcher + theme + right panel */}
-          <div className="flex items-center gap-1" data-tauri-drag-region={undefined}>
+          <div className="flex items-center gap-1" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
             {activeWorkspaceId && (
               <div className="relative flex items-center bg-dalam-bg-tertiary rounded-full border border-dalam-border-primary p-0.5 mr-2">
                 <button
@@ -551,20 +520,19 @@ export function App() {
                 const next = settings.theme === "dark" ? "light" : settings.theme === "light" ? "system" : "dark";
                 void useSettings.getState().update("theme", next);
               }}
-              className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
               title="Toggle theme"
             >
-              {settings.theme === "dark" ? <Moon className="w-3.5 h-3.5" /> : settings.theme === "light" ? <Sun className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+              {settings.theme === "dark" ? <Moon className="w-4 h-4" /> : settings.theme === "light" ? <Sun className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
             </button>
-            {viewMode === "chat" && (
-              <button
-                onClick={() => useUI.getState().toggleRightPanel()}
-                className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-                title="Toggle right panel"
-              >
-                <PanelRight className="w-3.5 h-3.5" />
-              </button>
-            )}
+            {/* Right panel toggle button — visible in both modes */}
+            <button
+              onClick={() => useUI.getState().toggleRightPanel()}
+              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+              title="Toggle right panel"
+            >
+              <PanelRight className="w-4 h-4" />
+            </button>
           </div>
         </div>
       )}
@@ -573,34 +541,30 @@ export function App() {
       <div className="flex-1 min-h-0 flex flex-col">
         <div className="flex-1 min-h-0">
           <PanelGroup direction="horizontal">
-            <Panel
-              ref={sidebarPanelRef}
-              id="sidebar"
-              order={1}
-              defaultSize={20}
-              minSize={12}
-              maxSize={32}
-              collapsible
-              collapsedSize={0}
-              onCollapse={() => { manualCollapseRef.current = true; useUI.getState().setSidebarOpen(false); }}
-              onExpand={() => useUI.getState().setSidebarOpen(true)}
-            >
-              <ErrorBoundary>
-                <Sidebar />
-              </ErrorBoundary>
-            </Panel>
-            <PanelResizeHandle
-              className="panel-resizer horizontal"
-              hitAreaMargins={{ coarse: 6, fine: 4 }}
-              disabled={!sidebarOpen}
-            />
-            <Panel id="editor" order={2} defaultSize={viewMode === "editor" ? 100 : 55} minSize={30}>
+
+            {/* Sidebar — visible in chat mode when sidebarOpen, or in editor mode when sidebarOpen */}
+            {sidebarOpen && (
+              <>
+                <Panel id="sidebar" order={1} defaultSize={20} minSize={12} maxSize={32}>
+                  <ErrorBoundary>
+                    <Sidebar />
+                  </ErrorBoundary>
+                </Panel>
+                <PanelResizeHandle
+                  className="panel-resizer horizontal"
+                  hitAreaMargins={{ coarse: 6, fine: 4 }}
+                />
+              </>
+            )}
+            <Panel id="editor" order={2} defaultSize={rightPanelOpen ? (viewMode === "editor" ? 75 : 55) : 100} minSize={30}>
               <ErrorBoundary>
                 <EditorPane />
               </ErrorBoundary>
             </Panel>
-            {/* Right panel — only in agentic mode */}
-            {viewMode === "chat" && (
+            {/* Right panel — available in both chat and editor modes */}
+            {(
+              viewMode === "chat" || rightPanelOpen
+            ) && (
               <>
                 <PanelResizeHandle
                   className="panel-resizer horizontal"

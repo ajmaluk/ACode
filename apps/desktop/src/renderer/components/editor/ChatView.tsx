@@ -1,446 +1,41 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback, useLayoutEffect } from "react";
-import ReactDOM from "react-dom";
-import { useWorkspace, useChat, useUI, useModelProviders, useGit, useSettings, useSettingsView, stripXmlToolCallTags, type ModelProvider } from "@/store/useAppStore";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { useWorkspace, useChat, useModelProviders, useGit, useSettings, useSettingsView, stripXmlToolCallTags } from "@/store/useAppStore";
 import {
-  X, FileCode, FilePlus, ArrowUp,
-  ChevronDown, ChevronRight, Loader2, Sparkles,
-  FileText, GitBranch, Terminal, Search, FolderOpen,
-  Check, ClipboardList, Settings, Zap, Hash, Cpu, RotateCcw, History, Info, Copy, Code2, Plus, Square,
+  X, ArrowUp,
+  ChevronDown, ChevronRight, Sparkles,
+  FileText, GitBranch, FolderOpen,
+  Check, ClipboardList, Settings, Hash, Cpu, Square,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup, SubAgentList, QuestionAccordion } from "@/components/chat/ActivityBlocks";
 import { CostDisplay } from "@/components/chat/CostDisplay";
 import { MessageQueue } from "@/components/chat/MessageQueue";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
-import { basename } from "@/lib/pathUtils";
+import { formatTime } from "@/lib/chatUtils";
 import { modKey } from "@/lib/platform";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import hljs from "highlight.js";
+import { WorkingTimer, InlineActivityRow, StreamingActivityPanel } from "@/components/chat/ActivityPanel";
+import { VersionRestoreBar, ResetConfirmDialog, RestorePopup } from "@/components/chat/ChatDialogs";
+import { ChatMessage } from "@/components/chat/ChatMessage";
+import { MarkdownContent, CodeBlock } from "@/components/chat/ChatRendering";
+import { ModelSubDropdown } from "@/components/editor/ModelSubDropdown";
+import { AttachFileButton } from "@/components/editor/AttachFileButton";
 
-const WorkingTimer = React.memo(function WorkingTimer({ startTime }: { startTime: number }) {
-  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTime) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [startTime]);
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-  const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-  return (
-    <span className="text-[12px] text-dalam-text-muted/60 tabular-nums">
-      Working for {timeStr}
-    </span>
-  );
-});
 
 // ============================================================================
 // InlineActivityRow — shows a single tool/activity in progress (Cursor-style)
 // ============================================================================
-function InlineActivityRow({
-  icon,
-  label,
-  target,
-  status,
-  duration,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  target?: string;
-  status?: "running" | "completed" | "failed";
-  duration?: string;
-  children?: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const hasDetail = !!children;
-  return (
-    <div className="my-0.5">
-      <button
-        type="button"
-        onClick={() => hasDetail && setOpen((o) => !o)}
-        className={`group flex items-center gap-1.5 text-left text-[12px] leading-relaxed w-full opacity-70 hover:opacity-100 transition-opacity ${
-          hasDetail ? "cursor-pointer" : "cursor-default"
-        } text-dalam-text-secondary`}
-      >
-        {status === "running" ? (
-          <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0" />
-        ) : status === "completed" ? (
-          <Check className="w-3 h-3 text-dalam-git-added flex-shrink-0" />
-        ) : status === "failed" ? (
-          <X className="w-3 h-3 text-dalam-git-deleted flex-shrink-0" />
-        ) : (
-          icon
-        )}
-        <span className="opacity-80">{label}</span>
-        {target && (
-          <span className="font-mono text-[11px] text-dalam-text-muted/60 truncate max-w-[400px]">
-            {target}
-          </span>
-        )}
-        {duration && (
-          <span className="text-[10px] text-dalam-text-muted/50 tabular-nums ml-auto">{duration}</span>
-        )}
-        {hasDetail && (
-          <ChevronDown
-            className={`w-2.5 h-2.5 text-dalam-text-muted/50 transition-transform flex-shrink-0 ml-1 ${open ? "" : "-rotate-90"}`}
-          />
-        )}
-      </button>
-      {hasDetail && open && (
-        <div className="ml-5 mt-0.5 pl-2 border-l border-dalam-border-primary/40 text-[11px] text-dalam-text-secondary/70 leading-relaxed max-h-60 overflow-y-auto scrollbar-thin">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ============================================================================
 // StreamingActivityPanel — shows all activities inline during streaming
 // ============================================================================
-const StreamingActivityPanel = React.memo(function StreamingActivityPanel({
-  activities,
-  toolCalls,
-  thinkingContent,
-  sessionStartTime,
-}: {
-  activities: import("@dalam/shared-types").PendingActivity[];
-  toolCalls: import("@dalam/shared-types").ToolCall[];
-  thinkingContent: string;
-  sessionStartTime: number;
-}) {
-  const taskPlan = useChat((s) => s.taskPlan);
-  const taskPlanSummary = useChat((s) => s.taskPlanSummary);
-  const subAgents = useChat((s) => s.subAgents);
-  const streamingStartedAt = useChat((s) => s.streamingStartedAt);
-
-  return (
-    <div className="animate-fade-in">
-      {/* Task plan (if LLM declared one) */}
-      {taskPlan && taskPlan.length > 0 && (
-        <TaskPlanBlock tasks={taskPlan} summary={taskPlanSummary} />
-      )}
-
-      {/* Active sub-agents (collapsible accordions) */}
-      {subAgents.length > 0 && (
-        <SubAgentList agents={subAgents} />
-      )}
-
-      {/* Working timer */}
-      <div className="mb-2">
-        <WorkingTimer startTime={streamingStartedAt ?? sessionStartTime} />
-      </div>
-
-      {/* Thinking block (if any) */}
-      {thinkingContent && (
-        <ThinkingBlock content={thinkingContent} streaming />
-      )}
-
-      {/* Tool calls */}
-      {toolCalls.length > 0 && (
-        <div className="space-y-0.5">
-          {toolCalls.map((tc) => {
-            const meta = getToolMeta(tc.name);
-            const isRunning = tc.status === "running" || tc.status === "pending";
-            const isCompleted = tc.status === "completed";
-            const isFailed = tc.status === "failed";
-            const status = isRunning ? "running" : isCompleted ? "completed" : isFailed ? "failed" : undefined;
-
-            const target = (() => {
-              const args = tc.args;
-              if (!args) return "";
-              if (typeof args.path === "string") return args.path;
-              if (typeof args.command === "string") return `$ ${args.command}`;
-              if (typeof args.query === "string") return args.query;
-              if (typeof args.pattern === "string") return args.pattern;
-              return "";
-            })();
-
-            return (
-              <InlineActivityRow
-                key={tc.id}
-                icon={React.createElement(meta.icon, { className: "w-3 h-3 flex-shrink-0" })}
-                label={meta.label}
-                target={target}
-                status={status}
-              >
-                {tc.result && (
-                  <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
-                    {tc.result.slice(0, 2000)}
-                  </pre>
-                )}
-              </InlineActivityRow>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Pending activities (explore, read, bash, skill, plan) */}
-      {activities.length > 0 && (
-        <div className="space-y-0.5">
-          {activities.map((activity, idx) => {
-            if (activity.type === "explore") {
-              return (
-                <InlineActivityRow
-                  key={`explore-${idx}`}
-                  icon={<Search className="w-3 h-3 flex-shrink-0" />}
-                  label="Searched"
-                  target={activity.query}
-                  status="completed"
-                />
-              );
-            }
-            if (activity.type === "read") {
-              const fileName = activity.path.split("/").pop() || activity.path;
-              const ext = fileName.split(".").pop()?.toLowerCase() || "";
-              return (
-                <InlineActivityRow
-                  key={`read-${idx}`}
-                  icon={React.createElement(getFileIcon(ext), { className: "w-3 h-3 flex-shrink-0" })}
-                  label="Read"
-                  target={fileName}
-                  status="completed"
-                />
-              );
-            }
-            if (activity.type === "bash") {
-              return (
-                <InlineActivityRow
-                  key={`bash-${idx}`}
-                  icon={<Terminal className="w-3 h-3 flex-shrink-0" />}
-                  label="Ran"
-                  target={`$ ${activity.command}`}
-                  status="completed"
-                >
-                  <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
-                    {activity.result.slice(0, 2000)}
-                  </pre>
-                </InlineActivityRow>
-              );
-            }
-            if (activity.type === "skill") {
-              return (
-                <InlineActivityRow
-                  key={`skill-${idx}`}
-                  icon={<Zap className="w-3 h-3 flex-shrink-0" />}
-                  label="Invoked"
-                  target={`$${activity.name}`}
-                  status="completed"
-                />
-              );
-            }
-            return null;
-          })}
-        </div>
-      )}
-    </div>
-  );
-});
 
 // Helper to get file icon based on extension
-function getFileIcon(ext: string): React.ElementType {
-  const iconMap: Record<string, React.ElementType> = {
-    ts: FileCode,
-    tsx: FileCode,
-    js: FileCode,
-    jsx: FileCode,
-    json: FileCode,
-    html: FileCode,
-    css: FileCode,
-    md: FileText,
-    py: FileCode,
-    rs: FileCode,
-    go: FileCode,
-  };
-  return iconMap[ext] || FileText;
-}
 
 // Tool metadata for display
-function getToolMeta(name: string): { icon: React.ElementType; label: string } {
-  const meta: Record<string, { icon: React.ElementType; label: string }> = {
-    read_file: { icon: FileText, label: "Read" },
-    read: { icon: FileText, label: "Read" },
-    edit_file: { icon: FileCode, label: "Edited" },
-    edit: { icon: FileCode, label: "Edited" },
-    write_file: { icon: FilePlus, label: "Wrote" },
-    write: { icon: FilePlus, label: "Wrote" },
-    bash: { icon: Terminal, label: "Ran" },
-    shell: { icon: Terminal, label: "Ran" },
-    run_command: { icon: Terminal, label: "Ran" },
-    list_dir: { icon: FolderOpen, label: "Listed" },
-    grep_file: { icon: Search, label: "Searched" },
-    search_files: { icon: Search, label: "Searched" },
-    git_status: { icon: GitBranch, label: "Git Status" },
-    git_commit: { icon: GitBranch, label: "Git Commit" },
-  };
-  return meta[name] || { icon: Code2, label: name };
-}
 
-function VersionRestoreBar({ restoredVersionId, activeSessionId, sessionVersions, onConfirm, onCancel }: {
-  restoredVersionId: string;
-  activeSessionId: string;
-  sessionVersions: Record<string, import("@dalam/shared-types").ChatVersion[]>;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const versions = sessionVersions[activeSessionId] ?? [];
-  const ver = versions.find((v) => v.id === restoredVersionId);
-  if (!ver) return null;
-  return (
-    <div className="px-3 pt-1.5 pb-0 flex-shrink-0 bg-dalam-bg-primary">
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-dalam-accent-subtle/40 border border-dalam-accent-primary/20 rounded-lg text-xs">
-        <History className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <span className="text-dalam-text-primary font-medium truncate">{ver.label}</span>
-          <span className="text-dalam-text-muted ml-1.5">· {ver.messages.length} message{ver.messages.length !== 1 ? "s" : ""}</span>
-        </div>
-        <button
-          className="flex items-center gap-1 px-2 py-1 bg-dalam-accent-primary/10 hover:bg-dalam-accent-primary/20 text-dalam-accent-primary rounded-md transition-colors"
-          title="Reset to this version"
-          onClick={onConfirm}
-        >
-          <RotateCcw className="w-3 h-3" />
-          <span>Reset</span>
-        </button>
-        <button
-          className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-          title="Cancel and return to current"
-          onClick={onCancel}
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </div>
-  );
-}
 
-function ResetConfirmDialog({ fileChanges, loading, onConfirm, onCancel }: {
-  fileChanges: { path: string; action: string; additions: number; deletions: number }[];
-  loading: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
-  const toggleFile = (path: string) => {
-    setExpandedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
-      <div className="w-[440px] max-h-[70vh] bg-dalam-bg-primary border border-dalam-border-primary rounded-xl shadow-2xl flex flex-col overflow-hidden animate-fade-in" onClick={(e) => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-dalam-border-primary flex items-center gap-2">
-          {loading ? (
-            <Loader2 className="w-4 h-4 text-dalam-accent-primary animate-spin" />
-          ) : (
-            <RotateCcw className="w-4 h-4 text-dalam-accent-primary" />
-          )}
-          <h3 className="text-sm font-semibold text-dalam-text-primary">
-            {loading ? "Computing changes..." : "Reset to this message"}
-          </h3>
-        </div>
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-3">
-          {loading ? (
-            <div className="flex items-center justify-center py-8 text-xs text-dalam-text-muted">
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
-              Analyzing file changes...
-            </div>
-          ) : fileChanges.length === 0 ? (
-            <div className="text-center text-xs text-dalam-text-muted py-8">No file changes will be reverted.</div>
-          ) : (
-            <div className="space-y-1">
-              <div className="text-[11px] text-dalam-text-muted mb-2">
-                The following files will be reverted:
-              </div>
-              {fileChanges.map((fc) => (
-                <div key={fc.path} className="border border-dalam-border-primary/50 rounded-lg overflow-hidden">
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-dalam-bg-hover transition-colors"
-                    onClick={() => toggleFile(fc.path)}
-                  >
-                    <ChevronDown className={`w-3 h-3 text-dalam-text-muted transition-transform flex-shrink-0 ${expandedFiles.has(fc.path) ? "" : "-rotate-90"}`} />
-                    <FileCode className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
-                    <span className="flex-1 min-w-0 text-xs text-dalam-text-primary truncate font-mono">{fc.path}</span>
-                    {fc.additions > 0 && <span className="text-[10px] text-dalam-git-added font-mono">+{fc.additions}</span>}
-                    {fc.deletions > 0 && <span className="text-[10px] text-dalam-git-deleted font-mono">-{fc.deletions}</span>}
-                  </button>
-                  {expandedFiles.has(fc.path) && (
-                    <div className="px-3 pb-2 text-[10px] text-dalam-text-muted border-t border-dalam-border-primary/30 pt-1">
-                      <div className="flex items-center gap-3">
-                        <span className="text-dalam-text-secondary">{fc.action}</span>
-                        <span className="text-dalam-git-added">+{fc.additions} added</span>
-                        <span className="text-dalam-git-deleted">-{fc.deletions} removed</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="px-4 py-3 border-t border-dalam-border-primary flex items-center justify-end gap-2">
-          <button
-            className="px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-lg transition-colors"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="px-3 py-1.5 text-xs bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
-            onClick={onConfirm}
-            disabled={loading}
-          >
-            <RotateCcw className="w-3 h-3" />
-            Reset
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function RestorePopup({ removedMessages, onRestore, onDismiss }: {
-  removedMessages: import("@dalam/shared-types").ChatMessage[];
-  onRestore: () => void;
-  onDismiss: () => void;
-}) {
-  if (removedMessages.length === 0) return null;
-  const userMsgCount = removedMessages.filter((m) => m.role === "user").length;
-  const assistantMsgCount = removedMessages.filter((m) => m.role === "assistant").length;
-  return (
-    <div className="mb-2 px-3">
-      <div className="max-w-2xl mx-auto bg-dalam-bg-secondary border border-dalam-accent-primary/30 rounded-lg shadow-lg px-3 py-2 flex items-center gap-2 animate-fade-in">
-        <History className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
-        <div className="flex-1 min-w-0 text-[11px] text-dalam-text-secondary">
-          <span className="text-dalam-text-primary font-medium">{removedMessages.length} message{removedMessages.length !== 1 ? "s" : ""}</span>
-          {" "}removed ({userMsgCount} user, {assistantMsgCount} assistant)
-        </div>
-        <button
-          className="px-2 py-1 text-[11px] bg-dalam-accent-primary/10 hover:bg-dalam-accent-primary/20 text-dalam-accent-primary rounded-md transition-colors font-medium"
-          onClick={onRestore}
-        >
-          Restore
-        </button>
-        <button
-          className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-          onClick={onDismiss}
-          title="Dismiss"
-        >
-          <X className="w-3 h-3" />
-        </button>
-      </div>
-    </div>
-  );
-}
 function ChatView() {
   const { workspaces, activeWorkspaceId, setActiveWorkspace, openWorkspace, fileTree } = useWorkspace();
   const { settings } = useSettings();
@@ -1486,617 +1081,14 @@ Add your project's common commands here so Dalam knows how to build:
 }
 
 /**
- * Sub-accordion wrapper for the agent's in-flight tool calls. While the agent
- * is streaming, the right side of the chat shows the running shell/read/edit
- * calls as a single collapsible group so the user can hide the noise and
- * focus on the streamed text.
+ * StreamingMessageWrapper — renders live streaming content with frame-synced throttling.
+ *
+ * Instead of fragile delta-based boundary detection (which breaks when content
+ * is trimmed by the 200K char safety limit), this uses a simple rAF throttle:
+ * every state change schedules one rAF callback that compares cleaned content
+ * to the previous cleaned content. This gives smooth 60fps updates without
+ * flickering or lag, regardless of content trimming or batch size.
  */
-function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, providers, selectedModelId, onSelect, onClose, hoverTimeoutRef }: {
-  hoveredProvider: string;
-  providerRowRefs: React.MutableRefObject<Record<string, HTMLElement | null>>;
-  modelRef: React.RefObject<HTMLDivElement | null>;
-  providers: ModelProvider[];
-  selectedModelId: string;
-  onSelect: (modelId: string) => void;
-  onClose: () => void;
-  hoverTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
-}) {
-  const [style, setStyle] = useState<React.CSSProperties>({});
-  const p = providers.find((pr) => pr.id === hoveredProvider);
-  const enabledModels = p?.models.filter((m) => m.enabled !== false) ?? [];
-
-  useLayoutEffect(() => {
-    const rowEl = providerRowRefs.current[hoveredProvider];
-    const dropdownEl = modelRef.current?.querySelector('[data-dropdown-body]');
-    if (!rowEl || !dropdownEl) return;
-    const rowRect = rowEl.getBoundingClientRect();
-    const dropRect = dropdownEl.getBoundingClientRect();
-    const subH = enabledModels.length * 40 + 8;
-    const vpH = window.innerHeight;
-    let top = rowRect.top;
-    if (top + subH > vpH) top = Math.max(0, vpH - subH - 8);
-    setStyle({ left: dropRect.right + 2, top });
-
-    const scrollEl = dropdownEl;
-    const onScroll = () => {
-      const rr = rowEl.getBoundingClientRect();
-      let t = rr.top;
-      if (t + subH > vpH) t = Math.max(0, vpH - subH - 8);
-      setStyle({ left: dropRect.right + 2, top: t });
-    };
-    scrollEl.addEventListener('scroll', onScroll, { passive: true });
-    return () => scrollEl.removeEventListener('scroll', onScroll);
-  }, [hoveredProvider, enabledModels.length]);
-
-  if (!p || enabledModels.length === 0) return null;
-
-  return ReactDOM.createPortal(
-    <div className="fixed w-56 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-[100]"
-      style={style}
-      data-model-subdropdown
-      onMouseEnter={() => { if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current); }}
-      onMouseLeave={() => { hoverTimeoutRef.current = setTimeout(onClose, 200); }}>
-      <div className="max-h-64 overflow-y-auto">
-        {enabledModels.map((m) => (
-          <button key={m.modelId}
-            className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-dalam-bg-hover text-dalam-accent-primary" : "text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
-            onClick={() => { onSelect(m.modelId); }}>
-            <span className="flex-1 truncate">{m.name}</span>
-            {selectedModelId === m.modelId && <Check className="w-3.5 h-3.5 text-dalam-accent-primary" />}
-          </button>
-        ))}
-      </div>
-    </div>,
-    document.body
-  );
-}
-
-const EMPTY_ACTIVITIES: never[] = [];
-
-const ChatMessage = React.memo(function ChatMessage({ message, pending, onResetToMessage: _onResetToMessage, onResetClick, isLast }: { message: import("@dalam/shared-types").ChatMessage; pending?: boolean; onResetToMessage?: (content: string) => void; onResetClick?: (messageId: string, messageContent: string, attachments?: import("@dalam/shared-types").FileAttachment[]) => void; isLast?: boolean }) {
-  const toast = useToast();
-  const segments = useMemo(() => splitCodeFences(message.content), [message.content]);
-  // For settled messages, activities come from message.activities (no store subscription needed).
-  // For the streaming message, subscribe to pendingActivities.
-  const pendingActivities = useChat((s) => pending ? s.pendingActivities : EMPTY_ACTIVITIES);
-  const activities = message.activities ?? (pending ? pendingActivities : []);
-
-  // System message: styled notification box
-  if (message.role === "system") {
-    return (
-      <div className="py-2.5 px-3.5 my-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl text-xs text-dalam-text-secondary flex items-start gap-3 animate-fade-in shadow-sm max-w-2xl mx-auto">
-        <Info className="w-4 h-4 text-dalam-accent-primary mt-0.5 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold text-dalam-text-primary mb-1">System Notification</div>
-          <div className="whitespace-pre-wrap leading-relaxed font-mono text-[11px] text-dalam-text-secondary">{message.content}</div>
-        </div>
-      </div>
-    );
-  }
-
-  // User message: right-aligned with subtle background
-  if (message.role === "user") {
-    // Skip empty user messages (e.g. tool result placeholders that leaked through)
-    if (!message.content && !message.attachments?.length) return null;
-    return (
-      <div className="group/usermsg py-2 animate-fade-in">
-        <div className="flex justify-end">
-          <div className="max-w-[80%]">
-            {message.attachments && message.attachments.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mb-2 justify-end">
-                {message.attachments.map((att) => (
-                  <div key={att.id} className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary">
-                    {att.mimeType.startsWith("image/") ? (
-                      <img src={`data:${att.mimeType};base64,${att.content}`} alt={att.name} className="w-10 h-10 rounded object-cover" />
-                    ) : (
-                      <>
-                        <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
-                        <span className="max-w-[120px] truncate">{att.name}</span>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 relative">
-              <p className="text-[13px] text-dalam-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
-                {message.content}
-              </p>
-              {/* Hover toolbar: copy + reset to checkpoint */}
-              <div className="absolute -bottom-7 right-0 flex items-center gap-0.5 opacity-0 group-hover/usermsg:opacity-100 transition-opacity z-10">
-                <button
-                  className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-                  title="Copy message"
-                  onClick={() => { void navigator.clipboard.writeText(message.content); toast.success("Copied"); }}
-                >
-                  <Copy className="w-3 h-3" />
-                </button>
-                <button
-                  className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-                  title="Reset to this message"
-                  onClick={() => onResetClick?.(message.id, message.content, message.attachments)}
-                >
-                  <RotateCcw className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Assistant message: left-aligned with subtle accent
-  // Skip empty assistant messages (no content, no activities, no tool calls)
-  const hasContent = !!(message.content || pending);
-  const hasActivities = activities.length > 0;
-  const hasToolCalls = !!(message.toolCalls && message.toolCalls.length > 0);
-  const hasTodos = !!(message.todos && message.todos.length > 0);
-  const hasFileChanges = !!(message.fileChanges && message.fileChanges.length > 0);
-  const hasThinking = !!(message.thinking);
-  if (!hasContent && !hasActivities && !hasToolCalls && !hasTodos && !hasFileChanges && !hasThinking) {
-    return null;
-  }
-
-  return (
-    <div className="group/msg py-2 animate-fade-in">
-
-      {/* Thinking block — model's reasoning, collapsed by default */}
-      {!pending && message.thinking && (
-        <ThinkingBlock content={message.thinking} />
-      )}
-
-      {/* Activity blocks (explore / read / skill / bash / plan) */}
-      {hasActivities && (() => {
-        // Group context-gathering activities (explore, read) into a collapsible section
-        const CONTEXT_TYPES = new Set(["explore", "read"]);
-        const contextActivities = activities.filter(a => CONTEXT_TYPES.has(a.type));
-        const otherActivities = activities.filter(a => !CONTEXT_TYPES.has(a.type));
-
-        return (
-          <div className="my-0.5">
-            {/* Context-gathering tools: collapsible group */}
-            {contextActivities.length > 0 && (
-              <ContextGatheringGroup activities={contextActivities} />
-            )}
-            {/* Other activities: rendered individually */}
-            {otherActivities.map((activity) => {
-              const ak = activity.id;
-              if (activity.type === "skill") {
-                return <SkillBlock key={ak} name={activity.name} content={activity.content} args={activity.args} />;
-              }
-              if (activity.type === "bash") {
-                return <BashActivityBlock key={ak} command={activity.command} result={activity.result} />;
-              }
-              if (activity.type === "plan") {
-                return <PlanBlock key={ak} plan={activity.plan} />;
-              }
-              if (activity.type === "think") {
-                return <ThinkingBlock key={ak} content={activity.content} />;
-              }
-              return null;
-            })}
-          </div>
-        );
-      })()}
-
-
-      {/* Main assistant message — rendered with markdown */}
-      {hasContent && (
-        <div className="text-[13px] text-dalam-text-primary leading-relaxed my-0.5">
-          {segments.filter((seg) => seg.type !== "text" || seg.content.trim()).map((seg, idx) =>
-            seg.type === "code"
-              ? <CodeBlock key={"code-" + idx} language={seg.language ?? ""} content={seg.content} />
-              : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0">
-                  {pending
-                    ? <StreamingContent content={seg.content} pending={true} />
-                    : <MarkdownContent content={seg.content} />
-                  }
-                </div>
-          )}
-          {pending && (
-            <span className="inline-block w-[2px] h-4 bg-dalam-accent-primary ml-0.5 animate-typing-cursor rounded-sm align-middle" />
-          )}
-        </div>
-      )}
-
-      {/* Tool calls from this AI turn — read_file, edit_file, shell, etc. */}
-      {!pending && hasToolCalls && (
-        <ToolCallsList toolCalls={message.toolCalls!} />
-      )}
-
-      {/* Todo checklist */}
-      {!pending && hasTodos && (
-        <TodoBlock todos={message.todos!} />
-      )}
-
-      {/* Task plan checklist */}
-      {!pending && message.taskPlan && message.taskPlan.length > 0 && (
-        <TaskPlanBlock tasks={message.taskPlan} summary={message.taskPlanSummary} />
-      )}
-
-      {/* Questions asked by the agent */}
-      {!pending && message.questions && message.questions.length > 0 && (
-        <QuestionAccordion questions={message.questions} />
-      )}
-
-      {/* Changes card — shows file modifications from this AI turn */}
-      {!pending && hasFileChanges && (
-        <ChangesCard changes={message.fileChanges!} />
-      )}
-
-      {/* Message meta footer — only on the last message when settled. */}
-      {!pending && isLast && (message.content || hasToolCalls || hasFileChanges) && (
-        <div className="flex items-center gap-2 mt-1 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity">
-          <div className="ml-auto flex items-center gap-0.5">
-            {message.content && (
-              <button
-                className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
-                title="Copy"
-                onClick={() => { void navigator.clipboard.writeText(message.content); toast.success("Copied"); }}
-              >
-                <Copy className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}, (prevProps, nextProps) => {
-  const prevTC = prevProps.message.toolCalls;
-  const nextTC = nextProps.message.toolCalls;
-  const tcChanged = (prevTC?.length ?? 0) !== (nextTC?.length ?? 0) ||
-    (prevTC && nextTC && prevTC.some((tc, i) =>
-      tc.id !== nextTC[i]?.id || tc.status !== nextTC[i]?.status || tc.result !== nextTC[i]?.result
-    ));
-  const prevFC = prevProps.message.fileChanges;
-  const nextFC = nextProps.message.fileChanges;
-  const fcChanged = (prevFC?.length ?? 0) !== (nextFC?.length ?? 0) ||
-    (prevFC && nextFC && prevFC.some((fc, i) =>
-      fc.path !== nextFC[i]?.path || fc.action !== nextFC[i]?.action
-    ));
-  const prevAct = prevProps.message.activities;
-  const nextAct = nextProps.message.activities;
-  const actChanged = (prevAct?.length ?? 0) !== (nextAct?.length ?? 0) ||
-    (prevAct && nextAct && prevAct.some((a, i) => {
-      const b = nextAct[i];
-      if (!b || a.type !== b.type) return true;
-      // Compare type-specific fields
-      switch (a.type) {
-        case "think": return b.type === "think" && a.content !== b.content;
-        case "explore": return b.type === "explore" && a.query !== b.query;
-        case "read": return b.type === "read" && a.path !== b.path;
-        case "skill": return b.type === "skill" && a.name !== b.name;
-        case "bash": return b.type === "bash" && (a.command !== b.command || a.result !== b.result);
-        case "plan": return b.type === "plan" && a.plan !== b.plan;
-        default: return false;
-      }
-    }));
-  return (
-    prevProps.pending === nextProps.pending &&
-    prevProps.isLast === nextProps.isLast &&
-    prevProps.onResetToMessage === nextProps.onResetToMessage &&
-    prevProps.onResetClick === nextProps.onResetClick &&
-    prevProps.message.id === nextProps.message.id &&
-    prevProps.message.content === nextProps.message.content &&
-    prevProps.message.role === nextProps.message.role &&
-    prevProps.message.thinking === nextProps.message.thinking &&
-    !tcChanged && !fcChanged && !actChanged
-  );
-});
-
-
-function AttachFileButton() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const { addPendingAttachment } = useChat();
-  const toast = useToast();
-
-  const readFile = async (file: File) => {
-    return new Promise<{ content: string; mimeType: string }>((resolve) => {
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          const base64 = result.split(",")[1] || "";
-          resolve({ content: base64, mimeType: file.type });
-        };
-        reader.onerror = () => resolve({ content: "", mimeType: file.type });
-        reader.readAsDataURL(file);
-      } else {
-        const reader = new FileReader();
-        reader.onload = () => resolve({ content: reader.result as string, mimeType: file.type || "text/plain" });
-        reader.onerror = () => resolve({ content: "", mimeType: file.type || "text/plain" });
-        reader.readAsText(file);
-      }
-    });
-  };
-
-  const handleFiles = async (files: FileList | null) => {
-    if (!files) return;
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      if (file.size > 10 * 1024 * 1024) {
-        toast.warning("File too large", `${file.name} exceeds 10MB limit`);
-        continue;
-      }
-      const { content, mimeType } = await readFile(file);
-      addPendingAttachment({
-        id: "att-" + crypto.randomUUID(),
-        name: file.name,
-        mimeType,
-        content,
-        size: file.size,
-      });
-    }
-    if (inputRef.current) inputRef.current.value = "";
-  };
-
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        className="hidden"
-        multiple
-        accept="image/*,.txt,.js,.ts,.tsx,.jsx,.py,.rs,.go,.java,.c,.cpp,.h,.css,.html,.json,.md,.yaml,.yml,.toml,.sh,.sql,.csv,.xml,.swift,.rb,.php"
-        onChange={(e) => void handleFiles(e.target.files)}
-      />
-      <Tooltip content="Add context" side="top">
-        <button
-          className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-          onClick={() => inputRef.current?.click()}
-          aria-label="Add context"
-        >
-          <Plus className="w-4 h-4" />
-        </button>
-      </Tooltip>
-    </>
-  );
-}
-
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MARKDOWN_COMPONENTS: Record<string, any> = {
-  p: ({ children }: { children: React.ReactNode }) => <p className="whitespace-pre-wrap break-words mb-2 last:mb-0">{children}</p>,
-  strong: ({ children }: { children: React.ReactNode }) => <strong className="font-semibold text-dalam-text-primary">{children}</strong>,
-  em: ({ children }: { children: React.ReactNode }) => <em className="italic">{children}</em>,
-  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children: React.ReactNode }) => (
-    <a
-      href={href}
-      {...props}
-      onClick={(e) => {
-        if (!href) return;
-        try {
-          const parsed = new URL(href);
-          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-            e.preventDefault();
-            const ui = useUI.getState();
-            ui.addBrowserTab({ url: href });
-            ui.setRightPanelTab("browser");
-            if (!ui.rightPanelOpen) ui.setRightPanelOpen(true);
-          }
-        } catch {
-          // Invalid URL — let the browser handle it normally
-        }
-      }}
-      className="text-dalam-accent-primary hover:underline cursor-pointer"
-    >{children}</a>
-  ),
-  ul: ({ children }: { children: React.ReactNode }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
-  ol: ({ children }: { children: React.ReactNode }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
-  li: ({ children }: { children: React.ReactNode }) => <li className="text-dalam-text-secondary">{children}</li>,
-  h1: ({ children }: { children: React.ReactNode }) => <h1 className="text-lg font-bold mb-2 text-dalam-text-primary">{children}</h1>,
-  h2: ({ children }: { children: React.ReactNode }) => <h2 className="text-base font-bold mb-2 text-dalam-text-primary">{children}</h2>,
-  h3: ({ children }: { children: React.ReactNode }) => <h3 className="text-sm font-bold mb-1 text-dalam-text-primary">{children}</h3>,
-  code: ({ children, className }: { children: React.ReactNode; className?: string }) => {
-    const isInline = !className;
-    if (isInline) {
-      return <code className="px-1 py-0.5 bg-dalam-bg-tertiary rounded text-[12px] font-mono text-dalam-accent-primary">{children}</code>;
-    }
-    return <code className={className}>{children}</code>;
-  },
-  blockquote: ({ children }: { children: React.ReactNode }) => (
-    <blockquote className="border-l-2 border-dalam-accent-primary/40 pl-3 my-2 text-dalam-text-muted italic">{children}</blockquote>
-  ),
-  hr: () => <hr className="my-3 border-dalam-border-primary" />,
-  table: ({ children }: { children: React.ReactNode }) => <div className="overflow-x-auto my-2"><table className="text-xs border-collapse">{children}</table></div>,
-  th: ({ children }: { children: React.ReactNode }) => <th className="px-2 py-1 border border-dalam-border-primary text-left font-medium">{children}</th>,
-  td: ({ children }: { children: React.ReactNode }) => <td className="px-2 py-1 border border-dalam-border-primary">{children}</td>,
-};
-
-const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
-  return (
-    <Markdown
-      remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
-    >
-      {content}
-    </Markdown>
-  );
-});
-
-// Lightweight streaming renderer — avoids expensive react-markdown re-parsing on each delta.
-// Uses full MarkdownContent for short content or when settled; lightweight renderer for long streaming content.
-const StreamingContent = React.memo(function StreamingContent({ content, pending }: { content: string; pending: boolean }) {
-  if (!pending || content.length < 100) {
-    return <MarkdownContent content={content} />;
-  }
-  const segments = splitCodeFences(content);
-  return (
-    <div className="prose-dalam mb-2 last:mb-0">
-      {segments.map((seg, idx) =>
-        seg.type === "code"
-          ? <StreamingCodeBlock key={"sc-" + idx} language={seg.language ?? ""} content={seg.content} />
-          : <p key={"st-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0 leading-relaxed">{seg.content}</p>
-      )}
-    </div>
-  );
-});
-
-const CodeBlock = React.memo(function CodeBlock({ language, content }: { language: string; content: string }) {
-  const toast = useToast();
-  const activeFilePath = useWorkspace((s) => s.activeFilePath);
-  const updateTabContent = useWorkspace((s) => s.updateTabContent);
-  const [expanded, setExpanded] = useState(true);
-  const lines = content.split("\n");
-  const isLong = lines.length > 30;
-
-  const escapeHtml = useCallback((s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"), []);
-
-  // Throttle hljs highlighting — re-runs at most once per 200ms during streaming
-  const [highlighted, setHighlighted] = useState(() => escapeHtml(content));
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (language && hljs.getLanguage(language)) {
-        try { setHighlighted(hljs.highlight(content, { language }).value); } catch { setHighlighted(escapeHtml(content)); }
-      } else {
-        try { setHighlighted(hljs.highlight(content, { language: "plaintext" }).value); } catch { setHighlighted(escapeHtml(content)); }
-      }
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [content, language, escapeHtml]);
-
-  const handleApply = useCallback(() => {
-    if (!activeFilePath) {
-      toast.info("No active file open in the editor");
-      return;
-    }
-    const { openTabs } = useWorkspace.getState();
-    const currentTab = openTabs.find((t) => t.path === activeFilePath);
-    const hasExistingContent = currentTab && currentTab.content.trim().length > 0;
-    if (hasExistingContent) {
-      if (!window.confirm(`Overwrite entire content of ${basename(activeFilePath)}? This cannot be undone.`)) return;
-    }
-    updateTabContent(activeFilePath, content);
-    toast.success("Applied to editor");
-  }, [activeFilePath, content, updateTabContent, toast]);
-
-  return (
-    <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
-        <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted"><FileCode className="w-3 h-3" />{language || "code"}<span className="text-dalam-text-muted/50">· {lines.length} lines</span></div>
-        <div className="flex items-center gap-1">
-          {isLong && (
-            <button
-              className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
-              onClick={() => setExpanded(!expanded)}
-            >{expanded ? "Collapse" : "Expand"}</button>
-          )}
-          <button className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors" onClick={handleApply}>Apply</button>
-        </div>
-      </div>
-      <pre
-        className="p-3 text-[12px] text-mono text-dalam-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
-        style={{ maxHeight: isLong && !expanded ? "240px" : undefined }}
-      ><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
-      {isLong && !expanded && (
-        <button
-          className="w-full py-1.5 text-[10px] text-dalam-accent-primary hover:bg-dalam-bg-hover border-t border-dalam-border-primary transition-colors"
-          onClick={() => setExpanded(true)}
-        >Show all {lines.length} lines</button>
-      )}
-    </div>
-  );
-});
-
-// Streaming code block — shows highlighted code immediately during stream
-const StreamingCodeBlock = React.memo(function StreamingCodeBlock({ language, content }: { language: string; content: string }) {
-  const lines = content.split("\n");
-  const isLong = lines.length > 30;
-  const [expanded, setExpanded] = useState(true);
-
-  const escapeHtml = useCallback((s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"), []);
-  const [highlighted, setHighlighted] = useState(() => escapeHtml(content));
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (language && hljs.getLanguage(language)) {
-        try { setHighlighted(hljs.highlight(content, { language }).value); } catch { setHighlighted(escapeHtml(content)); }
-      } else {
-        try { setHighlighted(hljs.highlightAuto(content).value); } catch { setHighlighted(escapeHtml(content)); }
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [content, language, escapeHtml]);
-
-  return (
-    <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
-        <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted">
-          <FileCode className="w-3 h-3" />
-          {language || "code"}
-          <span className="text-dalam-text-muted/50">· {lines.length} lines</span>
-        </div>
-        <div className="flex items-center gap-1">
-          {isLong && (
-            <button
-              className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
-              onClick={() => setExpanded(!expanded)}
-            >{expanded ? "Collapse" : "Expand"}</button>
-          )}
-        </div>
-      </div>
-      <pre
-        className="p-3 text-[12px] font-mono text-dalam-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
-        style={{ maxHeight: isLong && !expanded ? "240px" : undefined }}
-      ><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
-      {isLong && !expanded && (
-        <button
-          className="w-full py-1.5 text-[10px] text-dalam-accent-primary hover:bg-dalam-bg-hover border-t border-dalam-border-primary transition-colors"
-          onClick={() => setExpanded(true)}
-        >Show all {lines.length} lines</button>
-      )}
-    </div>
-  );
-});
-
-function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function splitCodeFences(text: string): { type: "text" | "code"; content: string; language?: string }[] {
-  const out: { type: "text" | "code"; content: string; language?: string }[] = [];
-  // Match complete code fences: ```lang\n...```
-  const re = /```(\w*)(?:\n([\s\S]*?))?\n?```/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > last) out.push({ type: "text", content: text.slice(last, match.index) });
-    out.push({ type: "code", content: match[2] ?? "", language: match[1] });
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) {
-    const rest = text.slice(last);
-    const fenceIdx = rest.indexOf("```");
-    if (fenceIdx !== -1) {
-      if (fenceIdx > 0) {
-        out.push({ type: "text", content: rest.slice(0, fenceIdx) });
-      }
-      const codePart = rest.slice(fenceIdx + 3);
-      const newlineIdx = codePart.indexOf("\n");
-      if (newlineIdx !== -1) {
-        const language = codePart.slice(0, newlineIdx).trim();
-        const content = codePart.slice(newlineIdx + 1);
-        // Incomplete code fence (no closing ```) — show as code block
-        out.push({ type: "code", content, language });
-      } else {
-        out.push({ type: "code", content: "", language: codePart.trim() });
-      }
-    } else {
-      out.push({ type: "text", content: rest });
-    }
-  }
-  return out;
-}
-
-function findFirstFile(nodes: import("@dalam/shared-types").FileNode[]): string | null {
-  for (const n of nodes) {
-    if (n.type === "file" && n.name !== ".gitignore") return n.path;
-    if (n.children) { const inner = findFirstFile(n.children); if (inner) return inner; }
-  }
-  return null;
-}
-
 function StreamingMessageWrapper({
   scrollRef,
   isUserScrolledUp,
@@ -2113,93 +1105,66 @@ function StreamingMessageWrapper({
   const pendingActivities = useChat((s) => s.pendingActivities);
   const session = useChat((s) => s.session);
 
-  const cleanRef = useRef("");
-  const lastRawLenRef = useRef(0); // Track raw length for correct delta computation
-  const pendingContentRef = useRef("");
-  const pendingThinkingRef = useRef("");
-  const cleanThinkingRef = useRef(""); // Ref for thinking comparison (avoids stale closure)
-  const lastUpdateRef = useRef(0);
-  const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refs hold latest values for rAF callback (no stale closures)
+  const streamingContentRef = useRef(streamingContent);
+  const thinkingContentRef = useRef(thinkingContent);
+  streamingContentRef.current = streamingContent;
+  thinkingContentRef.current = thinkingContent;
+
+  const prevCleanRef = useRef("");
+  const prevThinkingRef = useRef("");
+  const rafIdRef = useRef<number | null>(null);
   const [cleanStreamingContent, setCleanStreamingContent] = useState("");
   const [cleanThinkingContent, setCleanThinkingContent] = useState("");
 
   useEffect(() => {
+    // Both empty: reset immediately (stream ended or hasn't started)
     if (!streamingContent && !thinkingContent) {
-      if (cleanRef.current !== "" || cleanThinkingRef.current !== "") {
-        cleanRef.current = "";
-        lastRawLenRef.current = 0;
-        pendingContentRef.current = "";
-        pendingThinkingRef.current = "";
-        cleanThinkingRef.current = "";
+      if (prevCleanRef.current !== "" || prevThinkingRef.current !== "") {
+        prevCleanRef.current = "";
+        prevThinkingRef.current = "";
         setCleanStreamingContent("");
         setCleanThinkingContent("");
-        lastUpdateRef.current = 0;
-        if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+      }
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
       }
       return;
     }
-    pendingContentRef.current = streamingContent;
-    pendingThinkingRef.current = thinkingContent;
 
-    const performUpdate = () => {
-      const raw = pendingContentRef.current;
-      const rawThinking = pendingThinkingRef.current;
-      
-      const cleaned = stripXmlToolCallTags(raw);
-      let changed = false;
-      if (cleanRef.current !== cleaned) {
-        cleanRef.current = cleaned;
-        setCleanStreamingContent(cleaned);
-        changed = true;
-      }
-      // Use ref for comparison to avoid stale closure
-      if (cleanThinkingRef.current !== rawThinking) {
-        cleanThinkingRef.current = rawThinking;
-        setCleanThinkingContent(rawThinking);
-        changed = true;
-      }
-      if (changed) {
-        lastUpdateRef.current = Date.now();
-        lastRawLenRef.current = raw.length;
-      }
-      timeoutIdRef.current = null;
-    };
+    // Schedule one rAF callback per frame (deduped via rafIdRef)
+    if (rafIdRef.current === null) {
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        const raw = streamingContentRef.current;
+        const rawThinking = thinkingContentRef.current;
 
-    const now = Date.now();
-    const elapsed = now - lastUpdateRef.current;
+        const cleaned = raw ? stripXmlToolCallTags(raw) : "";
 
-    // Boundary-based batching: render only when complete sentences or lines are formed,
-    // or when the fallback timeout (350ms) is reached to prevent lag feeling.
-    // Use raw-to-raw delta (not stripped-to-raw) for correct boundary detection.
-    const raw = streamingContent;
-    // Handle content trimming: if raw is shorter than lastRawLen, content was trimmed
-    if (raw.length < lastRawLenRef.current) {
-      lastRawLenRef.current = 0;
-    }
-    const delta = raw.slice(lastRawLenRef.current);
-
-    const hasLineBreak = delta.includes("\n");
-    const hasSentenceEnd = /[.!?](\s|$)/.test(delta);
-    const hasCodeBlock = delta.includes("```");
-    const isBoundary = hasLineBreak || hasSentenceEnd || hasCodeBlock;
-
-    const throttleLimit = 16; // ~1 frame for instant streaming feedback
-
-    if (isBoundary || elapsed >= throttleLimit) {
-      if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
-      performUpdate();
-    } else {
-      if (!timeoutIdRef.current) {
-        timeoutIdRef.current = setTimeout(performUpdate, Math.min(throttleLimit - elapsed, 16)); // Cap at ~1 frame for smoothness
-      }
+        let changed = false;
+        if (prevCleanRef.current !== cleaned) {
+          prevCleanRef.current = cleaned;
+          setCleanStreamingContent(cleaned);
+          changed = true;
+        }
+        if (prevThinkingRef.current !== rawThinking) {
+          prevThinkingRef.current = rawThinking;
+          setCleanThinkingContent(rawThinking);
+          changed = true;
+        }
+      });
     }
 
     return () => {
-      if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
     };
   }, [streamingContent, thinkingContent]);
 
-  // Handle auto-scroll on content updates inside the wrapper to keep ChatView from re-rendering
+  // Handle auto-scroll on content updates
   useEffect(() => {
     if (!isUserScrolledUp.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -2221,7 +1186,7 @@ function StreamingMessageWrapper({
           message={{
             id: "streaming",
             role: "assistant",
-            content: cleanStreamingContent, // raw content — StreamingContent handles code fences
+            content: cleanStreamingContent,
             timestamp: timestamp,
             ...(cleanThinkingContent ? { thinking: cleanThinkingContent } : {}),
           }}
@@ -2244,5 +1209,5 @@ function StreamingMessageWrapper({
 
 
 // Export ChatView as default and individual components as named exports
-export { ChatView, ChatMessage, StreamingMessageWrapper, WorkingTimer, StreamingActivityPanel, InlineActivityRow, ModelSubDropdown, AttachFileButton, CodeBlock, MarkdownContent, splitCodeFences, findFirstFile, formatTime };
+export { ChatView, ChatMessage, StreamingMessageWrapper, WorkingTimer, StreamingActivityPanel, InlineActivityRow, ModelSubDropdown, AttachFileButton, CodeBlock, MarkdownContent };
 export default ChatView;

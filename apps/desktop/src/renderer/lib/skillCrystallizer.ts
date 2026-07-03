@@ -16,6 +16,7 @@
 import { createDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
+import { loadProjectSkills, refreshProjectSkills } from "./skills";
 import type { ChatMessage } from "@dalam/shared-types";
 
 export type NotifyFn = (toast: { kind: "info" | "success" | "warning" | "error"; title: string; description: string; durationMs?: number; actions?: Array<{ label: string; variant?: "primary" | "secondary" | "danger"; onClick: () => void }> }) => void;
@@ -118,7 +119,7 @@ ${formattedHistory}`;
                 await api.fs.writeFile(joinPath(skillsDir, "SKILL.md"), data.content);
 
                 // Reload skills registry in React app state
-                const { loadProjectSkills, refreshProjectSkills } = await import("./skills");
+
                 const projectSkills = await loadProjectSkills(workspacePath, api.fs);
                 refreshProjectSkills(projectSkills);
 

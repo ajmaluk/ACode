@@ -159,15 +159,29 @@ class HookEventBus {
       const start = Date.now();
       const handlerName = handler.name || "anonymous";
       try {
-        // Wrap handler with a 10-second timeout to prevent deadlocks
         const result = handler(payload);
         if (result && typeof (result as Promise<void>).then === "function") {
-          await Promise.race([
-            result,
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`Handler "${handlerName}" timed out after 10s`)), 10_000)
-            ),
-          ]);
+          // Use AbortController + timer for timeout instead of Promise.race to avoid
+          // leaking the timeout rejection handler if the handler resolves first.
+          // With Promise.race, the timeout Promise keeps its rejection callback alive
+          // until the timer fires (10s), preventing GC of the closure chain.
+          const timeoutController = new AbortController();
+          const timeoutId = setTimeout(() => {
+            timeoutController.abort();
+          }, 10_000);
+          try {
+            // Race the handler against a signal-aware rejection
+            await Promise.race([
+              result,
+              new Promise<never>((_, reject) => {
+                timeoutController.signal.addEventListener("abort", () => {
+                  reject(new Error(`Handler "${handlerName}" timed out after 10s`));
+                }, { once: true });
+              }),
+            ]);
+          } finally {
+            clearTimeout(timeoutId);
+          }
         }
         this.pushLog({
           event: eventName,

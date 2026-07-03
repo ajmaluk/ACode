@@ -27,6 +27,7 @@ import { getDb } from "./database";
 import { createDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
+import { loadProjectSkills, refreshProjectSkills } from "./skills";
 
 export interface DreamReport {
   purgedCount: number;
@@ -330,19 +331,6 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * Computes token-level intersection sets to catch surface-level duplicate structures.
- */
-function calculateTokenSimilarity(textA: string, textB: string): number {
-  const tokensA = new Set(textA.toLowerCase().split(/[\s,.\-/:()]+/));
-  const tokensB = new Set(textB.toLowerCase().split(/[\s,.\-/:()]+/));
-
-  const intersection = new Set([...tokensA].filter(x => tokensB.has(x)));
-  const union = new Set([...tokensA, ...tokensB]);
-
-  return union.size === 0 ? 0 : intersection.size / union.size;
-}
-
-/**
  * Scans the workspace skills directory, detects duplicates using Jaccard token clustering,
  * and refactors them into a consolidated skill using background LLM runs.
  */
@@ -376,11 +364,10 @@ export async function executeWorkspaceDreamOptimization(workspacePath: string): 
         const skillA = discoveredSkills[i]!;
         const skillB = discoveredSkills[j]!;
         
-        const coefficientScore = calculateTokenSimilarity(skillA.rawContent, skillB.rawContent);
+        // Use jaccardSimilarity directly (no thin wrapper)
+        if (jaccardSimilarity(skillA.rawContent, skillB.rawContent) <= 0.45) continue;
         
-        // Threshold triggering context merging via background LLM pass
-        if (coefficientScore > 0.45) {
-          const consolidationPrompt = `You are a background compilation refactoring process.
+        const consolidationPrompt = `You are a background compilation refactoring process.
 We found two highly similar, overlapping procedural instructions files inside our local project workspace configuration.
 Your task is to merge these two structural documents into a single comprehensive SKILL.md document.
 
@@ -392,38 +379,38 @@ ${skillB.rawContent}
 
 Generate an elegant unified version. Output the result in clean markdown with appropriate YAML headers.`;
 
-          const model = useSettings.getState().settings.selectedModel || "gpt-4o-mini";
-          const response = await api.agent.summarizeMessages(model, [
-            { role: "user", content: consolidationPrompt }
-          ]);
+        const model = useSettings.getState().settings.selectedModel || "gpt-4o-mini";
+        const response = await api.agent.summarizeMessages(model, [
+          { role: "user", content: consolidationPrompt }
+        ]);
 
-          // Validate LLM output contains valid YAML frontmatter before overwriting
-          const hasFrontmatter = /^---\s*\n[\s\S]*?\n---\s*\n/.test(response);
-          if (!hasFrontmatter || response.length < 50) {
-            console.warn(`[DreamAgent] LLM consolidation output for ${skillA.name} missing valid frontmatter — skipping write`);
-            continue;
-          }
-
-          // Re-write consolidated results back to primary node entry point
-          await writeFile(skillA.fullPath, new TextEncoder().encode(response));
-          
-          // Drop redundant micro-skill directories
-          const oldTargetDir = joinPath(skillsPath, skillB.name);
-          await remove(oldTargetDir, { recursive: true });
-
-          // Update skillA content in-memory so subsequent comparisons use merged version
-          discoveredSkills[i] = { ...skillA, rawContent: response };
-
-          // Mark skillB for removal so subsequent comparisons skip it
-          removedIndices.add(j);
-
-          // Reload skills registry so UI updates
-          const { loadProjectSkills, refreshProjectSkills } = await import("./skills");
-          const projectSkills = await loadProjectSkills(workspacePath, api.fs);
-          refreshProjectSkills(projectSkills);
-          
-          continue; // Skip skillB in subsequent comparisons
+        // Validate LLM output contains valid YAML frontmatter before overwriting
+        const hasFrontmatter = /^---\s*\n[\s\S]*?\n---\s*\n/.test(response);
+        if (!hasFrontmatter || response.length < 50) {
+          console.warn(`[DreamAgent] LLM consolidation output for ${skillA.name} missing valid frontmatter — skipping write`);
+          continue;
         }
+
+        // Re-write consolidated results back to primary node entry point
+        await writeFile(skillA.fullPath, new TextEncoder().encode(response));
+        
+        // Drop redundant micro-skill directories
+        const oldTargetDir = joinPath(skillsPath, skillB.name);
+        await remove(oldTargetDir, { recursive: true });
+
+        // Update skillA content IN the array so subsequent comparisons use merged version.
+        // Must re-read from array (not stale destructured `skillA` which has old rawContent).
+        discoveredSkills[i] = {
+          ...discoveredSkills[i]!,
+          rawContent: response,
+        };
+
+        // Mark skillB for removal so subsequent comparisons skip it
+        removedIndices.add(j);
+
+        // Reload skills registry so UI updates
+        const projectSkills = await loadProjectSkills(workspacePath, api.fs);
+        refreshProjectSkills(projectSkills);
       }
     }
   } catch {

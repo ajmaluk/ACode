@@ -6,33 +6,34 @@ export function PermissionDialog() {
   const { request, resolve, cancel } = usePermission();
   const [selected, setSelected] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const selectedRef = useRef(selected);
+  const selectedRef = useRef(0);
   const resolveRef = useRef(resolve);
   const cancelRef = useRef(cancel);
 
   useEffect(() => { resolveRef.current = resolve; }, [resolve]);
   useEffect(() => { cancelRef.current = cancel; }, [cancel]);
 
-  const decide = (idx: number) => {
-    if (idx === 0) resolveRef.current("allow");
-    else if (idx === 1) resolveRef.current("always");
-    else resolveRef.current("deny");
-  };
-
   const options = [
-    { key: "allow",  label: "Allow",  sub: "Allow only this time",              icon: Check },
-    { key: "always", label: "Always allow in this project", sub: "Do not ask again for the same command", icon: Shield },
-    { key: "deny",   label: "Deny",   sub: "Reject it for now",                 icon: X },
+    { key: "allow",  label: "Allow",  sub: "Allow only this time",              icon: Check, action: "allow" as const },
+    { key: "always", label: "Always allow in this project", sub: "Do not ask again for the same command", icon: Shield, action: "always" as const },
+    { key: "deny",   label: "Deny",   sub: "Reject it for now",                 icon: X, action: "deny" as const },
   ];
   const NUM_OPTIONS = options.length;
 
+  const decide = (idx: number) => {
+    resolveRef.current(options[idx]?.action ?? "deny");
+  };
+
+  const [requestId, setRequestId] = useState(request?.id);
+  const prevRequestIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (request) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (request?.id !== prevRequestIdRef.current && request?.id !== requestId) {
+      prevRequestIdRef.current = request?.id;
+      setRequestId(request?.id);
       setSelected(0);
       selectedRef.current = 0;
     }
-  }, [request]);
+  }, [request?.id, requestId]);
 
   useEffect(() => {
     if (!request) return;
@@ -132,8 +133,7 @@ export function PermissionDialog() {
               return (
                 <button
                   key={opt.key}
-                  onClick={() => decide(idx)}
-                  onMouseEnter={() => { setSelected(idx); selectedRef.current = idx; }}
+                  onClick={() => { setSelected(idx); selectedRef.current = idx; }}
                   className={`w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-3 transition-colors ${
                     active ? "bg-dalam-bg-hover border border-dalam-border-primary" : "border border-transparent hover:bg-dalam-bg-hover/50"
                   }`}

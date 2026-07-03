@@ -121,12 +121,7 @@ export async function setupNativeMenus(): Promise<void> {
     const viewMenu = await Submenu.new({
       text: "View",
       items: [
-        await MenuItem.new({
-          id: "view.toggle-sidebar",
-          text: "Toggle Sidebar",
-          accelerator: "CmdOrCtrl+B",
-          action: () => emitMenuAction("view.toggle-sidebar"),
-        }),
+
         await MenuItem.new({
           id: "view.toggle-right-panel",
           text: "Toggle Right Panel",

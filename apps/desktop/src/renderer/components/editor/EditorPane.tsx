@@ -13,16 +13,8 @@ import {
 } from "lucide-react";
 import { useToast } from "@/components/ui/toastStore";
 import { createDalamAPI } from "@/lib/dalamAPI";
-import { basename } from "@/lib/pathUtils";
+import { basename, findFirstFile } from "@/lib/pathUtils";
 import { modKey, platform } from "@/lib/platform";
-
-function findFirstFile(nodes: FileNode[]): string | null {
-  for (const n of nodes) {
-    if (n.type === "file" && n.name !== ".gitignore") return n.path;
-    if (n.children) { const inner = findFirstFile(n.children); if (inner) return inner; }
-  }
-  return null;
-}
 
 const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: FileNode[]; openFile: (path: string) => Promise<void> }) {
   const toast = useToast();
@@ -472,11 +464,16 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
     { type: "separator" as const },
     { label: "Copy Path", shortcut: `${mod}⇧C`, action: copyPath },
     { label: "Copy Relative Path", action: async () => {
+      const { workspaces, activeWorkspaceId } = useWorkspace.getState();
+      const ws = workspaces.find(w => w.id === activeWorkspaceId);
+      const relPath = ws && tabPath.startsWith(ws.path)
+        ? tabPath.slice(ws.path.length + 1)
+        : tabPath;
       try {
         const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-        await writeText(tabPath);
+        await writeText(relPath);
       } catch {
-        await navigator.clipboard.writeText(tabPath);
+        await navigator.clipboard.writeText(relPath);
       }
       onClose();
     }},

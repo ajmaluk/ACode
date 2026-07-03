@@ -121,9 +121,31 @@ pub async fn get_working_dir(_app: tauri::AppHandle) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 /// Open a URL or file with the system default handler.
+/// Only allows http:/https: URLs and files within the home directory.
 #[tauri::command]
 pub async fn open_with_system_handler(path_or_url: String) -> Result<(), String> {
-    opener::open(&path_or_url).map_err(|e| format!("Failed to open '{path_or_url}': {e}"))
+    let lower = path_or_url.to_lowercase();
+    // Allow only http/https URLs
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return opener::open(&path_or_url).map_err(|e| format!("Failed to open URL '{path_or_url}': {e}"));
+    }
+    // For file paths, ensure they're within the home directory
+    if lower.starts_with('/') || lower.starts_with("file://") {
+        let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
+        let expanded = if lower.starts_with("file://") {
+            path_or_url.trim_start_matches("file://").to_string()
+        } else {
+            path_or_url.clone()
+        };
+        let p = std::path::Path::new(&expanded);
+        let canonical = std::fs::canonicalize(p)
+            .map_err(|_| format!("Cannot access path: '{}'", path_or_url))?;
+        if !canonical.starts_with(&home) {
+            return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+        }
+        return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+    }
+    Err(format!("Cannot open '{}': only http/https URLs and local files are allowed", path_or_url))
 }
 
 /// Launch an application by name (e.g. "code", "firefox", "terminal").
@@ -260,8 +282,8 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
 /// Checks the thread-safe local store first, then falls back to process env.
 #[tauri::command]
 pub async fn get_env(key: String) -> Result<String, String> {
-    let blocked = ["AWS_SECRET_ACCESS_KEY", "AWS_SECRET_KEY", "AWS_ACCESS_KEY_SECRET",
-                   "GITHUB_TOKEN", "GITHUB_SECRET", "DATABASE_URL", "DATABASE_PASSWORD",
+    let blocked = ["AWS_SECRET_ACCESS_KEY", "AWS_SECRET_KEY", "AWS_ACCESS_KEY_ID",
+                   "GITHUB_TOKEN", "GITHUB_TOKEN_SECRET", "DATABASE_URL", "DATABASE_PASSWORD",
                    "REDIS_URL", "REDIS_PASSWORD", "MONGO_URL", "MONGO_PASSWORD",
                    "STRIPE_SECRET_KEY", "STRIPE_SECRET", "PAYPAL_CLIENT_SECRET",
                    "JWT_SECRET", "SECRET_KEY", "PRIVATE_KEY", "API_SECRET",
@@ -271,7 +293,7 @@ pub async fn get_env(key: String) -> Result<String, String> {
                    "KUBECONFIG", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN",
                    "AZURE_CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS"];
     let upper = key.to_uppercase();
-    if blocked.iter().any(|b| upper.contains(&b.to_uppercase())) {
+    if blocked.iter().any(|b| upper == *b) {
         return Err(format!("Access to sensitive environment variable '{}' is restricted", key));
     }
     // Check thread-safe local store first
@@ -352,13 +374,13 @@ pub async fn list_processes() -> Result<Vec<ProcessInfo>, String> {
 
     #[cfg(target_os = "macos")]
     let output = std::process::Command::new("ps")
-        .args(["aux", "-m"])
+        .args(["-eo", "pid,pcpu,rss,comm", "-m", "-r"])
         .output()
         .map_err(|e| format!("Failed to list processes: {e}"))?;
 
     #[cfg(target_os = "linux")]
     let output = std::process::Command::new("ps")
-        .args(["aux", "--sort=-rss"])
+        .args(["-eo", "pid,pcpu,rss,comm", "--sort=-rss"])
         .output()
         .map_err(|e| format!("Failed to list processes: {e}"))?;
 
@@ -388,11 +410,11 @@ pub async fn list_processes() -> Result<Vec<ProcessInfo>, String> {
     {
         for line in stdout.lines().skip(1).take(50) {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 11 {
-                let cpu_usage: f32 = parts[2].parse().unwrap_or(0.0);
-                let memory_kb: u64 = parts[5].parse().unwrap_or(0);
-                let pid: u32 = parts[1].parse().unwrap_or(0);
-                let name = parts[10..].join(" ");
+            if parts.len() >= 4 {
+                let pid: u32 = parts[0].parse().unwrap_or(0);
+                let cpu_usage: f32 = parts[1].parse().unwrap_or(0.0);
+                let memory_kb: u64 = parts[2].parse().unwrap_or(0);
+                let name = parts[3..].join(" ");
                 processes.push(ProcessInfo {
                     pid,
                     name,
@@ -409,7 +431,7 @@ pub async fn list_processes() -> Result<Vec<ProcessInfo>, String> {
 /// Kill a process by PID. Refuses to kill PID 0, PID 1, or the app's own PID.
 #[tauri::command]
 pub async fn kill_process(pid: u32) -> Result<(), String> {
-    if pid == 0 || pid == 1 {
+    if pid == 0 || pid == 1 || pid == std::process::id() {
         return Err(format!("Refusing to kill critical process with PID {pid}"));
     }
     #[cfg(unix)]
@@ -519,9 +541,12 @@ pub async fn get_disk_space(path: String) -> Result<DiskSpace, String> {
 
     #[cfg(not(target_os = "windows"))]
     {
+        // Canonicalize path to prevent df argument injection (e.g., path = "-a")
+        let canon_path = std::fs::canonicalize(std::path::Path::new(&path))
+            .map_err(|e| format!("Invalid path '{}': {}", path, e))?;
         let output = std::process::Command::new("df")
             .arg("-k")
-            .arg(&path)
+            .arg(&canon_path)
             .output()
             .map_err(|e| format!("Failed to get disk space: {e}"))?;
 

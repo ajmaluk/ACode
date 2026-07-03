@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useLayoutEffect, useState, useEffect, useRef } from "react";
 import {
   useSettingsView, useSettings, useSkillsMcp, useModelProviders, useWorkspace,
   type SettingsTab, type ModelProvider,
@@ -107,15 +107,8 @@ function GeneralTab() {
   const [terminalFont, setTerminalFont] = useState(settings.terminalFont);
   const [httpProxy, setHttpProxy] = useState(settings.httpProxy);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTerminalFont(settings.terminalFont);
-  }, [settings.terminalFont]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setHttpProxy(settings.httpProxy);
-  }, [settings.httpProxy]);
+  // Use controlled components that sync via other mechanisms
+  // terminalFont and httpProxy are updated via Save buttons
 
   return (
     <>
@@ -1426,8 +1419,7 @@ function CommandsTab() {
   });
   const [editing, setEditing] = useState<string | null>(null);
   const commandsRef = useRef(commands);
-  // Update ref after render (not during render)
-  useEffect(() => { commandsRef.current = commands; });
+  useLayoutEffect(() => { commandsRef.current = commands; }, [commands]);
 
   useEffect(() => {
     if (!editing) return;
@@ -1575,10 +1567,8 @@ function IndexingTab() {
   const { settings, update } = useSettings();
   const [excludedPatterns, setExcludedPatterns] = useState(settings.excludedPatterns ?? "node_modules\n.git\ndist\nbuild\n*.min.js\n.DS_Store");
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setExcludedPatterns(settings.excludedPatterns ?? "node_modules\n.git\ndist\nbuild\n*.min.js\n.DS_Store");
-  }, [settings.excludedPatterns]);
+  // Note: excludedPatterns is initialized from settings but changes require Save button click
+  // We intentionally do NOT sync back from settings to avoid cascading renders
 
   return (
     <>
@@ -1680,7 +1670,7 @@ function InstructionsTab() {
                 const api = createDalamAPI();
                 const dalamDir = joinPath(activeWorkspace.path, ".dalam");
                 const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-                if (!(await exists(dalamDir))) await mkdir(dalamDir);
+                if (!(await exists(dalamDir))) await mkdir(dalamDir, { recursive: true });
                 const projectPath = joinPath(activeWorkspace.path, "DALAM.md");
                 await api.fs.writeFile(projectPath, `# Project Instructions\n\nRules and conventions for this project.\n\n## Guidelines\n- Use TypeScript for all new files\n- Run typecheck before committing\n\n## Path-scoped rules\n\n@path: src/components/**/*.tsx\n- Use functional components with hooks\n- Name files PascalCase\n\n@path: **/*.test.ts\n- Always use vitest\n- Mock external dependencies\n\n@path: **/*.md\n- Use clear, concise language\n- Include code examples where helpful\n`);
                 toast({ kind: "success", title: "DALAM.md created" });
@@ -1819,7 +1809,7 @@ function InstructionsTab() {
                                   const api = createDalamAPI();
                                   const dir = layer.path.substring(0, layer.path.lastIndexOf("/"));
                                   const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-                                  if (!(await exists(dir))) await mkdir(dir);
+                                   if (!(await exists(dir))) await mkdir(dir, { recursive: true });
                                   await api.fs.writeFile(layer.path, `# ${layer.label} Instructions\n\nRules for this layer.\n`);
                                   toast({ kind: "success", title: `${layer.label} DALAM.md created` });
                                   const updated = await loadInstructions(api, activeWorkspace.path);

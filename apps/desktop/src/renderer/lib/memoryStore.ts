@@ -387,7 +387,12 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
     const filePath = joinPath(memDir, filename);
     await writeTextFile(filePath, frontmatter);
   } catch (e) {
-    console.warn("[MemoryStore] Failed to write markdown:", e);
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      console.debug("[MemoryStore] Workspace inaccessible, skipping markdown write");
+    } else {
+      console.warn("[MemoryStore] Failed to write markdown:", e);
+    }
   }
 }
 
@@ -400,9 +405,18 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
   const { exists, readTextFile, mkdir } = await import("@tauri-apps/plugin-fs");
   const memDir = joinPath(workspacePath, MEMORY_DIR);
 
-  if (!(await exists(memDir))) {
-    await mkdir(memDir, { recursive: true });
-    return 0;
+  try {
+    if (!(await exists(memDir))) {
+      await mkdir(memDir, { recursive: true });
+      return 0;
+    }
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      console.debug("[MemoryStore] Workspace inaccessible, skipping rebuild");
+      return 0;
+    }
+    throw e;
   }
 
   const { readDir } = await import("@tauri-apps/plugin-fs");
@@ -590,7 +604,12 @@ export async function updateMemoryIndex(workspacePath: string): Promise<void> {
     }
     await writeTextFile(joinPath(workspacePath, MEMORY_INDEX), header + lines.join("\n") + "\n");
   } catch (e) {
-    console.warn("[MemoryStore] Failed to write MEMORY.md index:", e);
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      console.debug("[MemoryStore] Workspace inaccessible, skipping index write");
+    } else {
+      console.warn("[MemoryStore] Failed to write MEMORY.md index:", e);
+    }
   }
 }
 
@@ -725,11 +744,11 @@ export async function extractMemoriesWithLLM(
     const validTiers: MemoryTier[] = ["critical", "high", "medium", "low"];
 
     const entries = parsed
-      .filter((e: any) => e && typeof e.content === "string" && e.content.length > 10)
+      .filter((e: Record<string, unknown>) => e && typeof e.content === "string" && e.content.length > 10)
       .slice(0, opts.maxEntries ?? 5)
-      .map((e: any) => ({
-        category: validCategories.includes(e.category) ? e.category : "project",
-        tier: validTiers.includes(e.tier) ? e.tier : "medium",
+      .map((e: Record<string, unknown>) => ({
+        category: (validCategories.includes(e.category as MemoryCategory) ? e.category : "project") as MemoryCategory,
+        tier: (validTiers.includes(e.tier as MemoryTier) ? e.tier : "medium") as MemoryTier,
         content: String(e.content),
         summary: String(e.summary || e.content).slice(0, 150),
         tags: Array.isArray(e.tags) ? e.tags.map(String).slice(0, 5) : [],

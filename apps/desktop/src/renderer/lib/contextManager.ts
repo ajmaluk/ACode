@@ -228,10 +228,8 @@ export function computeContextStats(
  */
 /** Check if a message is a tool result (user message with tool prefix). */
 export function _isToolResult(m: ChatMessage): boolean {
-  return m.role === "user" && typeof m.content === "string" && (
-    m.content.startsWith("[TOOL RESULT:") ||
-    m.content.startsWith("[TOOL ERROR:")
-  );
+  return m.role === "user" && typeof m.content === "string" &&
+    (m.content.startsWith("[TOOL RESULT:") || m.content.startsWith("[TOOL ERROR:"));
 }
 
 /** Align compaction boundaries — exported for direct unit testing. */
@@ -291,45 +289,39 @@ export function selectMessagesForCompaction(
     return { toCompact: [], toKeep: messages };
   }
 
-  // Identify which messages to protect
+  // Identify which messages to protect — consolidated into a single backward pass
   const protectedIndices = new Set<number>();
 
-  // 1. Protect the first user message (establishes context)
+  // Find the first user message in a forward pass (can't do everything backward)
   const firstUserIdx = messages.findIndex(m => m.role === "user");
   if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
 
-  // 2. Protect the last N user turns (non-tool-result)
+  // Single backward pass: protect recent user turns, recent assistant messages,
+  // and messages with file changes/todos
   let userTurnCount = 0;
+  let assistantCount = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user" && !_isToolResult(messages[i])) {
+    const m = messages[i];
+    // Protect messages with file changes (important for diffs)
+    if (m.fileChanges && m.fileChanges.length > 0) {
+      protectedIndices.add(i);
+    }
+    // Protect messages with todos (important for task tracking)
+    if (m.todos && m.todos.length > 0) {
+      protectedIndices.add(i);
+    }
+    // Protect the last N user turns (non-tool-result)
+    if (m.role === "user" && !_isToolResult(m) && userTurnCount < keepRecent) {
       protectedIndices.add(i);
       userTurnCount++;
     }
-    if (userTurnCount >= keepRecent) break;
-  }
-
-  // 3. Protect messages with file changes (important for diffs)
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].fileChanges && messages[i].fileChanges!.length > 0) {
-      protectedIndices.add(i);
-    }
-  }
-
-  // 4. Protect messages with todos (important for task tracking)
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].todos && messages[i].todos!.length > 0) {
-      protectedIndices.add(i);
-    }
-  }
-
-  // 5. Protect recent assistant messages (last 3 non-tool messages)
-  let assistantCount = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "assistant" && !_isToolResult(messages[i])) {
+    // Protect recent assistant messages (last 3 non-tool messages)
+    if (m.role === "assistant" && !_isToolResult(m) && assistantCount < 3) {
       protectedIndices.add(i);
       assistantCount++;
     }
-    if (assistantCount >= 3) break;
+    // Exit early once all tail protections are satisfied
+    if (userTurnCount >= keepRecent && assistantCount >= 3) break;
   }
 
   // Align boundaries: prevent splitting tool_call/tool_result pairs
@@ -350,9 +342,6 @@ export function selectMessagesForCompaction(
   return { toCompact, toKeep };
 }
 
-/**
- * Check if a message is a tool result (user message with tool prefix).
- */
 /**
  * Generate a compaction prompt for summarizing old messages.
  * Utility function — may be used by UI for manual compaction triggers.

@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::process::Command;
 use tauri::command;
+
+/// Validate that a path exists and is a valid directory (for git repo paths).
+/// Returns a canonicalized path string or an error.
+fn validate_git_path(raw_path: &str) -> Result<String, String> {
+    let p = Path::new(raw_path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", raw_path));
+    }
+    if !p.is_dir() {
+        return Err(format!("Path is not a directory: {}", raw_path));
+    }
+    // Canonicalize to resolve symlinks and .. components
+    let canonical = std::fs::canonicalize(p)
+        .map_err(|e| format!("Failed to resolve path '{}': {}", raw_path, e))?;
+    Ok(canonical.to_string_lossy().to_string())
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct GitStatus {
@@ -49,6 +66,7 @@ fn count_ahead_behind(path: &str, branch: &str) -> (i32, i32) {
 
 #[command]
 pub fn git_status(path: String) -> Result<GitStatus, String> {
+    let path = validate_git_path(&path)?;
     let branch_output = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(&path)
@@ -121,6 +139,10 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
 
 #[command]
 pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
+    let path = validate_git_path(&path)?;
+    if message.len() > 4096 {
+        return Err("Commit message too long (max 4096 bytes)".to_string());
+    }
     let output = Command::new("git")
         .args(["commit", "-m", &message])
         .current_dir(&path)
@@ -145,6 +167,7 @@ pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
 
 #[command]
 pub fn git_log(path: String, limit: Option<i32>) -> Result<Vec<GitLogEntry>, String> {
+    let path = validate_git_path(&path)?;
     let count = limit.unwrap_or(20);
     let output = Command::new("git")
         .args([
@@ -190,6 +213,7 @@ pub struct GitBranchInfo {
 
 #[command]
 pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+    let path = validate_git_path(&path)?;
     let output = Command::new("git")
         .args(["branch", "--list"])
         .current_dir(&path)
@@ -218,8 +242,14 @@ pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
 
 #[command]
 pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
+    let path = validate_git_path(&path)?;
+    // Block dangerous branch names that could be misinterpreted
+    let lower = branch.to_lowercase();
+    if ["head", "orir_head", "fetch_head", "merg_head", "index", "..", "."].contains(&lower.as_str()) || branch.contains("..") || branch.contains('\\') || branch.contains('@') || branch.contains('{') || branch.contains(' ') {
+        return Err(format!("Invalid branch name: '{}'", branch));
+    }
     let output = Command::new("git")
-        .args(["checkout", "--", &branch])
+        .args(["checkout", &branch])
         .current_dir(&path)
         .output()
         .map_err(|e| format!("git checkout failed: {}", e))?;
@@ -234,6 +264,11 @@ pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
 
 #[command]
 pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
+    let path = validate_git_path(&path)?;
+    let lower = name.to_lowercase();
+    if ["head", "orir_head", "fetch_head", "merg_head"].contains(&lower.as_str()) || name.contains("..") || name.contains('\\') || name.contains('@') || name.contains('{') || name.contains(' ') {
+        return Err(format!("Invalid branch name: '{}'", name));
+    }
     let output = Command::new("git")
         .args(["checkout", "-b", &name])
         .current_dir(&path)
@@ -250,6 +285,11 @@ pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
 
 #[command]
 pub fn git_diff_file(path: String, file_path: String) -> Result<String, String> {
+    let path = validate_git_path(&path)?;
+    // Block path traversal in file_path
+    if file_path.contains("..") || file_path.starts_with('/') {
+        return Err(format!("Invalid file path: '{}'", file_path));
+    }
     let output = Command::new("git")
         .args(["diff", "--no-color", "--", &file_path])
         .current_dir(&path)

@@ -149,5 +149,166 @@ describe("Instructions System", () => {
       expect(instructions.loadedPaths).toContain("/home/user/.dalam/DALAM.md");
       expect(instructions.loadedPaths).toContain("/workspace/DALAM.md");
     });
+
+    it("handles missing files gracefully", async () => {
+      const adapter: InstructionFsAdapter = {
+        exists: async () => false,
+        readFile: async () => "",
+        getHomeDir: async () => "/home/user",
+      };
+
+      const instructions = await loadInstructions("/workspace", adapter);
+      expect(instructions.globalRules).toBe("");
+      expect(instructions.pathScopedRules.size).toBe(0);
+      expect(instructions.loadedPaths).toHaveLength(0);
+    });
+
+    it("handles adapter without getHomeDir", async () => {
+      const adapter: InstructionFsAdapter = {
+        exists: async () => false,
+        readFile: async () => "",
+      };
+
+      const instructions = await loadInstructions("/workspace", adapter);
+      expect(instructions.globalRules).toBe("");
+    });
+  });
+
+  // 5. Edge case tests
+  describe("expandBraces (internal / tested via path-scoped rules)", () => {
+    it("handles no braces", () => {
+      const instructions = {
+        globalRules: "",
+        pathScopedRules: new Map([["*.ts", "TS rules"]]),
+        loadedPaths: [],
+        layers: { global: "", org: "", project: "", local: "" },
+      };
+      // Simple glob without braces should match
+      const formatted = formatInstructionsForPrompt(instructions, "src/index.ts");
+      expect(formatted).toContain("TS rules");
+    });
+
+    it("handles brace expansion in glob matching", () => {
+      const instructions = {
+        globalRules: "",
+        pathScopedRules: new Map([["src/**/*.{ts,tsx}", "TS/TSX files"]]),
+        loadedPaths: [],
+        layers: { global: "", org: "", project: "", local: "" },
+      };
+      const matchTs = formatInstructionsForPrompt(instructions, "src/components/Button.ts");
+      expect(matchTs).toContain("TS/TSX files");
+
+      const matchJsx = formatInstructionsForPrompt(instructions, "src/App.tsx");
+      expect(matchJsx).toContain("TS/TSX files");
+
+      const mismatchJs = formatInstructionsForPrompt(instructions, "src/index.js");
+      expect(mismatchJs).toBe("");
+    });
+
+    it("handles empty filePath gracefully", () => {
+      const instructions = {
+        globalRules: "Global rule",
+        pathScopedRules: new Map([["*.ts", "TS rule"]]),
+        loadedPaths: [],
+        layers: { global: "", org: "", project: "", local: "" },
+      };
+      // No filePath means only global rules should be included
+      const formatted = formatInstructionsForPrompt(instructions);
+      expect(formatted).toContain("Global rule");
+      expect(formatted).not.toContain("TS rule");
+    });
+
+    it("handles glob with only path-scoped rules and no global rules", () => {
+      const instructions = {
+        globalRules: "",
+        pathScopedRules: new Map([["*.ts", "Only TS rule"]]),
+        loadedPaths: [],
+        layers: { global: "", org: "", project: "", local: "" },
+      };
+      const formatted = formatInstructionsForPrompt(instructions, "file.ts");
+      expect(formatted).toContain("Only TS rule");
+    });
+
+    it("handles multiple path-scoped rules matching the same file", () => {
+      const instructions = {
+        globalRules: "",
+        pathScopedRules: new Map([
+          ["*.ts", "All TS files"],
+          ["src/*.ts", "Src TS files"],
+        ]),
+        loadedPaths: [],
+        layers: { global: "", org: "", project: "", local: "" },
+      };
+      const formatted = formatInstructionsForPrompt(instructions, "src/index.ts");
+      expect(formatted).toContain("All TS files");
+      expect(formatted).toContain("Src TS files");
+    });
+  });
+
+  describe("listPathScopedGlobs", () => {
+    it("returns all keys from pathScopedRules", () => {
+      const instructions = {
+        globalRules: "",
+        pathScopedRules: new Map([["*.ts", "a"], ["*.js", "b"], ["*.test.ts", "c"]]),
+        loadedPaths: [],
+        layers: { global: "", org: "", project: "", local: "" },
+      };
+      const globs = listPathScopedGlobs(instructions);
+      expect(globs).toContain("*.ts");
+      expect(globs).toContain("*.js");
+      expect(globs).toContain("*.test.ts");
+      expect(globs).toHaveLength(3);
+    });
+  });
+
+  describe("legacy fallback paths", () => {
+    it("falls back to .cursorrules when project DALAM.md missing", async () => {
+      const mockFs: Record<string, string> = {
+        "/home/user/.dalam/DALAM.md": "",
+        "/workspace/.cursorrules": "Cursor rules content"
+      };
+
+      const adapter: InstructionFsAdapter = {
+        exists: async (p) => !!mockFs[p],
+        readFile: async (p) => mockFs[p] || "",
+        getHomeDir: async () => "/home/user",
+      };
+
+      const instructions = await loadInstructions("/workspace", adapter);
+      expect(instructions.globalRules).toContain("Cursor rules content");
+      expect(instructions.loadedPaths).toContain("/workspace/.cursorrules");
+    });
+
+    it("falls back to .agentrules when .cursorrules missing", async () => {
+      const mockFs: Record<string, string> = {
+        "/home/user/.dalam/DALAM.md": "",
+        "/workspace/.agentrules": "Agent rules content"
+      };
+
+      const adapter: InstructionFsAdapter = {
+        exists: async (p) => !!mockFs[p],
+        readFile: async (p) => mockFs[p] || "",
+        getHomeDir: async () => "/home/user",
+      };
+
+      const instructions = await loadInstructions("/workspace", adapter);
+      expect(instructions.globalRules).toContain("Agent rules content");
+    });
+
+    it("falls back to .dalam/rules.md as last resort", async () => {
+      const mockFs: Record<string, string> = {
+        "/home/user/.dalam/DALAM.md": "",
+        "/workspace/.dalam/rules.md": "Dalam rules content"
+      };
+
+      const adapter: InstructionFsAdapter = {
+        exists: async (p) => !!mockFs[p],
+        readFile: async (p) => mockFs[p] || "",
+        getHomeDir: async () => "/home/user",
+      };
+
+      const instructions = await loadInstructions("/workspace", adapter);
+      expect(instructions.globalRules).toContain("Dalam rules content");
+    });
   });
 });

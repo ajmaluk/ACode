@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; script-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: blob: http: https:; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self' ipc: http: https: ws: wss:; worker-src 'self' blob: https://cdn.jsdelivr.net"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self' ipc: http: https: ws: wss:"
     }
   },
   "bundle": {
@@ -42,7 +42,7 @@
       "open": true
     },
     "fs": {
-      "requireLiteralLeadingDot": false
+      "requireLiteralLeadingDot": true
     }
   }
 }

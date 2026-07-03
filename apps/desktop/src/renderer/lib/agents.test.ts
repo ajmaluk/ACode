@@ -6,9 +6,9 @@ import {
   canonicaliseBashCommand,
   getAgent,
   getPrimaryAgent,
-  PRIMARY_AGENTS,
   SUBAGENTS,
   ALL_AGENTS,
+  PRIMARY_AGENTS,
 } from "./agents";
 
 describe("agents", () => {
@@ -171,16 +171,16 @@ describe("agents", () => {
   });
 
   describe("agent definitions", () => {
-    it("has 8 total agents", () => {
-      expect(ALL_AGENTS).toHaveLength(8);
+    it("has 10 total agents (3 primary + 7 subagents)", () => {
+      expect(ALL_AGENTS).toHaveLength(10);
     });
 
     it("has 7 subagents", () => {
       expect(SUBAGENTS).toHaveLength(7);
     });
 
-    it("has 10 total agents", () => {
-      expect(ALL_AGENTS).toHaveLength(8);
+    it("has 3 primary agents", () => {
+      expect(PRIMARY_AGENTS).toHaveLength(3);
     });
 
     it("getAgent returns correct agent", () => {
@@ -195,7 +195,8 @@ describe("agents", () => {
     });
 
     it("getPrimaryAgent throws for unknown name", () => {
-      expect(() => getPrimaryAgent("unknown" as any)).toThrow("Unknown primary agent");
+      expect(() => // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getPrimaryAgent("unknown" as any)).toThrow("Unknown primary agent");
     });
 
     it("yolo agent allows everything", () => {

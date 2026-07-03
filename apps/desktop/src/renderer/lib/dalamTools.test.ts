@@ -15,8 +15,9 @@ function parseAttributes(tagStr: string): Record<string, string> {
 }
 
 // Re-implement parseToolCalls for testing (mirrors dalamAPI.ts logic)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseToolCalls(text: string): { name: string; args: Record<string, any> }[] {
-  const calls: { name: string; args: Record<string, any> }[] = [];
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
 
   function extract(regex: RegExp, fn: (m: RegExpExecArray) => void): void {
     let m: RegExpExecArray | null;
@@ -623,7 +624,7 @@ describe("parseToolCalls", () => {
       const KNOWN_TOOL_NAMES = new Set(["list_dir", "read_file", "write_file", "run_command"]);
 
       function extractToolCallsFromCodeBlocks(text: string) {
-        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
         const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
@@ -657,7 +658,7 @@ describe("parseToolCalls", () => {
       const text = 'Let me check the files.\n\n```xml\n<read_file path="src/index.ts" />\n<list_dir path="src" />\n```\n';
 
       function extractToolCallsFromCodeBlocks(text: string) {
-        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
         const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
@@ -690,7 +691,7 @@ describe("parseToolCalls", () => {
       const text = 'Here is the command:\n\n```\n<run_command command="git status" />\n```\n';
 
       function extractToolCallsFromCodeBlocks(text: string) {
-        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
         const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
@@ -723,7 +724,7 @@ describe("parseToolCalls", () => {
       const text = '```xml\n<div class="container">Hello</div>\n```';
 
       function extractToolCallsFromCodeBlocks(text: string) {
-        const toolCalls: { name: string; args: Record<string, any> }[] = [];
+        const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
         const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {

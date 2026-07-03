@@ -4,10 +4,11 @@ import { useToasts } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { modKey, platform, shortcut } from "@/lib/platform";
 import { createDalamAPI } from "@/lib/dalamAPI";
+import { joinPath } from "@/lib/pathUtils";
 import {
-  ChevronLeft, ChevronRight, PanelRight,
+  ChevronLeft, ChevronRight, PanelLeft, PanelRight,
   FolderOpen, Code2, TerminalSquare, FolderTree, Settings,
-  Brain, Sun, Moon, Monitor, PanelLeftClose, PanelLeftOpen, MessageSquare,
+  Brain, Sun, Moon, Monitor,  MessageSquare,
   MonitorDot,
 } from "lucide-react";
 
@@ -19,7 +20,7 @@ function useEditorMenus(): { label: string; items: MenuAction[] }[] {
   const { settings, update: updateSetting } = useSettings();
   const { open: openSettings } = useSettingsView();
   const { activeWorkspaceId, workspaces, openWorkspace, openFile, closeTab, markSaved } = useWorkspace();
-  const { toggleSidebar, toggleRightPanel, setViewMode } = useUI();
+  const { toggleRightPanel, setViewMode } = useUI();
   const toast = useToasts((s) => s.push);
   const ws = workspaces.find((w) => w.id === activeWorkspaceId);
 
@@ -115,7 +116,7 @@ function useEditorMenus(): { label: string; items: MenuAction[] }[] {
     {
       label: "View",
       items: [
-        { type: "item", label: "Toggle Sidebar", shortcut: shortcut("B"), perform: toggleSidebar },
+
         { type: "item", label: "Toggle Right Panel", shortcut: `${modKey()}\\`, perform: toggleRightPanel },
         { type: "separator" },
         { type: "item", label: "Toggle Word Wrap", shortcut: shortcut("Z", { alt: true }), perform: toggleWordWrap },
@@ -162,7 +163,7 @@ export function TitleBar() {
   const rootRef = useRef<HTMLDivElement>(null);
   const isMac = platform() === "mac";
 
-  const { sidebarOpen, toggleSidebar, rightPanelOpen, toggleRightPanel, viewMode, setViewMode } = useUI();
+  const { rightPanelOpen, toggleRightPanel, viewMode, setViewMode, sidebarOpen, toggleSidebar } = useUI();
   const { goBackChat, goForwardChat, chatHistory, chatHistoryIdx, messages, session } = useChat();
   const { activeWorkspaceId, workspaces, openWorkspace } = useWorkspace();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
@@ -182,7 +183,7 @@ export function TitleBar() {
     void (async () => {
       try {
         const { exists } = await import("@tauri-apps/plugin-fs");
-        const { joinPath } = await import("@/lib/pathUtils");
+
         const hasMemory = await exists(joinPath(activeWorkspace.path, ".dalam/memory.json"));
         if (active) setMemoryActive(hasMemory);
       } catch {
@@ -310,13 +311,13 @@ export function TitleBar() {
       <div className="flex items-center gap-0.5 px-1.5">
         <Tooltip content={sidebarOpen ? `Hide sidebar (${mod}B)` : `Show sidebar (${mod}B)`} side="bottom">
           <button
-            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
-            onClick={() => toggleSidebar()}
+            className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+            onClick={toggleSidebar}
           >
-            {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+            <PanelLeft className="w-4 h-4" />
           </button>
         </Tooltip>
-
+        <div className="w-px h-4 bg-dalam-border-primary mx-0.5" />
         <Tooltip content={`Back (${mod}[)`} side="bottom">
           <button
             className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"

@@ -21,7 +21,11 @@ export const ReadFileArgsSchema = z.object({
 export const WriteFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
   content: z.string(),
-  create_dirs: z.boolean().optional().default(false),
+  create_dirs: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .optional()
+    .default(false)
+    .transform((v) => v === true || v === "true"),
 });
 
 export const EditFileArgsSchema = z.object({
@@ -160,6 +164,56 @@ export const QuestionArgsSchema = z.object({
   options: z.string().optional(),
 });
 
+export const GetEnvArgsSchema = z.object({
+  key: z.string().min(1, "key is required"),
+});
+
+export const GetScreenInfoArgsSchema = z.object({});
+
+export const ListProcessesArgsSchema = z.object({});
+
+export const KillProcessArgsSchema = z.object({
+  pid: z.string().min(1, "pid is required"),
+});
+
+export const GetDiskSpaceArgsSchema = z.object({
+  path: z.string().min(1, "path is required"),
+});
+
+export const SetThemeArgsSchema = z.object({
+  theme: z.enum(["light", "dark", "system"]),
+});
+
+export const ToggleThemeArgsSchema = z.object({});
+
+export const SetViewModeArgsSchema = z.object({
+  mode: z.enum(["editor", "chat"]),
+});
+
+export const ToggleViewModeArgsSchema = z.object({});
+
+export const ToggleRightPanelArgsSchema = z.object({});
+
+export const ToggleBottomPanelArgsSchema = z.object({});
+
+export const SetRightPanelTabArgsSchema = z.object({
+  tab: z.enum(["git", "diff", "review", "browser", "progress"]),
+});
+
+export const SetBottomPanelTabArgsSchema = z.object({
+  tab: z.enum(["terminal", "output", "problems"]),
+});
+
+export const NewTerminalArgsSchema = z.object({
+  cwd: z.string().optional(),
+  shell: z.string().optional(),
+});
+
+export const TerminalWriteArgsSchema = z.object({
+  command: z.string().min(1, "command is required"),
+  terminal_id: z.string().optional(),
+});
+
 // ─── Schema Registry ─────────────────────────────────────────
 
 type ToolSchemaEntry = {
@@ -204,11 +258,26 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   browser_execute: { schema: BrowserExecuteArgsSchema, requiredFields: ["script"] },
   create_task_plan: { schema: CreateTaskPlanArgsSchema, requiredFields: ["tasks"] },
   question: { schema: QuestionArgsSchema, requiredFields: ["question"] },
+  get_env: { schema: GetEnvArgsSchema, requiredFields: ["key"] },
+  get_screen_info: { schema: GetScreenInfoArgsSchema, requiredFields: [] },
+  list_processes: { schema: ListProcessesArgsSchema, requiredFields: [] },
+  kill_process: { schema: KillProcessArgsSchema, requiredFields: ["pid"] },
+  get_disk_space: { schema: GetDiskSpaceArgsSchema, requiredFields: ["path"] },
+  set_theme: { schema: SetThemeArgsSchema, requiredFields: ["theme"] },
+  toggle_theme: { schema: ToggleThemeArgsSchema, requiredFields: [] },
+  set_view_mode: { schema: SetViewModeArgsSchema, requiredFields: ["mode"] },
+  toggle_view_mode: { schema: ToggleViewModeArgsSchema, requiredFields: [] },
+  toggle_right_panel: { schema: ToggleRightPanelArgsSchema, requiredFields: [] },
+  toggle_bottom_panel: { schema: ToggleBottomPanelArgsSchema, requiredFields: [] },
+  set_right_panel_tab: { schema: SetRightPanelTabArgsSchema, requiredFields: ["tab"] },
+  set_bottom_panel_tab: { schema: SetBottomPanelTabArgsSchema, requiredFields: ["tab"] },
+  new_terminal: { schema: NewTerminalArgsSchema, requiredFields: [] },
+  terminal_write: { schema: TerminalWriteArgsSchema, requiredFields: ["command"] },
 };
 
 // ─── Security Validation ─────────────────────────────────────
 
-/** Paths that should never be written to */
+/** Paths that should never be read or written to */
 const DANGEROUS_PATH_PATTERNS = [
   /\.\./, // path traversal
   /^\/etc\//,
@@ -218,10 +287,20 @@ const DANGEROUS_PATH_PATTERNS = [
   /^\/sbin\//,
   /^\/root\//,
   /^~\//,
+  // Windows critical paths
+  /^[a-zA-Z]:\\Windows\\/,
+  /^[a-zA-Z]:\\Program Files/,
+  /^[a-zA-Z]:\\System32/,
+  /^[a-zA-Z]:\\Boot/,
+  /^[a-zA-Z]:\\ProgramData/,
 ];
 
-/** Commands that are too dangerous to execute */
+/**
+ * Commands that are too dangerous to execute.
+ * Includes both Unix and Windows-specific dangerous patterns.
+ */
 const DANGEROUS_COMMANDS = [
+  // Unix
   "rm -rf /",
   "mkfs",
   "dd if=",
@@ -229,6 +308,13 @@ const DANGEROUS_COMMANDS = [
   "chmod 777 /",
   "> /dev/sda",
   "mv /* ",
+  // Windows
+  "Format-Volume",
+  "Remove-Item -Recurse -Force C:\\",
+  "del /s /q C:\\",
+  "rmdir /s /q C:\\",
+  "bcdedit",
+  "reg delete HKLM",
 ];
 
 /**
@@ -282,8 +368,8 @@ export function validateToolArgs(
   }
 
   // Security checks for file operations
-  if (["write_file", "edit_file"].includes(toolName)) {
-    const path = String(args.path ?? "");
+  if (["read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files", "reveal_in_finder"].includes(toolName)) {
+    const path = String(args.path ?? (toolName === "search_files" ? args.pattern ?? "" : ""));
     for (const pattern of DANGEROUS_PATH_PATTERNS) {
       if (pattern.test(path)) {
         return {

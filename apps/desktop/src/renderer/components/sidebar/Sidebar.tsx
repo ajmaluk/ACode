@@ -35,8 +35,6 @@ import {
   GripVertical,
 } from "lucide-react";
 import type { ChatSessionSummary, ChatVersion } from "@dalam/shared-types";
-import { FileTree } from "./FileTree";
-import { ActivityBar } from "./ActivityBar";
 import { Tooltip } from "../ui/Tooltip";
 import {
   getConnectorConfigs,
@@ -130,6 +128,7 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
   const [draft, setDraft] = useState(session.title);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const draftRef = useRef(session.title);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -148,15 +147,19 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
     };
   }, [menuPosition]);
 
+  // Sync draft when session title changes externally
   useEffect(() => {
-    // Don't overwrite draft while user is actively editing
-    if (!editing) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (session.title !== draftRef.current && !editing) {
+      draftRef.current = session.title;
       setDraft(session.title);
     }
+  }, [session.title, editing]);
+  
+  // Update timestamp periodically
+  useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(id);
-  }, [session.title, editing]);
+  }, []);
 
   const submit = () => {
     const next = draft.trim();
@@ -170,7 +173,7 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
 
   return (
     <div
-      className={`group relative w-full flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
+      className={`group relative w-full flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-lg transition-colors cursor-pointer overflow-hidden ${
         isActive ? "bg-dalam-bg-active" : "hover:bg-dalam-bg-hover"
       }`}
       onClick={() => { if (!editing) { onSelect(); setMenuPosition(null); } }}
@@ -364,12 +367,12 @@ function ConnectorsSection() {
 }
 
 export function Sidebar() {
-  const { openWorkspace, activeWorkspaceId, workspaces, setActiveWorkspace, removeWorkspace } = useWorkspace();
+  const { openWorkspace, workspaces, setActiveWorkspace, removeWorkspace } = useWorkspace();
   const { open: openSettings } = useSettingsView();
   const { newChat, chatSessions, activeSessionId, setActiveSession, isStreaming, removeSession, renameSession, sessionVersions, deleteVersion } = useChat();
   const { cancel: cancelPermission } = usePermission();
   const { resolve: resolveQuestion } = useQuestion();
-  const { viewMode } = useUI();
+
   const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => {
     try { const v = localStorage.getItem("dalam.sidebar.collapsed"); return v ? new Set(JSON.parse(v)) : new Set(); } catch { return new Set(); }
@@ -377,7 +380,6 @@ export function Sidebar() {
   const [showAll, setShowAll] = useState<Record<string, boolean>>(() => {
     try { const v = localStorage.getItem("dalam.sidebar.showAll"); return v ? JSON.parse(v) : {}; } catch { return {}; }
   });
-  const [fileTreeView, setFileTreeView] = useState<string | null>(null);
   const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{ id: string; top: number; left: number } | null>(null);
 
   // Persist collapsedWorkspaces to localStorage
@@ -517,68 +519,7 @@ export function Sidebar() {
 
   const VISIBLE_LIMIT = 5;
 
-  // In editor mode, auto-show the file explorer for the active workspace
-  const effectiveFileTreeView = viewMode === "editor" && activeWorkspaceId ? activeWorkspaceId : fileTreeView;
-  const effectiveFileWorkspace = workspaces.find((w) => w.id === effectiveFileTreeView);
-
-  // Editor mode: show ActivityBar + content panel
-  if (viewMode === "editor") {
-    if (effectiveFileWorkspace) {
-      return (
-        <div className="h-full flex">
-          <ActivityBar />
-          <aside className="flex-1 min-w-0 flex flex-col bg-dalam-bg-secondary">
-            <div className="px-2 py-1.5 flex items-center gap-1.5 border-b border-dalam-border-primary flex-shrink-0">
-              <span className="flex-1 min-w-0 flex items-center gap-1.5">
-                <Folder className="w-3.5 h-3.5 text-dalam-accent-primary/60 flex-shrink-0" />
-                <span className="truncate text-xs text-dalam-text-primary font-medium">{effectiveFileWorkspace.name}</span>
-              </span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-              <FileTree />
-            </div>
-          </aside>
-        </div>
-      );
-    }
-    // Editor mode with activity bar but no file tree selected
-    return (
-      <div className="h-full flex">
-        <ActivityBar />
-        <aside className="flex-1 min-w-0 flex flex-col bg-dalam-bg-secondary">
-          <div className="px-3 py-2.5 flex flex-col gap-1 border-b border-dalam-border-primary flex-shrink-0">
-            <button
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
-              onClick={() => { cancelPermission(); resolveQuestion(null); newChat(); }}
-            >
-              <Plus className="w-4 h-4" />
-              <span>New task</span>
-              <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut("N")}</span>
-            </button>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-            {workspaces.map((ws) => {
-              const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
-              return (
-                <div key={ws.id} className="px-2 py-1">
-                  <button
-                    className="w-full flex items-center gap-1.5 px-2 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded transition-colors"
-                    onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); }}
-                  >
-                    <Folder className="w-3 h-3 text-dalam-text-muted" />
-                    <span className="truncate">{ws.name}</span>
-                    {wsSessions.length > 0 && <span className="text-[10px] text-dalam-text-muted ml-auto">{wsSessions.length}</span>}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </aside>
-      </div>
-    );
-  }
-
-  // Agentic mode: no ActivityBar, just the sidebar content
+  // Agentic mode: sidebar content
   return (
     <aside className="h-full flex flex-col bg-dalam-bg-secondary">
         {/* Primary actions */}
@@ -627,7 +568,7 @@ export function Sidebar() {
       </div>
 
       {/* Workspace + session list */}
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-thin">
         {workspaces.map((ws) => {
           const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
           // When dragging, collapse all workspaces
@@ -653,7 +594,7 @@ export function Sidebar() {
               onDragEnd={handleDragEnd}
             >
               <div
-                className={`relative w-full text-left pl-2 pr-2 py-1.5 flex items-center gap-1.5 group/workspace rounded-lg mx-1 transition-colors ${
+                className={`relative w-full text-left pl-2 pr-2 py-1.5 flex items-center gap-1.5 group/workspace rounded-lg mx-1 transition-colors overflow-hidden ${
                   dragId === ws.id ? "bg-dalam-bg-tertiary opacity-50" : ""
                 } ${isDragOver && dragId !== ws.id ? "bg-dalam-bg-tertiary" : ""}`}
                 draggable
@@ -666,7 +607,7 @@ export function Sidebar() {
                   <GripVertical className="w-3 h-3 text-dalam-text-muted/50" />
                 </div>
                 <button
-                  className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+                  className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer overflow-hidden"
                   draggable={false}
                   onClick={() => {
                     if (!isDragging) {
@@ -685,9 +626,9 @@ export function Sidebar() {
                   ) : (
                     <Folder className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                   )}
-                  <span className="truncate text-[13px] text-dalam-text-primary font-medium">{ws.name}</span>
+                  <span className="truncate text-[13px] text-dalam-text-primary font-medium min-w-0">{ws.name}</span>
                   {wsSessions.length > 0 && (
-                    <span className="text-[10px] text-dalam-text-muted flex-shrink-0">{wsSessions.length}</span>
+                    <span className="text-[10px] text-dalam-text-muted flex-shrink-0 ml-0.5">{wsSessions.length}</span>
                   )}
                 </button>
 
@@ -697,7 +638,7 @@ export function Sidebar() {
                     <button
                        className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                        draggable={false}
-                        onClick={() => { setActiveWorkspace(ws.id); setFileTreeView(ws.id); useWorkspace.getState().loadFileTree(ws.path); useUI.getState().setViewMode("editor"); }}
+                        onClick={() => { setActiveWorkspace(ws.id); useWorkspace.getState().loadFileTree(ws.path); useUI.getState().setViewMode("editor"); }}
                     >
                       <List className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>

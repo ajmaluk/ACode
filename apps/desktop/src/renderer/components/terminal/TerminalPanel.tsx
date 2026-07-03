@@ -103,7 +103,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
     let isCleanedUp = false;
     let unsubData: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
-    let shellProcId: string | null = null;
+    let _shellProcId: string | null = null;
 
     const startIO = async () => {
       try {
@@ -113,7 +113,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
           return;
         }
         procIdRef.current = procId;
-        shellProcId = procId;
+        _shellProcId = procId;
 
         unsubData = api.terminal.onData(procId, (data) => {
           if (activeRef.current) {
@@ -162,6 +162,8 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
       window.removeEventListener("resize", handleResize);
       ro.disconnect();
 
+      // Capture ref value at effect time (not cleanup) to avoid stale ref access
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       const currentTerminals = terminalsMapRef.current;
       currentTerminals.delete(tabId);
 
@@ -175,6 +177,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
 
       term.dispose();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId, cwd, shell]);
 
   useEffect(() => {
@@ -196,14 +199,13 @@ export function TerminalPanel() {
   const session = useChat((s) => s.session);
   const [showShellDropdown, setShowShellDropdown] = useState(false);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
-  const [availableShells, setAvailableShells] = useState<ShellOption[]>([]);
-
-  // Auto-create terminal for current workspace when panel opens with no tabs
+  const [availableShells, setAvailableShells] = useState<ShellOption[]>([]);    // Auto-create terminal for current workspace when panel opens with no tabs
   const cwd = session?.workspacePath ?? workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? "";
   useEffect(() => {
     if (cwd && tabs.length === 0) {
       ensureTabForCwd(cwd);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
 
   // Close dropdowns on outside click
@@ -260,10 +262,13 @@ export function TerminalPanel() {
         const isWin = navigator.userAgent.includes("Windows");
         setAvailableShells(isWin ? [
           { value: "powershell", label: "PowerShell", icon: "\u{26A1}" },
+          { value: "pwsh", label: "PowerShell Core", icon: "P" },
           { value: "cmd", label: "Command Prompt", icon: ">" },
         ] : [
           { value: "bash", label: "Bash", icon: "\u{1F41A}" },
           { value: "zsh", label: "Zsh", icon: "z" },
+          { value: "fish", label: "Fish", icon: "\u{1F41F}" },
+          { value: "sh", label: "sh", icon: "$" },
         ]);
       }
     };

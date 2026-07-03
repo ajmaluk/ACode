@@ -3,6 +3,7 @@ import { buildMemoryGraph, hitTest, type GraphNode, type GraphData } from "@/lib
 import { useSkillsMcp, useChat, useWorkspace } from "@/store/useAppStore";
 import { loadGenePool } from "@/lib/genes";
 import { getDb } from "@/lib/database";
+import { BUNDLED_SKILLS } from "@/lib/skills";
 
 const NODE_COLORS: Record<string, string> = {
   memory: "#4fc3f7",
@@ -108,7 +109,7 @@ export function MemoryGraph() {
       }
 
       // Add built-in skills as nodes
-      const { BUNDLED_SKILLS } = await import("@/lib/skills");
+
       for (const skill of BUNDLED_SKILLS) {
         memories.push({
           id: `skill-${skill.name}`,

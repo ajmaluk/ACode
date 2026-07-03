@@ -20,7 +20,7 @@ function detectPlatform(): Platform {
     || "").toLowerCase();
   if (platform.includes("mac") || ua.includes("mac")) return "mac";
   if (platform.includes("win") || ua.includes("windows") || ua.includes("win32") || ua.includes("win64")) return "win";
-  if (platform.includes("linux") || ua.includes("linux") || ua.includes("ubuntu") || ua.includes("fedora")) return "linux";
+  if (platform.includes("linux") || ua.includes("linux") || ua.includes("ubuntu") || ua.includes("fedora") || ua.includes("debian") || ua.includes("arch") || ua.includes("manjaro") || ua.includes("nixos") || ua.includes("alpine")) return "linux";
   return "other";
 }
 
@@ -33,6 +33,44 @@ export function platform(): Platform {
 /** The primary modifier for shortcuts: ⌘ on macOS, Ctrl elsewhere. */
 export function modKey(): "⌘" | "Ctrl" {
   return platform() === "mac" ? "⌘" : "Ctrl";
+}
+
+/** True if the current platform is Windows. */
+export function isWindows(): boolean {
+  return platform() === "win";
+}
+
+/** True if the current platform is macOS. */
+export function isMac(): boolean {
+  return platform() === "mac";
+}
+
+/** True if the current platform is Linux. */
+export function isLinux(): boolean {
+  return platform() === "linux";
+}
+
+/**
+ * Get the default shell for the current platform.
+ * Returns 'powershell' on Windows, 'zsh' on macOS, 'bash' on Linux.
+ */
+export function defaultShell(): string {
+  const p = platform();
+  if (p === "win") return "powershell";
+  if (p === "mac") return "zsh";
+  return "bash";
+}
+
+/**
+ * Wrap a command for execution on the current platform.
+ * On Windows, wraps in powershell -Command. On Unix, wraps in bash -c.
+ */
+export function wrapCommandForPlatform(command: string, shell?: string): { program: string; args: string[] } {
+  const s = shell || defaultShell();
+  if (s === "powershell" || s === "pwsh") {
+    return { program: s, args: ["-NoProfile", "-NonInteractive", "-Command", command] };
+  }
+  return { program: s, args: ["-c", command] };
 }
 
 /** A short label like "⌘K" or "Ctrl K" — pass the non-modifier key. */

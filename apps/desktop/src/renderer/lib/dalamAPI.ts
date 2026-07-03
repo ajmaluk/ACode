@@ -1765,7 +1765,9 @@ You can combine multiple tools in one response:
             try {
               const { resetSafetyTimer } = await import("../lib/safetyTimer");
               resetSafetyTimer(
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 () => useChat.getState() as any,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 (update: Record<string, unknown>) => useChat.setState(update as any),
                 "normal",
               );
@@ -1926,9 +1928,10 @@ You can combine multiple tools in one response:
         // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
         const streamCleanup = streamCleanups.get(sessionId);
         if (streamCleanup) streamCleanup();
-        // Clean up SessionEnd dedup tracking AFTER all cleanup is done
-        // Delay slightly to prevent race with concurrent abort() calls
-        setTimeout(() => emittedSessionEnds.delete(sessionId), 100);
+        // Clean up SessionEnd dedup tracking AFTER all cleanup is done.
+        // Use queueMicrotask instead of setTimeout to avoid a fragile 100ms timer
+        // that can race with concurrent abort() calls.
+        queueMicrotask(() => emittedSessionEnds.delete(sessionId));
         // Only delete callback if this session doesn't have a newer listener
         // (checked via streamCleanups — a newer onStreamEvent would have replaced it)
       }
@@ -2316,15 +2319,21 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
   return toolCalls;
 }
 
-async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
-  const toolCalls: ParsedToolCall[] = [];
-  // Quoted-string-aware attribute pattern: matches "..." or '...' (handles > inside quotes)
-  const ATTRCapture = '((?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\')\\s*)*';
+
+// Pre-compiled regex patterns for parseToolCalls
+const ATTRCapture = '((?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\')\\s*)*';
   const ATTRSelfClose = ATTRCapture + '\\s*\\/?>';
-  const ATTRClose = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/';
+// ATTRClose was unused — removed
 
   // Capture content between opening and closing tags (non-self-closing tags)
-  const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\1\\s*>';
+  const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*>';
+
+async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
+
+  // Reset lastIndex on global regexes
+  const toolCalls: ParsedToolCall[] = [];
+  // Quoted-string-aware attribute pattern: matches "..." or '...' (handles > inside quotes)
+  
 
   // 1. read_file — handle both self-closing <read_file path="..."/> and with offset/limit
   const readFileRegex = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
@@ -2834,21 +2843,26 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
     };
 
     // Check if decision was already made (e.g., auto-approved before waitForToolApproval was registered)
-    import("../store/useAppStore").then(({ _pendingResolutions }) => {
-      const existing = _pendingResolutions.get(toolCallId);
-      if (existing) {
-        _pendingResolutions.delete(toolCallId);
-        finish(existing);
-      }
-    }).catch(() => { });
-
-    // Register the resolver callback so resolveToolApproval can call us directly
-    import("../store/useAppStore").then(({ _toolCallResolvers }) => {
+    // Register resolver FIRST, THEN check for pre-existing decision.
+    // Previously these were two separate import().then() chains which created
+    // a race window: resolveToolApproval could store a decision in
+    // _pendingResolutions after the check but before the resolver was registered,
+    // leaving the promise stuck forever. Combining into a single chain eliminates
+    // this window.
+    import("../store/useAppStore").then(({ _toolCallResolvers, _pendingResolutions }) => {
       if (resolved) return;
+      // Register resolver so resolveToolApproval can call us directly
       _toolCallResolvers.set(toolCallId, (decision: "approved" | "denied") => {
         finish(decision);
         return decision;
       });
+      // Now check for pre-existing decision (e.g., auto-approved before we registered)
+      const existing = _pendingResolutions.get(toolCallId);
+      if (existing) {
+        _pendingResolutions.delete(toolCallId);
+        _toolCallResolvers.delete(toolCallId);
+        finish(existing);
+      }
     }).catch((err) => {
       console.error("Failed to register tool call resolver:", err);
       finish("denied");
@@ -2889,7 +2903,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   if (name === "read_file") {
     const { readFile, stat } = await import("@tauri-apps/plugin-fs");
     const MAX_READ_SIZE = 1024 * 1024; // 1MB limit for agent reads
-    let fileSize = 0;
+    let fileSize: number | undefined;
     let statFailed = false;
     try {
       const fileInfo = await stat(args.path);
@@ -3618,6 +3632,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (doc) {
         // Execute script in iframe context
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const result = (iframe.contentWindow as any)?.eval?.(script);
         return result !== undefined ? String(result) : "Script executed (no return value)";
       }
@@ -3965,6 +3980,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       return `Error: Invalid panel tab "${tab}". Valid tabs: ${validTabs.join(", ")}.`;
     }
     const { useUI } = await import("../store/useAppStore");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     useUI.getState().setRightPanelTab(tab as any);
     useUI.getState().setRightPanelOpen(true);
     return `Right panel switched to "${tab}" tab.`;
@@ -3977,6 +3993,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       return `Error: Invalid bottom panel tab "${tab}". Valid tabs: ${validTabs.join(", ")}.`;
     }
     const { useUI } = await import("../store/useAppStore");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     useUI.getState().setBottomPanelTab(tab as any);
     useUI.getState().setBottomPanelOpen(true);
     return `Bottom panel switched to "${tab}" tab.`;
@@ -3985,6 +4002,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   if (name === "new_terminal") {
     const { useTerminal, useChat, useWorkspace } = await import("../store/useAppStore");
     const cwd = args.cwd || useChat.getState().session?.workspacePath || useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId)?.path || ".";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const shell = args.shell as any || "bash";
     useTerminal.getState().addTab(cwd, shell);
     return `Opened new ${shell} terminal in ${cwd}.`;

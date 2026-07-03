@@ -160,7 +160,7 @@ export type DiffLine = {
   newLineNumber?: number;
 };
 
-export type AgentSessionMode = "yolo";
+export type AgentSessionMode = "yolo" | "build" | "plan";
 
 export type AgentSession = {
   id: string;
@@ -328,6 +328,7 @@ export type AgentInfo = {
   hidden?: boolean;
   native?: boolean;
   color?: string;
+  icon?: string;
   temperature?: number;
   topP?: number;
   model?: { providerID: string; modelID: string };
@@ -342,7 +343,7 @@ export type AgentInfo = {
  * The set of primary (user-selectable) agents.
  * YOLO mode is the only mode — full access, no permissions asked.
  */
-export type PrimaryAgentName = "yolo";
+export type PrimaryAgentName = "yolo" | "build" | "plan";
 
 /**
  * A discovered skill (matches MiMo-Code's `Skill.Info`).

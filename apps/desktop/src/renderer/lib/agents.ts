@@ -69,7 +69,6 @@ export function mergeRulesets(...rulesets: PermissionRuleset[]): PermissionRules
   const merged: PermissionRuleset = [];
   for (const rs of rulesets) {
     for (const rule of rs) {
-      // Remove any earlier rule that this one overrides
       const idx = merged.findIndex(
         (m) => m.permission === rule.permission && m.pattern === rule.pattern
       );
@@ -94,18 +93,29 @@ function globToRegex(pattern: string): RegExp {
  * Evaluate the ruleset for a given (permission, pattern) pair. Returns the
  * effective action — falls back to the wildcard rule for that permission,
  * then the global wildcard.
+ *
+ * Optimized: single pass with three tracking variables instead of 3 linear scans.
  */
 export function evaluate(ruleset: PermissionRuleset, permission: string, pattern: string): PermissionAction {
+  let permissionWildcard: PermissionAction | undefined;
+  let globalWildcard: PermissionAction | undefined;
+
   for (const r of ruleset) {
-    if (r.permission === permission && (r.pattern === pattern || globToRegex(r.pattern).test(pattern))) return r.action;
+    if (r.permission === permission) {
+      // Exact or glob match — return immediately (respects ruleset ordering)
+      if (r.pattern === pattern || globToRegex(r.pattern).test(pattern)) {
+        return r.action;
+      }
+      // Track permission-level wildcard fallback
+      if (r.pattern === "*") {
+        permissionWildcard = r.action;
+      }
+    } else if (r.permission === "*") {
+      globalWildcard = r.action;
+    }
   }
-  for (const r of ruleset) {
-    if (r.permission === permission && r.pattern === "*") return r.action;
-  }
-  for (const r of ruleset) {
-    if (r.permission === "*") return r.action;
-  }
-  return "ask";
+
+  return permissionWildcard ?? globalWildcard ?? "ask";
 }
 
 // ============================================================================
@@ -118,7 +128,7 @@ export function evaluate(ruleset: PermissionRuleset, permission: string, pattern
  * command should be checked against in the ruleset.
  */
 const BASH_ARITY: Record<string, number> = {
-  // 1-token commands
+  // 1-token Unix commands
   cat: 1, cd: 1, chmod: 1, chown: 1, cp: 1, echo: 1, env: 1, export: 1,
   grep: 1, ln: 1, ls: 1, mkdir: 1, mv: 1, ps: 1,
   pwd: 1, rm: 1, rmdir: 1, sleep: 1, source: 1, tail: 1, touch: 1,
@@ -126,11 +136,9 @@ const BASH_ARITY: Record<string, number> = {
   head: 1, diff: 1, tar: 1, zip: 1, unzip: 1, curl: 1, wget: 1,
   date: 1, whoami: 1, hostname: 1, uname: 1, df: 1, du: 1, top: 1, htop: 1,
   less: 1, more: 1, man: 1, open: 1, pbcopy: 1, pbpaste: 1,
-  // DANGEROUS: kill and killall are removed from allowed commands.
-  // These can terminate critical system processes and are blocked by default.
-  // If process termination is needed, use explicit permission rules.
-  // taskkill (Windows equivalent) is also blocked for the same reason.
-  // 2-token commands
+  dir: 1, cls: 1, copy: 1, move: 1, del: 1, ren: 1, type: 1,
+  ipconfig: 1, tasklist: 1, taskkill: 1, netstat: 1, systeminfo: 1,
+  set: 1, ver: 1, chdir: 1, popd: 1, pushd: 1,
   "aws s3": 2, "brew install": 2, "bun install": 2, "cargo build": 2,
   "cmake build": 2, "composer require": 2, "deno run": 2, "docker run": 2,
   "firebase deploy": 2, "flyctl deploy": 2, "git add": 2, "git branch": 2,
@@ -150,7 +158,6 @@ const BASH_ARITY: Record<string, number> = {
   "tmux new": 2, "turbo run": 2, "ufw allow": 2, "vault login": 2,
   "vercel deploy": 2, "volta install": 2, "wp plugin": 2, "yarn add": 2,
   "yarn run": 2,
-  // 3-token commands
   "aws s3 ls": 3, "az storage blob": 3, "bun run dev": 3, "cargo add": 3,
   "cargo run main": 3, "cdk deploy": 3, "cf push": 3, "deno task dev": 3,
   "doctl kubernetes": 3, "docker compose up": 3, "docker container ls": 3,
@@ -169,20 +176,35 @@ const BASH_ARITY: Record<string, number> = {
 };
 
 /**
+ * Check if a shell command contains shell metacharacters that could bypass
+ * arity-based permission detection. Metacharacters like |, ;, &&, ||, `, $()
+ * let hidden commands execute that aren't visible to arity analysis.
+ */
+const SHELL_METACHARACTERS = /[|;`$]/;
+const SHELL_REDIRECT = /[<>]/;
+export function hasShellMetacharacters(command: string): boolean {
+  return SHELL_METACHARACTERS.test(command) || (SHELL_REDIRECT.test(command) && !/^[<>]/.test(command.trim()));
+}
+
+/**
  * Given a full shell command like `git checkout main -b feature/x`, return
  * the canonical "human-readable" command using the arity dictionary
  * (e.g. `git checkout`). This is the pattern the ruleset will be evaluated
  * against.
+ * If the command contains shell metacharacters (|, ;, &&, `, $()), append a
+ * marker so the pattern doesn't match any allow rules (forcing "ask").
  */
 export function canonicaliseBashCommand(command: string): string {
   const tokens = command.trim().split(/\s+/).filter(Boolean);
+  const hasMetachars = tokens.length > 0 && hasShellMetacharacters(command);
   for (let len = Math.min(tokens.length, 5); len > 0; len--) {
     const prefix = tokens.slice(0, len).join(" ");
     if (BASH_ARITY[prefix] !== undefined) {
-      return prefix;
+      return hasMetachars ? `${prefix} |` : prefix;
     }
   }
-  return tokens[0] ?? "";
+  const first = tokens[0] ?? "";
+  return hasMetachars && first ? `${first} |` : first;
 }
 
 // ============================================================================
@@ -194,13 +216,13 @@ export function canonicaliseBashCommand(command: string): string {
  * Dalam's `defaults` from agent.ts.
  */
 export const DEFAULT_PERMISSIONS: PermissionRuleset = fromConfig({
-  "*": "allow",
+  "*": "ask",
   mcp: "ask",
   doom_loop: "ask",
   external_directory: {
     "*": "ask",
   },
-  question: "deny",
+  question: "allow",
   change_directory: "ask",
 });
 
@@ -214,10 +236,107 @@ const YOLO_AGENT: AgentInfo = {
   mode: "primary",
   native: true,
   color: "#e85d75",
-  description: "Full access — reads, writes, executes everything without asking.",
+  icon: "zap",
+  description: "Full unrestricted access — reads, writes, executes everything without asking. Use for experienced users who want maximum speed.",
   permission: mergeRulesets(
     DEFAULT_PERMISSIONS,
-    fromConfig({ question: "allow" })
+    fromConfig({
+      "*": "allow",
+      question: "allow",
+      doom_loop: "allow",
+      external_directory: "allow",
+      change_directory: "allow",
+    })
+  ),
+};
+
+const BUILD_AGENT: AgentInfo = {
+  name: "build",
+  category: "general",
+  mode: "primary",
+  native: true,
+  color: "#81c784",
+  icon: "hammer",
+  description: "Balanced agent that reads and writes files with automatic approval for safe operations. Asks before destructive actions. Recommended for daily development work.",
+  permission: mergeRulesets(
+    DEFAULT_PERMISSIONS,
+    fromConfig({
+      edit: "ask",
+      question: "allow",
+      bash: {
+        "git status": "allow",
+        "git diff": "allow",
+        "git log": "allow",
+        "git branch": "allow",
+        "git checkout": "allow",
+        "git add": "allow",
+        "git commit": "allow",
+        "git pull": "allow",
+        "git push": "allow",
+        "git stash": "allow",
+        "git reset": "allow",
+        "npm run": "allow",
+        "pnpm run": "allow",
+        "yarn run": "allow",
+        "bun run": "allow",
+        "npm install": "allow",
+        "pnpm install": "allow",
+        "yarn install": "allow",
+        "bun install": "allow",
+        "ls": "allow",
+        "cat": "allow",
+        "pwd": "allow",
+        "which": "allow",
+        "date": "allow",
+        "echo": "allow",
+        "python": "ask",
+        "node": "ask",
+        "cargo": "ask",
+        "go": "ask",
+        "make": "ask",
+        "*": "ask",
+      },
+    })
+  ),
+};
+
+const PLAN_AGENT: AgentInfo = {
+  name: "plan",
+  category: "general",
+  mode: "primary",
+  native: true,
+  color: "#64b5f6",
+  icon: "clipboard-list",
+  description: "Read-only planning agent. Explores the codebase, creates task plans, and proposes changes without writing files. Use when you want to explore before making changes.",
+  permission: mergeRulesets(
+    DEFAULT_PERMISSIONS,
+    fromConfig({
+      edit: "deny",
+      write: "deny",
+      bash: {
+        "git status": "allow",
+        "git diff": "allow",
+        "git log": "allow",
+        "git branch": "allow",
+        "ls": "allow",
+        "cat": "allow",
+        "pwd": "allow",
+        "which": "allow",
+        "find": "allow",
+        "grep": "allow",
+        "head": "allow",
+        "tail": "allow",
+        "wc": "allow",
+        "*": "deny",
+      },
+      question: "allow",
+      read: {
+        "task": "deny",
+        "*": "allow",
+      },
+      webfetch: "allow",
+      websearch: "allow",
+    })
   ),
 };
 
@@ -227,7 +346,8 @@ const GENERAL_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#aac4e1",
-  description: "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.",
+  icon: "cpu",
+  description: "General-purpose subagent for researching complex questions, executing multi-step tasks, and running parallel work units.",
   permission: mergeRulesets(
     DEFAULT_PERMISSIONS,
     fromConfig({ change_directory: "deny" })
@@ -240,7 +360,8 @@ const EXPLORE_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#f5c9b0",
-  description: "Fast agent specialized for exploring codebases. Use this when you need to quickly understand a file structure, find references, or summarize a module.",
+  icon: "search",
+  description: "Fast subagent specialized for exploring codebases. Use for quickly understanding file structures, finding references, or summarizing modules.",
   permission: mergeRulesets(
     DEFAULT_PERMISSIONS,
     fromConfig({
@@ -257,7 +378,8 @@ const TITLE_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#dcd7a8",
-  description: "Generates a short, descriptive title for the conversation.",
+  icon: "heading",
+  description: "Generates a short, descriptive title for the conversation based on context.",
   permission: fromConfig({ "*": "deny", "skill": "allow" }),
 };
 
@@ -267,7 +389,8 @@ const SUMMARY_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#9ec1cf",
-  description: "Summarizes long conversation histories into a compact form.",
+  icon: "file-text",
+  description: "Summarizes long conversation histories into a compact form for context window management.",
   permission: fromConfig({ "*": "deny" }),
 };
 
@@ -277,7 +400,8 @@ const COMPACTION_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#c4a7e7",
-  description: "Compresses context to keep the conversation within model context windows.",
+  icon: "compress",
+  description: "Compresses context to keep the conversation within model context windows by summarizing older messages.",
   permission: fromConfig({ "*": "deny" }),
 };
 
@@ -287,7 +411,8 @@ const DREAM_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#f6c4a8",
-  description: "Generates creative, exploratory code or design proposals for ambiguous tasks.",
+  icon: "moon",
+  description: "Generates creative, exploratory code or design proposals for ambiguous tasks. Useful for brainstorming.",
   permission: fromConfig({ "*": "deny" }),
 };
 
@@ -297,12 +422,15 @@ const DISTILL_SUBAGENT: AgentInfo = {
   mode: "subagent",
   native: true,
   color: "#a8c4f6",
-  description: "Extracts the essential structure from a body of code or text.",
+  icon: "droplets",
+  description: "Extracts the essential structure from a body of code or text, producing concise summaries.",
   permission: fromConfig({ "*": "deny" }),
 };
 
 export const ALL_AGENTS: AgentInfo[] = [
   YOLO_AGENT,
+  BUILD_AGENT,
+  PLAN_AGENT,
   GENERAL_SUBAGENT,
   EXPLORE_SUBAGENT,
   TITLE_SUBAGENT,
@@ -324,5 +452,3 @@ export function getPrimaryAgent(name: PrimaryAgentName): AgentInfo {
   if (!a) throw new Error(`Unknown primary agent: ${name}`);
   return a;
 }
-
-

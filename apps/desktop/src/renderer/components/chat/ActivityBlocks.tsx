@@ -19,7 +19,7 @@
  *   - ChangesCard    — file changes (open diff, +/- stats)
  *   - TodoBlock      — todo list checklist
  */
-import { useState } from "react";
+import React, { useState } from "react";
 import {
   CheckCircle2,
   FileText,
@@ -38,6 +38,13 @@ import {
   FileJson,
   FileImage,
   FileType,
+  GitBranch,
+  Monitor,
+  Eye,
+  HelpCircle,
+  Layout,
+  ListChecks,
+  Paintbrush,
 } from "lucide-react";
 import type {
   FileChange,
@@ -117,7 +124,7 @@ function ActivityRow({
 // ThinkingBlock — model's step-by-step reasoning
 // ============================================================================
 
-export function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
+export const ThinkingBlock = React.memo(function ThinkingBlock({ content, streaming }: { content: string; streaming?: boolean }) {
   return (
     <ActivityRow
       label={
@@ -143,7 +150,7 @@ export function ThinkingBlock({ content, streaming }: { content: string; streami
       </pre>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // ExploreBlock — file tree / grep findings
@@ -155,7 +162,7 @@ export type ExploreResult = {
   matches: { path: string; line?: number; preview?: string }[];
 };
 
-export function ExploreBlock({ result }: { result: ExploreResult }) {
+export const ExploreBlock = React.memo(function ExploreBlock({ result }: { result: ExploreResult }) {
   return (
     <ActivityRow
       label={<>Explored {result.kind ? <span className="text-dalam-text-secondary/70">{result.kind}</span> : "codebase"}</>}
@@ -193,13 +200,13 @@ export function ExploreBlock({ result }: { result: ExploreResult }) {
       </ul>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // ReadBlock — file content the agent looked at
 // ============================================================================
 
-export function ReadBlock({ path, content, lineRange }: { path: string; content: string; lineRange?: [number, number] }) {
+export const ReadBlock = React.memo(function ReadBlock({ path, content, lineRange }: { path: string; content: string; lineRange?: [number, number] }) {
   const fileName = basename(path);
   const lines = content.split("\n");
   const start = lineRange?.[0] ?? 1;
@@ -227,13 +234,13 @@ export function ReadBlock({ path, content, lineRange }: { path: string; content:
       </pre>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // ContextGatheringGroup — collapsible group for explore/read activities
 // ============================================================================
 
-export function ContextGatheringGroup({ activities }: { activities: import("@dalam/shared-types").PendingActivity[] }) {
+export const ContextGatheringGroup = React.memo(function ContextGatheringGroup({ activities }: { activities: import("@dalam/shared-types").PendingActivity[] }) {
   const [open, setOpen] = useState(false);
   if (activities.length === 0) return null;
 
@@ -271,13 +278,13 @@ export function ContextGatheringGroup({ activities }: { activities: import("@dal
       )}
     </div>
   );
-}
+});
 
 // ============================================================================
 // SkillBlock — $skill invocation
 // ============================================================================
 
-export function SkillBlock({ name, args, content, status }: { name: string; args?: string; content?: string; status?: "running" | "completed" | "failed" }) {
+export const SkillBlock = React.memo(function SkillBlock({ name, args, content, status }: { name: string; args?: string; content?: string; status?: "running" | "completed" | "failed" }) {
   const bundledSkill = BUNDLED_SKILLS.find((s: SkillInfo) => s.name === name);
   const projectSkill = skillRegistry.get(name);
   const skill = bundledSkill ?? (projectSkill ? { name: projectSkill.name, description: projectSkill.description ?? "", content: projectSkill.content, location: projectSkill.location, source: projectSkill.source } : null);
@@ -296,13 +303,13 @@ export function SkillBlock({ name, args, content, status }: { name: string; args
       )}
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // PlanBlock — plan from plan mode
 // ============================================================================
 
-export function PlanBlock({ plan }: { plan: string }) {
+export const PlanBlock = React.memo(function PlanBlock({ plan }: { plan: string }) {
   return (
     <ActivityRow
       label="Implementation plan"
@@ -314,13 +321,13 @@ export function PlanBlock({ plan }: { plan: string }) {
       </pre>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // BashActivityBlock — terminal-like display
 // ============================================================================
 
-export function BashActivityBlock({ command, result }: { command: string; result: string }) {
+export const BashActivityBlock = React.memo(function BashActivityBlock({ command, result }: { command: string; result: string }) {
   return (
     <ActivityRow
       label={<>Ran <span className="font-mono">$ {command}</span></>}
@@ -335,7 +342,7 @@ export function BashActivityBlock({ command, result }: { command: string; result
       )}
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // ToolCallsList — list of tool calls
@@ -379,10 +386,31 @@ const TOOL_META: Record<string, { icon: React.ElementType; label: string; color:
   memory_export: { icon: Code2, label: "Memory Export", color: "text-dalam-text-muted" },
   memory_import: { icon: Code2, label: "Memory Import", color: "text-dalam-text-muted" },
   get_env: { icon: Code2, label: "Get Env", color: "text-dalam-text-muted" },
-  get_screen_info: { icon: Code2, label: "Screen Info", color: "text-dalam-text-muted" },
+  get_screen_info: { icon: Monitor, label: "Screen Info", color: "text-dalam-text-muted" },
   list_processes: { icon: Terminal, label: "Processes", color: "text-dalam-text-muted" },
   kill_process: { icon: X, label: "Kill Process", color: "text-dalam-text-muted" },
   get_disk_space: { icon: Code2, label: "Disk Space", color: "text-dalam-text-muted" },
+  open_panel: { icon: Layout, label: "Opened Panel", color: "text-dalam-text-muted" },
+  screenshot: { icon: Monitor, label: "Screenshot", color: "text-dalam-text-muted" },
+  browser_navigate: { icon: Search, label: "Navigated", color: "text-dalam-text-muted" },
+  run_preview: { icon: Eye, label: "Preview", color: "text-dalam-text-muted" },
+  browser_execute: { icon: Code2, label: "Browser JS", color: "text-dalam-text-muted" },
+  create_task_plan: { icon: ListChecks, label: "Task Plan", color: "text-dalam-text-muted" },
+  question: { icon: HelpCircle, label: "Question", color: "text-dalam-text-muted" },
+  task: { icon: ListChecks, label: "Sub-Agent", color: "text-dalam-text-muted" },
+  git_branch: { icon: GitBranch, label: "Git Branch", color: "text-dalam-text-muted" },
+  git_checkout: { icon: GitBranch, label: "Git Checkout", color: "text-dalam-text-muted" },
+  git_diff_file: { icon: FileText, label: "Git Diff", color: "text-dalam-text-muted" },
+  set_theme: { icon: Paintbrush, label: "Set Theme", color: "text-dalam-text-muted" },
+  toggle_theme: { icon: Paintbrush, label: "Toggle Theme", color: "text-dalam-text-muted" },
+  set_view_mode: { icon: Layout, label: "Set Mode", color: "text-dalam-text-muted" },
+  toggle_view_mode: { icon: Layout, label: "Toggle Mode", color: "text-dalam-text-muted" },
+  toggle_right_panel: { icon: Layout, label: "Toggle Panel", color: "text-dalam-text-muted" },
+  toggle_bottom_panel: { icon: Layout, label: "Toggle Panel", color: "text-dalam-text-muted" },
+  set_right_panel_tab: { icon: Layout, label: "Set Panel Tab", color: "text-dalam-text-muted" },
+  set_bottom_panel_tab: { icon: Layout, label: "Set Panel Tab", color: "text-dalam-text-muted" },
+  new_terminal: { icon: Terminal, label: "New Terminal", color: "text-dalam-text-muted" },
+  terminal_write: { icon: Terminal, label: "Terminal Cmd", color: "text-dalam-text-muted" },
 };
 
 function getToolMeta(name: string) {
@@ -404,7 +432,7 @@ export function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
 // Smart tool result display — renders results as nice UI instead of raw JSON
 // ============================================================================
 
-function ArgsDisplay({ toolName, args }: { toolName: string; args: Record<string, any> }) {
+function ArgsDisplay({ toolName, args }: { toolName: string; args: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false);
   const entries = Object.entries(args).filter(([k]) => k !== "api_key" && k !== "token");
 
@@ -413,16 +441,16 @@ function ArgsDisplay({ toolName, args }: { toolName: string; args: Record<string
   }
 
   // Compact inline display for common tools
-  const compact = (() => {
+  const compact: string | null = (() => {
     if (toolName === "read_file" || toolName === "write_file" || toolName === "edit_file" || toolName === "list_dir") {
       const p = args.path as string;
       if (p) return p;
     }
-    if (toolName === "run_command") return `$ ${args.command}`;
-    if (toolName === "grep_file") return `${args.pattern} in ${args.path ?? "."}`;
-    if (toolName === "search_files") return `"${args.pattern}" in ${args.path ?? "."}`;
-    if (toolName === "fetch_url") return args.url;
-    if (toolName === "create_file") return args.path;
+    if (toolName === "run_command") return `$ ${String(args.command ?? "")}`;
+    if (toolName === "grep_file") return `${String(args.pattern ?? "")} in ${String(args.path ?? ".")}`;
+    if (toolName === "search_files") return `"${String(args.pattern ?? "")}" in ${String(args.path ?? ".")}`;
+    if (toolName === "fetch_url") return String(args.url ?? "");
+    if (toolName === "create_file") return String(args.path ?? "");
     return null;
   })();
 
@@ -430,7 +458,7 @@ function ArgsDisplay({ toolName, args }: { toolName: string; args: Record<string
     <div>
       {compact ? (
         <div className="font-mono text-dalam-text-primary bg-dalam-bg-secondary/30 rounded-md px-2 py-1 flex items-center gap-1.5">
-          <span className="text-dalam-text-muted">{args.mode ? `[${args.mode}]` : ""}</span>
+          <span className="text-dalam-text-muted">{args.mode ? `[${String(args.mode)}]` : ""}</span>
           <span className="truncate">{compact}</span>
         </div>
       ) : (
@@ -460,7 +488,7 @@ function getFileIconForName(name: string) {
   return File;
 }
 
-function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, any> }) {
+function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, unknown> }) {
   const openFile = useWorkspace((s) => s.openFile);
   const _openDiff = useDiffView((s) => s.openFile);
 
@@ -509,9 +537,8 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
       const isSearch = toolName === "search_files";
       return (
         <div className="space-y-0.5 max-h-48 overflow-y-auto scrollbar-thin">
-          {lines.map((line, idx) => {
+          {lines.slice(0, 50).map((line, idx) => {
             if (isSearch) {
-              // Format: filePath:lineNum: text
               const match = line.match(/^(.+?):(\d+):(.*)$/);
               if (match) {
                 const [, filePath, lineNum, text] = match;
@@ -531,7 +558,6 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
                 );
               }
             }
-            // Format: lineNum: text
             const match = line.match(/^(\d+):(.*)$/);
             if (match) {
               const [, lineNum, text] = match;
@@ -551,8 +577,8 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
               <div key={idx} className="px-2 py-0.5 text-[11px] font-mono text-dalam-text-primary truncate">{line}</div>
             );
           })}
-          {lines.length >= 50 && (
-            <div className="text-[10px] text-dalam-text-muted px-2 pt-0.5">Showing 50 of {lines.length} matches</div>
+          {lines.length > 50 && (
+            <div className="text-[10px] text-dalam-text-muted px-2 pt-0.5">Showing first 50 of {lines.length} matches</div>
           )}
         </div>
       );
@@ -570,7 +596,7 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
           {preview}
           {totalLines > 15 && <span className="text-dalam-text-muted">{"\n"}... ({totalLines - 15} more lines)</span>}
         </pre>
-        {args.path && (
+        {typeof args.path === "string" && args.path && (
           <button
             className="text-[10px] text-dalam-accent-primary hover:underline mt-1"
             onClick={(e) => { e.stopPropagation(); openFile(args.path as string); }}
@@ -585,6 +611,18 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
   // Default: raw display with truncation
   const isLong = result.length > 500;
   const display = isLong ? result.slice(0, 500) + "..." : result;
+
+  // Question tool: show answer with accent styling
+  if (toolName === "question") {
+    const answerText = result.replace(/^User answered:\s*/, "");
+    return (
+      <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-dalam-bg-secondary/30">
+        <span className="text-[10px] text-dalam-text-muted">Answer:</span>
+        <span className="text-[11px] text-dalam-accent-primary font-medium">{answerText}</span>
+      </div>
+    );
+  }
+
   return (
     <pre className="font-mono text-[11px] text-dalam-text-primary whitespace-pre-wrap break-words bg-dalam-bg-secondary/30 rounded-md p-2 max-h-40 overflow-y-auto scrollbar-thin">
       {display}
@@ -609,6 +647,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
     if (typeof args.skill === "string") return args.skill;
     if (typeof args.url === "string") return args.url;
     if (typeof args.dir === "string") return args.dir;
+    if (typeof args.question === "string") return args.question;
     return "";
   })();
 
@@ -715,7 +754,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
 // ChangesCard — file changes with expandable inline diffs
 // ============================================================================
 
-export function ChangesCard({ changes }: { changes: FileChange[] }) {
+export const ChangesCard = React.memo(function ChangesCard({ changes }: { changes: FileChange[] }) {
   const openDiff = useDiffView((s) => s.openFile);
   const totalAdded = changes.reduce((s, c) => s + c.additions, 0);
   const totalRemoved = changes.reduce((s, c) => s + c.deletions, 0);
@@ -737,7 +776,7 @@ export function ChangesCard({ changes }: { changes: FileChange[] }) {
       </div>
     </ActivityRow>
   );
-}
+});
 
 function FileChangeRow({ change, onOpenDiff }: { change: FileChange; onOpenDiff: () => void }) {
   const [expanded, setExpanded] = useState(false);
@@ -802,7 +841,7 @@ function FileChangeRow({ change, onOpenDiff }: { change: FileChange; onOpenDiff:
 // TodoBlock — todo list checklist
 // ============================================================================
 
-export function TodoBlock({ todos }: { todos: TodoItem[] }) {
+export const TodoBlock = React.memo(function TodoBlock({ todos }: { todos: TodoItem[] }) {
   if (!todos.length) return null;
   const completed = todos.filter((t) => t.status === "completed").length;
   const total = todos.length;
@@ -822,9 +861,10 @@ export function TodoBlock({ todos }: { todos: TodoItem[] }) {
       defaultOpen
     >
       <ul className="space-y-0.5">
-        {todos.map((t) => {
+          {todos.map((t) => {
           const done = t.status === "completed";
           const inFlight = t.status === "in_progress";
+          const failed = t.status === "failed";
           return (
             <li
               key={t.id}
@@ -832,19 +872,21 @@ export function TodoBlock({ todos }: { todos: TodoItem[] }) {
             >
               {done ? (
                 <CheckCircle2 className="w-3 h-3 text-dalam-git-added flex-shrink-0 mt-0.5" />
+              ) : failed ? (
+                <X className="w-3 h-3 text-dalam-git-deleted flex-shrink-0 mt-0.5" />
               ) : inFlight ? (
                 <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0 mt-0.5" />
               ) : (
                 <span className="w-3 h-3 rounded-full border border-dalam-text-muted/40 flex-shrink-0 mt-0.5" />
               )}
-              <span className={done ? "line-through opacity-70" : ""}>{t.content}</span>
+              <span className={done ? "line-through opacity-70" : failed ? "line-through opacity-50" : ""}>{t.content}</span>
             </li>
           );
         })}
       </ul>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // TaskPlanBlock — live-updating task plan checklist
@@ -856,7 +898,7 @@ export type TaskPlanItem = {
   status: "pending" | "running" | "done" | "failed";
 };
 
-export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summary?: string | null }) {
+export const TaskPlanBlock = React.memo(function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summary?: string | null }) {
   const completed = tasks.filter((t) => t.status === "done").length;
   const total = tasks.length;
   const current = tasks.find((t) => t.status === "running");
@@ -910,13 +952,13 @@ export function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summa
       </ul>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // SubAgentBlock — collapsible accordion for spawned sub-agents
 // ============================================================================
 
-export function SubAgentBlock({ agent }: { agent: SubAgentState }) {
+export const SubAgentBlock = React.memo(function SubAgentBlock({ agent }: { agent: SubAgentState }) {
   const [open, setOpen] = useState(false);
   const isRunning = agent.status === "running";
   const _isFailed = agent.status === "failed";
@@ -1000,13 +1042,13 @@ export function SubAgentBlock({ agent }: { agent: SubAgentState }) {
       )}
     </div>
   );
-}
+});
 
 // ============================================================================
 // SubAgentList — renders all active/recent sub-agents as a group
 // ============================================================================
 
-export function SubAgentList({ agents }: { agents: SubAgentState[] }) {
+export const SubAgentList = React.memo(function SubAgentList({ agents }: { agents: SubAgentState[] }) {
   if (agents.length === 0) return null;
   return (
     <div className="my-1">
@@ -1015,13 +1057,13 @@ export function SubAgentList({ agents }: { agents: SubAgentState[] }) {
       ))}
     </div>
   );
-}
+});
 
 // ============================================================================
 // QuestionAccordion — shows questions asked by the agent and user's answers
 // ============================================================================
 
-export function QuestionAccordion({ questions }: { questions: { id: string; question: string; options: string[]; answer: string; timestamp: number }[] }) {
+export const QuestionAccordion = React.memo(function QuestionAccordion({ questions }: { questions: { id: string; question: string; options: string[]; answer: string; timestamp: number }[] }) {
   if (!questions || questions.length === 0) return null;
   return (
     <div className="my-1 space-y-1">
@@ -1030,7 +1072,7 @@ export function QuestionAccordion({ questions }: { questions: { id: string; ques
       ))}
     </div>
   );
-}
+});
 
 function QuestionItem({ question }: { question: { id: string; question: string; options: string[]; answer: string; timestamp: number } }) {
   const [expanded, setExpanded] = useState(false);

@@ -16,6 +16,7 @@
  */
 
 import { hookBus } from "./hookBus";
+import { createDalamAPI, getActiveProvider, corsFetch } from "./dalamAPI";
 import type {
   SessionStartEvent,
   UserPromptSubmitEvent,
@@ -111,67 +112,65 @@ function onPostToolUse(event: PostToolUseEvent): void {
  * This writes a lightweight JSON summary to .dalam/session-history.json
  * that can be read on the next SessionStart.
  */
-async function onSessionEnd(event: SessionEndEvent): Promise<void> {
+/**
+ * Persist session stats to the workspace session-history.json file.
+ */
+async function persistSessionStats(event: SessionEndEvent): Promise<void> {
   const stats = sessionStats.get(event.sessionId);
+  if (!stats) return;
 
-  if (stats) {
-    // Persist session summary for next session's context
-    try {
-      const { useWorkspace } = await import("../store/useAppStore");
-      const workspace = useWorkspace.getState().workspaces.find(
-        (w) => w.id === useWorkspace.getState().activeWorkspaceId
-      );
-      if (workspace) {
-        const api = (await import("./dalamAPI")).createDalamAPI();
-        const summaryPath = `${workspace.path}/.dalam/session-history.json`;
-        const { exists } = await import("@tauri-apps/plugin-fs");
+  try {
+    const { useWorkspace } = await import("../store/useAppStore");
+    const workspace = useWorkspace.getState().workspaces.find(
+      (w) => w.id === useWorkspace.getState().activeWorkspaceId
+    );
+    if (!workspace) return;
 
-        let history: Array<{
-          sessionId: string;
-          endedAt: number;
-          reason: string;
-          messageCount: number;
-          durationMs: number;
-          toolCalls: number;
-          toolErrors: number;
-        }> = [];
+    const api = createDalamAPI();
+    const summaryPath = `${workspace.path}/.dalam/session-history.json`;
+    const { exists } = await import("@tauri-apps/plugin-fs");
 
-        if (await exists(summaryPath)) {
-          try {
-            const raw = await api.fs.readFile(summaryPath);
-            history = JSON.parse(raw);
-          } catch { /* start fresh */ }
-        }
+    let history: Array<{
+      sessionId: string;
+      endedAt: number;
+      reason: string;
+      messageCount: number;
+      durationMs: number;
+      toolCalls: number;
+      toolErrors: number;
+    }> = [];
 
-        history.push({
-          sessionId: event.sessionId,
-          endedAt: event.timestamp,
-          reason: event.reason,
-          messageCount: event.messageCount,
-          durationMs: event.durationMs,
-          toolCalls: stats.calls,
-          toolErrors: stats.errors,
-        });
-
-        // Keep only last 50 sessions
-        history = history.slice(-50);
-        await api.fs.writeFile(summaryPath, JSON.stringify(history, null, 2));
-      }
-    } catch (e) {
-      console.warn("[HookListener] Failed to persist session summary:", e);
+    if (await exists(summaryPath)) {
+      try {
+        const raw = await api.fs.readFile(summaryPath);
+        history = JSON.parse(raw);
+      } catch { /* start fresh */ }
     }
 
-    // Clean up stats
-    sessionStats.delete(event.sessionId);
+    history.push({
+      sessionId: event.sessionId,
+      endedAt: event.timestamp,
+      reason: event.reason,
+      messageCount: event.messageCount,
+      durationMs: event.durationMs,
+      toolCalls: stats.calls,
+      toolErrors: stats.errors,
+    });
 
+    history = history.slice(-50);
+    await api.fs.writeFile(summaryPath, JSON.stringify(history, null, 2));
+  } catch (e) {
+    console.warn("[HookListener] Failed to persist session summary:", e);
   }
 
-  // Periodic cleanup of stale session stats to prevent unbounded growth
-  if (sessionStats.size > MAX_SESSION_STATS / 2) {
-    cleanupStaleStats();
-  }
+  sessionStats.delete(event.sessionId);
+}
 
-  // ── Auto-extract memories from the last exchange ──
+/**
+ * Auto-extract memories from the last user-assistant exchange.
+ * Falls back from heuristic extraction to LLM-based extraction.
+ */
+async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
   try {
     const { useChat, useWorkspace } = await import("../store/useAppStore");
     const { extractMemoriesFromExchange, extractMemoriesWithLLM, saveMemory } = await import("./memoryStore");
@@ -179,14 +178,14 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
     if (!sessionMessages || sessionMessages.length < 2) return;
 
-    // Find the last user message (reverse scan for ES2023 compat)
+    // Find the last user message
     let lastUserIdx = -1;
     for (let i = sessionMessages.length - 1; i >= 0; i--) {
       if (sessionMessages[i].role === "user") { lastUserIdx = i; break; }
     }
     if (lastUserIdx < 0) return;
 
-    // Find the assistant message after the last user message (the response)
+    // Find the assistant message after it
     let assistantIdx = -1;
     for (let i = lastUserIdx + 1; i < sessionMessages.length; i++) {
       if (sessionMessages[i].role === "assistant") { assistantIdx = i; break; }
@@ -196,7 +195,6 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     const userInput = sessionMessages[lastUserIdx].content;
     const assistantResponse = sessionMessages[assistantIdx].content;
 
-    // Only extract from substantial exchanges (>200 chars combined)
     if (userInput.length + assistantResponse.length < 200) return;
 
     const workspace = useWorkspace.getState().workspaces.find(
@@ -210,12 +208,10 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
     });
 
     if (entries.length === 0) {
-      // Try LLM extraction for richer results
       try {
-        const { getActiveProvider } = await import("./dalamAPI");
+        const api = createDalamAPI();
         const { settings, config } = getActiveProvider();
         const isAnthropic = config.apiFormat === "anthropic";
-        const { corsFetch: corsFetchFn } = await import("./dalamAPI");
         const fetchLLM = async (prompt: string): Promise<string> => {
           const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
           const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -228,41 +224,34 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
           const body = isAnthropic
             ? { model: settings.selectedModel, system: "You are a memory extraction assistant.", messages: [{ role: "user", content: prompt }], max_tokens: 1000 }
             : { model: settings.selectedModel, messages: [{ role: "system", content: "You are a memory extraction assistant." }, { role: "user", content: prompt }], max_tokens: 1000 };
-          const resp = await corsFetchFn(url, { method: "POST", headers, body: JSON.stringify(body) });
+          const resp = await corsFetch(url, { method: "POST", headers, body: JSON.stringify(body) });
           if (!resp.ok) throw new Error(`LLM extraction failed: HTTP ${resp.status}`);
           const json = await resp.json();
           return isAnthropic ? (json.content?.[0]?.text || "") : (json.choices?.[0]?.message?.content || "");
         };
         const llmResult = await extractMemoriesWithLLM(userInput, assistantResponse, fetchLLM, {
-          sessionId: event.sessionId,
-          maxEntries: 3,
-          workspacePath: workspace.path,
+          sessionId: event.sessionId, maxEntries: 3, workspacePath: workspace.path,
         });
         entries = llmResult.entries;
       } catch {
-        // Fall back to heuristic extraction (already computed above as empty)
         entries = extractMemoriesFromExchange(userInput, assistantResponse, {
-          sessionId: event.sessionId,
-          maxEntries: 3,
+          sessionId: event.sessionId, maxEntries: 3,
         });
       }
     }
 
-    if (entries.length === 0) return;
-
     for (const entry of entries) {
-      try {
-        await saveMemory(entry, workspace.path);
-      } catch {
-        // Silently skip individual failures
-      }
+      try { await saveMemory(entry, workspace.path); } catch { /* skip */ }
     }
-
   } catch (e) {
     console.warn("[HookListener] Failed to auto-extract memories:", e);
   }
+}
 
-  // ── Periodic self-maintaining memory cleanup ──
+/**
+ * Periodic memory maintenance — runs every CTX.MEMORY_MAINTAIN_INTERVAL sessions.
+ */
+async function runMemoryMaintenanceIfNeeded(): Promise<void> {
   maintenanceCounter++;
   if (maintenanceCounter >= CTX.MEMORY_MAINTAIN_INTERVAL && !maintenanceRunning) {
     maintenanceCounter = 0;
@@ -276,51 +265,87 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
       maintenanceRunning = false;
     }
   }
+}
 
-  // ── Auto-crystallize skill from session ──
+/**
+ * Auto-crystallize a skill from the session content.
+ * Non-blocking — fires and forgets.
+ */
+async function triggerSkillCrystallization(event: SessionEndEvent): Promise<void> {
   try {
     const { useWorkspace } = await import("../store/useAppStore");
     const workspace = useWorkspace.getState().workspaces.find(
       (w) => w.id === useWorkspace.getState().activeWorkspaceId
     );
-    if (workspace) {
-      const { proposeSkillFromSession } = await import("./skillCrystallizer");
-      const { useToasts } = await import("../components/ui/toastStore");
-      const pushToast = useToasts.getState().push;
-      // Asynchronously trigger proposal check without blocking SessionEnd execution
-      proposeSkillFromSession(event.sessionId, workspace.path, false, (t: Parameters<typeof pushToast>[0]) => pushToast(t)).catch((err) => {
-        console.warn("[HookListener] Background skill crystallization failed:", err);
-      });
-    }
+    if (!workspace) return;
+
+    const { proposeSkillFromSession } = await import("./skillCrystallizer");
+    const { useToasts } = await import("../components/ui/toastStore");
+    const pushToast = useToasts.getState().push;
+    proposeSkillFromSession(
+      event.sessionId, workspace.path, false,
+      (t: Parameters<typeof pushToast>[0]) => pushToast(t)
+    ).catch((err: unknown) => {
+      console.warn("[HookListener] Background skill crystallization failed:", err);
+    });
   } catch (e) {
     console.warn("[HookListener] Failed to assess session for skill crystallization:", e);
   }
+}
 
-  // ── Gene reflection: detect patterns and create genes ──
+/**
+ * Detect usage patterns and create/evolve genes from the session.
+ */
+async function runGeneReflection(event: SessionEndEvent): Promise<void> {
   try {
     const { useChat } = await import("../store/useAppStore");
     const messages = useChat.getState().sessionMessages[event.sessionId] || [];
-    if (messages.length >= 4) {
-      const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId } = await import("./genes");
-      const reflection = reflectOnSession(messages, event.sessionId);
-      
-      if (reflection.suggestedGenes.length > 0) {
-        let pool = loadGenePool();
-        for (const candidate of reflection.suggestedGenes) {
-          // Assign unique IDs to avoid collisions in concurrent reflections
-          const uniqueCandidate = { ...candidate, id: createGeneId() };
-          pool = addGene(pool, uniqueCandidate);
-        }
-        // Evolve the pool periodically
-        if (pool.genes.length > 10) {
-          pool = evolveGenes(pool);
-        }
-        saveGenePool(pool);
+    if (messages.length < 4) return;
+
+    const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId } = await import("./genes");
+    const reflection = reflectOnSession(messages, event.sessionId);
+
+    if (reflection.suggestedGenes.length > 0) {
+      let pool = loadGenePool();
+      for (const candidate of reflection.suggestedGenes) {
+        const uniqueCandidate = { ...candidate, id: createGeneId() };
+        pool = addGene(pool, uniqueCandidate);
       }
+      if (pool.genes.length > 10) {
+        pool = evolveGenes(pool);
+      }
+      saveGenePool(pool);
     }
   } catch (e) {
     console.warn("[HookListener] Gene reflection failed:", e);
   }
+}
+
+// ─── 2. Auto-Save Context on SessionEnd ───
+/**
+ * When a session ends (completed or aborted), runs all post-session tasks
+ * as focused sequential steps, each independently caught.
+ */
+async function onSessionEnd(event: SessionEndEvent): Promise<void> {
+  // 1. Persist session stats
+  await persistSessionStats(event);
+
+  // 2. Periodic cleanup of stale session stats
+  if (sessionStats.size > MAX_SESSION_STATS / 2) {
+    cleanupStaleStats();
+  }
+
+  // 3. Auto-extract memories from the last exchange
+  await autoExtractMemories(event);
+
+  // 4. Periodic memory maintenance
+  await runMemoryMaintenanceIfNeeded();
+
+  // 5. Auto-crystallize skill from session (fire-and-forget)
+  triggerSkillCrystallization(event);
+
+  // 6. Gene reflection (fire-and-forget)
+  runGeneReflection(event);
 }
 
 // ─── 3. Prompt Analytics (UserPromptSubmit) ───

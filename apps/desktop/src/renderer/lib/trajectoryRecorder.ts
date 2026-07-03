@@ -107,7 +107,12 @@ export async function startRecording(
       await mkdir(trajDir, { recursive: true });
     }
   } catch (e) {
-    console.warn("Trajectory", "Failed to create trajectory directory", { error: String(e) });
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      console.debug("[Trajectory] Workspace inaccessible, recording disabled:", workspacePath);
+    } else {
+      console.warn("Trajectory", "Failed to create trajectory directory", { error: String(e) });
+    }
   }
 
   // Start flush timer if not running

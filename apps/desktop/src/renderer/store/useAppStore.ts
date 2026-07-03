@@ -87,6 +87,9 @@ const XML_STRIP_RE = new RegExp(
 );
 const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi");
 const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
+const XML_INCOMPLETE_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi");
+const XML_MODEL_OUTPUT_RE = /<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)[^>]*>/gi;
+const XML_MODEL_OUTPUT_CLOSE_RE = /<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)\s*>/gi;
 
 /**
  * Strip all XML tool call tags from content (for display purposes).
@@ -112,24 +115,24 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(/<\/?invoke[^>]*>/gi, "");
   // Strip incomplete XML tool tags at end of content (arriving across streaming deltas)
   // Matches: <run_command command="ls -la$  (no closing > or />)
-  result = result.replace(new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi"), "");
+  result = result.replace(XML_INCOMPLETE_TAG_RE, "");
   // Strip broken/malformed tag fragments from model output (e.g. ><]minimax[>][)
   result = result.replace(/>\]\s*<[^>]*>?\[</g, "");
   result = result.replace(/\]>\s*\[</g, "");
   result = result.replace(/<\]?\w+\[>?\]?\[?/g, "");
   // Strip common model output tags that aren't tool calls
-  result = result.replace(/<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)[^>]*>/gi, "");
+  result = result.replace(XML_MODEL_OUTPUT_RE, "");
   // Strip orphan closing tags for the above
-  result = result.replace(/<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)\s*>/gi, "");
+  result = result.replace(XML_MODEL_OUTPUT_CLOSE_RE, "");
   // Clean up excessive whitespace left behind
   result = result.replace(/\n{3,}/g, "\n\n").trim();
   return result;
 }
 
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
-const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_extract", "memory_save"]);
-const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "task", "question", "open_panel", "screenshot"]);
+const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_save"]);
+const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app", "kill_process", "new_terminal", "terminal_write", "browser_navigate", "browser_execute", "run_preview", "open_url", "reveal_in_finder"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "task", "question", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab"]);
 
 /**
  * Parse XML-style tool calls from assistant text content.
@@ -987,7 +990,7 @@ type DoomLoopResult = { message: string; severity: "warn" | "halt" };
 function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<string, unknown>): DoomLoopResult | null {
   const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
   const history = _toolCallHistory[sessionId] ?? [];
-  const failures = _toolFailureCounts[sessionId] ?? {};
+  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
   const currentCount = (failures[sig] ?? 0) + 1;
   failures[sig] = currentCount;
   _toolFailureCounts[sessionId] = failures;
@@ -1000,22 +1003,28 @@ function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<st
   if (currentCount >= threshold) {
     return { message: `Doom loop detected: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agent appears stuck in a death spiral.`, severity: "warn" };
   }
-  const toolFailures = history.filter(h => h.name === toolName).length;
-  if (toolFailures >= haltThreshold) {
-    return { message: `Tool guardrail HALTED: "${toolName}" has accumulated ${toolFailures} failures across this session. The agentic loop has been stopped.`, severity: "halt" };
+  // Count consecutive failures from the tail of history for this tool
+  const recentFailures = history.filter(h => h.name === toolName);
+  let consecutiveTailFailures = 0;
+  for (let i = recentFailures.length - 1; i >= 0; i--) {
+    // All entries in history are failures (only failures are recorded), so count from tail
+    consecutiveTailFailures++;
   }
-  if (toolFailures >= threshold) {
-    return { message: `Tool guardrail: "${toolName}" has accumulated ${toolFailures} failures across this session. Consider changing strategy.`, severity: "warn" };
+  if (consecutiveTailFailures >= haltThreshold) {
+    return { message: `Tool guardrail HALTED: "${toolName}" has accumulated ${consecutiveTailFailures} failures across this session. The agentic loop has been stopped.`, severity: "halt" };
+  }
+  if (consecutiveTailFailures >= threshold) {
+    return { message: `Tool guardrail: "${toolName}" has accumulated ${consecutiveTailFailures} failures across this session. Consider changing strategy.`, severity: "warn" };
   }
   return null;
 }
 
 function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
-  const history = _toolCallHistory[sessionId] ?? [];
+  const history = [...(_toolCallHistory[sessionId] ?? [])];
   history.push({ name: toolName, args: JSON.stringify(toolArgs) });
   _toolCallHistory[sessionId] = history.slice(-50);
   // Cap _toolFailureCounts to prevent unbounded growth across sessions
-  const failures = _toolFailureCounts[sessionId] ?? {};
+  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
   const keys = Object.keys(failures);
   if (keys.length > 100) {
     // Remove oldest entries (keep most recent 50)
@@ -1027,7 +1036,7 @@ function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Recor
 
 function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
   const sig = `${toolName}:${JSON.stringify(toolArgs)}`;
-  const failures = _toolFailureCounts[sessionId] ?? {};
+  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
   delete failures[sig];
   _toolFailureCounts[sessionId] = failures;
 }
@@ -1160,9 +1169,22 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
 
+    // Check if workspace root is accessible before attempting .dalam operations
+    try {
+      if (!(await exists(workspacePath))) return;
+    } catch {
+      // Path outside Tauri scope (forbidden) — silently skip this workspace
+      return;
+    }
+
     // Ensure .dalam directory exists before checking files inside it
-    if (!(await exists(dotDalam))) {
-      try { await mkdir(dotDalam, { recursive: true }); } catch { /* may already exist or scope issue */ }
+    try {
+      if (!(await exists(dotDalam))) {
+        await mkdir(dotDalam, { recursive: true });
+      }
+    } catch {
+      // .dalam dir may already exist, or path is outside Tauri scope — skip
+      return;
     }
 
     // Load always-allowed permissions from disk first (needed for tool permission evaluations)
@@ -1424,7 +1446,12 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
       }
     }
   } catch (err) {
-    console.warn("Failed to check workspace paths in loadWorkspaceConfigAndSessions:", err);
+    const msg = (err as Error)?.message ?? String(err);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      console.debug("[Workspace] Skipped inaccessible workspace:", workspacePath);
+    } else {
+      console.warn("Failed to load workspace:", workspacePath, err);
+    }
   }
 }
 
@@ -1448,8 +1475,13 @@ async function _doSaveWorkspaceData() {
 
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    if (!(await exists(dotDalam))) {
-      await mkdir(dotDalam, { recursive: true });
+    try {
+      if (!(await exists(dotDalam))) {
+        await mkdir(dotDalam, { recursive: true });
+      }
+    } catch {
+      // Path outside Tauri scope — skip saving for this workspace
+      return;
     }
 
     const chatState = useChat.getState();
@@ -1519,7 +1551,7 @@ async function _doSaveWorkspaceData() {
 
 export const useAgents = create<AgentStoreState>((set, get) => ({
   agents: ALL_AGENTS,
-  activeAgentName: "yolo" as PrimaryAgentName,
+  activeAgentName: "build" as PrimaryAgentName,
   userRules: [],
   enabledSkills: loadEnabledSkills(),
   selectedSubagent: null,
@@ -1656,6 +1688,8 @@ type ChatState = {
   removeSession: (id: string) => void;
   approvePlan: () => void;
   rejectPlan: () => void;
+  agentMode: import("@dalam/shared-types").AgentSessionMode;
+  setAgentMode: (mode: import("@dalam/shared-types").AgentSessionMode) => void;
   addPendingAttachment: (file: FileAttachment) => void;
   removePendingAttachment: (id: string) => void;
   clearPendingAttachments: () => void;
@@ -1679,7 +1713,7 @@ export const useChat = create<ChatState>((set, get) => ({
   thinkingContent: "",
   isStreaming: false,
   streamingStartedAt: null,
-  activeAgentName: "yolo" as PrimaryAgentName,
+  activeAgentName: "build" as PrimaryAgentName,
   selectedModelId: "",
   todos: [],
   taskPlan: null,
@@ -1706,6 +1740,7 @@ export const useChat = create<ChatState>((set, get) => ({
   _deltaBatchTimer: null,
   doomLoopWarningCount: 0,
   _suppressSessionRestore: false,
+  agentMode: "build" as import("@dalam/shared-types").AgentSessionMode,
   subAgents: [],
   _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
   _clearAutoRemoveTimers() {
@@ -1861,17 +1896,11 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
-    // Flush any residual delta batch buffer BEFORE abort so the message-end
-    // handler sees the full content. Safety net — normally empty since
-    // message-delta now flushes directly to streamingContent.
+    // Delta batch buffer is no longer used — message-delta flushes directly to streamingContent.
+    // This guard remains for backward compatibility with any in-flight deltas.
     const buf = get()._deltaBatchBuffer;
     if (buf) {
-      const dt = get()._deltaBatchTimer;
-      if (dt) clearTimeout(dt);
-      set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "", _deltaBatchTimer: null }));
-    } else {
-      const deltaTimer = get()._deltaBatchTimer;
-      if (deltaTimer) { clearTimeout(deltaTimer); set({ _deltaBatchTimer: null }); }
+      set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "" }));
     }
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
@@ -1921,7 +1950,7 @@ export const useChat = create<ChatState>((set, get) => ({
           )?.path
         : undefined;
       try {
-        const sessionMode = "yolo" as import("@dalam/shared-types").AgentSessionMode;
+        const sessionMode = get().agentMode || "build" as import("@dalam/shared-types").AgentSessionMode;
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
         console.error("Failed to start session:", err);
@@ -1948,7 +1977,7 @@ export const useChat = create<ChatState>((set, get) => ({
       ...(pendingAttachments.length > 0 ? { attachments: pendingAttachments } : {}),
     };
     set((s) => ({
-      messages: [...messages, userMsg],
+      messages: [...s.messages, userMsg],
       isStreaming: true,
       streamingStartedAt: Date.now(),
       streamingContent: "",
@@ -2062,14 +2091,12 @@ export const useChat = create<ChatState>((set, get) => ({
     };
     _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content?.length ?? 0}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
     // Safety net: flush any residual delta batch buffer on non-delta events.
-    // Normally the buffer is empty since message-delta flushes directly,
-    // but this guards against edge cases with abort() race conditions.
+    // Delta batch buffer is vestigial — message-delta now flushes directly.
+    // This guard handles edge cases with abort() race conditions.
     if (event.type !== "message-delta") {
       const buf = get()._deltaBatchBuffer;
       if (buf) {
-        const timer = get()._deltaBatchTimer;
-        if (timer) clearTimeout(timer);
-        set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "", _deltaBatchTimer: null }));
+        set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "" }));
       }
     }
     // Reset safety timer on every stream event — the agent loop is alive
@@ -2497,11 +2524,13 @@ export const useChat = create<ChatState>((set, get) => ({
               );
               const patchedMsg = { ...msg, toolCalls: patchedToolCalls };
               const patchedMessages = [...s.messages.slice(0, msgIdx), patchedMsg, ...s.messages.slice(msgIdx + 1)];
-              // Also patch sessionMessages
+              // Also patch sessionMessages by ID, not by index (arrays may diverge)
               const sid = s.activeSessionId;
               const patchedSessionMessages = sid ? {
                 ...s.sessionMessages,
-                [sid]: [...(s.sessionMessages[sid] ?? []).slice(0, msgIdx), patchedMsg, ...(s.sessionMessages[sid] ?? []).slice(msgIdx + 1)],
+                [sid]: (s.sessionMessages[sid] ?? []).map(m =>
+                  m.id === patchedMsg.id ? patchedMsg : m
+                ),
               } : s.sessionMessages;
               return {
                 pendingToolCalls: updated,
@@ -2691,8 +2720,9 @@ export const useChat = create<ChatState>((set, get) => ({
         if (event.command === "task plan") {
           const resultText = event.result ?? "";
           const newTasks: TaskPlanItem[] = resultText.split("\n").filter(Boolean).map((line: string) => {
-            const match = line.match(/^([\w.]+):\s*(.+)$/);
-            return match ? { id: match[1], title: match[2], status: "pending" as const } : null;
+            // Match task IDs like "task-1", "1.2", "T1", etc. followed by colon and title
+            const match = line.match(/^([\w.-]+):\s*(.+)$/);
+            return match ? { id: match[1], title: match[2].trim(), status: "pending" as const } : null;
           }).filter(Boolean) as TaskPlanItem[];
           if (newTasks.length > 0) {
             // Merge with existing task plan — preserve status of tasks that already exist
@@ -2833,11 +2863,21 @@ export const useChat = create<ChatState>((set, get) => ({
         if (questionSessionId) {
           get().setSessionStatus(questionSessionId, "questioning");
         }
-        void useQuestion.getState().ask({
-          header: event.header,
+        // Show the question dialog — the promise is intentionally not awaited here
+        // because the stream handler must return immediately. The useQuestion store
+        // resolves the promise when the user answers or dismisses, and the session
+        // status is restored to "running" in useQuestion.resolve().
+        useQuestion.getState().ask({
+          header: event.header ?? "Question",
           question: event.question,
-          options: event.options,
-        }).catch((err) => console.error("ask-question error:", err));
+          options: event.options ?? [],
+        }).catch((err) => {
+          console.error("ask-question error:", err);
+          // Restore status on error so the UI doesn't get stuck
+          if (questionSessionId) {
+            try { useChat.getState().setSessionStatus(questionSessionId, "running"); } catch { /* ignore */ }
+          }
+        });
         break;
       }
       case "error": {
@@ -2855,7 +2895,19 @@ export const useChat = create<ChatState>((set, get) => ({
         const errorMsg: ChatMessage = {
           id: "err-" + crypto.randomUUID(),
           role: "assistant",
-          content: `**Error**: ${event.error}\n\nCheck your provider settings and try again.`,
+          content: (() => {
+            // Parse provider error JSON into human-readable text
+            const raw = event.error;
+            let friendly = raw;
+            try {
+              const json = JSON.parse(raw.replace(/^.*?(HTTP \d+:\s*)/, ""));
+              if (json?.error?.message) friendly = String(json.error.message);
+              else if (json?.detail) friendly = String(json.detail);
+              else if (json?.message) friendly = String(json.message);
+              else if (typeof json?.error === "string") friendly = json.error;
+            } catch { /* not JSON — use raw */ }
+            return `**Error**: ${friendly}\n\nCheck your provider settings and try again.`;
+          })(),
           timestamp: Date.now(),
           ...(lastUserMsgId ? { parentID: lastUserMsgId } : {}),
         };
@@ -2984,7 +3036,7 @@ export const useChat = create<ChatState>((set, get) => ({
       return;
     }
     const messages = sessionMessages[id] ?? [];
-    const agent = sessionAgentName[id] ?? "yolo";
+      const agent = sessionAgentName[id] ?? "build";
     useAgents.getState().setActiveAgent(agent);
     // Reconstruct the AgentSession object from stored data
     const chatSession = get().chatSessions.find((cs) => cs.id === id);
@@ -3128,7 +3180,28 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   approvePlan() {
+    const { agentMode, planApproval } = get();
     set({ planApproval: null });
+    if (agentMode === "plan" && planApproval?.planContent) {
+      const buildMode = "build" as import("@dalam/shared-types").AgentSessionMode;
+      set({ agentMode: buildMode });
+      useAgents.getState().setActiveAgent(buildMode);
+      // Auto-send a message in build mode to execute the approved plan
+      setTimeout(() => {
+        const state = get();
+        if (!state.isStreaming && !state._sendInProgress) {
+          const plan = planApproval.planContent;
+          const executeMsg = `The user approved the plan. Execute it now.\n\nPlan:\n${plan}`;
+          void state.sendMessage(executeMsg);
+        }
+      }, 500);
+    }
+  },
+  setAgentMode(mode) {
+    set({ agentMode: mode });
+    // Sync with agents store so the active agent matches the requested mode
+    // This ensures sendMessage uses the correct agent name for permission evaluation
+    useAgents.getState().setActiveAgent(mode);
   },
 
   rejectPlan() {
@@ -3499,6 +3572,10 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async resolveToolApproval(toolCallId, decision, result) {
+    // Guard: if tool already reached a terminal state, ignore duplicate resolution
+    const existingTool = get().pendingToolCalls.find((tc) => tc.id === toolCallId);
+    if (existingTool && (existingTool.status === "completed" || existingTool.status === "failed")) return;
+
     // First, resolve via direct callback if registered (avoids polling races)
     const resolver = _toolCallResolvers.get(toolCallId);
     if (resolver) _toolCallResolvers.delete(toolCallId);
@@ -3768,6 +3845,8 @@ type TerminalState = {
   saveForSession: (sessionId: string) => void;
   /** Restore terminal state for a session */
   restoreForSession: (sessionId: string) => void;
+  /** Write a command to a terminal tab's pending queue (picked up by consumePendingCommand) */
+  writeToTerminal: (tabId: string, command: string) => void;
 };
 
 // Persist terminal state keyed by session ID (proper Map, not single cache)
@@ -3824,6 +3903,11 @@ export const useTerminal = create<TerminalState>((set, get) => ({
   updateTabShell(id, shell) {
     set((s) => ({
       tabs: s.tabs.map((t) => t.id === id ? { ...t, shell: shell as TerminalTab["shell"] } : t),
+    }));
+  },
+  writeToTerminal(tabId, command) {
+    set((s) => ({
+      pendingCommands: { ...s.pendingCommands, [tabId]: command },
     }));
   },
   saveForSession(sessionId) {
@@ -4404,24 +4488,22 @@ export type BrowserTab = {
 };
 
 type UIState = {
-  sidebarOpen: boolean;
   rightPanelOpen: boolean;
+  sidebarOpen: boolean;
   bottomPanelOpen: boolean;
   viewMode: "chat" | "editor";
-  activityBarTab: "explorer" | "search" | "scm" | "agent" | "extensions";
   browserTabs: BrowserTab[];
   activeBrowserTabId: string | null;
   rightPanelTab: "git" | "diff" | "review" | "browser" | "progress";
   bottomPanelTab: "terminal" | "output" | "problems";
-  setSidebarOpen: (open: boolean) => void;
-  toggleSidebar: () => void;
   setRightPanelOpen: (open: boolean) => void;
   toggleRightPanel: () => void;
+  setSidebarOpen: (open: boolean) => void;
+  toggleSidebar: () => void;
   setBottomPanelOpen: (open: boolean) => void;
   toggleBottomPanel: () => void;
   setViewMode: (mode: "chat" | "editor") => void;
   toggleViewMode: () => void;
-  setActivityBarTab: (tab: "explorer" | "search" | "scm" | "agent" | "extensions") => void;
   setRightPanelTab: (tab: "git" | "diff" | "review" | "browser" | "progress") => void;
   setBottomPanelTab: (tab: "terminal" | "output" | "problems") => void;
   addBrowserTab: (tab?: Partial<BrowserTab>) => string;
@@ -4448,74 +4530,91 @@ function deriveTitleFromUrl(url: string): string {
   }
 }
 
+/** Check if a hostname resolves to a private/internal address. */
+function isPrivateHost(hostname: string): boolean {
+  // IPv6 loopback/link-local
+  if (hostname === "::1" || hostname === "[::1]") return true;
+  // IPv4 private ranges
+  if (/^127\./.test(hostname)) return true;
+  if (/^10\./.test(hostname)) return true;
+  if (/^192\.168\./.test(hostname)) return true;
+  if (/^169\.254\./.test(hostname)) return true;
+  if (/^0\./.test(hostname)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
+  // Cloud metadata endpoints
+  if (/^metadata\.google\.internal$/i.test(hostname)) return true;
+  if (/^instance-data\.local$/i.test(hostname)) return true;
+  if (/^169\.254\.169\.254$/.test(hostname)) return true;
+  // Catch bare integer IP representations (0x7f000001, 2130706433, 0177.0.0.1)
+  // These don't match dotted patterns but still resolve to IPs in the OS network stack.
+  if (hostname.includes(".")) {
+    try {
+      const testUrl = new URL(`http://${hostname}`);
+      const normalized = testUrl.hostname;
+      if (normalized !== hostname) return isPrivateHost(normalized);
+    } catch { /* not parseable as host */ }
+  } else if (/^0x[0-9a-f]+$/i.test(hostname)) {
+    // Hex IP representations like 0x7f000001 → 127.0.0.1
+    return true;
+  } else if (/^\d+$/.test(hostname)) {
+    // Decimal IP representations like 2130706433 → 127.0.0.1 (and 1 → 0.0.0.1, etc.)
+    // These are interpreted as IP addresses by the OS socket layer and in some browsers.
+    return true;
+  }
+  return hostname === "localhost";
+}
+
 function normalizeBrowserUrl(input: string): string | null {
   const raw = input.trim();
   if (!raw) return null;
-  // SSRF protection: block file:// and other dangerous protocols
-  if (/^file:\/\//i.test(raw)) return null;
-  if (/^(data|javascript|vbscript):\/\//i.test(raw)) return null;
-  // SSRF protection: extract hostname and check ALL private/internal addresses
-  // BEFORE any URL construction to prevent bypass via bare addresses or userinfo
-  const hostnameExtract = raw
-    .replace(/^https?:\/\//i, "")
-    .replace(/^[^@]*@/, "")  // Strip userinfo (user:pass@) before extracting hostname
-    .replace(/[:/].*$/, "")
-    .replace(/^\[/, "")
-    .replace(/\]$/, "");
-  const privatePatternsAll = [
-    /^localhost$/i, /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./,
-    /^192\.168\./, /^169\.254\./, /^0\./, /^::1$/, /^\[::1\]$/,
-    /^metadata\.google\.internal$/i, /^instance-data\.local$/i,
-  ];
-  if (privatePatternsAll.some(p => p.test(hostnameExtract))) return null;
-  // SSRF protection: check private/internal addresses for protocol-prefixed URLs
-  const privatePatterns = [
-    /^https?:\/\/(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.|::1|\[::1\])/i,
-    /^https?:\/\/metadata\.google\.internal/i,
-    /^https?:\/\/instance-data\.local/i,
-  ];
-  if (privatePatterns.some((p) => p.test(raw))) return null;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
-  if (/\s/.test(raw)) return "https://www.google.com/search?q=" + encodeURIComponent(raw);
-  let host = raw.replace(/^www\./i, "");
-  const slash = host.search("/");
-  const tail = slash >= 0 ? host.slice(slash) : "";
-  host = slash >= 0 ? host.slice(0, slash) : host;
-  const TLDs = ["com","org","net","io","co","dev","ai","app","me","us","uk","de","fr","jp","cn","ru","br","in","info","biz","xyz","tech","cloud","gg","tv","fm","sh","ly"];
-  const lastDot = host.lastIndexOf(".");
-  if (lastDot > 0) {
-    const tld = host.slice(lastDot + 1).toLowerCase();
-    if (TLDs.includes(tld) || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
-      return "https://" + raw.replace(/^https?:\/\//i, "");
+  // Block dangerous URL schemes
+  if (/^(file|data|javascript|vbscript):/i.test(raw)) return null;
+
+  // Try parsing as a URL with protocol
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      if (isPrivateHost(url.hostname)) return null;
+      return url.href;
+    } catch {
+      return null;
     }
   }
-  if (/^\d{1,3}(\.\d{1,3}){0,3}$/.test(host)) return "http://" + raw.replace(/^https?:\/\//i, "");
-  if (/^[\w-]+$/.test(host)) return "https://" + host + ".com" + tail;
-  if (host.includes(".")) return "https://" + raw.replace(/^https?:\/\//i, "");
 
-  return "https://www.google.com/search?q=" + encodeURIComponent(raw);
+  // Try as a bare hostname/IP (no protocol)
+  try {
+    const testUrl = new URL(`https://${raw}`);
+    if (isPrivateHost(testUrl.hostname)) return null;
+  } catch { /* not a valid hostname — treat as search query */ }
+
+  if (/\s/.test(raw)) return "https://www.google.com/search?q=" + encodeURIComponent(raw);
+  return "https://" + raw.replace(/^https?:\/\//i, "");
 }
 
 export const useUI = create<UIState>((set, get) => ({
-  sidebarOpen: true,
   rightPanelOpen: false,
+  sidebarOpen: true,
   bottomPanelOpen: false,
   viewMode: "chat",
-  activityBarTab: "agent",
   browserTabs: [],
   activeBrowserTabId: null,
   rightPanelTab: "git",
   bottomPanelTab: "terminal",
-  setSidebarOpen: (open) => set({ sidebarOpen: open }),
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setBottomPanelOpen: (open) => set({ bottomPanelOpen: open }),
   toggleBottomPanel: () => set((s) => ({ bottomPanelOpen: !s.bottomPanelOpen })),
-  setActivityBarTab: (tab) => set({ activityBarTab: tab }),
   setViewMode: (mode) => {
     const prevMode = get().viewMode;
-    set({ viewMode: mode });
+    const patch: Partial<UIState> = { viewMode: mode };
+    // Auto-close the right panel when switching from editor mode to chat mode
+    // to prevent stale empty panels from taking up horizontal space
+    if (prevMode === "editor" && mode === "chat" && get().rightPanelOpen) {
+      patch.rightPanelOpen = false;
+    }
+    set(patch);
     // Use event bus for cross-store communication instead of direct getState() calls
     // This breaks the circular dependency between useUI and useWorkspace
     if (prevMode !== mode) {
@@ -4844,9 +4943,10 @@ type QuestionState = {
   resolve: (answer: { selectedLabel: string; customText?: string } | null) => void;
 };
 
-export const useQuestion = create<QuestionState>((set) => {
+export const useQuestion = create<QuestionState>((set, _get) => {
   let pendingResolve: ((a: { selectedLabel: string; customText?: string } | null) => void) | null = null;
   const ask: QuestionState["ask"] = (req) => {
+    // Dismiss any previous pending question to avoid stale promises
     if (pendingResolve) { pendingResolve(null); pendingResolve = null; }
     const full: QuestionRequest = {
       ...req,
@@ -4862,15 +4962,21 @@ export const useQuestion = create<QuestionState>((set) => {
     request: null,
     ask,
     resolve(answer) {
+      // Capture and clear the pending resolver before invoking to prevent double-resolve
       const r = pendingResolve;
       pendingResolve = null;
-      r?.(answer);
-      set({ request: null });
-      // Set session status back to running after question is resolved
-      const activeSessionId = useChat.getState().activeSessionId;
-      if (activeSessionId) {
-        useChat.getState().setSessionStatus(activeSessionId, "running");
+      if (r) {
+        r(answer);
       }
+      // Clear the request from UI state
+      set({ request: null });
+      // Restore session status — guard against missing session
+      try {
+        const activeSessionId = useChat.getState().activeSessionId;
+        if (activeSessionId) {
+          useChat.getState().setSessionStatus(activeSessionId, "running");
+        }
+      } catch { /* store may be resetting */ }
     },
   };
 });

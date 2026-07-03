@@ -108,11 +108,13 @@ async function migrateFromLocalStorage(): Promise<void> {
   }
 }
 
-// Track whether migration has been attempted
+// Track whether migration has been attempted (per-session guard)
 let migrationAttempted = false;
 
 /**
  * Ensure the database is initialized and localStorage migration is done.
+ * Migration runs at most once per app session. If it fails, localStorage
+ * data remains available via the fallback code in useAppStore.ts.
  */
 async function ensureDB(): Promise<IDBDatabase> {
   const db = await openDB();
@@ -122,8 +124,7 @@ async function ensureDB(): Promise<IDBDatabase> {
       await migrateFromLocalStorage();
     } catch (e) {
       console.warn("[IndexedDB] Migration from localStorage failed:", e);
-      // Reset flag so migration is retried on next call
-      migrationAttempted = false;
+      // Migration will be retried on next app session start.
     }
   }
   return db;
