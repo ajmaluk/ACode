@@ -103,7 +103,6 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
     let isCleanedUp = false;
     let unsubData: (() => void) | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
-    let _shellProcId: string | null = null;
 
     const startIO = async () => {
       try {
@@ -113,7 +112,6 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
           return;
         }
         procIdRef.current = procId;
-        _shellProcId = procId;
 
         unsubData = api.terminal.onData(procId, (data) => {
           if (activeRef.current) {

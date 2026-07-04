@@ -99,10 +99,14 @@ export async function startRecording(
   buffers.set(sessionId, { turns: [], lastFlush: Date.now(), workspacePath });
   console.log("Trajectory", `Started recording session ${sessionId}`, { workspacePath });
 
-  // Ensure trajectory directory exists
+  // Ensure trajectory directory exists — create .dalam first, then trajectories
   try {
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-    const trajDir = joinPath(workspacePath, ".dalam", TRAJECTORY_DIR);
+    const dalamDir = joinPath(workspacePath, ".dalam");
+    const trajDir = joinPath(dalamDir, TRAJECTORY_DIR);
+    if (!(await exists(dalamDir))) {
+      await mkdir(dalamDir, { recursive: true });
+    }
     if (!(await exists(trajDir))) {
       await mkdir(trajDir, { recursive: true });
     }
@@ -273,12 +277,22 @@ async function flushBuffer(sessionId: string): Promise<void> {
     }
 
     const api = createDalamAPI();
-    const filePath = joinPath(
-      workspacePath,
-      ".dalam",
-      TRAJECTORY_DIR,
-      `trajectory-${sessionId}.jsonl`,
-    );
+    const trajDir = joinPath(workspacePath, ".dalam", TRAJECTORY_DIR);
+    const filePath = joinPath(trajDir, `trajectory-${sessionId}.jsonl`);
+
+    // Ensure directory exists before writing
+    try {
+      const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+      const dalamDir = joinPath(workspacePath, ".dalam");
+      if (!(await exists(dalamDir))) {
+        await mkdir(dalamDir, { recursive: true });
+      }
+      if (!(await exists(trajDir))) {
+        await mkdir(trajDir, { recursive: true });
+      }
+    } catch {
+      // Directory creation failed — trajectory recording is best-effort
+    }
 
     // Build the JSONL line
     const record: TrajectoryRecord = {
@@ -462,4 +476,16 @@ export async function getTrajectoryStats(
     completedSessions,
     models,
   };
+}
+
+// Clean up flush timer on page unload to prevent background writes during shutdown.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+    // Best-effort final flush of all buffered sessions
+    void flushAll();
+  });
 }

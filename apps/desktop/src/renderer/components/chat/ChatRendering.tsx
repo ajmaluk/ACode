@@ -1,12 +1,12 @@
-import React, { useState, useCallback } from "react";
-import { FileCode } from "lucide-react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import { FileCode, Globe, ExternalLink, Copy } from "lucide-react";
 import { useWorkspace, useUI } from "@/store/useAppStore";
 import { useToast } from "@/components/ui/toastStore";
 import { basename } from "@/lib/pathUtils";
 import { splitCodeFences } from "@/lib/chatUtils";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import hljs from "highlight.js";
+import hljs from "@/lib/highlight";
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 
@@ -20,28 +20,71 @@ const MARKDOWN_COMPONENTS: Record<string, any> = {
   p: ({ children }: { children: React.ReactNode }) => <p className="whitespace-pre-wrap break-words mb-2 last:mb-0">{children}</p>,
   strong: ({ children }: { children: React.ReactNode }) => <strong className="font-semibold text-dalam-text-primary">{children}</strong>,
   em: ({ children }: { children: React.ReactNode }) => <em className="italic">{children}</em>,
-  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children: React.ReactNode }) => (
-    <a
-      href={href}
-      {...props}
-      onClick={(e) => {
-        if (!href) return;
-        try {
-          const parsed = new URL(href);
-          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children: React.ReactNode }) => {
+    const [showMenu, setShowMenu] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      if (!showMenu) return;
+      const close = (e: MouseEvent) => {
+        if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowMenu(false);
+      };
+      document.addEventListener("mousedown", close);
+      return () => document.removeEventListener("mousedown", close);
+    }, [showMenu]);
+
+    const isExternalUrl = (() => {
+      try { const u = new URL(href || ""); return u.protocol === "http:" || u.protocol === "https:"; } catch { return false; }
+    })();
+
+    return (
+      <span className="relative inline-block">
+        <a
+          href={href}
+          {...props}
+          onClick={(e) => {
             e.preventDefault();
-            const ui = useUI.getState();
-            ui.addBrowserTab({ url: href });
-            ui.setRightPanelTab("browser");
-            if (!ui.rightPanelOpen) ui.setRightPanelOpen(true);
-          }
-        } catch {
-          // Invalid URL — let the browser handle it normally
-        }
-      }}
-      className="text-dalam-accent-primary hover:underline cursor-pointer"
-    >{children}</a>
-  ),
+            if (isExternalUrl) setShowMenu(!showMenu);
+          }}
+          className="text-dalam-accent-primary hover:underline cursor-pointer"
+        >{children}</a>
+        {showMenu && isExternalUrl && (
+          <div ref={menuRef} className="absolute z-50 bottom-full left-0 mb-1 w-52 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-lg py-1 animate-fade-in">
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover flex items-center gap-2"
+              onClick={() => {
+                const ui = useUI.getState();
+                ui.addBrowserTab({ url: href! });
+                ui.setRightPanelTab("browser");
+                if (!ui.rightPanelOpen) ui.setRightPanelOpen(true);
+                setShowMenu(false);
+              }}
+            >
+              <Globe className="w-3.5 h-3.5" /> Open in Dalam
+            </button>
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover flex items-center gap-2"
+              onClick={() => {
+                try { window.open(href, "_blank"); } catch { /* noop */ }
+                setShowMenu(false);
+              }}
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> Open in external browser
+            </button>
+            <button
+              className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover flex items-center gap-2"
+              onClick={() => {
+                navigator.clipboard.writeText(href || "").catch(() => {});
+                setShowMenu(false);
+              }}
+            >
+              <Copy className="w-3.5 h-3.5" /> Copy URL
+            </button>
+          </div>
+        )}
+      </span>
+    );
+  },
   ul: ({ children }: { children: React.ReactNode }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
   ol: ({ children }: { children: React.ReactNode }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
   li: ({ children }: { children: React.ReactNode }) => <li className="text-dalam-text-secondary">{children}</li>,
@@ -75,26 +118,11 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
   );
 });
 
-// Lightweight streaming renderer — avoids expensive react-markdown re-parsing on each delta.
-// For short content (under 100 chars), uses full MarkdownContent since the cost is negligible.
-// For longer content during streaming, uses splitCodeFences to only highlight code blocks,
-// skipping the full react-markdown parse on every delta.
-export const StreamingContent = React.memo(function StreamingContent({ content, pending }: { content: string; pending: boolean }) {
-  // During streaming, content under ~100 chars is likely a fragment or thinking indicator
-  // where full markdown parsing is fine. Longer content benefits from fence-split optimization.
-  if (!pending || content.length < 100) {
-    return <MarkdownContent content={content} />;
-  }
-  const segments = splitCodeFences(content);
-  return (
-    <div className="prose-dalam mb-2 last:mb-0">
-      {segments.map((seg, idx) =>
-        seg.type === "code"
-          ? <StreamingCodeBlock key={"sc-" + idx} language={seg.language ?? ""} content={seg.content} />
-          : <p key={"st-" + idx} className="whitespace-pre-wrap break-words mb-2 last:mb-0 leading-relaxed">{seg.content}</p>
-      )}
-    </div>
-  );
+// Lightweight streaming renderer — uses full markdown parsing for real-time formatting.
+// react-markdown is fast enough for streaming deltas. The visual quality improvement
+// (proper bold, headings, lists, code highlighting) far outweighs the minor re-parse cost.
+export const StreamingContent = React.memo(function StreamingContent({ content }: { content: string }) {
+  return <MarkdownContent content={content} />;
 });
 
 export const CodeBlock = React.memo(function CodeBlock({ language, content }: { language: string; content: string }) {
@@ -135,6 +163,15 @@ export const CodeBlock = React.memo(function CodeBlock({ language, content }: { 
       <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
         <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted"><FileCode className="w-3 h-3" />{language || "code"}<span className="text-dalam-text-muted/50">· {lines.length} lines</span></div>
         <div className="flex items-center gap-1">
+          <button
+            className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
+            onClick={() => {
+              navigator.clipboard.writeText(content).then(
+                () => toast.success("Copied to clipboard"),
+                () => toast.error("Failed to copy")
+              );
+            }}
+          >Copy</button>
           {isLong && (
             <button
               className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
@@ -145,7 +182,7 @@ export const CodeBlock = React.memo(function CodeBlock({ language, content }: { 
         </div>
       </div>
       <pre
-        className="p-3 text-[12px] text-mono text-dalam-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
+        className="p-3 text-[12px] font-mono text-dalam-text-primary overflow-x-auto scrollbar-thin leading-relaxed"
         style={{ maxHeight: isLong && !expanded ? "240px" : undefined }}
       ><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
       {isLong && !expanded && (

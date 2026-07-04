@@ -8,6 +8,8 @@ import {
   computeContextStats,
   estimateTokens,
   parseContextWindow,
+  buildCompactionPrompt,
+  computePressure,
 } from "./contextManager";
 import type { ChatMessage } from "@dalam/shared-types";
 
@@ -722,7 +724,9 @@ describe("estimateTokens", () => {
     const text = "x".repeat(10000);
     const tokens = estimateTokens(text);
     expect(tokens).toBeGreaterThan(0);
-    expect(tokens).toBeLessThan(100);
+    // 10K code chars at ~0.29 tokens/char ≈ 2900 tokens
+    expect(tokens).toBeGreaterThan(1000);
+    expect(tokens).toBeLessThan(5000);
   });
 
   it("is deterministic for same input", () => {
@@ -744,23 +748,27 @@ describe("computeContextStats", () => {
   });
 
   it("computes shouldCompact at 95% ratio", () => {
-    // Make messages with enough tokens to hit 95%
-    const bigMsg = userMsg("x".repeat(250000));
+    // Each 'x' is a code char at ~0.25 tokens; need >= 95% of usableTokens
+    // usableTokens = 100000 (with 0 reserve). Need >= 95000 tokens → ~380000 chars
+    const bigMsg = userMsg("x".repeat(400000));
     const stats = computeContextStats([bigMsg], 100000, 0, 0);
     expect(stats.shouldCompact).toBe(true);
   });
 
   it("computes shouldPrune when tokens exceed usable - PRUNE_PROTECT", () => {
-    const bigMsg = userMsg("x".repeat(40000));
+    // usableTokens = 43000, PRUNE_PROTECT = 10000. Need > 33000 tokens → ~132000 chars
+    const bigMsg = userMsg("x".repeat(140000));
     const stats = computeContextStats([bigMsg], 45000, 1000, 1000);
     expect(stats.shouldPrune).toBe(true);
   });
 
   it("provides nextCheckpointTrigger for various ratios", () => {
+    // Low usage: ratio < 0.20, next trigger is 0.20
     const stats1 = computeContextStats([userMsg("x".repeat(50))], 1000, 100, 100);
     expect(stats1.nextCheckpointTrigger).toBeDefined();
 
-    const stats2 = computeContextStats([userMsg("x".repeat(500))], 1000, 100, 100);
+    // High usage: ratio > 0.70 (all triggers fired), next trigger is null
+    const stats2 = computeContextStats([userMsg("x".repeat(2500))], 1000, 100, 100);
     expect(stats2.nextCheckpointTrigger).toBeNull();
   });
 });

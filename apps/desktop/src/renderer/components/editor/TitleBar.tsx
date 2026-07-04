@@ -104,8 +104,8 @@ function useEditorMenus(): { label: string; items: MenuAction[] }[] {
     {
       label: "Edit",
       items: [
-        { type: "item", label: "Undo", shortcut: shortcut("Z"), perform: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true })) },
-        { type: "item", label: "Redo", shortcut: shortcut("Z", { shift: true }), perform: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true })) },
+        { type: "item", label: "Undo", shortcut: shortcut("Z"), perform: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: platform() !== "mac", metaKey: platform() === "mac" })) },
+        { type: "item", label: "Redo", shortcut: shortcut("Z", { shift: true }), perform: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: platform() !== "mac", metaKey: platform() === "mac", shiftKey: true })) },
         { type: "separator" },
         { type: "item", label: "Find", shortcut: shortcut("F"), perform: () => window.dispatchEvent(new CustomEvent("editor:find")) },
         { type: "item", label: "Replace", shortcut: shortcut("F", { alt: true }), perform: () => window.dispatchEvent(new CustomEvent("editor:find-replace")) },

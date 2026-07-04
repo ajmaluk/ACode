@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { useWorkspace, useChat, useModelProviders, useGit, useSettings, useSettingsView, stripXmlToolCallTags } from "@/store/useAppStore";
+import { useWorkspace, useChat, useModelProviders, useGit, useSettings, useSettingsView, stripXmlToolCallTags, useQuestion, useAgents } from "@/store/useAppStore";
 import {
   X, ArrowUp,
   ChevronDown, ChevronRight, Sparkles,
   FileText, GitBranch, FolderOpen,
   Check, ClipboardList, Settings, Hash, Cpu, Square,
+  Zap, Hammer, ClipboardList as PlanIcon,
 } from "lucide-react";
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -23,18 +24,186 @@ import { AttachFileButton } from "@/components/editor/AttachFileButton";
 
 
 // ============================================================================
-// InlineActivityRow — shows a single tool/activity in progress (Cursor-style)
+// AgentModeSelector — dropdown to switch between build/yolo/plan modes
+// ============================================================================// ============================================================================
+// AgentModeSelector — dropdown to switch between build/yolo/plan modes
 // ============================================================================
 
+const AGENT_MODES = [
+  { name: "build" as const, icon: Hammer, label: "Build", color: "text-green-500", description: "Balanced — asks before writes" },
+  { name: "yolo" as const, icon: Zap, label: "Yolo", color: "text-red-400", description: "Full access — no approval needed" },
+  { name: "plan" as const, icon: PlanIcon, label: "Plan", color: "text-blue-400", description: "Read-only — explores without changes" },
+];
+
+function AgentModeSelector() {
+  const { activeAgentName, setActiveAgent } = useAgents();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const currentMode = AGENT_MODES.find((m) => m.name === activeAgentName) || AGENT_MODES[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors hover:bg-dalam-bg-hover ${currentMode.color}`}
+        title={currentMode.description}
+      >
+        <currentMode.icon className="w-3 h-3" />
+        <span>{currentMode.label}</span>
+        <ChevronDown className={`w-2.5 h-2.5 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 mb-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 min-w-[200px] py-1 animate-fade-in">
+          {AGENT_MODES.map((mode) => (
+            <button
+              key={mode.name}
+              onClick={() => { setActiveAgent(mode.name); setOpen(false); }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
+                activeAgentName === mode.name
+                  ? "bg-dalam-accent-subtle text-dalam-text-primary"
+                  : "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+              }`}
+            >
+              <mode.icon className={`w-3.5 h-3.5 ${mode.color}`} />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium">{mode.label}</div>
+                <div className="text-[10px] text-dalam-text-muted truncate">{mode.description}</div>
+              </div>
+              {activeAgentName === mode.name && <Check className="w-3 h-3 text-dalam-accent-primary" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============================================================================
-// StreamingActivityPanel — shows all activities inline during streaming
+// InlineQuestionDialog — shows question options above input (Claude Code style)
 // ============================================================================
 
-// Helper to get file icon based on extension
+function InlineQuestionDialog() {
+  const { request, resolve } = useQuestion();
+  const [selected, setSelected] = useState(0);
+  const [customText, setCustomText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
-// Tool metadata for display
+  // Reset state when a new question appears
+  const prevRequestIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (request?.id !== prevRequestIdRef.current) {
+      prevRequestIdRef.current = request?.id;
+      setSelected(0);
+      setCustomText("");
+    }
+  }, [request?.id]);
 
+  if (!request) return null;
 
+  const optionCount = request.options.length;
+
+  return (
+    <div className="mb-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg overflow-hidden animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-dalam-border-primary/50">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[11px] font-medium text-dalam-accent-primary bg-dalam-accent-subtle px-2 py-0.5 rounded">
+            {request.header}
+          </span>
+          <span className="text-sm text-dalam-text-primary truncate">{request.question}</span>
+        </div>
+        <button onClick={() => resolve(null)} className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted" title="Dismiss">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Options */}
+      <div className="px-4 py-2 space-y-0.5">
+        {request.options.map((opt, idx) => (
+          <button
+            key={opt.label}
+            onClick={() => resolve({ selectedLabel: opt.label })}
+            onMouseEnter={() => setSelected(idx)}
+            className={`w-full text-left flex items-start gap-3 px-3 py-2 rounded-lg transition-colors ${
+              selected === idx ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
+            }`}
+          >
+            <span className="text-xs text-dalam-text-muted w-4 mt-0.5 text-center flex-shrink-0">{idx + 1}.</span>
+            <div className="flex-1 min-w-0">
+              <span className="text-sm text-dalam-text-primary font-medium">{opt.label}</span>
+              {opt.description && (
+                <span className="text-sm text-dalam-text-muted ml-2">{opt.description}</span>
+              )}
+            </div>
+          </button>
+        ))}
+
+        {/* Custom answer input */}
+        {request.allowFreeText !== false && (
+          <div
+            className={`flex items-start gap-3 px-3 py-2 rounded-lg transition-colors ${
+              selected === optionCount ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
+            }`}
+            onClick={() => {
+              setSelected(optionCount);
+              inputRef.current?.focus();
+            }}
+          >
+            <span className="text-xs text-dalam-text-muted w-4 mt-2 text-center flex-shrink-0">{optionCount + 1}.</span>
+            <input
+              ref={inputRef}
+              type="text"
+              value={customText}
+              onChange={(e) => setCustomText(e.target.value)}
+              placeholder="Enter your answer..."
+              className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && customText.trim()) {
+                  e.preventDefault();
+                  resolve({ selectedLabel: "Custom", customText: customText.trim() });
+                }
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-4 py-2 border-t border-dalam-border-primary/50">
+        <div className="text-[10px] text-dalam-text-muted">Use number keys or click to select</div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => resolve(null)}
+            className="px-3 py-1 text-xs rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+          >
+            Dismiss
+          </button>
+          <button
+            onClick={() => {
+              if (customText.trim()) {
+                resolve({ selectedLabel: "Custom", customText: customText.trim() });
+              } else if (selected >= 0 && selected < optionCount) {
+                resolve({ selectedLabel: request.options[selected].label });
+              }
+            }}
+            className="px-3 py-1 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
+          >
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ChatView() {
   const { workspaces, activeWorkspaceId, setActiveWorkspace, openWorkspace, fileTree } = useWorkspace();
@@ -799,6 +968,7 @@ Add your project's common commands here so Dalam knows how to build:
                 <div className="flex items-center justify-between px-4 pb-2.5">
                   <div className="flex items-center gap-2">
                     <AttachFileButton />
+                    <AgentModeSelector />
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="relative" ref={modelRef}>
@@ -878,6 +1048,7 @@ Add your project's common commands here so Dalam knows how to build:
                 <span>Changes</span>
                 {totalAdded > 0 && <span className="text-dalam-git-added">+{totalAdded}</span>}
                 {totalDeleted > 0 && <span className="text-dalam-git-deleted">-{totalDeleted}</span>}
+                {totalModified > 0 && <span className="text-dalam-git-modified">~{totalModified}</span>}
                 <span className="ml-auto flex items-center gap-1">
                   <Cpu className="w-2.5 h-2.5" />
                   {currentModel?.model.name || "Select model"}
@@ -967,6 +1138,8 @@ Add your project's common commands here so Dalam knows how to build:
               onDismiss={handleDismissRestore}
             />
           )}
+          {/* Inline question dialog — appears above input when agent asks a question */}
+          <InlineQuestionDialog />
           {/* Message queue — follow-up messages waiting to be sent */}
           <MessageQueue />
           <div className="max-w-2xl w-full mx-auto bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
@@ -1008,6 +1181,7 @@ Add your project's common commands here so Dalam knows how to build:
             <div className="flex items-center justify-between px-4 pb-3">
               <div className="flex items-center gap-2">
                 <AttachFileButton />
+                <AgentModeSelector />
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative" ref={followupModelRef}>
@@ -1140,7 +1314,8 @@ function StreamingMessageWrapper({
         const raw = streamingContentRef.current;
         const rawThinking = thinkingContentRef.current;
 
-        const cleaned = raw ? stripXmlToolCallTags(raw) : "";
+        // Only run expensive XML stripping when content likely contains tags
+        const cleaned = raw && (raw.includes("<") || raw.match(/\bquestion\s+question=/)) ? stripXmlToolCallTags(raw) : raw || "";
 
         let changed = false;
         if (prevCleanRef.current !== cleaned) {
@@ -1171,6 +1346,15 @@ function StreamingMessageWrapper({
     }
   }, [cleanStreamingContent, cleanThinkingContent, scrollRef, isUserScrolledUp]);
 
+  // Memoize streaming message object to prevent re-render cascade
+  const streamingMessage = React.useMemo(() => ({
+    id: "streaming",
+    role: "assistant" as const,
+    content: cleanStreamingContent,
+    timestamp: timestamp,
+    ...(cleanThinkingContent ? { thinking: cleanThinkingContent } : {}),
+  }), [cleanStreamingContent, cleanThinkingContent, timestamp]);
+
   if (!isStreaming) return null;
 
   return (
@@ -1183,13 +1367,7 @@ function StreamingMessageWrapper({
       />
       {cleanStreamingContent && (
         <ChatMessage
-          message={{
-            id: "streaming",
-            role: "assistant",
-            content: cleanStreamingContent,
-            timestamp: timestamp,
-            ...(cleanThinkingContent ? { thinking: cleanThinkingContent } : {}),
-          }}
+          message={streamingMessage}
           pending
         />
       )}

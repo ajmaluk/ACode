@@ -138,6 +138,22 @@ let _pendingGenePool: GenePool | null = null;
 
 // ─── Gene Expression ─────────────────────────────────────────
 
+// Cache compiled regexes for gene triggers to avoid recompilation per prompt
+const _geneTriggerCache = new Map<string, RegExp | null>();
+
+function getGeneTriggerRegex(trigger: string): RegExp | null {
+  const cached = _geneTriggerCache.get(trigger);
+  if (cached !== undefined) return cached;
+  try {
+    const regex = new RegExp(trigger, "i");
+    _geneTriggerCache.set(trigger, regex);
+    return regex;
+  } catch {
+    _geneTriggerCache.set(trigger, null);
+    return null;
+  }
+}
+
 /**
  * Find genes that match a given context (prompt + recent messages).
  * Returns genes sorted by confidence and relevance.
@@ -155,12 +171,11 @@ export function expressGenes(
 
   const matched = pool.genes
     .filter(gene => {
-      try {
-        const regex = new RegExp(gene.trigger, "i");
+      const regex = getGeneTriggerRegex(gene.trigger);
+      if (regex) {
         return regex.test(lowerPrompt) || regex.test(recentContent);
-      } catch {
-        return lowerPrompt.includes(gene.trigger.toLowerCase());
       }
+      return lowerPrompt.includes(gene.trigger.toLowerCase());
     })
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 3);
@@ -454,9 +469,13 @@ export function evolveGenes(pool: GenePool): GenePool {
     if (gene.activationCount > 5 && gene.successCount > gene.activationCount * 0.7) {
       return { ...gene, confidence: Math.min(1, gene.confidence + 0.05) };
     }
-    // Reduce confidence for unused genes
+    // Reduce confidence for unused genes (zero activations, stale)
     if (now - gene.lastActivatedAt > STALE_DAYS && gene.activationCount === 0) {
       return { ...gene, confidence: Math.max(0, gene.confidence - 0.1) };
+    }
+    // Reduce confidence for rarely-used stale genes (1-3 activations, stale)
+    if (now - gene.lastActivatedAt > STALE_DAYS && gene.activationCount > 0 && gene.activationCount <= 3) {
+      return { ...gene, confidence: Math.max(0, gene.confidence - 0.05) };
     }
     return gene;
   });

@@ -92,6 +92,7 @@ function ActivityRow({
       <button
         type="button"
         onClick={() => hasDetail && setOpen((o) => !o)}
+        aria-expanded={hasDetail ? open : undefined}
         className={`group flex items-center gap-1.5 text-left text-[13px] leading-relaxed w-full opacity-60 hover:opacity-100 transition-opacity ${
           hasDetail ? "cursor-pointer" : "cursor-default"
         } text-dalam-text-secondary`}
@@ -490,7 +491,6 @@ function getFileIconForName(name: string) {
 
 function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, unknown> }) {
   const openFile = useWorkspace((s) => s.openFile);
-  const _openDiff = useDiffView((s) => s.openFile);
 
   // list_dir: parse JSON array of { name, path, type }
   if (toolName === "list_dir" && result.startsWith("[")) {
@@ -674,7 +674,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
           {toolCall.status === "running" || toolCall.status === "pending" ? (
             <Loader2 className="w-2.5 h-2.5 animate-spin" />
           ) : toolCall.status === "awaiting-approval" ? (
-            <Shield className="w-2.5 h-2.5 text-amber-400" />
+            <Shield className="w-2.5 h-2.5 text-yellow-500" />
           ) : null}
           <span>{statusText}</span>
           {isEdit && toolCall.status === "completed" && typeof args.path === "string" && (
@@ -961,7 +961,6 @@ export const TaskPlanBlock = React.memo(function TaskPlanBlock({ tasks, summary 
 export const SubAgentBlock = React.memo(function SubAgentBlock({ agent }: { agent: SubAgentState }) {
   const [open, setOpen] = useState(false);
   const isRunning = agent.status === "running";
-  const _isFailed = agent.status === "failed";
   const isCompleted = agent.status === "completed";
 
   const statusIcon = isRunning
@@ -988,7 +987,7 @@ export const SubAgentBlock = React.memo(function SubAgentBlock({ agent }: { agen
         <ChevronDown
           className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
         />
-        <span className="font-mono text-dalam-accent-secondary font-medium">task</span>
+        <span className="font-mono text-dalam-accent-primary font-medium">task</span>
         <span className="text-dalam-text-secondary truncate flex-1">{agent.description}</span>
         <span className="text-[10px] text-dalam-text-muted/60 flex-shrink-0">
           {typeLabel}{elapsed ? ` · ${elapsed}` : ""}

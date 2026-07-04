@@ -151,17 +151,17 @@ export function EditorPane() {
       }
 
       if (mod && shift && e.key.toLowerCase() === "f") {
+        e.preventDefault();
         // Only open bottom panel search in editor mode
         if (useUI.getState().viewMode !== "editor") return;
-        e.preventDefault();
         useUI.getState().setBottomPanelTab("terminal");
         useUI.getState().setBottomPanelOpen(true);
       }
 
       if (mod && !shift && e.key.toLowerCase() === "j") {
+        e.preventDefault();
         // Only open terminal in editor mode
         if (useUI.getState().viewMode !== "editor") return;
-        e.preventDefault();
         const ui = useUI.getState();
         const session = useChat.getState().session;
         if (session?.workspacePath) {
@@ -288,7 +288,7 @@ export function EditorPane() {
                   <Code2 className="w-8 h-8 text-dalam-text-muted/50" />
                 </div>
                 <p className="text-sm font-medium mb-1">No file open</p>
-                <p className="text-xs text-dalam-text-muted/60 mb-4">Select a file from the explorer or use Ctrl+P to quick open</p>
+                <p className="text-xs text-dalam-text-muted/60 mb-4">Select a file from the explorer or use {modKey()}P to quick open</p>
               </div>
             )}
           </div>
@@ -358,7 +358,7 @@ function EditorStatusBar() {
           </span>
         )}
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
-        <span className="flex-shrink-0">Spaces: 2</span>
+        <span className="flex-shrink-0">Spaces: {settings.tabSize ?? 2}</span>
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
         <span className="flex-shrink-0">UTF-8</span>
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />

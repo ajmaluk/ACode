@@ -26,6 +26,7 @@ import {
   formatGenesForPrompt,
   createGeneId,
   getGeneSuccessRate,
+  recordGeneSuccess,
   type Gene,
   type GenePool,
 } from "./genes";
@@ -385,7 +386,7 @@ describe("genes", () => {
     });
 
     it("does not boost confidence when activation count <= 5", () => {
-      const gene = makeGene({ confidence: 0.5, activationCount: 3, successCount: 3 });
+      const gene = makeGene({ confidence: 0.5, activationCount: 3, successCount: 3, lastActivatedAt: Date.now() });
       const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
       const evolved = evolveGenes(pool);
       // Confidence should not change because activationCount < 5

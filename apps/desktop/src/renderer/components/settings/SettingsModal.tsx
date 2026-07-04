@@ -25,7 +25,6 @@ const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP Servers", icon: Plug },
   { id: "memory-graph", label: "Memory Graph", icon: Network },
-  { id: "plugins", label: "Plugins", icon: Puzzle },
   { id: "connectors", label: "Connectors", icon: Plug },
   { id: "commands", label: "Commands", icon: Terminal },
   { id: "indexing", label: "Indexing", icon: Database },
@@ -81,7 +80,6 @@ export function SettingsModal() {
             {activeTab === "skills" && <SkillsTab />}
             {activeTab === "mcp" && <McpTab />}
             {activeTab === "memory-graph" && <MemoryGraphTab />}
-            {activeTab === "plugins" && <PluginsTab />}
             {activeTab === "connectors" && <ConnectorsTab />}
             {activeTab === "commands" && <CommandsTab />}
             {activeTab === "indexing" && <IndexingTab />}
@@ -203,6 +201,27 @@ function CodePreviewTab() {
         <div className="flex items-center gap-4">
           <input type="range" min={10} max={22} value={settings.codeFontSize} onChange={(e) => update("codeFontSize", Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
           <span className="text-sm text-dalam-text-primary w-8 text-right">{settings.codeFontSize}</span>
+        </div>
+      </Card>
+      <Card title="Tab size" description="Number of spaces per indentation level in the code editor.">
+        <div className="flex justify-end">
+          <select className="input-base w-32 appearance-none" value={settings.tabSize ?? 2} onChange={(e) => update("tabSize", Number(e.target.value))}>
+            <option value={2}>2 spaces</option>
+            <option value={4}>4 spaces</option>
+            <option value={8}>8 spaces</option>
+          </select>
+        </div>
+      </Card>
+      <Card title="Letter spacing" description="Adjust character spacing in the code editor for readability.">
+        <div className="flex items-center gap-4">
+          <input type="range" min={0} max={1.5} step={0.1} value={settings.letterSpacing ?? 0.3} onChange={(e) => update("letterSpacing", Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
+          <span className="text-sm text-dalam-text-primary w-8 text-right">{(settings.letterSpacing ?? 0.3).toFixed(1)}</span>
+        </div>
+      </Card>
+      <Card title="Cursor width" description="Width of the text cursor in pixels.">
+        <div className="flex items-center gap-4">
+          <input type="range" min={1} max={4} step={1} value={settings.cursorWidth ?? 2} onChange={(e) => update("cursorWidth", Number(e.target.value))} className="flex-1 accent-dalam-accent-primary" />
+          <span className="text-sm text-dalam-text-primary w-8 text-right">{settings.cursorWidth ?? 2}px</span>
         </div>
       </Card>
       <div className="mt-8">
@@ -1470,8 +1489,8 @@ function CommandsTab() {
         </div>
       </Card>
       <Card title="Custom commands" description="Create your own reusable commands that run agent tasks or scripts.">
-        <button className="px-4 py-2 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors">
-          + New command
+        <button className="px-4 py-2 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors opacity-50 cursor-not-allowed" disabled>
+          + New command (coming soon)
         </button>
       </Card>
     </>

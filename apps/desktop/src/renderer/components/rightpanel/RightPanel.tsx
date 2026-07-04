@@ -695,6 +695,9 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 {status.modified.slice(0, 50).map((f) => (
                   <FileRow key={f} path={f} action="modified" icon={<FileCode className="w-3 h-3 text-dalam-git-modified" />} />
                 ))}
+                {status.modified.length > 50 && (
+                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.modified.length - 50} more</div>
+                )}
               </div>
             )}
             {(status.added?.length ?? 0) > 0 && (
@@ -703,6 +706,9 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 {status.added.slice(0, 50).map((f) => (
                   <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-git-added" />} />
                 ))}
+                {status.added.length > 50 && (
+                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.added.length - 50} more</div>
+                )}
               </div>
             )}
             {(status.deleted?.length ?? 0) > 0 && (
@@ -711,6 +717,9 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 {status.deleted.slice(0, 50).map((f) => (
                   <FileRow key={f} path={f} action="deleted" icon={<X className="w-3 h-3 text-dalam-git-deleted" />} />
                 ))}
+                {status.deleted.length > 50 && (
+                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.deleted.length - 50} more</div>
+                )}
               </div>
             )}
             {(status.untracked?.length ?? 0) > 0 && (
@@ -719,6 +728,9 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 {status.untracked.slice(0, 50).map((f) => (
                   <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-text-muted" />} />
                 ))}
+                {status.untracked.length > 50 && (
+                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.untracked.length - 50} more</div>
+                )}
               </div>
             )}
           </div>

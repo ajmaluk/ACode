@@ -161,10 +161,9 @@ class HookEventBus {
       try {
         const result = handler(payload);
         if (result && typeof (result as Promise<void>).then === "function") {
-          // Use AbortController + timer for timeout instead of Promise.race to avoid
-          // leaking the timeout rejection handler if the handler resolves first.
-          // With Promise.race, the timeout Promise keeps its rejection callback alive
-          // until the timer fires (10s), preventing GC of the closure chain.
+          // Use AbortController to create a timeout signal. When the timeout fires,
+          // the AbortController rejects the Promise, which races against the handler.
+          // The cleanup in finally ensures the timer is cleared on success.
           const timeoutController = new AbortController();
           const timeoutId = setTimeout(() => {
             timeoutController.abort();

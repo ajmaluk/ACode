@@ -217,9 +217,19 @@ class SkillRegistry {
   private skills: Map<string, SkillInfo> = new Map();
   private backups: Map<string, { skill: SkillInfo; timestamp: number }[]> = new Map();
   private listeners = new Set<() => void>();
+  private batchDepth = 0;
 
   constructor() {
     for (const s of BUNDLED_SKILLS) this.skills.set(s.name, s);
+  }
+
+  /** Suppress notifications during bulk operations. Emits once at the end. */
+  batchUpdate(fn: () => void): void {
+    this.batchDepth++;
+    try { fn(); } finally {
+      this.batchDepth--;
+      if (this.batchDepth === 0) this.emit();
+    }
   }
 
   /** Return every skill, sorted by name. */
@@ -295,6 +305,7 @@ class SkillRegistry {
   }
 
   private emit() {
+    if (this.batchDepth > 0) return;
     for (const l of this.listeners) l();
   }
 }
@@ -375,20 +386,22 @@ export function refreshProjectSkills(
   projectSkills: SkillInfo[],
   registry: SkillRegistry = skillRegistry
 ): void {
-  // Remove all existing project-level skills
-  for (const existing of registry.list()) {
-    if (existing.source === "project") {
-      registry.remove(existing.name);
+  registry.batchUpdate(() => {
+    // Remove all existing project-level skills
+    for (const existing of registry.list()) {
+      if (existing.source === "project") {
+        registry.remove(existing.name);
+      }
     }
-  }
-  // Re-register bundled skills that were shadowed by removed project skills
-  for (const bs of BUNDLED_SKILLS) {
-    if (!registry.get(bs.name)) registry.add(bs);
-  }
-  // Add the freshly loaded project skills (overrides bundled if same name)
-  for (const skill of projectSkills) {
-    registry.add(skill);
-  }
+    // Re-register bundled skills that were shadowed by removed project skills
+    for (const bs of BUNDLED_SKILLS) {
+      if (!registry.get(bs.name)) registry.add(bs);
+    }
+    // Add the freshly loaded project skills (overrides bundled if same name)
+    for (const skill of projectSkills) {
+      registry.add(skill);
+    }
+  });
 }
 
 /**

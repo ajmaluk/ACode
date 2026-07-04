@@ -60,7 +60,7 @@ export async function saveMemory(
   const db = getDb();
 
   // Search for similar existing memories via FTS5
-  const existing = await searchMemories(entry.summary, { category: entry.category, limit: 3 });
+  const existing = await searchMemories(entry.summary, { category: entry.category, limit: 3, updateAccessCount: false });
 
   for (const e of existing) {
     const similarity = jaccardSimilarity(entry.content, e.content);
@@ -185,10 +185,11 @@ export async function searchMemories(
     tier?: MemoryTier;
     limit?: number;
     excludeStale?: boolean;
+    updateAccessCount?: boolean; // Set to false for system calls (dream agent) to avoid artificial inflation
   } = {}
 ): Promise<MemoryEntry[]> {
   const db = getDb();
-  const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
+  const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true, updateAccessCount = true } = opts;
 
   let sql = `
     SELECT m.*, memories_fts.rank as _rank
@@ -197,8 +198,8 @@ export async function searchMemories(
     WHERE memories_fts MATCH ?`;
   const safeQuery = query;
   // Break multi-word query into individual tokens for better search results
-  // Escape FTS5 special characters in each token
-  const escapeFts = (t: string) => t.replace(/['"*+\-()^~]/g, ' ');
+  // Escape FTS5 special characters in each token, including double quotes
+  const escapeFts = (t: string) => t.replace(/['"*+\-()^~]/g, ' ').replace(/"/g, ' ');
   const tokens = safeQuery.split(/\s+/).filter(Boolean);
   const ftsQuery = tokens.map(t => `"${escapeFts(t)}"`).join(" OR ");
   const params: (string | number)[] = [ftsQuery];
@@ -216,8 +217,8 @@ export async function searchMemories(
   try {
     const rows = await db.select(sql, params) as MemoryEntryRow[];
 
-    // Update access tracking for returned results
-    if (rows.length > 0) {
+    // Update access tracking for returned results (skip for system calls)
+    if (updateAccessCount && rows.length > 0) {
       const now = Date.now();
       const ids = rows.map((r: MemoryEntryRow) => r.id);
       const placeholders = ids.map(() => "?").join(",");
@@ -446,9 +447,10 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
       } else {
         await db.execute(
           `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
           [parsed.id, parsed.category, parsed.tier, parsed.content, parsed.summary, JSON.stringify(parsed.tags),
-           parsed.sourceSession ?? null, parsed.sourceFile || filePath, parsed.createdAt, parsed.updatedAt, parsed.stale ? 1 : 0]
+           parsed.sourceSession ?? null, parsed.sourceFile || filePath, parsed.createdAt, parsed.updatedAt,
+           parsed.accessCount ?? 0, parsed.lastAccessedAt ?? 0, parsed.stale ? 1 : 0]
         );
       }
       count++;
@@ -673,7 +675,7 @@ export function extractMemoriesFromExchange(
   }
 
   // Detect build/test commands (npm, pnpm, cargo, etc.)
-  const cmdPattern = /\b(npm|pnpm|yarn|bun|cargo|go|make|docker)\s+(run|build|test|install|start|dev|serve|check)\b[^\n]{0,60}/gi;
+  const cmdPattern = /\b(npm|pnpm|yarn|bun|cargo|go|make|docker)\s+(run|build|test|install|start|dev|serve|check|compose|exec|pull|push|images|ps|logs|stop|rm|kill|rmi|create|cp|diff|events|export|history|import|inspect|port|save|stats|top|unpause|update|version|wait)\b[^\n]{0,60}/gi;
   let cmdMatch;
   while ((cmdMatch = cmdPattern.exec(combined)) !== null && entries.length < maxEntries) {
     const content = cmdMatch[0].trim();
@@ -724,16 +726,8 @@ export async function extractMemoriesWithLLM(
     const prompt = buildExtractionPrompt(userInput, assistantResponse);
     const response = await fetchLLM(prompt);
 
-    // Parse JSON response — strip markdown fences if present
-    let cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
-    const startIdx = cleaned.indexOf("[");
-    const endIdx = cleaned.lastIndexOf("]");
-    if (startIdx !== -1 && endIdx !== -1) {
-      cleaned = cleaned.slice(startIdx, endIdx + 1);
-    }
-    const parsed = JSON.parse(cleaned);
-
-    if (!Array.isArray(parsed) || parsed.length === 0) {
+    const parsed = parseLLMJson<Record<string, unknown>[]>(response);
+    if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
       // LLM returned nothing worth remembering — fall back to heuristics
       const entries = extractMemoriesFromExchange(userInput, assistantResponse, opts);
       return { entries, saved: 0, source: "heuristic" };
@@ -857,6 +851,12 @@ function tokenize(text: string): string[] {
   for (const w of raw) {
     if (w.length <= 2 || stopWords.has(w)) continue;
     tokens.add(w);
+    // Also add sub-parts for path-like tokens to improve similarity matching
+    // e.g. "src/components/Button.tsx" → also yields "src", "components", "button.tsx"
+    const subParts = w.split(/[/.]/).filter(p => p.length > 2 && !stopWords.has(p));
+    for (const p of subParts) {
+      tokens.add(p);
+    }
   }
   return [...tokens];
 }
@@ -1050,4 +1050,36 @@ interface MemoryEntryRow {
   last_accessed: number;
   verified: number;
   stale: number;
+}
+
+// ============================================================
+// SECTION 10 — SHARED LLM RESPONSE PARSING
+// ============================================================
+
+/**
+ * Parse a JSON response from an LLM, handling common formatting issues:
+ * - Strips markdown code fences (```json ... ```)
+ * - Extracts JSON from surrounding text
+ * - Returns null on parse failure
+ */
+export function parseLLMJson<T>(response: string): T | null {
+  try {
+    let cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+    // Try to extract JSON array
+    const arrStart = cleaned.indexOf("[");
+    const arrEnd = cleaned.lastIndexOf("]");
+    if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
+      return JSON.parse(cleaned.slice(arrStart, arrEnd + 1)) as T;
+    }
+    // Try to extract JSON object
+    const objStart = cleaned.indexOf("{");
+    const objEnd = cleaned.lastIndexOf("}");
+    if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
+      return JSON.parse(cleaned.slice(objStart, objEnd + 1)) as T;
+    }
+    // Try raw parse
+    return JSON.parse(cleaned) as T;
+  } catch {
+    return null;
+  }
 }

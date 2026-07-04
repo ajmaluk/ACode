@@ -6,7 +6,9 @@ import {
   skillRegistry,
   matchSkillInvocation,
   renderSkillForPrompt,
+  loadSkillContent,
 } from "./skills";
+import type { SkillInfo } from "@dalam/shared-types";
 
 describe("skills", () => {
   describe("parseFrontmatter", () => {

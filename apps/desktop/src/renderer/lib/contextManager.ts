@@ -88,8 +88,7 @@ export function estimateTokens(text: string): number {
   }
 
   let lineNum = 0;
-  // Detect fence on the very first line (line 0) before entering the loop,
-  // because the in-loop check only fires after a newline increments lineNum.
+  // Detect fence on the very first line (line 0) before entering the loop
   if (fenceLines.has(0)) codeMode = !codeMode;
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -97,33 +96,33 @@ export function estimateTokens(text: string): number {
     // Track line boundaries for code fence detection
     if (code === 10) { // newline
       lineNum++;
-      // Toggle codeMode at line boundaries with triple backtick
       if (fenceLines.has(lineNum)) {
         codeMode = !codeMode;
       }
-      count += 1; // newline = 1 token
+      count += 1;
       continue;
     }
 
-
-    // Check for triple backtick at start of a line (already tracked via fenceLines)
-    // Also handle inline backtick pairs for emphasis (not code blocks)
-
-    // CJK characters — roughly 1.5 chars per token
-    if (code >= 0x2e80 && code <= 0x9fff) {
-      count += 0.67;
-    } else if (code > 0xf900 && code < 0xfaff) {
+    // CJK Unified Ideographs — ~1.5 chars per token
+    if ((code >= 0x4e00 && code <= 0x9fff) ||   // CJK Unified
+        (code >= 0x3400 && code <= 0x4dbf) ||   // CJK Extension A
+        (code >= 0xf900 && code <= 0xfaff)) {   // CJK Compatibility
       count += 0.67;
     }
-    // Whitespace — roughly 1 token per space/tab
+    // CJK punctuation and fullwidth forms — ~2 chars per token
+    else if ((code >= 0x3000 && code <= 0x303f) ||  // CJK Symbols
+             (code >= 0xff00 && code <= 0xffef)) {  // Fullwidth forms
+      count += 0.5;
+    }
+    // Whitespace
     else if (code === 32 || code === 9) {
       count += 1;
     }
-    // Code identifiers — roughly 3.5 chars per token
+    // Code identifiers — ~4 chars per token (realistic for mixed code)
     else if (codeMode || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 95) {
-      count += 0.29;
+      count += 0.25;
     }
-    // Other characters — roughly 4 chars per token
+    // Other characters — ~4 chars per token
     else {
       count += 0.25;
     }
@@ -194,7 +193,7 @@ export function computeContextStats(
     needsCompaction: ratio >= CTX.CHECKPOINT_HARD,
     shouldPrune: totalTokens > (usableTokens - CTX.PRUNE_PROTECT),
     nextCheckpointTrigger: getNextCheckpointTrigger(ratio),
-    shouldCompact: ratio >= 0.95,
+    shouldCompact: ratio >= CTX.COMPACT_THRESHOLD,
   };
 }
 
@@ -229,7 +228,8 @@ export function computeContextStats(
 /** Check if a message is a tool result (user message with tool prefix). */
 export function _isToolResult(m: ChatMessage): boolean {
   return m.role === "user" && typeof m.content === "string" &&
-    (m.content.startsWith("[TOOL RESULT:") || m.content.startsWith("[TOOL ERROR:"));
+    (m.content.startsWith("[TOOL RESULT:") || m.content.startsWith("[TOOL ERROR:") ||
+     m.content.startsWith("[Tool result for ") || m.content.startsWith("[Tool error for "));
 }
 
 /** Align compaction boundaries — exported for direct unit testing. */

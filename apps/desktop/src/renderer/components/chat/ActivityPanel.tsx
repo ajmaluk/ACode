@@ -3,7 +3,8 @@ import {
   X, FileCode, FilePlus,
   ChevronDown, Loader2,
   FileText, GitBranch, Terminal, Search, FolderOpen,
-  Check, Zap, Code2,
+  Check, Zap, Code2, ClipboardList, Brain,
+  Database, HelpCircle, Globe, Layout,
 } from "lucide-react";
 import { useChat } from "@/store/useAppStore";
 import { ThinkingBlock, TaskPlanBlock, SubAgentList } from "./ActivityBlocks";
@@ -120,6 +121,18 @@ export function getToolMeta(name: string): { icon: React.ElementType; label: str
     search_files: { icon: Search, label: "Searched" },
     git_status: { icon: GitBranch, label: "Git Status" },
     git_commit: { icon: GitBranch, label: "Git Commit" },
+    git_log: { icon: GitBranch, label: "Git Log" },
+    git_branch: { icon: GitBranch, label: "Git Branch" },
+    git_checkout: { icon: GitBranch, label: "Git Checkout" },
+    git_diff_file: { icon: GitBranch, label: "Git Diff" },
+    memory_save: { icon: Database, label: "Memory Saved" },
+    memory_search: { icon: Search, label: "Memory Searched" },
+    memory_delete: { icon: Database, label: "Memory Deleted" },
+    memory_stats: { icon: Database, label: "Memory Stats" },
+    question: { icon: HelpCircle, label: "Question" },
+    task: { icon: ClipboardList, label: "Task" },
+    browser_navigate: { icon: Globe, label: "Browser" },
+    open_panel: { icon: Layout, label: "Panel" },
   };
   return meta[name] || { icon: Code2, label: name };
 }
@@ -197,6 +210,8 @@ export const StreamingActivityPanel = React.memo(function StreamingActivityPanel
       {activities.length > 0 && (
         <div className="space-y-0.5">
           {activities.map((activity, idx) => {
+            const isLast = idx === activities.length - 1;
+            const status: "completed" | "running" = isLast && activity.type !== "skill" ? "running" : "completed";
             if (activity.type === "explore") {
               return (
                 <InlineActivityRow
@@ -204,7 +219,7 @@ export const StreamingActivityPanel = React.memo(function StreamingActivityPanel
                   icon={<Search className="w-3 h-3 flex-shrink-0" />}
                   label="Searched"
                   target={activity.query}
-                  status="completed"
+                  status={status}
                 />
               );
             }
@@ -217,7 +232,7 @@ export const StreamingActivityPanel = React.memo(function StreamingActivityPanel
                   icon={React.createElement(getFileIcon(ext), { className: "w-3 h-3 flex-shrink-0" })}
                   label="Read"
                   target={fileName}
-                  status="completed"
+                  status={status}
                 />
               );
             }
@@ -228,10 +243,11 @@ export const StreamingActivityPanel = React.memo(function StreamingActivityPanel
                   icon={<Terminal className="w-3 h-3 flex-shrink-0" />}
                   label="Ran"
                   target={`$ ${activity.command}`}
-                  status="completed"
+                  status={status}
                 >
                   <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
                     {activity.result.slice(0, 2000)}
+                    {activity.result.length > 2000 && <span className="text-dalam-text-muted"> (truncated)</span>}
                   </pre>
                 </InlineActivityRow>
               );
@@ -244,6 +260,28 @@ export const StreamingActivityPanel = React.memo(function StreamingActivityPanel
                   label="Invoked"
                   target={`$${activity.name}`}
                   status="completed"
+                />
+              );
+            }
+            if (activity.type === "plan") {
+              return (
+                <InlineActivityRow
+                  key={`plan-${idx}`}
+                  icon={<ClipboardList className="w-3 h-3 flex-shrink-0" />}
+                  label="Planning"
+                  target={activity.plan || "Creating plan"}
+                  status={status}
+                />
+              );
+            }
+            if (activity.type === "think") {
+              return (
+                <InlineActivityRow
+                  key={`think-${idx}`}
+                  icon={<Brain className="w-3 h-3 flex-shrink-0" />}
+                  label="Thinking"
+                  target={activity.content?.slice(0, 60) || "Analyzing"}
+                  status={status}
                 />
               );
             }

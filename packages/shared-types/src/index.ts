@@ -22,6 +22,9 @@ export interface AppSettings {
   showMinimap: boolean;
   showIndentGuides: boolean;
   bracketPairColorization: boolean;
+  tabSize?: number;
+  letterSpacing?: number;
+  cursorWidth?: number;
   selectedModel: string;
   selectedProvider: string;
   maxTokens?: number;
@@ -48,6 +51,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showMinimap: true,
   showIndentGuides: true,
   bracketPairColorization: true,
+  tabSize: 2,
+  letterSpacing: 0.3,
+  cursorWidth: 2,
   selectedModel: "",
   selectedProvider: "",
   maxTokens: 4096,
@@ -169,7 +175,7 @@ export type AgentSession = {
   mode: AgentSessionMode;
   startedAt: number;
   messages: ChatMessage[];
-  status: "idle" | "running" | "aborted" | "error" | "questioning";
+  status: "idle" | "running" | "completed" | "aborted" | "error" | "questioning";
 };
 
 /** @deprecated Use SkillInfo instead — Skill has inconsistent source values */

@@ -224,7 +224,7 @@ function addEdgeDeduped(
  * and co-occurrence scoring.
  */
 export function buildMemoryGraph(
-  memories: { id: string; summary: string; category: string; tags: string[]; tier: string }[],
+  memories: { id: string; summary: string; category: string; tags: string[]; tier: string; sourceSession?: string }[],
   genes: { id: string; name: string; trigger: string; category: string; confidence: number }[],
   agentSessions: { id: string; title: string; agentName: string; messageCount: number }[],
 ): GraphData {
@@ -302,21 +302,30 @@ export function buildMemoryGraph(
     }
   }
 
-  // ── Agent ↔ Memory edges ──
+  // ── Agent ↔ Memory edges (only for memories created by each agent) ──
   for (const session of agentSessions) {
     const agentId = `agent-${session.agentName}`;
     if (!nodeIds.has(agentId)) continue;
     for (const mem of memories) {
-      addEdgeDeduped(edges, seen, agentId, `mem-${mem.id}`, "created_by", 0.3);
+      if (mem.sourceSession === session.id) {
+        addEdgeDeduped(edges, seen, agentId, `mem-${mem.id}`, "created_by", 0.5);
+      }
     }
   }
 
-  // ── Gene ↔ Agent edges (category matching) ──
+  // ── Gene ↔ Agent edges (only when gene was triggered during a session) ──
   for (const gene of genes) {
     const geneId = `gene-${gene.id}`;
-    for (const agentName of agentGroups.keys()) {
-      const agentId = `agent-${agentName}`;
-      addEdgeDeduped(edges, seen, geneId, agentId, "uses", 0.2);
+    for (const session of agentSessions) {
+      // Connect gene to agent if the gene's trigger matches any memory tag from that session
+      const sessionMemories = memories.filter(m => m.sourceSession === session.id);
+      const hasOverlap = sessionMemories.some(m =>
+        m.tags.some(t => gene.trigger.includes(t) || gene.name.includes(t))
+      );
+      if (hasOverlap) {
+        const agentId = `agent-${session.agentName}`;
+        addEdgeDeduped(edges, seen, geneId, agentId, "uses", 0.3);
+      }
     }
   }
 

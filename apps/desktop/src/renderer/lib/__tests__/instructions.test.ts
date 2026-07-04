@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   parsePathScopedRules,
   formatInstructionsForPrompt,
-  loadInstructions
+  loadInstructions,
+  listPathScopedGlobs,
 } from "../instructions";
 import type { InstructionFsAdapter } from "../instructions";
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Command } from "cmdk";
 import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useChat, useUI } from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
@@ -35,10 +35,12 @@ export function CommandPalette() {
   const { toggle: toggleShortcuts } = useShortcuts();
   const [recent, setRecent] = useState<string[]>([]);
 
-  // Load recent files when component mounts
-  if (open && recent.length === 0) {
-    setRecent(getRecentFiles());
-  }
+  // Load recent files when palette opens
+  useEffect(() => {
+    if (open && recent.length === 0) {
+      setRecent(getRecentFiles());
+    }
+  }, [open, recent.length]);
 
   const items = useMemo<Item[]>(
     () => [

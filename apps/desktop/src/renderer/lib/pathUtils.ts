@@ -77,7 +77,12 @@ export function joinPath(...segments: string[]): string {
       drivePrefix = getDriveLetter(posix);
     }
     for (const piece of posix.split("/")) {
-      if (piece.length > 0) parts.push(piece);
+      if (piece.length > 0) {
+        // Skip the drive letter piece (e.g. "C:") from path parts
+        // since we track it separately in drivePrefix
+        if (drivePrefix && piece === drivePrefix) continue;
+        parts.push(piece);
+      }
     }
   }
 

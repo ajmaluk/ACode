@@ -79,14 +79,25 @@ export function mergeRulesets(...rulesets: PermissionRuleset[]): PermissionRules
   return merged;
 }
 
+const _globRegexCache = new Map<string, RegExp>();
 function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|\\[\]/]/g, "\\$&");
-  const regexStr = escaped
+  const cached = _globRegexCache.get(pattern);
+  if (cached) return cached;
+  // Handle brace expansion: {a,b} → (?:a|b)
+  let expanded = pattern.replace(/\{([^}]+)\}/g, (_, group: string) => {
+    const parts = group.split(",").map(s => s.replace(/[.+^${}()|\\[\]/]/g, "\\$&"));
+    return "(?:" + parts.join("|") + ")";
+  });
+  // Escape remaining glob special chars (but not the braces we already converted)
+  expanded = expanded.replace(/[.+^$()|\\[\]/]/g, "\\$&");
+  const regexStr = expanded
     .replace(/\*\*/g, "\0GLOBSTAR\0")
     .replace(/\*/g, "[^/]*")
     .replace(/\?/g, "[^/]")
     .replace(/\0GLOBSTAR\0/g, ".*");
-  return new RegExp("^" + regexStr + "$");
+  const regex = new RegExp("^" + regexStr + "$");
+  _globRegexCache.set(pattern, regex);
+  return regex;
 }
 
 /**
@@ -180,10 +191,10 @@ const BASH_ARITY: Record<string, number> = {
  * arity-based permission detection. Metacharacters like |, ;, &&, ||, `, $()
  * let hidden commands execute that aren't visible to arity analysis.
  */
-const SHELL_METACHARACTERS = /[|;`$]/;
+const SHELL_METACHARACTERS = /[|;`$]|&&|\|\|/;
 const SHELL_REDIRECT = /[<>]/;
 export function hasShellMetacharacters(command: string): boolean {
-  return SHELL_METACHARACTERS.test(command) || (SHELL_REDIRECT.test(command) && !/^[<>]/.test(command.trim()));
+  return SHELL_METACHARACTERS.test(command) || SHELL_REDIRECT.test(command);
 }
 
 /**

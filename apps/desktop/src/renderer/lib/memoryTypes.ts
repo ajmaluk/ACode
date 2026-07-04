@@ -73,6 +73,7 @@ export const CTX = {
   REBUILD_BUDGET:      65_000,  // MiMo: total injected content on rebuild
   CHECKPOINT_TRIGGERS: [0.20, 0.45, 0.70] as const,
   CHECKPOINT_HARD:          0.85, // hard overflow: force compaction
+  COMPACT_THRESHOLD:        0.95, // full LLM summarization compaction threshold
   TIER1_PRUNE_RATIO:        0.50, // Tier 1: lightweight tool output pruning (no LLM)
   TIER2_COMPACT_RATIO:      0.85, // Tier 2: full LLM summarization compaction
   MEMORY_INDEX_MAX_LINES: 200,   // Claude Code MEMORY.md cap

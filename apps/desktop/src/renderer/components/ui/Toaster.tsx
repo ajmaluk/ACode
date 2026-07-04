@@ -33,7 +33,7 @@ export function Toaster() {
   const { toasts, dismiss } = useToasts();
 
   return (
-    <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 pointer-events-none" aria-live="assertive">
+    <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 pointer-events-none" aria-live="polite">
       {toasts.map((t) => {
         const style = KIND_STYLES[t.kind];
         return (
@@ -65,7 +65,7 @@ export function Toaster() {
                             : "bg-dalam-bg-hover text-dalam-text-primary hover:bg-opacity-80"
                         }`}
                         onClick={() => {
-                          act.onClick();
+                          try { act.onClick(); } catch { /* swallow */ }
                           dismiss(t.id);
                         }}
                       >

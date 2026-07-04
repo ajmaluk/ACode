@@ -67,14 +67,6 @@ interface AnthropicContentBlock {
   text?: string;
 }
 
-/** Minimal Zustand store ref for waitForToolApproval */
-interface _ChatStoreRef {
-  getState(): {
-    pendingToolCalls: import("@dalam/shared-types").ToolCall[];
-    resolveToolApproval: (id: string, decision: "approved" | "denied") => void;
-  };
-}
-
 function joinPath(...parts: string[]): string {
   return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
 }
@@ -543,7 +535,6 @@ async function* streamAnthropic(
   }
   // Tool call accumulation for Anthropic native tool calling
   const _anthropicToolBuffers = new Map<string, { name: string; args: string }>();
-  let _anthropicCurrentToolName: string;
   _debugLog("[streamAnthropic] Starting stream, url:", url);
   try {
     while (true) {
@@ -571,8 +562,8 @@ async function* streamAnthropic(
           }
           if (json.type === "message_start") { msgId = json.message?.id || ""; }
           if (json.type === "content_block_start" && json.content_block?.type === "tool_use") {
-            _anthropicCurrentToolName = json.content_block.name || "";
-            _anthropicToolBuffers.set(json.content_block.id, { name: _anthropicCurrentToolName, args: "" });
+            const toolName = json.content_block.name || "";
+            _anthropicToolBuffers.set(json.content_block.id, { name: toolName, args: "" });
           }
           if (json.type === "content_block_delta" && json.delta?.type === "input_json_delta" && json.content_block_id) {
             const buf = _anthropicToolBuffers.get(json.content_block_id);
@@ -1653,6 +1644,11 @@ You can combine multiple tools in one response:
                 const action = agentState.evaluatePermission(permissionKey, canonicalPattern);
                 if (action === "allow") {
                   autoApprovedTools.add(tc.id);
+                  // Pre-store approval so waitForToolApproval resolves immediately
+                  try {
+                    const { _pendingResolutions } = await import("../store/useAppStore");
+                    _pendingResolutions.set(tc.id, "approved");
+                  } catch { /* store not available */ }
                 }
               }
             } catch { /* store not available */ }
@@ -1910,10 +1906,8 @@ You can combine multiple tools in one response:
         }
         // MCP HTTP sessions are keyed by server name → session token (not Dalam session ID),
         // so we cannot match them here. They will be cleaned up by the MCP module on error/close.
-        // Clean up pending diff proposals for this session only
-        for (const [key] of pendingDiffProposals) {
-          if (key.startsWith(sessionId + ":")) pendingDiffProposals.delete(key);
-        }
+        // Clean up all pending diff proposals (they are ephemeral to the session)
+        pendingDiffProposals.clear();
         // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
         try {
           const { useChat } = await import("../store/useAppStore");
@@ -2239,8 +2233,8 @@ interface ParsedToolCall {
 }
 
 function decodeHtmlEntities(s: string): string {
-  // Decode in correct order: & first (to avoid double-decoding), then < and >
-  return s.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
+  // Decode HTML entities in correct order: &amp; first (to avoid double-decoding)
+  return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
 function parseAttributes(tagStr: string): Record<string, string> {
@@ -2271,6 +2265,10 @@ const KNOWN_TOOL_NAMES = new Set([
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
   "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan", "question",
+  // UI control tools
+  "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode",
+  "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab",
+  "new_terminal", "terminal_write",
 ]);
 
 function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
@@ -2337,7 +2335,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 
   // 1. read_file — handle both self-closing <read_file path="..."/> and with offset/limit
   const readFileRegex = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = readFileRegex.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.path) {
@@ -2353,7 +2351,7 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 
   // 3. edit_file — support optional occurrence attribute
   // Use greedy match to prevent premature closing on </edit_file> in content
-  const editFileRegex = /<edit_file\s+path=["']([^"']+)["']\s*occurence=["'](\d+)["']?\s*>([\s\S]*)<\/edit_file>/gi;
+  const editFileRegex = /<edit_file\s+path=["']([^"']+)["']\s*(?:occurrence|occurence)=["'](\d+)["']?\s*>([\s\S]*)<\/edit_file>/gi;
   while ((match = editFileRegex.exec(text)) !== null) {
     const innerText = match[3];
     const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(innerText);
@@ -2663,6 +2661,14 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   while ((match = questionBlockRegex.exec(text)) !== null) {
     toolCalls.push({ name: "question", args: { question: match[1].trim() }, raw: match[0] });
   }
+  // Handle malformed question tags without opening < (LLM output quirk)
+  const malformedQuestionRegex = /\bquestion\s+question="([^"]*)"\s+options="([^"]*)"\s*\/?/gi;
+  while ((match = malformedQuestionRegex.exec(text)) !== null) {
+    // Only add if not already captured by the proper regex
+    if (match[1] && !toolCalls.some(tc => tc.name === "question" && tc.args.question === match![1])) {
+      toolCalls.push({ name: "question", args: { question: match[1], options: match[2] }, raw: match[0] });
+    }
+  }
 
   // 25. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
@@ -2918,7 +2924,12 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     if (statFailed) {
       return `[Unable to read file: ${args.path}. The file may not exist or access was denied.]`;
     }
-    const bytes = await readFile(args.path);
+    let bytes: Uint8Array;
+    try {
+      bytes = await readFile(args.path);
+    } catch {
+      return `[Unable to read file: ${args.path}. The file may have been deleted or access was denied.]`;
+    }
     const ext = args.path.split(".").pop()?.toLowerCase() ?? "";
     const textExts = new Set(["ts", "tsx", "js", "jsx", "json", "md", "mdx", "py", "rs", "css", "html", "yml", "yaml", "toml", "txt", "csv", "xml", "svg", "sh", "bash", "zsh", "fish", "sql", "graphql", "prisma", "env", "gitignore", "dockerignore", "editorconfig", "prettierrc", "eslintrc", "lock", "log", "cfg", "ini", "conf"]);
     let text: string;
@@ -2926,7 +2937,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       text = new TextDecoder().decode(bytes);
     } else {
       const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      if (decoded.includes("\0") || (decoded.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
+      if (decoded.includes("\0") || (decoded.match(/\uFFFD/g)?.length ?? 0) > decoded.length * 0.01) {
         return `[Binary file: ${args.path.split("/").pop()} — ${bytes.length} bytes]`;
       }
       text = decoded;
@@ -2948,7 +2959,11 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       const numbered = selectedLines.map((line, i) => `${lineStart + i}: ${line}`).join("\n");
       return `${header}\n${numbered}`;
     }
-    return text;
+    // Full file read — add header with line count and size
+    const totalLines = text.split("\n").length;
+    const sizeKB = (bytes.length / 1024).toFixed(1);
+    const header = `--- ${args.path} (lines 1-${totalLines}, ${sizeKB}KB) ---`;
+    return `${header}\n${text}`;
   }
 
   if (name === "write_file") {

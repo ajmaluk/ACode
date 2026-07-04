@@ -138,7 +138,7 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
               ? <CodeBlock key={"code-" + idx} language={seg.language ?? ""} content={seg.content} />
               : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0">
                   {pending
-                    ? <StreamingContent content={seg.content} pending={true} />
+                    ? <StreamingContent content={seg.content} />
                     : <MarkdownContent content={seg.content} />
                   }
                 </div>
@@ -230,6 +230,8 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.role === nextProps.message.role &&
     prevProps.message.thinking === nextProps.message.thinking &&
+    prevProps.message.questions === nextProps.message.questions &&
+    prevProps.message.taskPlan === nextProps.message.taskPlan &&
     !tcChanged && !fcChanged && !actChanged
   );
 });

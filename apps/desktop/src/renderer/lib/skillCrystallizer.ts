@@ -77,14 +77,21 @@ ${formattedHistory}`;
     ]);
 
     let cleaned = response.replace(/```json/gi, "").replace(/```/g, "").trim();
-    // Robustly extract JSON by tracking brace depth
+    // Robustly extract JSON by tracking brace depth, respecting string context
     const startIdx = cleaned.indexOf("{");
     if (startIdx !== -1) {
       let depth = 0;
       let endIdx = startIdx;
+      let inString = false;
+      let escapeNext = false;
       for (let i = startIdx; i < cleaned.length; i++) {
-        if (cleaned[i] === "{") depth++;
-        else if (cleaned[i] === "}") depth--;
+        const ch = cleaned[i];
+        if (escapeNext) { escapeNext = false; continue; }
+        if (ch === "\\") { escapeNext = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === "{") depth++;
+        else if (ch === "}") depth--;
         if (depth === 0) { endIdx = i; break; }
       }
       if (depth !== 0) {
@@ -107,16 +114,38 @@ ${formattedHistory}`;
             variant: "primary",
             onClick: async () => {
               try {
-                const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+                const { exists, mkdir, readTextFile } = await import("@tauri-apps/plugin-fs");
                 // Sanitize skill name to prevent path traversal
                 const safeName = data.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
                 const skillsDir = joinPath(workspacePath, `.dalam/skills/${safeName}`);
+                const skillFile = joinPath(skillsDir, "SKILL.md");
+
+                // Check if skill already exists — warn user
+                if (await exists(skillFile)) {
+                  const existingContent = await readTextFile(skillFile);
+                  if (existingContent === data.content) {
+                    notify({
+                      kind: "info",
+                      title: "Skill Unchanged",
+                      description: `Skill '${data.name}' already exists with identical content.`
+                    });
+                    return;
+                  }
+                  // Backup existing skill before overwrite
+                  const backupDir = joinPath(skillsDir, ".backups");
+                  if (!(await exists(backupDir))) {
+                    await mkdir(backupDir, { recursive: true });
+                  }
+                  const backupFile = joinPath(backupDir, `backup-${Date.now()}.md`);
+                  await api.fs.writeFile(backupFile, existingContent);
+                }
+
                 if (!(await exists(skillsDir))) {
                   await mkdir(skillsDir, { recursive: true });
                 }
-                
+
                 // Write skill to project directory
-                await api.fs.writeFile(joinPath(skillsDir, "SKILL.md"), data.content);
+                await api.fs.writeFile(skillFile, data.content);
 
                 // Reload skills registry in React app state
 

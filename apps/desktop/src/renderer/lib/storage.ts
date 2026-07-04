@@ -119,12 +119,12 @@ let migrationAttempted = false;
 async function ensureDB(): Promise<IDBDatabase> {
   const db = await openDB();
   if (!migrationAttempted) {
-    migrationAttempted = true;
     try {
       await migrateFromLocalStorage();
+      migrationAttempted = true;
     } catch (e) {
       console.warn("[IndexedDB] Migration from localStorage failed:", e);
-      // Migration will be retried on next app session start.
+      // Migration will be retried on next call to ensureDB.
     }
   }
   return db;
@@ -159,22 +159,23 @@ export async function idbPut(
 ): Promise<void> {
   const db = await ensureDB();
   return new Promise((resolve, reject) => {
+    let settled = false;
     try {
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
       store.put(value);
-      tx.oncomplete = () => resolve();
+      tx.oncomplete = () => { if (!settled) { settled = true; resolve(); } };
       tx.onerror = () => {
         console.warn(`[IndexedDB] Transaction error writing to ${storeName}:`, tx.error);
-        reject(tx.error);
+        if (!settled) { settled = true; reject(tx.error); }
       };
       tx.onabort = () => {
         console.warn(`[IndexedDB] Transaction aborted writing to ${storeName}`);
-        reject(new Error(`Transaction aborted for ${storeName}`));
+        if (!settled) { settled = true; reject(new Error(`Transaction aborted for ${storeName}`)); }
       };
     } catch (e) {
       console.warn(`[IndexedDB] Failed to write to ${storeName}:`, e);
-      reject(e);
+      if (!settled) { settled = true; reject(e); }
     }
   });
 }

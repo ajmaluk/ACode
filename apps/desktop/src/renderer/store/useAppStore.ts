@@ -98,7 +98,7 @@ const XML_MODEL_OUTPUT_CLOSE_RE = /<\/?(?:user|assistant|system|thinking|thought
  */
 export function stripXmlToolCallTags(content: string): string {
   // Fast path: skip all regex if content has no angle brackets
-  if (!content.includes("<")) return content;
+  if (!content.includes("<") && !content.match(/\bquestion\s+question=/)) return content;
   let result = content;
   // Strip opening+content+closing blocks: <tool ...>content</tool>
   // and self-closing tags: <tool .../>
@@ -107,6 +107,8 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(XML_CLOSING_TAG_RE, "");
   // Strip MCP tags
   result = result.replace(XML_MCP_STRIP_RE, "");
+  // Strip malformed question tags without opening < (LLM output quirk)
+  result = result.replace(/\bquestion\s+question="[^"]*"\s+options="[^"]*"\s*\/?>/g, "");
   // Strip Anthropic antml:function_calls / <invoke> blocks
   result = result.replace(/(?:antml:function_calls\s*)?<invoke[\s\S]*?<\/(?:antml:)?function_calls\s*>/gi, "");
   // Strip orphan antml tags
@@ -920,6 +922,7 @@ const _antiThrashTimestamps: Record<string, number> = {}; // sessionId → times
 // Safety Timer Helper — eliminates 3× duplicated timer logic in sendMessage/appendStream
 // ============================================================================
 const SAFETY_TIMEOUT_MS = 120_000;
+let _safetyTimerRef: ReturnType<typeof setTimeout> | null = null;
 const TOOL_APPROVAL_TIMEOUT_MS = 600_000; // 10 min during tool approval
 
 function _createSafetyTimer(
@@ -2103,13 +2106,12 @@ export const useChat = create<ChatState>((set, get) => ({
     // as long as events keep flowing. This prevents the timer from killing
     // active multi-turn agent loops (tool approval waits, sequential LLM calls).
     // If there are pending tool approvals, use the extended 10-minute timeout.
-    const existingTimer = get()._safetyTimer;
-    if (existingTimer) {
-      clearTimeout(existingTimer);
+    // Use module-level variable instead of Zustand state to avoid cascading re-renders.
+    if (_safetyTimerRef) {
+      clearTimeout(_safetyTimerRef);
       const pending = get().pendingToolCalls;
       const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
-      const newTimer = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
-      set({ _safetyTimer: newTimer });
+      _safetyTimerRef = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
     }
     switch (event.type) {
       case "message-start": {
@@ -4227,7 +4229,6 @@ export type SettingsTab =
   | "skills"
   | "mcp"
   | "memory-graph"
-  | "plugins"
   | "commands"
   | "indexing"
   | "onboard"

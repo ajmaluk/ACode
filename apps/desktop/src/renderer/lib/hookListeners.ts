@@ -209,7 +209,6 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
 
     if (entries.length === 0) {
       try {
-        const api = createDalamAPI();
         const { settings, config } = getActiveProvider();
         const isAnthropic = config.apiFormat === "anthropic";
         const fetchLLM = async (prompt: string): Promise<string> => {
@@ -232,7 +231,9 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
         const llmResult = await extractMemoriesWithLLM(userInput, assistantResponse, fetchLLM, {
           sessionId: event.sessionId, maxEntries: 3, workspacePath: workspace.path,
         });
-        entries = llmResult.entries;
+        // LLM extraction already saved entries when workspacePath was provided,
+        // so only track the count — don't double-save via the outer loop.
+        if (llmResult.saved > 0) return;
       } catch {
         entries = extractMemoriesFromExchange(userInput, assistantResponse, {
           sessionId: event.sessionId, maxEntries: 3,
@@ -330,10 +331,8 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
   // 1. Persist session stats
   await persistSessionStats(event);
 
-  // 2. Periodic cleanup of stale session stats
-  if (sessionStats.size > MAX_SESSION_STATS / 2) {
-    cleanupStaleStats();
-  }
+  // 2. Periodic cleanup of stale session stats (always run, not just when half-full)
+  cleanupStaleStats();
 
   // 3. Auto-extract memories from the last exchange
   await autoExtractMemories(event);
@@ -357,14 +356,26 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
  *
  * Useful for understanding usage patterns without invasive telemetry.
  */
-function onUserPromptSubmit(_event: UserPromptSubmitEvent): void {
+function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
+  const historySize = event.conversationHistory.length;
+  const hasAttachments = event.attachments.length > 0;
+  console.log(
+    `[Prompt] ${event.sessionId.slice(0, 8)} | ` +
+    `${event.prompt.length} chars | ` +
+    `${historySize} msgs` +
+    (hasAttachments ? ` | ${event.attachments.length} attachment(s)` : "")
+  );
 }
 
 // ─── 4. Session Start Tracking (SessionStart) ───
 /**
  * Logs when a new session begins with context about the workspace and model.
  */
-function onSessionStart(_event: SessionStartEvent): void {
+function onSessionStart(event: SessionStartEvent): void {
+  console.log(
+    `[SessionStart] ${event.sessionId.slice(0, 8)} | ` +
+    `model: ${event.model} | agent: ${event.agentName} | mode: ${event.mode}`
+  );
 }
 
 // ─── 5. Stop Event (Turn Complete) ───

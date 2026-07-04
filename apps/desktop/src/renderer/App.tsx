@@ -9,7 +9,7 @@ import { BottomPanel } from "@/components/terminal/BottomPanel";
 import { CommandPalette } from "@/components/palette/CommandPalette";
 import { SettingsModal } from "@/components/settings/SettingsModal";
 import { PermissionDialog } from "@/components/permissions/PermissionDialog";
-import { QuestionDialog } from "@/components/permissions/QuestionDialog";
+// QuestionDialog removed — now rendered inline above input in ChatView
 import { Toaster } from "@/components/ui/Toaster";
 import { useProgressKeyframes } from "@/components/ui/toastStore";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
@@ -432,14 +432,16 @@ export function App() {
   if (settingsOpen) {
     return (
       <ContextMenuProvider>
-        <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
-          <SettingsModal />
-          <CommandPalette />
-          <PermissionDialog />
-          <QuestionDialog />
-          <ShortcutsCheatsheet />
-          <Toaster />
-        </div>
+        <ErrorBoundary>
+          <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
+            <SettingsModal />
+            <CommandPalette />
+            <PermissionDialog />
+            {/* QuestionDialog removed — now rendered inline above input in ChatView */}
+            <ShortcutsCheatsheet />
+            <Toaster />
+          </div>
+        </ErrorBoundary>
       </ContextMenuProvider>
     );
   }
@@ -612,9 +614,7 @@ export function App() {
       <ErrorBoundary>
         <PermissionDialog />
       </ErrorBoundary>
-      <ErrorBoundary>
-        <QuestionDialog />
-      </ErrorBoundary>
+      {/* QuestionDialog removed — now rendered inline above input in ChatView */}
       <Toaster />
       </div>
     </ContextMenuProvider>

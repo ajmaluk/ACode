@@ -1,7 +1,7 @@
 import MonacoEditor, { loader, type OnMount } from "@monaco-editor/react";
 import { useSettings } from "@/store/useAppStore";
 import { detectLanguage } from "@/lib/pathUtils";
-import { useEffect } from "react";
+import { useMemo } from "react";
 
 // Monaco editor instance type — the @monaco-editor/react OnMount callback provides this
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -122,14 +122,15 @@ type Props = {
 
 export function CodeView({ path, content, onChange, onEditorReady }: Props) {
   const { settings } = useSettings();
-  const theme = (() => {
+
+  const theme = useMemo(() => {
     if (settings.theme === "dark") return "dark";
     if (settings.theme === "light") return "light";
     if (typeof window !== "undefined" && window.matchMedia) {
       return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     }
     return "dark";
-  })();
+  }, [settings.theme]);
 
   const onMount: OnMount = (editor, monaco) => {
     monaco.editor.defineTheme("dalam-dark", DALAM_DARK as never);
@@ -137,16 +138,6 @@ export function CodeView({ path, content, onChange, onEditorReady }: Props) {
     monaco.editor.setTheme(theme === "light" ? "dalam-light" : "dalam-dark");
     onEditorReady?.(editor);
   };
-
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try {
-        const monaco = (window as unknown as { monaco?: { editor: { setTheme: (name: string) => void } } }).monaco;
-        if (monaco) monaco.editor.setTheme(theme === "light" ? "dalam-light" : "dalam-dark");
-      } catch { /* noop */ }
-    }, 0);
-    return () => clearTimeout(t);
-  }, [theme]);
 
   return (
     <MonacoEditor
@@ -170,7 +161,7 @@ export function CodeView({ path, content, onChange, onEditorReady }: Props) {
         fontSize: settings.codeFontSize,
         fontLigatures: true,
         fontWeight: "400",
-        letterSpacing: 0.3,
+        letterSpacing: settings.letterSpacing ?? 0.3,
         lineNumbers: settings.showLineNumbers ? "on" : "off",
         lineNumbersMinChars: 3,
         wordWrap: settings.wordWrap ? "on" : "off",
@@ -179,13 +170,13 @@ export function CodeView({ path, content, onChange, onEditorReady }: Props) {
         smoothScrolling: true,
         cursorBlinking: "smooth",
         cursorSmoothCaretAnimation: "on",
-        cursorWidth: 2,
+        cursorWidth: settings.cursorWidth ?? 2,
         renderLineHighlight: "all",
         renderLineHighlightOnlyWhenFocus: false,
         bracketPairColorization: { enabled: settings.bracketPairColorization ?? true, independentColorPoolPerBracketType: true },
         guides: { bracketPairs: true, bracketPairsHorizontal: true, indentation: settings.showIndentGuides ?? true, highlightActiveIndentation: true },
         padding: { top: 12, bottom: 12 },
-        tabSize: 2,
+        tabSize: settings.tabSize ?? 2,
         automaticLayout: true,
         renderWhitespace: "selection",
         scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8, useShadows: false, verticalSliderSize: 6 },
