@@ -252,7 +252,7 @@ export async function setupNativeMenus(): Promise<void> {
     await menu.setAsAppMenu();
     menuInitialized = true;
   } catch (err) {
-    console.error("[NativeMenu] Failed to set up native menus:", err);
+    if (import.meta.env.DEV) console.error("[NativeMenu] Failed to set up native menus:", err);
   }
 }
 

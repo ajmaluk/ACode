@@ -68,7 +68,7 @@ export function loadGenePool(): GenePool {
   try {
     const raw = localStorage.getItem(GENE_POOL_KEY);
     if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
+  } catch (err) { console.warn("[Genes] Failed to load gene pool:", err); }
   return {
     genes: [],
     version: 1,
@@ -78,7 +78,11 @@ export function loadGenePool(): GenePool {
 }
 
 export function saveGenePool(pool: GenePool): void {
-  localStorage.setItem(GENE_POOL_KEY, JSON.stringify(pool));
+  try {
+    localStorage.setItem(GENE_POOL_KEY, JSON.stringify(pool));
+  } catch (err) {
+    console.warn("[Genes] Failed to save gene pool:", err);
+  }
 }
 
 export function addGene(pool: GenePool, gene: Gene): GenePool {

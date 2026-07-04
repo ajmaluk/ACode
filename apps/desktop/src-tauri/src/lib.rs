@@ -4,7 +4,15 @@ mod system;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .plugin(tauri_plugin_log::Builder::default().build())
+    .plugin(
+      tauri_plugin_log::Builder::default()
+        .max_level(if cfg!(debug_assertions) {
+          log::LevelFilter::Debug
+        } else {
+          log::LevelFilter::Warn
+        })
+        .build(),
+    )
     .plugin(tauri_plugin_fs::init())
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())

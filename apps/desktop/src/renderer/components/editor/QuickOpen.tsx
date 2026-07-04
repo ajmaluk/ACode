@@ -65,6 +65,9 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
     inputRef.current?.focus();
   }, []);
 
+  // Clamp selectedIndex when filtered results shrink (avoid setState in effect)
+  const safeIndex = Math.min(selectedIndex, Math.max(0, filtered.length - 1));
+
   const handleQueryChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);
     setSelectedIndex(0);
@@ -84,16 +87,17 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && filtered[selectedIndex]) {
-      void handleSelect(filtered[selectedIndex]);
+    } else if (e.key === "Enter" && filtered[safeIndex]) {
+      void handleSelect(filtered[safeIndex]);
     }
-  }, [onClose, filtered, selectedIndex, handleSelect]);
+  }, [onClose, filtered, safeIndex, handleSelect]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
       <div
         className="w-[560px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl overflow-hidden animate-fade-in"
         onClick={(e) => e.stopPropagation()}
+        role="dialog" aria-modal="true" aria-label="Quick open file"
       >
         <div className="flex items-center gap-2 px-3 py-2 border-b border-dalam-border-primary">
           <Search className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
@@ -119,7 +123,7 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
           {filtered.map((path, idx) => {
             const name = basename(path);
             const Icon = getFileIcon(name);
-            const isSelected = idx === selectedIndex;
+            const isSelected = idx === safeIndex;
             return (
               <button
                 key={path}

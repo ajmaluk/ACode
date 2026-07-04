@@ -12,8 +12,9 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // In a real build this would forward to telemetry
-    console.error("[Dalam] UI crash:", error, info);
+    if (import.meta.env.DEV) {
+      console.error("[Dalam] UI crash:", error, info);
+    }
   }
 
   reset = () => this.setState({ error: null });

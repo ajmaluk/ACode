@@ -21,6 +21,7 @@ export const InterruptBar: React.FC = () => {
   const abort = useChat((s) => s.abort);
   const sendMessage = useChat((s) => s.sendMessage);
   const activeSessionId = useChat((s) => s.activeSessionId);
+  const redirectSentRef = useRef(false);
 
   useEffect(() => {
     if (showRedirect && inputRef.current) {
@@ -34,10 +35,25 @@ export const InterruptBar: React.FC = () => {
       const id = requestAnimationFrame(() => {
         setShowRedirect(false);
         setRedirectText("");
+        redirectSentRef.current = false;
       });
       return () => cancelAnimationFrame(id);
     }
   }, [isStreaming]);
+
+  const handleAbortAndSend = async (text: string) => {
+    if (redirectSentRef.current || !activeSessionId) return;
+    redirectSentRef.current = true;
+    await abort(activeSessionId);
+    // Wait for streaming to fully stop with timeout
+    const deadline = Date.now() + 3000;
+    while (useChat.getState().isStreaming && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // Extra wait to ensure state is fully settled
+    await new Promise((r) => setTimeout(r, 50));
+    sendMessage(text);
+  };
 
   if (!isStreaming || !activeSessionId) return null;
 
@@ -79,12 +95,7 @@ export const InterruptBar: React.FC = () => {
                 const text = redirectText.trim();
                 setRedirectText("");
                 setShowRedirect(false);
-                await abort(activeSessionId);
-                const deadline = Date.now() + 5000;
-                while (useChat.getState().isStreaming && Date.now() < deadline) {
-                  await new Promise((r) => setTimeout(r, 50));
-                }
-                sendMessage(text);
+                await handleAbortAndSend(text);
               }
               if (e.key === "Escape") {
                 setShowRedirect(false);
@@ -100,12 +111,7 @@ export const InterruptBar: React.FC = () => {
                 const text = redirectText.trim();
                 setRedirectText("");
                 setShowRedirect(false);
-                await abort(activeSessionId);
-                const deadline = Date.now() + 5000;
-                while (useChat.getState().isStreaming && Date.now() < deadline) {
-                  await new Promise((r) => setTimeout(r, 50));
-                }
-                sendMessage(text);
+                await handleAbortAndSend(text);
               }
             }}
             className="px-2 py-1 text-xs bg-dalam-accent-primary text-white rounded hover:bg-dalam-accent-primary/90 transition-colors"

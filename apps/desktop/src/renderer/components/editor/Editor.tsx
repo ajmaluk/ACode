@@ -1,7 +1,7 @@
 import MonacoEditor, { loader, type OnMount } from "@monaco-editor/react";
 import { useSettings } from "@/store/useAppStore";
 import { detectLanguage } from "@/lib/pathUtils";
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 // Monaco editor instance type — the @monaco-editor/react OnMount callback provides this
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -123,14 +123,27 @@ type Props = {
 export function CodeView({ path, content, onChange, onEditorReady }: Props) {
   const { settings } = useSettings();
 
+  // Track system theme changes for "system" theme mode
+  const [systemDark, setSystemDark] = useState(() => {
+    if (typeof window !== "undefined" && window.matchMedia) {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    if (settings.theme !== "system") return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [settings.theme]);
+
   const theme = useMemo(() => {
     if (settings.theme === "dark") return "dark";
     if (settings.theme === "light") return "light";
-    if (typeof window !== "undefined" && window.matchMedia) {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    return "dark";
-  }, [settings.theme]);
+    return systemDark ? "dark" : "light";
+  }, [settings.theme, systemDark]);
 
   const onMount: OnMount = (editor, monaco) => {
     monaco.editor.defineTheme("dalam-dark", DALAM_DARK as never);

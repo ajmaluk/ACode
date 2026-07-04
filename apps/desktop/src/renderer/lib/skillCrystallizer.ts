@@ -158,7 +158,7 @@ ${formattedHistory}`;
                   description: `Skill '${data.name}' successfully added to the project registry.`
                 });
               } catch (e) {
-                console.error("[SkillCrystallizer] Failed to save skill:", e);
+                if (import.meta.env.DEV) console.error("[SkillCrystallizer] Failed to save skill:", e);
                 notify({
                   kind: "error",
                   title: "Save Failed",
@@ -178,6 +178,6 @@ ${formattedHistory}`;
       });
     }
   } catch (err) {
-    console.error("[SkillCrystallizer] Error during crystallization:", err);
+    if (import.meta.env.DEV) console.error("[SkillCrystallizer] Error during crystallization:", err);
   }
 }

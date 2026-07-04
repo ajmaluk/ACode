@@ -75,21 +75,4 @@ describe("hookBus", () => {
     unsub1();
     unsub2();
   });
-
-  it("clear removes all handlers for an event", async () => {
-    const handler = vi.fn();
-    hookBus.on("SessionStart", handler);
-    hookBus.clear("SessionStart");
-
-    await hookBus.emit("SessionStart", {
-      sessionId: "test",
-      workspacePath: "/test",
-      model: "gpt-4o",
-      agentName: "yolo",
-      mode: "yolo",
-      timestamp: Date.now(),
-    });
-
-    expect(handler).not.toHaveBeenCalled();
-  });
 });

@@ -34,7 +34,51 @@ export function ContextMenuProvider({ children }: { children: React.ReactNode })
 
 const ContextMenuPanel = forwardRef<HTMLDivElement, { state: ContextMenuState; onClose: () => void }>(({ state, onClose }, ref) => {
   const [openSub, setOpenSub] = useState<number | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState(0);
   const innerRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Build flat list of actionable items (separators excluded, disabled items skipped) for keyboard nav
+  const actionableItems = state.items.filter((i) => i.type === "submenu" || (i.type === "item" && !i.disabled));
+
+  // Keyboard navigation
+  useEffect(() => {
+    if (!innerRef.current) return;
+    innerRef.current.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusedIndex((prev) => (prev + 1) % actionableItems.length);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusedIndex((prev) => (prev - 1 + actionableItems.length) % actionableItems.length);
+      } else if (e.key === "ArrowRight") {
+        // Open submenu if focused item is a submenu
+        const focused = actionableItems[focusedIndex];
+        if (focused?.type === "submenu") {
+          e.preventDefault();
+          setOpenSub(state.items.indexOf(focused));
+        }
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setOpenSub(null);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const focused = actionableItems[focusedIndex];
+        if (focused?.type === "item") {
+          focused.perform();
+          onClose();
+        } else if (focused?.type === "submenu") {
+          setOpenSub(state.items.indexOf(focused));
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    innerRef.current.addEventListener("keydown", handler);
+    return () => innerRef.current?.removeEventListener("keydown", handler);
+  }, [actionableItems, focusedIndex, state.items, onClose]);
 
   useEffect(() => {
     const el = innerRef.current;
@@ -46,6 +90,29 @@ const ContextMenuPanel = forwardRef<HTMLDivElement, { state: ContextMenuState; o
     if (rect.bottom > vh) el.style.top = `${state.y - rect.height}px`;
   }, [state.x, state.y]);
 
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  const handleSubEnter = (idx: number) => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    setOpenSub(idx);
+  };
+
+  const handleSubLeave = () => {
+    // Delay closing submenu to prevent flickering when moving to submenu
+    closeTimerRef.current = setTimeout(() => {
+      setOpenSub(null);
+      closeTimerRef.current = null;
+    }, 150);
+  };
+
   return (
     <div
       ref={(node) => { innerRef.current = node; if (typeof ref === "function") ref(node); else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node; }}
@@ -53,15 +120,17 @@ const ContextMenuPanel = forwardRef<HTMLDivElement, { state: ContextMenuState; o
       style={{ left: state.x, top: state.y }}
       onMouseDown={(e) => e.stopPropagation()}
       role="menu"
+      tabIndex={0}
     >
       {state.items.map((item, idx) => {
         if (item.type === "separator") return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" role="separator" />;
+        const isFocused = actionableItems[focusedIndex] === item;
         if (item.type === "submenu") return (
           <div key={idx} className="relative"
-            onMouseEnter={() => setOpenSub(idx)}
-            onMouseLeave={() => setOpenSub(null)}
+            onMouseEnter={() => { handleSubEnter(idx); setFocusedIndex(actionableItems.indexOf(item)); }}
+            onMouseLeave={handleSubLeave}
           >
-            <button className="w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-accent-subtle transition-colors" role="menuitem" aria-haspopup="menu">
+            <button className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs text-dalam-text-primary transition-colors ${isFocused ? "bg-dalam-accent-subtle" : "hover:bg-dalam-accent-subtle"}`} role="menuitem" aria-haspopup="menu" aria-expanded={openSub === idx}>
               <span className="flex items-center gap-2">
                 {item.icon && <span className="w-4 flex-shrink-0 flex justify-center">{item.icon}</span>}
                 {item.label}
@@ -69,7 +138,12 @@ const ContextMenuPanel = forwardRef<HTMLDivElement, { state: ContextMenuState; o
               <ChevronRight className="w-3 h-3 text-dalam-text-muted" />
             </button>
             {openSub === idx && (
-              <div className="absolute left-full top-0 min-w-[180px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl py-1" role="menu">
+              <div
+                className="absolute left-full top-0 min-w-[180px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl py-1"
+                role="menu"
+                onMouseEnter={() => handleSubEnter(idx)}
+                onMouseLeave={handleSubLeave}
+              >
                 {item.items.map((sub, si) => {
                   if (sub.type === "separator") return <div key={si} className="h-px bg-dalam-border-primary my-1 mx-1" role="separator" />;
                   if (sub.type === "item") return (
@@ -98,10 +172,11 @@ const ContextMenuPanel = forwardRef<HTMLDivElement, { state: ContextMenuState; o
         return (
           <button key={idx} disabled={item.disabled} onClick={() => { item.perform(); onClose(); }}
             role="menuitem"
+            onMouseEnter={() => setFocusedIndex(actionableItems.indexOf(item))}
             className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
               item.destructive
-                ? "text-red-400 hover:bg-red-500/10"
-                : "text-dalam-text-primary hover:bg-dalam-accent-subtle"
+                ? isFocused ? "text-red-400 bg-red-500/10" : "text-red-400 hover:bg-red-500/10"
+                : isFocused ? "text-dalam-text-primary bg-dalam-accent-subtle" : "text-dalam-text-primary hover:bg-dalam-accent-subtle"
             }`}
           >
             <span className="flex items-center gap-2">

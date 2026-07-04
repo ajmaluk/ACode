@@ -42,6 +42,7 @@ import {
   removeConnectorConfig,
 } from "@/lib/connectors";
 import type { ConnectorConfig } from "@/lib/connectors";
+import { FileTree } from "./FileTree";
 
 function formatRelative(ts: number, now: number): string {
   const diff = Math.max(0, now - ts);
@@ -139,11 +140,16 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
         setMenuPosition(null);
       }
     };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuPosition(null);
+    };
     document.addEventListener("mousedown", handleClose);
     document.addEventListener("scroll", handleClose, true);
+    document.addEventListener("keydown", handleEscape);
     return () => {
       document.removeEventListener("mousedown", handleClose);
       document.removeEventListener("scroll", handleClose, true);
+      document.removeEventListener("keydown", handleEscape);
     };
   }, [menuPosition]);
 
@@ -176,7 +182,10 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
       className={`group relative w-full flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-lg transition-colors cursor-pointer overflow-hidden ${
         isActive ? "bg-dalam-bg-active" : "hover:bg-dalam-bg-hover"
       }`}
+      role="listitem"
+      tabIndex={0}
       onClick={() => { if (!editing) { onSelect(); setMenuPosition(null); } }}
+      onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !editing) { e.preventDefault(); onSelect(); setMenuPosition(null); } }}
       title={session.preview ?? session.title}
     >
       {editing ? (
@@ -372,6 +381,7 @@ export function Sidebar() {
   const { newChat, chatSessions, activeSessionId, setActiveSession, isStreaming, removeSession, renameSession, sessionVersions, deleteVersion } = useChat();
   const { cancel: cancelPermission } = usePermission();
   const { resolve: resolveQuestion } = useQuestion();
+  const viewMode = useUI((s) => s.viewMode);
 
   const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => {
@@ -416,11 +426,16 @@ export function Sidebar() {
         setWorkspaceMenuPosition(null);
       }
     };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWorkspaceMenuPosition(null);
+    };
     document.addEventListener("mousedown", handleClose);
     document.addEventListener("scroll", handleClose, true);
+    document.addEventListener("keydown", handleEscape);
     return () => {
       document.removeEventListener("mousedown", handleClose);
       document.removeEventListener("scroll", handleClose, true);
+      document.removeEventListener("keydown", handleEscape);
     };
   }, [workspaceMenuPosition]);
 
@@ -519,7 +534,27 @@ export function Sidebar() {
 
   const VISIBLE_LIMIT = 5;
 
-  // Agentic mode: sidebar content
+  // Editor mode: show file tree
+  if (viewMode === "editor") {
+    return (
+      <aside className="h-full flex flex-col bg-dalam-bg-secondary">
+        <FileTree />
+        <div className="p-3 flex-shrink-0 border-t border-dalam-border-primary">
+          <button
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
+            onClick={() => openSettings()}
+            title={`Open Settings (${shortcut(",")})`}
+          >
+            <Settings className="w-5 h-5 text-dalam-text-muted" />
+            <span className="font-medium">Settings</span>
+            <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut(",")}</span>
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
+  // Chat/agent mode: sidebar content
   return (
     <aside className="h-full flex flex-col bg-dalam-bg-secondary">
         {/* Primary actions */}

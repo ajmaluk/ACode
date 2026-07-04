@@ -130,6 +130,7 @@ pub async fn open_with_system_handler(path_or_url: String) -> Result<(), String>
         return opener::open(&path_or_url).map_err(|e| format!("Failed to open URL '{path_or_url}': {e}"));
     }
     // For file paths, ensure they're within the home directory
+    #[cfg(not(target_os = "windows"))]
     if lower.starts_with('/') || lower.starts_with("file://") {
         let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
         let expanded = if lower.starts_with("file://") {
@@ -144,6 +145,16 @@ pub async fn open_with_system_handler(path_or_url: String) -> Result<(), String>
             return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
         }
         return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+    }
+    // Windows: allow drive letters (C:\) and UNC paths (\\server\share)
+    #[cfg(target_os = "windows")]
+    if lower.starts_with("file://") || (path_or_url.len() >= 3 && path_or_url.as_bytes()[1] == b':' && (path_or_url.as_bytes()[2] == b'\\' || path_or_url.as_bytes()[2] == b'/')) || path_or_url.starts_with("\\\\") {
+        let expanded = if lower.starts_with("file://") {
+            path_or_url.trim_start_matches("file://").to_string()
+        } else {
+            path_or_url.clone()
+        };
+        return opener::open(&expanded).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
     }
     Err(format!("Cannot open '{}': only http/https URLs and local files are allowed", path_or_url))
 }

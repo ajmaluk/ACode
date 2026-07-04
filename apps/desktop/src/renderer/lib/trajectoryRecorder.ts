@@ -83,6 +83,7 @@ const FLUSH_INTERVAL_MS = 5_000; // Flush every 5 seconds
 const MAX_BUFFER_SIZE = 50; // Flush after 50 turns
 
 let flushTimer: ReturnType<typeof setInterval> | null = null;
+let recordingDisabled = false; // Set to true if .dalam dir can't be created
 
 // ─── Core Functions ────────────────────────────────────────
 
@@ -113,11 +114,14 @@ export async function startRecording(
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     if (msg.includes("forbidden") || msg.includes("scope")) {
-      console.debug("[Trajectory] Workspace inaccessible, recording disabled:", workspacePath);
+      recordingDisabled = true;
+      return; // Don't start flush timer if we can't write
     } else {
       console.warn("Trajectory", "Failed to create trajectory directory", { error: String(e) });
     }
   }
+
+  if (recordingDisabled) return;
 
   // Start flush timer if not running
   if (!flushTimer) {
@@ -253,6 +257,7 @@ async function flushAll(): Promise<void> {
  * Flush a single session's buffer to the JSONL file.
  */
 async function flushBuffer(sessionId: string): Promise<void> {
+  if (recordingDisabled) return;
   const buffer = buffers.get(sessionId);
   if (!buffer || buffer.turns.length === 0) return;
   // Per-session flush mutex: skip if already flushing
@@ -290,7 +295,8 @@ async function flushBuffer(sessionId: string): Promise<void> {
       if (!(await exists(trajDir))) {
         await mkdir(trajDir, { recursive: true });
       }
-    } catch {
+    } catch (err) {
+      console.warn("[Trajectory] Flush error:", err);
       // Directory creation failed — trajectory recording is best-effort
     }
 
@@ -323,7 +329,8 @@ async function flushBuffer(sessionId: string): Promise<void> {
       record.meta = {
         doomLoopWarnings: chatState.doomLoopWarningCount,
       };
-    } catch {
+    } catch (err) {
+      console.warn("[Trajectory] Flush error:", err);
       // Store not available, use defaults
     }
 
@@ -339,7 +346,8 @@ async function flushBuffer(sessionId: string): Promise<void> {
         try {
           const existing = await api.fs.readFile(filePath);
           buffer._appendedContent = existing;
-        } catch {
+        } catch (err) {
+          console.warn("[Trajectory] Flush error:", err);
           // File doesn't exist yet — start fresh
           buffer._appendedContent = "";
         }
@@ -350,7 +358,7 @@ async function flushBuffer(sessionId: string): Promise<void> {
       buffer._appendedContent = fullContent;
       writeSucceeded = true;
     } catch (e) {
-      console.error("Trajectory", "Failed to write trajectory", {
+      if (import.meta.env.DEV) console.error("Trajectory", "Failed to write trajectory", {
         sessionId,
         error: String(e),
       });
@@ -399,7 +407,8 @@ export async function readTrajectories(
         if (!line.trim()) continue;
         try {
           records.push(JSON.parse(line));
-        } catch {
+        } catch (err) {
+          console.warn("[Trajectory] Flush error:", err);
           // Skip malformed lines
         }
       }
@@ -435,12 +444,13 @@ export async function exportTrajectories(
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // Delay revocation to ensure the download has started reading the blob
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 
     console.log("Trajectory", `Exported ${records.length} trajectory records`);
     return link.download;
   } catch (e) {
-    console.error("Trajectory", "Export failed", { error: String(e) });
+    if (import.meta.env.DEV) console.error("Trajectory", "Export failed", { error: String(e) });
     return null;
   }
 }

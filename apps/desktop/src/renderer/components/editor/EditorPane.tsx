@@ -16,6 +16,15 @@ import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename, findFirstFile } from "@/lib/pathUtils";
 import { modKey, platform } from "@/lib/platform";
 
+// Efficient line counter — avoids split("\n") which creates a huge array for large files
+function countLines(text: string): number {
+  let count = 1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") count++;
+  }
+  return count;
+}
+
 const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: FileNode[]; openFile: (path: string) => Promise<void> }) {
   const toast = useToast();
   const mod = modKey();
@@ -63,6 +72,24 @@ export function EditorPane() {
     const onFindReplace = () => { setShowFindBar(true); setFindReplaceMode(true); };
     const onQuickOpen = () => setShowQuickOpen(true);
     const onGoToLine = () => setShowGoToLine(true);
+    const onGoToLineNumber = (e: Event) => {
+      const editor = monacoEditorRef.current;
+      if (!editor) return;
+      const line = (e as CustomEvent).detail?.line;
+      if (typeof line === "number" && line >= 1) {
+        editor.revealLineInCenter(line);
+        editor.setPosition({ lineNumber: line, column: 1 });
+        editor.focus();
+      }
+    };
+    const onFindNext = () => {
+      const editor = monacoEditorRef.current;
+      if (editor) editor.trigger("findBar", "editor.action.nextMatchFindAction", null);
+    };
+    const onFindPrevious = () => {
+      const editor = monacoEditorRef.current;
+      if (editor) editor.trigger("findBar", "editor.action.previousMatchFindAction", null);
+    };
     const onToggleComment = () => {
       const editor = monacoEditorRef.current;
       if (editor) editor.trigger("menu", "editor.action.commentLine", null);
@@ -72,12 +99,18 @@ export function EditorPane() {
     window.addEventListener("editor:find-replace", onFindReplace);
     window.addEventListener("editor:quick-open", onQuickOpen);
     window.addEventListener("editor:go-to-line", onGoToLine);
+    window.addEventListener("editor:go-to-line-number", onGoToLineNumber);
+    window.addEventListener("editor:find-next", onFindNext);
+    window.addEventListener("editor:find-previous", onFindPrevious);
     window.addEventListener("editor:toggle-comment", onToggleComment);
     return () => {
       window.removeEventListener("editor:find", onFind);
       window.removeEventListener("editor:find-replace", onFindReplace);
       window.removeEventListener("editor:quick-open", onQuickOpen);
       window.removeEventListener("editor:go-to-line", onGoToLine);
+      window.removeEventListener("editor:go-to-line-number", onGoToLineNumber);
+      window.removeEventListener("editor:find-next", onFindNext);
+      window.removeEventListener("editor:find-previous", onFindPrevious);
       window.removeEventListener("editor:toggle-comment", onToggleComment);
     };
   }, []);
@@ -176,6 +209,50 @@ export function EditorPane() {
         const { settings, update } = useSettings.getState();
         void update("wordWrap", !settings.wordWrap);
       }
+
+      if (mod && shift && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        const editor = monacoEditorRef.current;
+        if (editor) {
+          editor.getAction("editor.action.formatDocument")?.run();
+        }
+      }
+
+      if (mod && alt && e.key === "[") {
+        e.preventDefault();
+        const editor = monacoEditorRef.current;
+        if (editor) {
+          editor.getAction("editor.fold")?.run();
+        }
+      }
+
+      if (mod && alt && e.key === "]") {
+        e.preventDefault();
+        const editor = monacoEditorRef.current;
+        if (editor) {
+          editor.getAction("editor.unfold")?.run();
+        }
+      }
+
+      // Check custom shortcuts from settings
+      const customShortcuts = useSettings.getState().settings.customShortcuts;
+      if (customShortcuts) {
+        const key = `${mod ? "Cmd" : "Ctrl"}+${shift ? "Shift+" : ""}${alt ? "Alt+" : ""}${e.key.toLowerCase()}`;
+        const action = customShortcuts[key];
+        if (action) {
+          e.preventDefault();
+          // Handle known actions
+          if (action === "format") {
+            const editor = monacoEditorRef.current;
+            if (editor) editor.getAction("editor.action.formatDocument")?.run();
+          } else if (action === "toggleMinimap") {
+            void useSettings.getState().update("showMinimap", !useSettings.getState().settings.showMinimap);
+          } else if (action === "toggleWordWrap") {
+            void useSettings.getState().update("wordWrap", !useSettings.getState().settings.wordWrap);
+          }
+          return;
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -188,28 +265,55 @@ export function EditorPane() {
     return () => window.removeEventListener("click", handler);
   }, [tabContextMenu]);
 
-  const handleFindSearch = useCallback((_query: string, _options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean }) => {
+  const [findMatchCount, setFindMatchCount] = useState(0);
+  const [findCurrentMatch, setFindCurrentMatch] = useState(0);
+
+  const handleFindSearch = useCallback((query: string, options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean }) => {
     const editor = monacoEditorRef.current;
     if (!editor) return;
-    const action = editor.getAction("actions.find");
-    if (action) {
-      void action.run();
-      setTimeout(() => {
-        editor.trigger("findBar", "editor.action.nextMatchFindAction", null);
-      }, 50);
+    if (!query) { setFindMatchCount(0); setFindCurrentMatch(0); return; }
+    const model = editor.getModel();
+    if (!model) return;
+    // Use Monaco's find controller directly
+    const findController = editor.getContribution("editor.contrib.findController") as { start: (searchString: string, options: { caseSensitive: boolean; wholeWord: boolean; isRegex: boolean }) => void } | null;
+    if (findController) {
+      findController.start(query, {
+        caseSensitive: options.caseSensitive,
+        wholeWord: options.wholeWord,
+        isRegex: options.regex,
+      });
+    }
+    // Count matches using Monaco's model
+    const matches = model.findMatches(query, false, options.regex, options.caseSensitive, options.wholeWord ? "true" : null, false) as Array<{ range: { startLineNumber: number; startColumn: number } }>;
+    setFindMatchCount(matches.length);
+    const pos = editor.getPosition();
+    if (pos && matches.length > 0) {
+      const idx = matches.findIndex((m) => m.range.startLineNumber === pos.lineNumber && m.range.startColumn === pos.column);
+      setFindCurrentMatch(idx >= 0 ? idx + 1 : 1);
+    } else {
+      setFindCurrentMatch(matches.length > 0 ? 1 : 0);
     }
   }, []);
 
-  const handleFindReplace = useCallback((_replacement: string) => {
+  const handleFindClose = useCallback(() => {
+    setShowFindBar(false);
+    // Also close Monaco's internal find widget to clean up highlights
     const editor = monacoEditorRef.current;
-    if (!editor) return;
-    editor.trigger("findBar", "editor.action.replaceOne", null);
+    if (editor) {
+      editor.trigger("findBar", "closeFindWidget", null);
+    }
   }, []);
 
-  const handleFindReplaceAll = useCallback((_replacement: string) => {
+  const handleFindReplace = useCallback((replacement: string) => {
     const editor = monacoEditorRef.current;
     if (!editor) return;
-    editor.trigger("findBar", "editor.action.replaceAll", null);
+    editor.trigger("findBar", "editor.action.replaceOne", replacement);
+  }, []);
+
+  const handleFindReplaceAll = useCallback((replacement: string) => {
+    const editor = monacoEditorRef.current;
+    if (!editor) return;
+    editor.trigger("findBar", "editor.action.replaceAll", replacement);
   }, []);
 
   if (viewMode === "editor") {
@@ -223,10 +327,34 @@ export function EditorPane() {
                 <div key={t.path}
                   className={`group flex items-center gap-1.5 px-3 h-full border-r border-dalam-border-primary cursor-pointer transition-colors ${active ? "bg-dalam-bg-primary text-dalam-text-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
                   onClick={() => setActiveFile(t.path)}
-                  onAuxClick={(e) => { if (e.button === 1) closeTab(t.path); }}
+                  onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.path); } }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setTabContextMenu({ x: e.clientX, y: e.clientY, path: t.path });
+                  }}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("text/plain", t.path);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const draggedPath = e.dataTransfer.getData("text/plain");
+                    if (draggedPath && draggedPath !== t.path) {
+                      const tabs = useWorkspace.getState().openTabs;
+                      const fromIdx = tabs.findIndex(tab => tab.path === draggedPath);
+                      const toIdx = tabs.findIndex(tab => tab.path === t.path);
+                      if (fromIdx >= 0 && toIdx >= 0) {
+                        const newTabs = [...tabs];
+                        const [moved] = newTabs.splice(fromIdx, 1);
+                        newTabs.splice(toIdx, 0, moved);
+                        useWorkspace.setState({ openTabs: newTabs });
+                      }
+                    }
                   }}
                   title={`${t.path}${t.dirty ? " (unsaved)" : ""}`}>
                   {t.dirty && <Circle className="w-2 h-2 fill-current text-dalam-accent-primary flex-shrink-0" />}
@@ -272,16 +400,16 @@ export function EditorPane() {
               onSearch={handleFindSearch}
               onReplace={handleFindReplace}
               onReplaceAll={handleFindReplaceAll}
-              onClose={() => setShowFindBar(false)}
-              matchCount={0}
-              currentMatch={0}
+              onClose={handleFindClose}
+              matchCount={findMatchCount}
+              currentMatch={findCurrentMatch}
               showReplace={findReplaceMode}
             />
           )}
 
           <div className="flex-1 min-h-0 relative">
             {activeTab ? (
-              <CodeView path={activeTab.path} content={activeTab.content} onChange={(v) => updateTabContent(activeTab.path, v)} onEditorReady={(e) => { monacoEditorRef.current = e; }} />
+              <CodeView path={activeTab.path} content={activeTab.content} onChange={(v) => updateTabContent(activeTab.path, v)} onEditorReady={(e) => { monacoEditorRef.current = e; const active = useWorkspace.getState().openTabs.find(t => t.path === useWorkspace.getState().activeFilePath); if (active?.cursor) { e.setPosition({ lineNumber: active.cursor.line, column: active.cursor.column }); e.revealLineInCenter(active.cursor.line); } }} />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-dalam-text-muted">
                 <div className="w-16 h-16 mb-4 rounded-2xl bg-dalam-bg-active flex items-center justify-center">
@@ -298,7 +426,7 @@ export function EditorPane() {
         {showQuickOpen && <QuickOpen onClose={() => setShowQuickOpen(false)} />}
         {showGoToLine && activeTab && (
           <GoToLine
-            maxLine={activeTab.content.split("\n").length}
+            maxLine={countLines(activeTab.content)}
             onGoToLine={(line) => {
               window.dispatchEvent(new CustomEvent("editor:go-to-line-number", { detail: { line } }));
             }}
@@ -324,10 +452,17 @@ function EditorStatusBar() {
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath);
   const mod = modKey();
-  const language = activeTab ? activeTab.path.split(".").pop()?.toLowerCase() ?? "text" : "";
+  const extToLang: Record<string, string> = {
+    ts: "TypeScript", tsx: "TypeScript React", js: "JavaScript", jsx: "JavaScript React",
+    py: "Python", rs: "Rust", go: "Go", java: "Java", rb: "Ruby", css: "CSS",
+    html: "HTML", json: "JSON", md: "Markdown", yaml: "YAML", yml: "YAML",
+    sh: "Shell", bash: "Bash", toml: "TOML", xml: "XML", sql: "SQL",
+  };
+  const ext = activeTab?.path.split(".").pop()?.toLowerCase() ?? "";
+  const language = ext ? (extToLang[ext] ?? ext.toUpperCase()) : "";
   const cursor = activeTab?.cursor;
   const wordWrap = settings.wordWrap;
-  const lineCount = activeTab ? activeTab.content.split("\n").length : 0;
+  const lineCount = activeTab ? countLines(activeTab.content) : 0;
   return (
     <div className="h-6 flex items-center justify-between bg-dalam-bg-tertiary border-t border-dalam-border-primary px-3 text-[11px] text-dalam-text-muted flex-shrink-0 select-none">
       <div className="flex items-center gap-3 min-w-0 overflow-hidden">

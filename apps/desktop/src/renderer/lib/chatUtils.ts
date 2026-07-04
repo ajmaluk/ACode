@@ -10,6 +10,51 @@ export function formatTime(ts: number): string {
 }
 
 /**
+ * Close incomplete markdown markers for streaming content.
+ * This ensures bold, italic, and other inline formatting renders correctly
+ * even when the closing marker hasn't arrived yet.
+ */
+export function closeIncompleteMarkdown(text: string): string {
+  let result = text;
+
+  // Close unclosed bold markers (**)
+  const boldCount = (result.match(/\*\*/g) || []).length;
+  if (boldCount % 2 !== 0) result += "**";
+
+  // Close unclosed italic markers (*)
+  // Count single * that aren't part of **
+  const singleStars = result.replace(/\*\*/g, "").match(/\*/g) || [];
+  if (singleStars.length % 2 !== 0) result += "*";
+
+  // Close unclosed inline code markers (`)
+  // Track open/close state rather than counting total backticks,
+  // which breaks when multiple inline code spans exist.
+  let inCode = false;
+  for (const ch of result) { if (ch === '`') inCode = !inCode; }
+  if (inCode) result += "`";
+
+  // Close unclosed link text brackets ([text])
+  const openBrackets = (result.match(/\[/g) || []).length;
+  const closeBrackets = (result.match(/\]/g) || []).length;
+  if (openBrackets > closeBrackets) {
+    for (let i = 0; i < openBrackets - closeBrackets; i++) result += "]";
+  }
+
+  // Close unclosed link URLs (](url))
+  const openParens = (result.match(/(?<=\])\(/g) || []).length;
+  const closeParens = (result.match(/(?<=\]\()([^)]*)\)/g) || []).length;
+  if (openParens > closeParens) {
+    for (let i = 0; i < openParens - closeParens; i++) result += ")";
+  }
+
+  // Close unclosed strikethrough (~~)
+  const tildeCount = (result.match(/~~/g) || []).length;
+  if (tildeCount % 2 !== 0) result += "~~";
+
+  return result;
+}
+
+/**
  * Split markdown text into alternating text and code-fence segments.
  * Handles both complete fences (```lang ... ```) and incomplete trailing
  * fences (no closing ```).

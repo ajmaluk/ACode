@@ -12,10 +12,18 @@ import { getConnectorConfigs, saveConnectorConfig, removeConnectorConfig, type C
 import { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder";
 import {
   X, Settings as SettingsIcon, Code2, Cpu, Sparkles, Plug, ChevronLeft,
-  Puzzle, Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
+  Terminal, Database, Rocket, Plus, ChevronDown, Trash2,
   Zap, ClipboardList, FolderOpen, CheckCircle2, Network,
   Info, MessageSquare,
 } from "lucide-react";
+
+const MCP_PRESETS = [
+  { name: "Filesystem", description: "Read, write, and manage files on your system", command: "npx", args: "-y @modelcontextprotocol/server-filesystem /path/to/allowed/dir", icon: FolderOpen },
+  { name: "Memory", description: "Persistent knowledge graph memory for the agent", command: "npx", args: "-y @modelcontextprotocol/server-memory", icon: Database },
+  { name: "GitHub", description: "Repository management, issues, and pull requests", command: "npx", args: "-y @modelcontextprotocol/server-github", icon: Code2 },
+  { name: "Brave Search", description: "Web search via Brave Search API", command: "npx", args: "-y @modelcontextprotocol/server-brave-search", icon: Zap },
+  { name: "Fetch", description: "Fetch web pages and extract content", command: "npx", args: "-y @modelcontextprotocol/server-fetch", icon: Network },
+];
 
 const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
   { id: "general", label: "General", icon: SettingsIcon },
@@ -49,19 +57,26 @@ export function SettingsModal() {
   if (!openState) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-dalam-bg-primary flex flex-col animate-fade-in">
+    <div className="fixed inset-0 z-50 bg-dalam-bg-primary flex flex-col animate-fade-in" role="dialog" aria-modal="true" aria-label="Settings">
       <div className="flex flex-1 min-h-0">
-        <nav className="w-56 flex-shrink-0 border-r border-dalam-border-primary bg-dalam-bg-secondary py-4 flex flex-col">
+        <nav className="w-56 flex-shrink-0 border-r border-dalam-border-primary bg-dalam-bg-secondary py-4 flex flex-col" aria-label="Settings tabs">
           <button className="mx-4 mb-4 flex items-center gap-2 text-sm text-dalam-text-secondary hover:text-dalam-text-primary transition-colors" onClick={close}>
             <ChevronLeft className="w-4 h-4" />
             Back to workspace
           </button>
-          <div className="flex-1 min-h-0 overflow-y-auto px-2">
+          <div className="flex-1 min-h-0 overflow-y-auto px-2" role="tablist" aria-orientation="vertical">
             {TABS.map((t) => {
               const Icon = t.icon;
               const active = t.id === activeTab;
               return (
                 <button key={t.id} onClick={() => setActiveTab(t.id)}
+                  role="tab"
+                  aria-selected={active}
+                  onKeyDown={(e) => {
+                    const idx = TABS.findIndex((tab) => tab.id === activeTab);
+                    if (e.key === "ArrowDown") { e.preventDefault(); setActiveTab(TABS[(idx + 1) % TABS.length].id); }
+                    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveTab(TABS[(idx - 1 + TABS.length) % TABS.length].id); }
+                  }}
                   className={`w-full text-left flex items-center gap-2.5 px-3 py-2 text-sm rounded-lg transition-colors mb-0.5 ${active ? "bg-dalam-accent-subtle text-dalam-text-primary" : "text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary"}`}>
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   {t.label}
@@ -102,6 +117,7 @@ function Card({ title, description, children }: { title: string; description?: s
 
 function GeneralTab() {
   const { settings, update } = useSettings();
+  const toast = useToast();
   const [terminalFont, setTerminalFont] = useState(settings.terminalFont);
   const [httpProxy, setHttpProxy] = useState(settings.httpProxy);
 
@@ -132,6 +148,7 @@ function GeneralTab() {
             <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-dalam-text-muted pointer-events-none" />
           </div>
         </div>
+        <p className="text-[10px] text-dalam-text-muted mt-1">Internationalization support coming soon</p>
       </Card>
 
       <Card title="Inherit system terminal profile" description="When launching the built-in terminal, inherit login shell environment, proxy, Kubernetes variables, and local terminal font when possible.">
@@ -152,7 +169,13 @@ function GeneralTab() {
       <div className="my-6 border-t border-dalam-border-primary" />
       <Card title="HTTP Proxy" description="Route model, MCP, command-tool, and app renderer egress traffic through this proxy. Leave blank for direct connections. Restart the app to take effect.">
         <div className="flex items-center gap-3">
-          <input className="input-base flex-1" value={httpProxy} placeholder="Leave blank for direct, e.g. http://127.0.0.1:7890" onChange={(e) => setHttpProxy(e.target.value)} />
+          <input className="input-base flex-1" value={httpProxy} placeholder="Leave blank for direct, e.g. http://127.0.0.1:7890" onChange={(e) => {
+            const prev = httpProxy;
+            setHttpProxy(e.target.value);
+            if (e.target.value !== prev) {
+              toast.info("Restart required", "HTTP proxy changes take effect after restarting the app.");
+            }
+          }} />
           <button className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors" onClick={() => update("httpProxy", httpProxy)}>Save</button>
         </div>
       </Card>
@@ -598,9 +621,6 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
                   onClick={() => { void navigator.clipboard.writeText(m.modelId); }}>
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
                 </button>
-                <button className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors" title="Edit">
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                </button>
                 <button className="text-dalam-text-muted hover:text-dalam-git-deleted transition-colors" title="Delete"
                   onClick={() => removeModel(provider.id, m.modelId)}>
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" /></svg>
@@ -859,14 +879,6 @@ function McpTab() {
   const [showHelp, setShowHelp] = useState(false);
   const toast = useToasts((s) => s.push);
 
-  const MCP_PRESETS = [
-    { name: "Filesystem", description: "Read, write, and manage files on your system", command: "npx", args: "-y @modelcontextprotocol/server-filesystem /path/to/allowed/dir", icon: FolderOpen },
-    { name: "Memory", description: "Persistent knowledge graph memory for the agent", command: "npx", args: "-y @modelcontextprotocol/server-memory", icon: Database },
-    { name: "GitHub", description: "Repository management, issues, and pull requests", command: "npx", args: "-y @modelcontextprotocol/server-github", icon: Code2 },
-    { name: "Brave Search", description: "Web search via Brave Search API", command: "npx", args: "-y @modelcontextprotocol/server-brave-search", icon: Zap },
-    { name: "Fetch", description: "Fetch web pages and extract content", command: "npx", args: "-y @modelcontextprotocol/server-fetch", icon: Network },
-  ];
-
   const validateJson = (text: string): boolean => {
     if (!text.trim()) { setJsonError(null); return false; }
     try {
@@ -930,6 +942,7 @@ function McpTab() {
         args: parsed.args,
         url: parsed.url,
         scope: parsed.scope ?? "user",
+        env: parsed.env,
       });
       toast({ kind: "success", title: "MCP server added" });
       setJsonText("");
@@ -1180,69 +1193,6 @@ function MemoryGraphTab() {
 
 // ---- Plugins -------------------------------------------------------------
 
-function PluginsTab() {
-  const toast = useToasts((s) => s.push);
-  const [installed, setInstalled] = useState<{ id: string; name: string; enabled: boolean; version: string; description: string }[]>([]);
-  const [uninstalling, setUninstalling] = useState<string | null>(null);
-
-  const onUninstall = (id: string, name: string) => {
-    if (!confirm(`Uninstall "${name}"? You'll need to reinstall it from the marketplace.`)) return;
-    setUninstalling(id);
-    setTimeout(() => {
-      setInstalled((arr) => arr.filter((p) => p.id !== id));
-      setUninstalling(null);
-      toast({ kind: "success", title: "Plugin uninstalled", description: name });
-    }, 300);
-  };
-
-  return (
-    <>
-      <h1 className="text-3xl font-bold text-dalam-text-primary mb-2">Plugins</h1>
-      <p className="text-sm text-dalam-text-muted mb-8">Extend Dalam with community plugins. Plugins run in a sandboxed renderer context.</p>
-      <Card title="Installed plugins" description="Toggle each plugin to enable or disable it for the current workspace.">
-        <div className="divide-y divide-dalam-border-primary">
-          {installed.length === 0 && (
-            <div className="text-center text-sm text-dalam-text-muted py-6">No plugins installed.</div>
-          )}
-          {installed.map((p) => (
-            <div key={p.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-dalam-text-primary font-medium truncate">{p.name}</span>
-                  <span className="text-[10px] text-dalam-text-muted">v{p.version}</span>
-                </div>
-                <div className="text-xs text-dalam-text-muted line-clamp-1">{p.description}</div>
-              </div>
-              <button
-                onClick={() => onUninstall(p.id, p.name)}
-                disabled={uninstalling === p.id}
-                className="p-1.5 rounded-md text-dalam-text-muted hover:text-dalam-git-deleted hover:bg-dalam-bg-active transition-colors disabled:opacity-50"
-                title="Uninstall"
-                aria-label={`Uninstall ${p.name}`}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-              <Toggle checked={p.enabled} onChange={() => setInstalled((arr) => arr.map((x) => x.id === p.id ? { ...x, enabled: !x.enabled } : x))} label={`Enable plugin ${p.name}`} />
-            </div>
-          ))}
-        </div>
-      </Card>
-      <Card title="Install from marketplace" description="Browse and install plugins from the Dalam marketplace.">
-        <div className="flex items-center gap-2">
-          <button className="px-4 py-2 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-md transition-colors"
-            onClick={() => toast({ kind: "info", title: "Marketplace coming soon" })}>
-            Open marketplace
-          </button>
-          <button className="px-4 py-2 bg-dalam-bg-tertiary hover:bg-dalam-bg-hover text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors"
-            onClick={() => toast({ kind: "info", title: "Install from URL coming soon" })}>
-            Install from URL…
-          </button>
-        </div>
-      </Card>
-    </>
-  );
-}
-
 // ---- Connectors Tab ------------------------------------------------------------
 
 function ConnectorsTab() {
@@ -1457,7 +1407,11 @@ function CommandsTab() {
       const updated = commandsRef.current.map((c) => c.id === editing ? { ...c, shortcut: parts.join(platform() === "mac" ? "" : " ") } : c);
       setCommands(updated);
       setEditing(null);
-      localStorage.setItem("dalam.commands.shortcuts", JSON.stringify(updated.map((c) => ({ id: c.id, shortcut: c.shortcut }))));
+      try {
+        localStorage.setItem("dalam.commands.shortcuts", JSON.stringify(updated.map((c) => ({ id: c.id, shortcut: c.shortcut }))));
+      } catch (err) {
+        console.warn("[Settings] Failed to save custom shortcuts:", err);
+      }
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
@@ -1649,6 +1603,7 @@ function InstructionsTab() {
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [expandedLayer, setExpandedLayer] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const toast = useToasts((s) => s.push);
   const activeWorkspace = useWorkspace((s) => s.workspaces.find((w) => w.id === s.activeWorkspaceId));
 
@@ -1656,7 +1611,7 @@ function InstructionsTab() {
     if (!activeWorkspace) return;
     const api = createDalamAPI();
     loadInstructions(api, activeWorkspace.path).then(setLayers).finally(() => setLoading(false));
-  }, [activeWorkspace]);
+  }, [activeWorkspace, refreshKey]);
 
   if (!activeWorkspace) {
     return (
@@ -1693,7 +1648,8 @@ function InstructionsTab() {
                 const projectPath = joinPath(activeWorkspace.path, "DALAM.md");
                 await api.fs.writeFile(projectPath, `# Project Instructions\n\nRules and conventions for this project.\n\n## Guidelines\n- Use TypeScript for all new files\n- Run typecheck before committing\n\n## Path-scoped rules\n\n@path: src/components/**/*.tsx\n- Use functional components with hooks\n- Name files PascalCase\n\n@path: **/*.test.ts\n- Always use vitest\n- Mock external dependencies\n\n@path: **/*.md\n- Use clear, concise language\n- Include code examples where helpful\n`);
                 toast({ kind: "success", title: "DALAM.md created" });
-                window.location.reload();
+                setLoading(true);
+                setRefreshKey((k) => k + 1);
               } catch (err) {
                 toast({ kind: "error", title: "Failed to create DALAM.md", description: String(err) });
               }

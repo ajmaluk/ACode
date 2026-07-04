@@ -5,6 +5,7 @@ out/
 *.tsbuildinfo
 .DS_Store
 .env
+.env.*
 .env.local
 .code-review-graph/
 tmp_git_clones/

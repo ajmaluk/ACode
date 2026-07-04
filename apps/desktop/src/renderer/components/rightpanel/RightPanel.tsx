@@ -29,8 +29,6 @@ export function RightPanel() {
   const { browserTabs, activeBrowserTabId, rightPanelTab: tab, setRightPanelTab: setTab } = useUI();
   const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0);
 
-  const visibleTabs = useMemo(() => TABS, []);
-
   useEffect(() => { void refresh(); }, [refresh, activeWorkspaceId]);
 
   // Unified tab-switching + panel-opening effect with priority: diff > browser > git
@@ -60,7 +58,7 @@ export function RightPanel() {
       {/* Activity bar on the right edge */}
       <div className="w-11 flex-shrink-0 bg-dalam-bg-tertiary border-l border-dalam-border-primary flex flex-col items-center pt-2 pb-3 gap-1 select-none">
         <div className="flex-1 flex flex-col items-center gap-1">
-          {visibleTabs.map((t) => {
+          {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = tab === t.id;
             const hasChanges = t.id === "git" && changeCount > 0;
@@ -107,7 +105,7 @@ export function RightPanel() {
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="flex items-center justify-between px-3 py-1.5 border-b border-dalam-border-primary bg-dalam-bg-secondary/30 flex-shrink-0 min-h-[33px]">
           <span className="text-[11px] font-medium text-dalam-text-secondary uppercase tracking-wider">
-            {visibleTabs.find((t) => t.id === tab)?.label ?? ""}
+            {TABS.find((t) => t.id === tab)?.label ?? ""}
           </span>
           <div className="flex items-center gap-0.5">
             {tab === "git" && (
@@ -426,11 +424,13 @@ function ReviewTab() {
 
   const fileChanges = useMemo(() => {
     const changes: { path: string; action: string; additions: number; deletions: number }[] = [];
+    const seen = new Set<string>();
     // Include committed changes from messages
     for (const msg of messages) {
       if (msg.fileChanges) {
         for (const fc of msg.fileChanges) {
-          if (!changes.find((c) => c.path === fc.path)) {
+          if (!seen.has(fc.path)) {
+            seen.add(fc.path);
             changes.push(fc);
           }
         }
@@ -439,7 +439,8 @@ function ReviewTab() {
     // Include pending (streaming) changes
     if (_pendingChanges) {
       for (const fc of _pendingChanges) {
-        if (!changes.find((c) => c.path === fc.path)) {
+        if (!seen.has(fc.path)) {
+          seen.add(fc.path);
           changes.push(fc);
         }
       }
@@ -583,6 +584,10 @@ function ProgressTab() {
 
 function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error: string | null; onRefresh: () => void }) {
   const [commitMsg, setCommitMsg] = useState("");
+  const [showAllModified, setShowAllModified] = useState(false);
+  const [showAllAdded, setShowAllAdded] = useState(false);
+  const [showAllDeleted, setShowAllDeleted] = useState(false);
+  const [showAllUntracked, setShowAllUntracked] = useState(false);
   const toast = useToast();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const ws = workspaces.find((w) => w.id === activeWorkspaceId);
@@ -596,6 +601,8 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
       const wsPath = useWorkspace.getState().workspaces.find(
         (w) => w.id === useWorkspace.getState().activeWorkspaceId
       )?.path ?? ".";
+      const { Command } = await import("@tauri-apps/plugin-shell");
+      await Command.create("git", ["add", "-u"], { cwd: wsPath }).execute();
       await api.git.commit(wsPath, commitMsg.trim());
       toast.success("Committed", commitMsg.trim().slice(0, 50));
       setCommitMsg("");
@@ -628,6 +635,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           {ws && (
             <button
               onClick={async () => {
+                if (!confirm("Initialize a new Git repository in this folder?")) return;
                 try {
                   const { Command } = await import("@tauri-apps/plugin-shell");
                   await Command.create("git", ["init"], { cwd: ws.path }).execute();
@@ -692,44 +700,52 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
             {(status.modified?.length ?? 0) > 0 && (
               <div>
                 <SectionHeader label="Modified" count={status.modified.length} color="text-dalam-git-modified" />
-                {status.modified.slice(0, 50).map((f) => (
+                {(showAllModified ? status.modified : status.modified.slice(0, 20)).map((f) => (
                   <FileRow key={f} path={f} action="modified" icon={<FileCode className="w-3 h-3 text-dalam-git-modified" />} />
                 ))}
-                {status.modified.length > 50 && (
-                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.modified.length - 50} more</div>
+                {status.modified.length > 20 && !showAllModified && (
+                  <button onClick={() => setShowAllModified(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                    Show all {status.modified.length} files
+                  </button>
                 )}
               </div>
             )}
             {(status.added?.length ?? 0) > 0 && (
               <div>
                 <SectionHeader label="Added" count={status.added.length} color="text-dalam-git-added" />
-                {status.added.slice(0, 50).map((f) => (
+                {(showAllAdded ? status.added : status.added.slice(0, 20)).map((f) => (
                   <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-git-added" />} />
                 ))}
-                {status.added.length > 50 && (
-                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.added.length - 50} more</div>
+                {status.added.length > 20 && !showAllAdded && (
+                  <button onClick={() => setShowAllAdded(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                    Show all {status.added.length} files
+                  </button>
                 )}
               </div>
             )}
             {(status.deleted?.length ?? 0) > 0 && (
               <div>
                 <SectionHeader label="Deleted" count={status.deleted.length} color="text-dalam-git-deleted" />
-                {status.deleted.slice(0, 50).map((f) => (
+                {(showAllDeleted ? status.deleted : status.deleted.slice(0, 20)).map((f) => (
                   <FileRow key={f} path={f} action="deleted" icon={<X className="w-3 h-3 text-dalam-git-deleted" />} />
                 ))}
-                {status.deleted.length > 50 && (
-                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.deleted.length - 50} more</div>
+                {status.deleted.length > 20 && !showAllDeleted && (
+                  <button onClick={() => setShowAllDeleted(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                    Show all {status.deleted.length} files
+                  </button>
                 )}
               </div>
             )}
             {(status.untracked?.length ?? 0) > 0 && (
               <div>
                 <SectionHeader label="Untracked" count={status.untracked.length} color="text-dalam-text-muted" />
-                {status.untracked.slice(0, 50).map((f) => (
+                {(showAllUntracked ? status.untracked : status.untracked.slice(0, 20)).map((f) => (
                   <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-text-muted" />} />
                 ))}
-                {status.untracked.length > 50 && (
-                  <div className="px-3 py-1 text-[10px] text-dalam-text-muted">+{status.untracked.length - 50} more</div>
+                {status.untracked.length > 20 && !showAllUntracked && (
+                  <button onClick={() => setShowAllUntracked(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                    Show all {status.untracked.length} files
+                  </button>
                 )}
               </div>
             )}
@@ -791,12 +807,29 @@ function BrowserTab() {
   } = useUI();
   const [inputValue, setInputValue] = useState("");
 
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
   const activeTab = browserTabs.find((t) => t.id === activeBrowserTabId);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (activeTab) setInputValue(activeTab.url);
   }, [activeTab]);
+
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      // Validate origin to prevent messages from external pages
+      if (e.origin !== window.location.origin && e.origin !== "null") return;
+      if (e.data?.type === "dalam-navigate" && e.data?.url) {
+        const tab = useUI.getState().browserTabs.find(t => t.id === activeTab?.id);
+        if (tab) {
+          useUI.getState().updateBrowserTab(tab.id, { url: e.data.url, loading: false });
+        }
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [activeTab?.id]);
 
   const onNavigate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -858,6 +891,17 @@ function BrowserTab() {
         <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx <= 0} onClick={() => activeTab && goBackBrowser(activeTab.id)} title="Back"><ArrowLeft className="w-3 h-3" /></button>
         <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx >= activeTab.history.length - 1} onClick={() => activeTab && goForwardBrowser(activeTab.id)} title="Forward"><ArrowRight className="w-3 h-3" /></button>
         <button type="button" className="btn-icon" onClick={() => activeTab && refreshBrowser(activeTab.id)} title="Refresh"><RefreshCw className="w-3 h-3" /></button>
+        {activeTab?.loading && (
+          <button type="button" onClick={() => {
+            if (!activeTab) return;
+            if (iframeRef.current) {
+              iframeRef.current.src = "about:blank";
+              useUI.getState().updateBrowserTab(activeTab.id, { loading: false });
+            }
+          }} className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors" title="Stop loading">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
         <input
           className="flex-1 bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md px-2.5 py-1 text-xs text-dalam-text-primary placeholder:text-dalam-text-muted outline-none focus:border-dalam-accent-primary transition-colors"
           placeholder="Search or enter URL"
@@ -872,19 +916,23 @@ function BrowserTab() {
         {activeTab?.url ? (
           <>
             <iframe
+              ref={iframeRef}
               src={activeTab.url}
               title={activeTab.title}
               className="w-full h-full border-0 bg-white"
-              sandbox="allow-same-origin allow-scripts allow-popups"
-              onLoad={(e) => {
+              sandbox="allow-scripts allow-popups allow-forms"
+              onLoad={() => {
                 const currentTab = useUI.getState().browserTabs.find((t) => t.id === activeTab.id);
                 if (!currentTab || !currentTab.loading) return;
-                const iframe = e.target as HTMLIFrameElement;
-                let pageTitle = currentTab.title;
-                try { pageTitle = iframe.contentDocument?.title || pageTitle; } catch { /* cross-origin */ }
                 useUI.getState().updateBrowserTab(currentTab.id, {
                   loading: false,
-                  ...(pageTitle !== currentTab.title ? { title: pageTitle } : {}),
+                });
+              }}
+              onError={() => {
+                const currentTab = useUI.getState().browserTabs.find((t) => t.id === activeTab.id);
+                if (!currentTab || !currentTab.loading) return;
+                useUI.getState().updateBrowserTab(currentTab.id, {
+                  loading: false,
                 });
               }}
             />

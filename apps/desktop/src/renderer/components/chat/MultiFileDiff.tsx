@@ -9,7 +9,7 @@
  * ============================================================
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import { useChat } from "@/store/useAppStore";
 import { Check, X, FileText } from "lucide-react";
 
@@ -17,6 +17,12 @@ export const MultiFileDiffSummary: React.FC = () => {
   const pendingToolCalls = useChat((s) => s.pendingToolCalls);
   const resolveToolApproval = useChat((s) => s.resolveToolApproval);
   const [batchResolving, setBatchResolving] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Collect all pending diffs
   const pendingDiffs = useMemo(() => {
@@ -53,11 +59,11 @@ export const MultiFileDiffSummary: React.FC = () => {
               setBatchResolving(true);
               try {
                 const ids = pendingDiffs.map((d) => d.id);
-                await Promise.all(ids.map((id) => resolveToolApproval(id, "approved")));
+                await Promise.allSettled(ids.map((id) => resolveToolApproval(id, "approved")));
               } catch {
                 // Individual failures handled upstream by resolveToolApproval
               } finally {
-                setBatchResolving(false);
+                if (mountedRef.current) setBatchResolving(false);
               }
             }}
             disabled={batchResolving}
@@ -71,11 +77,11 @@ export const MultiFileDiffSummary: React.FC = () => {
               setBatchResolving(true);
               try {
                 const ids = pendingDiffs.map((d) => d.id);
-                await Promise.all(ids.map((id) => resolveToolApproval(id, "denied")));
+                await Promise.allSettled(ids.map((id) => resolveToolApproval(id, "denied")));
               } catch {
                 // Individual failures handled upstream by resolveToolApproval
               } finally {
-                setBatchResolving(false);
+                if (mountedRef.current) setBatchResolving(false);
               }
             }}
             disabled={batchResolving}

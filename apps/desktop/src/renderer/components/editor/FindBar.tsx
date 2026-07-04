@@ -25,19 +25,29 @@ export function FindBar({ onSearch, onReplace, onReplaceAll, onClose, matchCount
     inputRef.current?.select();
   }, []);
 
+  const debounceTimerRef = useRef<number>(0);
+
   useEffect(() => {
     if (query) {
-      onSearch(query, { caseSensitive, wholeWord, regex: useRegex });
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = window.setTimeout(() => {
+        onSearch(query, { caseSensitive, wholeWord, regex: useRegex });
+      }, 150);
     }
+    return () => clearTimeout(debounceTimerRef.current);
   }, [query, caseSensitive, wholeWord, useRegex, onSearch]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
       onClose();
     } else if (e.key === "Enter" && e.shiftKey) {
-      // Previous match handled by parent
+      // Previous match — dispatch event for Monaco editor to handle
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("editor:find-previous"));
     } else if (e.key === "Enter") {
-      // Next match handled by parent
+      // Next match — dispatch event for Monaco editor to handle
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("editor:find-next"));
     } else if (e.key === "Tab" && e.altKey) {
       e.preventDefault();
       setShowReplace((v) => !v);

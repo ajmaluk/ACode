@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
 import { hookBus } from "./hookBus";
+import { isWindows, platform } from "./platform";
 
 // ---------------------------------------------------------------------------
 // Debug logging — set window.__DALAM_DEBUG = true in console to enable
@@ -235,12 +236,15 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
       ok: resp.ok,
       status: resp.status,
       statusText: resp.statusText,
+      type: "basic" as ResponseType,
+      url: url,
+      redirected: false,
       headers: respHeaders,
       body: resp.body,
       text: async () => new TextDecoder().decode(await getBody()),
       json: async () => JSON.parse(new TextDecoder().decode(await getBody())),
       arrayBuffer: getBody,
-      clone: () => new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders }),
+      clone: () => new Response(bodyCache ? new Blob([bodyCache]) : resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders }),
     } as Response;
   } catch {
     // Fallback to browser fetch if plugin unavailable
@@ -787,10 +791,9 @@ const dalamAPI: DalamAPI = {
         const id = "t-" + crypto.randomUUID();
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
-          const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
           // Use provided shell or default to platform-appropriate shell
           const knownShells = ["bash", "zsh", "fish", "powershell", "cmd", "pwsh"];
-          const shellCmd = shell && knownShells.includes(shell) ? shell : (isWindows ? "powershell" : "bash");
+          const shellCmd = shell && knownShells.includes(shell) ? shell : (isWindows() ? "powershell" : "bash");
 
           const currentSettings = getStoredSettings();
           const args: string[] = [];
@@ -825,6 +828,7 @@ const dalamAPI: DalamAPI = {
           command.on("close", () => {
             cbs.forEach((cb) => cb("\r\n[process exited]\r\n"));
             processes.delete(id);
+            listeners.delete(id);
           });
 
           const child = await command.spawn();
@@ -1500,6 +1504,14 @@ You can combine multiple tools in one response:
           loopCount++;
           emittedEndInThisIteration = false;
 
+          // Check abort signal at the top of each iteration to avoid wasting an LLM call
+          if (ac.signal.aborted) {
+            emit({ type: "error", error: "Aborted by user." });
+            emit({ type: "message-end", messageId: sessionId });
+            emittedEndInThisIteration = true;
+            break;
+          }
+
           if (Date.now() - loopStartTime > MAX_LOOP_DURATION_MS) {
             emit({ type: "error", error: `Agent loop timed out after ${MAX_LOOP_DURATION_MS / 1000}s.` });
             emit({ type: "message-end", messageId: sessionId });
@@ -1655,12 +1667,14 @@ You can combine multiple tools in one response:
 
             // Execute tools with approval
             const toolResults: string[] = [];
+            let abortedMidBatch = false;
             for (const tc of toolCallMetas) {
               _debugLog(`[sendPrompt] Turn ${loopCount}: executing tool ${tc.id} (${tc.name})`);
               // Check abort signal before each tool execution
               if (ac.signal.aborted) {
                 emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                abortedMidBatch = true;
                 break;
               }
               const decision = await waitForToolApproval(tc.id, ac.signal);
@@ -1668,6 +1682,7 @@ You can combine multiple tools in one response:
               if (ac.signal.aborted) {
                 emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                 toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                abortedMidBatch = true;
                 break;
               }
               if (decision === "approved") {
@@ -1712,6 +1727,17 @@ You can combine multiple tools in one response:
                 // Emit tool-result for denied tools to keep store in sync
                 emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
                 toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
+              }
+            }
+
+            // Emit tool-result for any remaining tools skipped by abort
+            if (abortedMidBatch) {
+              const executedIds = new Set(toolCallMetas.slice(0, toolResults.length).map(tc => tc.id));
+              for (const tc of toolCallMetas) {
+                if (!executedIds.has(tc.id)) {
+                  emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
+                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                }
               }
             }
 
@@ -1893,7 +1919,8 @@ You can combine multiple tools in one response:
         // Only clean up if THIS call's controller is still the active one.
         // A concurrent sendPrompt for the same session would have replaced it.
         const currentController = activeControllers.get(sessionId);
-        if (currentController === ac) {
+        const isStillActive = currentController === ac;
+        if (isStillActive) {
           activeControllers.delete(sessionId);
         }
         sessionStartTimes.delete(sessionId);
@@ -1906,19 +1933,26 @@ You can combine multiple tools in one response:
         }
         // MCP HTTP sessions are keyed by server name → session token (not Dalam session ID),
         // so we cannot match them here. They will be cleaned up by the MCP module on error/close.
-        // Clean up all pending diff proposals (they are ephemeral to the session)
-        pendingDiffProposals.clear();
-        // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire
-        try {
-          const { useChat } = await import("../store/useAppStore");
-          const state = useChat.getState();
-          if (state.isStreaming && state.activeSessionId === sessionId) {
-            _debugLog(`[sendPrompt] finally: isStreaming still true for ${sessionId}, force-clearing`);
-            // Emit message-end BEFORE cleanup so the UI gets the final message
-            emit({ type: "message-end", messageId: sessionId });
-            useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
-          }
-        } catch { /* store not available */ }
+        // Clean up stale pending diff proposals (older than 5 minutes) rather than clearing all,
+        // to avoid discarding proposals from concurrent sessions.
+        const staleThreshold = Date.now() - 5 * 60 * 1000;
+        for (const [key, proposal] of pendingDiffProposals) {
+          if (proposal.createdAt < staleThreshold) pendingDiffProposals.delete(key);
+        }
+        // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire.
+        // Only do this if we're still the active controller — otherwise a concurrent sendPrompt
+        // owns the streaming state and we must not interfere.
+        if (isStillActive) {
+          try {
+            const { useChat } = await import("../store/useAppStore");
+            const state = useChat.getState();
+            if (state.isStreaming && state.activeSessionId === sessionId) {
+              _debugLog(`[sendPrompt] finally: isStreaming still true for ${sessionId}, force-clearing`);
+              emit({ type: "message-end", messageId: sessionId });
+              useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
+            }
+          } catch { /* store not available */ }
+        }
         // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
         const streamCleanup = streamCleanups.get(sessionId);
         if (streamCleanup) streamCleanup();
@@ -2150,8 +2184,7 @@ You can combine multiple tools in one response:
       } catch {
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
-          const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
-          const cmd = isWindows ? "explorer" : "open";
+          const cmd = isWindows() ? "explorer" : platform() === "mac" ? "open" : "xdg-open";
           const dir = path.includes("/") ? path.split("/").slice(0, -1).join("/") : path.includes("\\") ? path.split("\\").slice(0, -1).join("\\") : path;
           await Command.create(cmd, [dir]).execute();
         } catch { /* silent */ }
@@ -2870,7 +2903,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         finish(existing);
       }
     }).catch((err) => {
-      console.error("Failed to register tool call resolver:", err);
+      if (import.meta.env.DEV) console.error("Failed to register tool call resolver:", err);
       finish("denied");
     });
 
@@ -3130,6 +3163,8 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       const re = isRegex ? new RegExp(pattern, "i") : null;
       for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
         const line = lines[i];
+        // Skip very long lines with regex to prevent ReDoS
+        if (re && line.length > 10000) continue;
         if (re ? re.test(line) : line.includes(pattern)) {
           matches.push({ line: i + 1, text: line.trim() });
         }
@@ -3191,7 +3226,10 @@ async function executeTool(name: string, args: Record<string, string>, workspace
             const content = new TextDecoder().decode(bytes);
             const lines = content.split("\n");
             for (let i = 0; i < lines.length && results.length < maxResults; i++) {
-              const match = re ? re.test(lines[i]) : lines[i].includes(pattern);
+              const line = lines[i];
+              // Skip very long lines with regex to prevent ReDoS
+              if (re && line.length > 10000) continue;
+              const match = re ? re.test(line) : line.includes(pattern);
               if (match) {
                 results.push({ file: full, line: i + 1, text: lines[i].trim().slice(0, 200) });
               }
@@ -3207,9 +3245,8 @@ async function executeTool(name: string, args: Record<string, string>, workspace
 
   if (name === "run_command") {
     const { Command } = await import("@tauri-apps/plugin-shell");
-    const isWindows = typeof window !== "undefined" && window.navigator.userAgent.includes("Windows");
-    const program = isWindows ? "powershell" : "bash";
-    const commandArgs = isWindows ? ["-NoProfile", "-NonInteractive", "-Command", args.command] : ["-c", args.command];
+    const program = isWindows() ? "powershell" : "bash";
+    const commandArgs = isWindows() ? ["-NoProfile", "-NonInteractive", "-Command", args.command] : ["-c", args.command];
     const cmd = Command.create(program, commandArgs, { cwd: workspacePath });
     const child = await cmd.spawn();
     let killed = false;
@@ -3620,7 +3657,8 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     // Run the command in the terminal
     const { useTerminal } = await import("../store/useAppStore");
     const cwd = workspacePath || ".";
-    useTerminal.getState().addTab(cwd, "bash", command);
+    const defaultShell = isWindows() ? "powershell" : "bash";
+    useTerminal.getState().addTab(cwd, defaultShell, command);
 
     // Open browser panel to show the preview
     const { useUI } = await import("../store/useAppStore");

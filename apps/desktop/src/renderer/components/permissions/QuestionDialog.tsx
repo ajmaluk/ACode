@@ -129,7 +129,7 @@ export function QuestionDialog() {
             return (
               <button
                 key={opt.label}
-                onClick={() => resolve({ selectedLabel: opt.label })}
+                onClick={() => { setSelected(idx); setInputFocused(false); }}
                 onMouseEnter={() => { setSelected(idx); setInputFocused(false); }}
                 className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                   active ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"

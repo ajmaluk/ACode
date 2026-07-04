@@ -27,7 +27,7 @@ try {
 try {
   createDalamAPI();
 } catch (err) {
-  console.error("Failed to initialize Dalam API:", err);
+  if (import.meta.env.DEV) console.error("Failed to initialize Dalam API:", err);
 }
 
 // Register hook listeners for tool usage logging, session auto-save, etc.
@@ -35,7 +35,7 @@ registerHookListeners();
 
 const rootEl = document.getElementById("root");
 if (!rootEl) {
-  console.error("Root element not found — app cannot mount");
+  if (import.meta.env.DEV) console.error("Root element not found — app cannot mount");
 } else {
   createRoot(rootEl).render(
     <StrictMode>

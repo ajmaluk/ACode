@@ -14,8 +14,14 @@ export async function copyToClipboard(
   try {
     const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
     await writeText(text);
-  } catch {
-    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn("[Editor] Tauri clipboard failed:", err);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      toast.error("Copy failed", "Unable to access clipboard");
+      return;
+    }
   }
   const display = truncatedMsg ?? (text.length > 60 ? text.slice(0, 57) + "…" : text);
   toast.success("Copied to clipboard", display);

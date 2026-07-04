@@ -10,12 +10,7 @@ type EventMap = {
   "ui:view-mode-changed": { mode: "chat" | "editor" };
 
   // Chat events
-  "chat:streaming-started": { sessionId: string };
-  "chat:streaming-stopped": { sessionId: string };
   "chat:model-selected": { modelId: string };
-
-  // Settings events
-  "settings:loaded": { settings: Record<string, unknown> };
 };
 
 type EventKey = keyof EventMap;
@@ -40,9 +35,18 @@ class EventBus {
     const handlers = this.handlers.get(event);
     if (handlers) {
       for (const handler of handlers) {
-        handler(data);
+        try {
+          handler(data);
+        } catch (err) {
+          console.error(`[EventBus] Handler error for "${event}":`, err);
+        }
       }
     }
+  }
+
+  offAll(event?: EventKey): void {
+    if (event) this.handlers.delete(event);
+    else this.handlers.clear();
   }
 }
 

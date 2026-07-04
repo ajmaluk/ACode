@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo } from "react";
 import { Command } from "cmdk";
 import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useChat, useUI } from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
@@ -33,14 +33,7 @@ export function CommandPalette() {
   const { open: openSettings } = useSettingsView();
   const { openWorkspace, loadWorkspace, fileTree, openFile } = useWorkspace();
   const { toggle: toggleShortcuts } = useShortcuts();
-  const [recent, setRecent] = useState<string[]>([]);
-
-  // Load recent files when palette opens
-  useEffect(() => {
-    if (open && recent.length === 0) {
-      setRecent(getRecentFiles());
-    }
-  }, [open, recent.length]);
+  const recent = useMemo(() => (open ? getRecentFiles() : []), [open]);
 
   const items = useMemo<Item[]>(
     () => [
@@ -98,6 +91,7 @@ export function CommandPalette() {
         shortcut: shortcut("N"),
         perform: () => {
           useChat.getState().newChat();
+          if (useUI.getState().viewMode !== "chat") useUI.getState().setViewMode("chat");
           setOpen(false);
         },
       },
@@ -111,19 +105,19 @@ export function CommandPalette() {
       },
       {
         id: "search-files",
-        label: "Search files in project",
+        label: "Quick open file",
         group: "View",
         icon: <Search className="w-3.5 h-3.5" />,
         shortcut: shortcut("P"),
-        perform: () => { setOpen(false); },
+        perform: () => { window.dispatchEvent(new CustomEvent("editor:quick-open")); setOpen(false); },
       },
       {
         id: "go-symbol",
-        label: "Go to symbol",
+        label: "Go to line",
         group: "View",
         icon: <Code2 className="w-3.5 h-3.5" />,
         shortcut: shortcut("O", { shift: true }),
-        perform: () => { setOpen(false); },
+        perform: () => { window.dispatchEvent(new CustomEvent("editor:go-to-line")); setOpen(false); },
       },
     ],
     [setOpen, openSettings, openWorkspace, loadWorkspace, toggleShortcuts]
@@ -173,6 +167,7 @@ export function CommandPalette() {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/55 dark:bg-black/55 backdrop-blur-sm flex items-start justify-center pt-[12vh] animate-fade-in"
+      role="dialog" aria-modal="true" aria-label="Command palette"
       onClick={() => setOpen(false)}
     >
       <div

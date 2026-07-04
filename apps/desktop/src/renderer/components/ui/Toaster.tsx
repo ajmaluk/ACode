@@ -75,7 +75,7 @@ export function Toaster() {
                   </div>
                 )}
               </div>
-              <button className="btn-icon" onClick={() => dismiss(t.id)}>
+              <button className="btn-icon" onClick={() => dismiss(t.id)} aria-label="Dismiss notification">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>

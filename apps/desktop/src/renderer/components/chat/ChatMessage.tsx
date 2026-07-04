@@ -14,7 +14,15 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
   const toast = useToast();
   const segments = useMemo(() => splitCodeFences(message.content), [message.content]);
   const pendingActivities = useChat((s) => pending ? s.pendingActivities : EMPTY_ACTIVITIES);
-  const activities = message.activities ?? (pending ? pendingActivities : []);
+  const activities = useMemo(
+    () => message.activities ?? (pending ? pendingActivities : []),
+    [message.activities, pending, pendingActivities]
+  );
+
+  // Memoize activity filtering to avoid creating new arrays every render
+  const CONTEXT_TYPES = useMemo(() => new Set(["explore", "read"]), []);
+  const contextActivities = useMemo(() => activities.filter(a => CONTEXT_TYPES.has(a.type)), [activities, CONTEXT_TYPES]);
+  const otherActivities = useMemo(() => activities.filter(a => !CONTEXT_TYPES.has(a.type)), [activities, CONTEXT_TYPES]);
 
   // System message: styled notification box
   if (message.role === "system") {
@@ -99,12 +107,7 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
       )}
 
       {/* Activity blocks (explore / read / skill / bash / plan) */}
-      {hasActivities && (() => {
-        const CONTEXT_TYPES = new Set(["explore", "read"]);
-        const contextActivities = activities.filter(a => CONTEXT_TYPES.has(a.type));
-        const otherActivities = activities.filter(a => !CONTEXT_TYPES.has(a.type));
-
-        return (
+      {hasActivities && (
           <div className="my-0.5">
             {contextActivities.length > 0 && (
               <ContextGatheringGroup activities={contextActivities} />
@@ -126,8 +129,7 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
               return null;
             })}
           </div>
-        );
-      })()}
+      )}
 
 
       {/* Main assistant message — rendered with markdown */}
@@ -135,8 +137,8 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
         <div className="text-[13px] text-dalam-text-primary leading-relaxed my-0.5">
           {segments.filter((seg) => seg.type !== "text" || seg.content.trim()).map((seg, idx) =>
             seg.type === "code"
-              ? <CodeBlock key={"code-" + idx} language={seg.language ?? ""} content={seg.content} />
-              : <div key={"txt-" + idx} className="prose-dalam mb-2 last:mb-0">
+              ? <CodeBlock key={`code-${seg.content.length}-${idx}`} language={seg.language ?? ""} content={seg.content} />
+              : <div key={`txt-${seg.content.length}-${idx}`} className="prose-dalam mb-2 last:mb-0">
                   {pending
                     ? <StreamingContent content={seg.content} />
                     : <MarkdownContent content={seg.content} />
@@ -230,8 +232,10 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.role === nextProps.message.role &&
     prevProps.message.thinking === nextProps.message.thinking &&
-    prevProps.message.questions === nextProps.message.questions &&
-    prevProps.message.taskPlan === nextProps.message.taskPlan &&
+    JSON.stringify(prevProps.message.questions) === JSON.stringify(nextProps.message.questions) &&
+    JSON.stringify(prevProps.message.taskPlan) === JSON.stringify(nextProps.message.taskPlan) &&
+    prevProps.message.taskPlanSummary === nextProps.message.taskPlanSummary &&
+    JSON.stringify(prevProps.message.todos) === JSON.stringify(nextProps.message.todos) &&
     !tcChanged && !fcChanged && !actChanged
   );
 });

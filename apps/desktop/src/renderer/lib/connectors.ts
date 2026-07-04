@@ -101,21 +101,11 @@ export function registerConnector(connector: Connector): void {
  * Unregister a connector.
  */
 export function unregisterConnector(id: string): void {
-  connectors.delete(id);
-}
-
-/**
- * Get a connector by ID.
- */
-export function getConnector(id: string): Connector | undefined {
-  return connectors.get(id);
-}
-
-/**
- * Get all registered connectors.
- */
-export function getAllConnectors(): Connector[] {
-  return Array.from(connectors.values());
+  const connector = connectors.get(id);
+  if (connector) {
+    connector.stop().catch(() => {});
+    connectors.delete(id);
+  }
 }
 
 // ─── Built-in Connectors ───────────────────────────────────
@@ -145,6 +135,7 @@ export class WebhookConnector implements Connector {
     this.events = events;
     // Webhook server implementation would go here
     // For now, mark as connected (actual HTTP server requires runtime environment)
+    console.warn("[WebhookConnector] Webhook server is a stub — actual HTTP server requires runtime environment. Marking as connected.");
     this.connected = true;
     events.onStatusChange("connected");
     console.log("Webhook", `Started webhook listener on port ${this.port}${this.path}`);
@@ -257,8 +248,8 @@ export class FileWatcherConnector implements Connector {
             });
           }
           this.lastSnapshots.set(watchPath, text);
-        } catch {
-          // File may not exist yet — skip
+        } catch (err) {
+          console.warn("[FileWatcher] Error reading file:", err);
         }
       }
     } catch (err) {
@@ -277,7 +268,7 @@ export class FileWatcherConnector implements Connector {
   }
 
   async sendMessage(_channelId: string, _content: string): Promise<void> {
-    // File watcher is receive-only
+    console.warn("[FileWatcherConnector] sendMessage not supported — this connector is receive-only");
   }
 
   getStatus(): { connected: boolean; error?: string } {
@@ -335,7 +326,7 @@ export class CronConnector implements Connector {
   }
 
   async sendMessage(_channelId: string, _content: string): Promise<void> {
-    // Cron jobs are trigger-only
+    console.warn("[CronConnector] sendMessage not supported — this connector is receive-only");
   }
 
   getStatus(): { connected: boolean; error?: string } {
@@ -512,7 +503,7 @@ export class TelegramConnector implements Connector {
       void this.poll(); // immediate first poll
     } catch (err) {
       events.onStatusChange("error");
-      console.error("Telegram", "Failed to connect", { error: String(err) });
+      if (import.meta.env.DEV) console.error("Telegram", "Failed to connect", { error: String(err) });
     }
   }
 
@@ -541,7 +532,7 @@ export class TelegramConnector implements Connector {
         }),
       });
     } catch (err) {
-      console.error("Telegram", "Failed to send message", { error: String(err) });
+      if (import.meta.env.DEV) console.error("Telegram", "Failed to send message", { error: String(err) });
     }
   }
 
@@ -622,7 +613,7 @@ export class WhatsAppConnector implements Connector {
       void this.poll();
     } catch (err) {
       events.onStatusChange("error");
-      console.error("WhatsApp", "Failed to connect to bridge", { error: String(err) });
+      if (import.meta.env.DEV) console.error("WhatsApp", "Failed to connect to bridge", { error: String(err) });
     }
   }
 
@@ -648,7 +639,7 @@ export class WhatsAppConnector implements Connector {
         body: JSON.stringify({ chatId, content }),
       });
     } catch (err) {
-      console.error("WhatsApp", "Failed to send message", { error: String(err) });
+      if (import.meta.env.DEV) console.error("WhatsApp", "Failed to send message", { error: String(err) });
     }
   }
 
@@ -696,7 +687,8 @@ function loadConnectorConfigs(): ConnectorConfig[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
-  } catch {
+  } catch (err) {
+    console.warn("[Connectors] Failed to load configs:", err);
     return [];
   }
 }
@@ -707,8 +699,8 @@ function loadConnectorConfigs(): ConnectorConfig[] {
 function saveConnectorConfigs(configs: ConnectorConfig[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(configs));
-  } catch {
-    console.warn("Connector", "Failed to save connector configs");
+  } catch (err) {
+    console.warn("[Connectors] Failed to save configs:", err);
   }
 }
 
@@ -775,7 +767,7 @@ export async function initializeConnectors(
         onStatusChange: (status) => onStatusChange(config.id, status),
       });
     } catch (err) {
-      console.error("Connector", `Failed to start connector ${config.name}`, { error: String(err) });
+      if (import.meta.env.DEV) console.error("Connector", `Failed to start connector ${config.name}`, { error: String(err) });
     }
   }
 }
@@ -784,13 +776,15 @@ export async function initializeConnectors(
  * Stop all connectors.
  */
 export async function shutdownConnectors(): Promise<void> {
-  for (const connector of connectors.values()) {
-    try {
-      await connector.stop();
-    } catch (err) {
-      console.warn("Connector", `Failed to stop connector ${connector.name}`, { error: String(err) });
-    }
+  const promises: Promise<void>[] = [];
+  for (const [name, connector] of connectors) {
+    promises.push(
+      connector.stop().catch((err) => {
+        console.warn(`[Connectors] Failed to stop ${name}:`, err);
+      })
+    );
   }
+  await Promise.allSettled(promises);
   connectors.clear();
   connectorConfigs.clear();
 }
@@ -798,7 +792,7 @@ export async function shutdownConnectors(): Promise<void> {
 /**
  * Add or update a connector config.
  */
-export function saveConnectorConfig(config: ConnectorConfig): void {
+export async function saveConnectorConfig(config: ConnectorConfig): Promise<void> {
   const configs = loadConnectorConfigs();
   const idx = configs.findIndex(c => c.id === config.id);
   if (idx >= 0) {
@@ -807,6 +801,13 @@ export function saveConnectorConfig(config: ConnectorConfig): void {
     configs.push(config);
   }
   saveConnectorConfigs(configs);
+
+  // Restart the connector if it's running
+  const connector = connectors.get(config.id);
+  if (connector) {
+    try { await connector.stop(); } catch { /* ignore */ }
+    connectors.delete(config.id);
+  }
 }
 
 /**

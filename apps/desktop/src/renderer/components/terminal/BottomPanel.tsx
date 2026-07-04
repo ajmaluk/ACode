@@ -16,10 +16,69 @@ const TABS: { id: BottomTab; icon: React.ElementType; label: string }[] = [
   { id: "problems", icon: AlertTriangle, label: "Problems" },
 ];
 
+function OutputTab() {
+  const [output, setOutput] = useState<string[]>([]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.text) setOutput((prev) => [...prev.slice(-200), detail.text]);
+    };
+    window.addEventListener("dalam:build-output", handler);
+    return () => window.removeEventListener("dalam:build-output", handler);
+  }, []);
+
+  return (
+    <div className="h-full overflow-auto p-3 font-mono text-xs text-dalam-text-secondary">
+      {output.length === 0 ? (
+        <p className="text-dalam-text-muted">No output yet. Build output will appear here.</p>
+      ) : (
+        output.map((line, i) => <div key={i} className="whitespace-pre-wrap">{line}</div>)
+      )}
+    </div>
+  );
+}
+
+function ProblemsTab() {
+  const [problems, setProblems] = useState<Array<{ severity: string; message: string; file?: string; line?: number }>>([]);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.problems) setProblems(detail.problems);
+    };
+    window.addEventListener("dalam:problems-update", handler);
+    return () => window.removeEventListener("dalam:problems-update", handler);
+  }, []);
+
+  return (
+    <div className="h-full overflow-auto">
+      {problems.length === 0 ? (
+        <div className="p-3 text-xs text-dalam-text-muted">No problems detected.</div>
+      ) : (
+        problems.map((p, i) => (
+          <div key={i} className="flex items-start gap-2 px-3 py-1.5 text-xs hover:bg-dalam-bg-hover border-b border-dalam-border-primary/30">
+            <span className={p.severity === "error" ? "text-red-400" : "text-yellow-400"}>
+              {p.severity === "error" ? "✕" : "⚠"}
+            </span>
+            <span className="text-dalam-text-primary flex-1">{p.message}</span>
+            {p.file && <span className="text-dalam-text-muted flex-shrink-0">{p.file}{p.line ? `:${p.line}` : ""}</span>}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 export function BottomPanel() {
   const { bottomPanelTab: tab, setBottomPanelTab: setTab, setBottomPanelOpen } = useUI();
   const { session } = useChat();
-  const [height, setHeight] = useState(220);
+  const [height, setHeight] = useState(() => {
+    try {
+      const saved = localStorage.getItem("dalam.bottomPanelHeight");
+      return saved ? parseInt(saved, 10) || 220 : 220;
+    } catch { return 220; }
+  });
   const draggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -29,23 +88,55 @@ export function BottomPanel() {
     draggingRef.current = true;
     startYRef.current = e.clientY;
     startHeightRef.current = height;
+    let rafId: number | null = null;
+    let lastHeight = height;
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!draggingRef.current) return;
       const delta = startYRef.current - e.clientY;
-      const newHeight = Math.max(100, Math.min(startHeightRef.current + delta, window.innerHeight * 0.5));
-      setHeight(newHeight);
+      lastHeight = Math.max(100, Math.min(startHeightRef.current + delta, window.innerHeight * 0.5));
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        setHeight(lastHeight);
+      });
     };
 
     const handleMouseUp = () => {
       draggingRef.current = false;
+      if (rafId !== null) cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      moveHandlerRef.current = null;
+      upHandlerRef.current = null;
+      // Persist height once on mouseup instead of every mousemove
+      try { localStorage.setItem("dalam.bottomPanelHeight", String(lastHeight)); } catch { /* ignore */ }
     };
 
+    moveHandlerRef.current = handleMouseMove;
+    upHandlerRef.current = handleMouseUp;
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
   }, [height]);
+
+  // Cleanup drag listeners on unmount to prevent leaks
+  const moveHandlerRef = useRef<((e: MouseEvent) => void) | null>(null);
+  const upHandlerRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      draggingRef.current = false;
+      // Remove any lingering document listeners from active drag
+      if (moveHandlerRef.current) {
+        document.removeEventListener("mousemove", moveHandlerRef.current);
+        moveHandlerRef.current = null;
+      }
+      if (upHandlerRef.current) {
+        document.removeEventListener("mouseup", upHandlerRef.current);
+        upHandlerRef.current = null;
+      }
+    };
+  }, []);
 
   // Auto-open terminal tab when bottom panel opens with a workspace
   useEffect(() => {
@@ -106,16 +197,8 @@ export function BottomPanel() {
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {tab === "terminal" && <TerminalPanel />}
-        {tab === "output" && (
-          <div className="flex-1 flex items-center justify-center p-4">
-            <p className="text-xs text-dalam-text-muted">No output</p>
-          </div>
-        )}
-        {tab === "problems" && (
-          <div className="flex-1 flex items-center justify-center p-4">
-            <p className="text-xs text-dalam-text-muted">No problems</p>
-          </div>
-        )}
+        {tab === "output" && <OutputTab />}
+        {tab === "problems" && <ProblemsTab />}
       </div>
     </div>
   );

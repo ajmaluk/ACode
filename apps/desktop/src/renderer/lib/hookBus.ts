@@ -124,17 +124,6 @@ class HookEventBus {
   }
 
   /**
-   * Remove all handlers for an event, or all handlers for all events.
-   */
-  clear(eventName?: HookEventName): void {
-    if (eventName) {
-      this.listeners.delete(eventName);
-    } else {
-      this.listeners.clear();
-    }
-  }
-
-  /**
    * Emit an event to all registered handlers.
    * Handlers run sequentially. Errors are caught and logged, never thrown.
    */
@@ -216,12 +205,6 @@ class HookEventBus {
     }
   }
 
-  /**
-   * Get recent execution log entries (for diagnostics).
-   */
-  getExecutionLog(limit = 50): typeof this.executionLog {
-    return this.executionLog.slice(-limit);
-  }
 }
 
 // ---------------------------------------------------------------------------

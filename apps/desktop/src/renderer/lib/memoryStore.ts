@@ -199,7 +199,7 @@ export async function searchMemories(
   const safeQuery = query;
   // Break multi-word query into individual tokens for better search results
   // Escape FTS5 special characters in each token, including double quotes
-  const escapeFts = (t: string) => t.replace(/['"*+\-()^~]/g, ' ').replace(/"/g, ' ');
+  const escapeFts = (t: string) => t.replace(/['"*+\-()^~\\:|]/g, ' ').replace(/"/g, ' ');
   const tokens = safeQuery.split(/\s+/).filter(Boolean);
   const ftsQuery = tokens.map(t => `"${escapeFts(t)}"`).join(" OR ");
   const params: (string | number)[] = [ftsQuery];
@@ -352,7 +352,11 @@ function yamlEscape(s: string): string {
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t")
     .replace(/:/g, "\\:")
-    .replace(/#/g, "\\#");
+    .replace(/#/g, "\\#")
+    .replace(/\|/g, "\\|")
+    .replace(/!/g, "\\!")
+    .replace(/&/g, "\\&")
+    .replace(/\*/g, "\\*");
 }
 
 /**
@@ -795,13 +799,19 @@ Return ONLY the JSON array, no markdown fences.`;
 
 /** Parse a DB row into a MemoryEntry */
 function parseRow(row: MemoryEntryRow): MemoryEntry {
+  let tags: string[] = [];
+  try {
+    tags = typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []);
+  } catch {
+    tags = [];
+  }
   return {
     id: row.id,
     category: row.category as MemoryCategory,
     tier: row.tier as MemoryTier,
     content: row.content,
     summary: row.summary,
-    tags: typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []),
+    tags,
     sourceSession: row.source_session ?? undefined,
     sourceFile: row.source_file ?? undefined,
     createdAt: row.created_at,
@@ -1064,7 +1074,7 @@ interface MemoryEntryRow {
  */
 export function parseLLMJson<T>(response: string): T | null {
   try {
-    let cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+    const cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
     // Try to extract JSON array
     const arrStart = cleaned.indexOf("[");
     const arrEnd = cleaned.lastIndexOf("]");

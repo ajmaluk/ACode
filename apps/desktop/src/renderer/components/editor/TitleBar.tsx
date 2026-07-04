@@ -502,16 +502,18 @@ export function TitleBar() {
           </button>
         </Tooltip>
 
-        {/* Right panel */}
-        <Tooltip content={rightPanelOpen ? `Hide right panel (${mod}\\)` : `Show right panel (${mod}\\)`} side="bottom">
-          <button
-            className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
-              rightPanelOpen ? "text-dalam-text-secondary hover:bg-dalam-bg-hover" : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
-            }`}
-            onClick={toggleRightPanel}>
-            <PanelRight className="w-3.5 h-3.5" />
-          </button>
-        </Tooltip>
+        {/* Right panel — only show in agent/chat mode */}
+        {viewMode === "chat" && (
+          <Tooltip content={rightPanelOpen ? `Hide right panel (${mod}\\)` : `Show right panel (${mod}\\)`} side="bottom">
+            <button
+              className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
+                rightPanelOpen ? "text-dalam-text-secondary hover:bg-dalam-bg-hover" : "text-dalam-accent-primary bg-dalam-accent-subtle hover:bg-dalam-bg-hover"
+              }`}
+              onClick={toggleRightPanel}>
+              <PanelRight className="w-3.5 h-3.5" />
+            </button>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

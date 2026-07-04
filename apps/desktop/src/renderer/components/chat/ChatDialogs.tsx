@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   X, FileCode, ChevronDown, Loader2,
   RotateCcw, History,

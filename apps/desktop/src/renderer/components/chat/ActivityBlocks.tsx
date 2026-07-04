@@ -76,6 +76,7 @@ function ActivityRow({
   defaultOpen = false,
   children,
   trailing,
+  className,
 }: {
   icon?: React.ReactNode;
   iconClass?: string;
@@ -84,11 +85,12 @@ function ActivityRow({
   defaultOpen?: boolean;
   children?: React.ReactNode;
   trailing?: React.ReactNode;
+  className?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const hasDetail = !!children;
   return (
-    <div className="my-0.5">
+    <div className={`my-0.5 ${className ?? ""}`}>
       <button
         type="button"
         onClick={() => hasDetail && setOpen((o) => !o)}
@@ -414,11 +416,16 @@ const TOOL_META: Record<string, { icon: React.ElementType; label: string; color:
   terminal_write: { icon: Terminal, label: "Terminal Cmd", color: "text-dalam-text-muted" },
 };
 
+// Cache for tool metadata lookups to avoid recreating objects per render
+const _toolMetaCache: Record<string, { icon: React.ElementType; label: string; color: string }> = {};
 function getToolMeta(name: string) {
-  return TOOL_META[name] ?? { icon: Code2, label: name, color: "text-dalam-text-muted" };
+  if (_toolMetaCache[name]) return _toolMetaCache[name];
+  const meta = TOOL_META[name] ?? { icon: Code2, label: name, color: "text-dalam-text-muted" };
+  _toolMetaCache[name] = meta;
+  return meta;
 }
 
-export function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
+export const ToolCallsList = React.memo(function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
   if (!toolCalls.length) return null;
   return (
     <div className="my-1">
@@ -427,7 +434,7 @@ export function ToolCallsList({ toolCalls }: { toolCalls: ToolCall[] }) {
       ))}
     </div>
   );
-}
+});
 
 // ============================================================================
 // Smart tool result display — renders results as nice UI instead of raw JSON
@@ -489,7 +496,7 @@ function getFileIconForName(name: string) {
   return File;
 }
 
-function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, unknown> }) {
+const ToolResultDisplay = React.memo(function ToolResultDisplay({ toolName, result, args }: { toolName: string; result: string; args: Record<string, unknown> }) {
   const openFile = useWorkspace((s) => s.openFile);
 
   // list_dir: parse JSON array of { name, path, type }
@@ -628,9 +635,9 @@ function ToolResultDisplay({ toolName, result, args }: { toolName: string; resul
       {display}
     </pre>
   );
-}
+});
 
-function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
+const ToolCallRow = React.memo(function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
   const resolveToolApproval = useChat((s) => s.resolveToolApproval);
   const openDiff = useDiffView((s) => s.openFile);
   const needsApproval = toolCall.status === "awaiting-approval";
@@ -655,6 +662,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
 
   // Status as a small inline word rather than a colored badge — keeps the row
   // visually quiet.
+  const isFailed = toolCall.status === "failed";
   const statusText = (() => {
     switch (toolCall.status) {
       case "completed":         return "done";
@@ -668,6 +676,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
 
   return (
     <ActivityRow
+      className={isFailed ? "border-l-2 border-red-500/50" : undefined}
       label={<>{meta.label}{target ? <span className="opacity-70 ml-1.5 font-mono">{target}</span> : null}</>}
       meta={
         <span className="flex items-center gap-1.5 text-[10px] opacity-70">
@@ -675,8 +684,10 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
             <Loader2 className="w-2.5 h-2.5 animate-spin" />
           ) : toolCall.status === "awaiting-approval" ? (
             <Shield className="w-2.5 h-2.5 text-yellow-500" />
+          ) : isFailed ? (
+            <span className="text-red-400 font-medium">failed</span>
           ) : null}
-          <span>{statusText}</span>
+          {!isFailed && <span>{statusText}</span>}
           {isEdit && toolCall.status === "completed" && typeof args.path === "string" && (
             <>
               <span>·</span>
@@ -748,7 +759,7 @@ function ToolCallRow({ toolCall }: { toolCall: ToolCall }) {
       </div>
     </ActivityRow>
   );
-}
+});
 
 // ============================================================================
 // ChangesCard — file changes with expandable inline diffs
@@ -1073,7 +1084,7 @@ export const QuestionAccordion = React.memo(function QuestionAccordion({ questio
   );
 });
 
-function QuestionItem({ question }: { question: { id: string; question: string; options: string[]; answer: string; timestamp: number } }) {
+const QuestionItem = React.memo(function QuestionItem({ question }: { question: { id: string; question: string; options: string[]; answer: string; timestamp: number } }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-lg border border-dalam-border-primary/40 overflow-hidden">
@@ -1103,4 +1114,4 @@ function QuestionItem({ question }: { question: { id: string; question: string; 
       )}
     </div>
   );
-}
+});

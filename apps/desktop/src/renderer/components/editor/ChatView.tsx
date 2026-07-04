@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
-import { useWorkspace, useChat, useModelProviders, useGit, useSettings, useSettingsView, stripXmlToolCallTags, useQuestion, useAgents } from "@/store/useAppStore";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useWorkspace, useChat, useModelProviders, useGit, useSettings, useSettingsView, stripXmlToolCallTags, useQuestion, useAgents, savePersistedMessages, savePersistedSessionSummaries } from "@/store/useAppStore";
 import {
   X, ArrowUp,
   ChevronDown, ChevronRight, Sparkles,
@@ -24,8 +24,6 @@ import { AttachFileButton } from "@/components/editor/AttachFileButton";
 
 
 // ============================================================================
-// AgentModeSelector — dropdown to switch between build/yolo/plan modes
-// ============================================================================// ============================================================================
 // AgentModeSelector — dropdown to switch between build/yolo/plan modes
 // ============================================================================
 
@@ -99,6 +97,8 @@ function InlineQuestionDialog() {
 
   // Reset state when a new question appears
   const prevRequestIdRef = useRef<string | undefined>(undefined);
+  const optionCount = request?.options?.length ?? 0;
+
   useEffect(() => {
     if (request?.id !== prevRequestIdRef.current) {
       prevRequestIdRef.current = request?.id;
@@ -107,9 +107,29 @@ function InlineQuestionDialog() {
     }
   }, [request?.id]);
 
-  if (!request) return null;
+  // Number key handler
+  useEffect(() => {
+    if (!request) return;
+    const handler = (e: KeyboardEvent) => {
+      // Ignore if typing in input
+      if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "TEXTAREA") return;
+      const n = parseInt(e.key);
+      if (n >= 1 && n <= optionCount) {
+        e.preventDefault();
+        setSelected(n - 1);
+      } else if (e.key === "Enter" && selected >= 0 && selected < optionCount) {
+        e.preventDefault();
+        resolve({ selectedLabel: request.options[selected].label });
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        resolve(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [request, optionCount, selected, resolve]);
 
-  const optionCount = request.options.length;
+  if (!request) return null;
 
   return (
     <div className="mb-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg overflow-hidden animate-fade-in">
@@ -131,7 +151,7 @@ function InlineQuestionDialog() {
         {request.options.map((opt, idx) => (
           <button
             key={opt.label}
-            onClick={() => resolve({ selectedLabel: opt.label })}
+            onClick={() => setSelected(idx)}
             onMouseEnter={() => setSelected(idx)}
             className={`w-full text-left flex items-start gap-3 px-3 py-2 rounded-lg transition-colors ${
               selected === idx ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
@@ -224,6 +244,7 @@ function ChatView() {
   const mainAutocompleteKey = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
   const followupAutocompleteKey = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null>(null);
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
+  const [workspaceSearch, setWorkspaceSearch] = useState("");
   const [showBranchDropdown, setShowBranchDropdown] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [hoveredProvider, setHoveredProvider] = useState<string | null>(null);
@@ -234,6 +255,12 @@ function ChatView() {
   const followupProviderRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const [timestamp] = useState(() => Date.now());
+
+  // Memoize filtered messages to avoid new array on every render
+  const visibleMessages = useMemo(
+    () => messages.filter(m => !m.isToolResult && !m.content?.startsWith("[Tool result for ")),
+    [messages]
+  );
 
   // Reset confirmation dialog state
   const [resetConfirmState, setResetConfirmState] = useState<{
@@ -409,20 +436,14 @@ function ChatView() {
         ? { ...cs, messageCount: kept.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
         : cs
     );
-    // Update state and persist
+    // Update state and persist via store's debounced persistence
     useChat.setState({
       messages: kept,
       sessionMessages: sessionMsgs,
       chatSessions: updatedSessions,
     });
-    // Persist sessionMessages
-    try {
-      localStorage.setItem("dalam.sessionMessages.v1", JSON.stringify(sessionMsgs));
-    } catch { /* ignore quota errors */ }
-    // Persist session summaries
-    try {
-      localStorage.setItem("dalam.chatSessions.v1", JSON.stringify(updatedSessions));
-    } catch { /* ignore */ }
+    savePersistedMessages(sessionMsgs);
+    savePersistedSessionSummaries(updatedSessions);
     // Populate input
     setValue(resetConfirmState.messageContent);
     // Set attachments
@@ -470,14 +491,8 @@ function ChatView() {
       restoredVersionId: null,
       preRestoreMessages: null,
     });
-    // Persist to localStorage
-    try {
-      localStorage.setItem("dalam.sessionMessages.v1", JSON.stringify(sessionMsgs));
-    } catch { /* ignore */ }
-    // Persist session summaries
-    try {
-      localStorage.setItem("dalam.chatSessions.v1", JSON.stringify(updatedSessions));
-    } catch { /* ignore */ }
+    savePersistedMessages(sessionMsgs);
+    savePersistedSessionSummaries(updatedSessions);
     // Clear the stack and hide popup
     setRemovedMessagesStack([]);
     setShowRestorePopup(false);
@@ -881,24 +896,36 @@ Add your project's common commands here so Dalam knows how to build:
                     {showWorkspaceDropdown && (
                       <div className="absolute top-full left-0 mt-1 w-64 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl z-50 overflow-hidden">
                         <div className="p-2 border-b border-dalam-border-primary">
-                          <input className="input-base w-full text-xs" placeholder="Search workspaces" autoFocus />
+                          <input
+                            className="input-base w-full text-xs"
+                            placeholder="Search workspaces"
+                            autoFocus
+                            value={workspaceSearch}
+                            onChange={(e) => setWorkspaceSearch(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Escape") { setShowWorkspaceDropdown(false); setWorkspaceSearch(""); } }}
+                          />
                         </div>
                         <div className="max-h-60 overflow-y-auto">
                           {workspaces.length === 0 && (
                             <div className="px-3 py-3 text-xs text-dalam-text-muted">No workspaces yet. Open a folder to get started.</div>
                           )}
-                          {workspaces.map((ws) => (
+                          {workspaces
+                            .filter((ws) => !workspaceSearch || ws.name.toLowerCase().includes(workspaceSearch.toLowerCase()))
+                            .map((ws) => (
                             <button key={ws.id}
                               className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-dalam-bg-hover transition-colors ${ws.id === activeWorkspaceId ? "bg-dalam-bg-hover" : ""}`}
-                              onClick={() => { setActiveWorkspace(ws.id); setShowWorkspaceDropdown(false); }}>
+                              onClick={() => { setActiveWorkspace(ws.id); setShowWorkspaceDropdown(false); setWorkspaceSearch(""); }}>
                               <FolderOpen className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
                               <span className="flex-1 truncate text-dalam-text-primary">{ws.name}</span>
                               {ws.id === activeWorkspaceId && <Check className="w-4 h-4 text-dalam-accent-primary" />}
                             </button>
                           ))}
+                          {workspaceSearch && workspaces.filter((ws) => ws.name.toLowerCase().includes(workspaceSearch.toLowerCase())).length === 0 && (
+                            <div className="px-3 py-2 text-xs text-dalam-text-muted">No matching workspaces</div>
+                          )}
                           <div className="border-t border-dalam-border-primary">
                             <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
-                              onClick={() => { void openWorkspace(); setShowWorkspaceDropdown(false); }}>
+                              onClick={() => { void openWorkspace(); setShowWorkspaceDropdown(false); setWorkspaceSearch(""); }}>
                               <FolderOpen className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
                               <span>Open folder…</span>
                             </button>
@@ -1077,7 +1104,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
               </div>
             )}
-            {messages.filter(m => !m.isToolResult && !m.content?.startsWith("[Tool result for ")).map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={handleResetToMessage} onResetClick={handleResetClick} isLast={idx === arr.length - 1} />)}
+            {visibleMessages.map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={handleResetToMessage} onResetClick={handleResetClick} isLast={idx === arr.length - 1} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1282,8 +1309,18 @@ function StreamingMessageWrapper({
   // Refs hold latest values for rAF callback (no stale closures)
   const streamingContentRef = useRef(streamingContent);
   const thinkingContentRef = useRef(thinkingContent);
-  streamingContentRef.current = streamingContent;
-  thinkingContentRef.current = thinkingContent;
+  const mountedRef = useRef(true);
+
+  // Sync refs with state via effect
+  useEffect(() => {
+    streamingContentRef.current = streamingContent;
+    thinkingContentRef.current = thinkingContent;
+  }, [streamingContent, thinkingContent]);
+
+  // Track unmount for rAF guard
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const prevCleanRef = useRef("");
   const prevThinkingRef = useRef("");
@@ -1311,22 +1348,20 @@ function StreamingMessageWrapper({
     if (rafIdRef.current === null) {
       rafIdRef.current = requestAnimationFrame(() => {
         rafIdRef.current = null;
+        if (!mountedRef.current) return;
         const raw = streamingContentRef.current;
         const rawThinking = thinkingContentRef.current;
 
         // Only run expensive XML stripping when content likely contains tags
         const cleaned = raw && (raw.includes("<") || raw.match(/\bquestion\s+question=/)) ? stripXmlToolCallTags(raw) : raw || "";
 
-        let changed = false;
         if (prevCleanRef.current !== cleaned) {
           prevCleanRef.current = cleaned;
           setCleanStreamingContent(cleaned);
-          changed = true;
         }
         if (prevThinkingRef.current !== rawThinking) {
           prevThinkingRef.current = rawThinking;
           setCleanThinkingContent(rawThinking);
-          changed = true;
         }
       });
     }
@@ -1339,12 +1374,19 @@ function StreamingMessageWrapper({
     };
   }, [streamingContent, thinkingContent]);
 
-  // Handle auto-scroll on content updates
+  // Handle auto-scroll on content updates — throttled via RAF
+  const streamScrollRafRef = useRef<number>(0);
   useEffect(() => {
     if (!isUserScrolledUp.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      cancelAnimationFrame(streamScrollRafRef.current);
+      streamScrollRafRef.current = requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      });
     }
-  }, [cleanStreamingContent, cleanThinkingContent, scrollRef, isUserScrolledUp]);
+    return () => cancelAnimationFrame(streamScrollRafRef.current);
+  }, [cleanStreamingContent, cleanThinkingContent]);
 
   // Memoize streaming message object to prevent re-render cascade
   const streamingMessage = React.useMemo(() => ({

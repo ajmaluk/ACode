@@ -62,6 +62,7 @@ const TAG_TO_TOOL: Record<string, string> = {
   websearch: "websearch",
   run_command: "bash",
   task: "task",
+  create_file: "create_file",
 };
 
 // Comprehensive list of ALL tool names for display stripping (must match dalamAPI.ts KNOWN_TOOL_NAMES)
@@ -74,6 +75,10 @@ const ALL_TOOL_NAMES = [
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
   "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan", "question",
+  // UI control tools
+  "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode",
+  "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab",
+  "new_terminal", "terminal_write", "create_file", "execute",
   // Legacy aliases used by TAG_TO_TOOL
   "bash", "shell", "search", "grep", "webfetch", "websearch",
 ];
@@ -88,8 +93,12 @@ const XML_STRIP_RE = new RegExp(
 const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi");
 const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
 const XML_INCOMPLETE_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi");
-const XML_MODEL_OUTPUT_RE = /<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)[^>]*>/gi;
-const XML_MODEL_OUTPUT_CLOSE_RE = /<\/?(?:user|assistant|system|thinking|thought|reasoning|analysis|plan|response|output|result|content|message)\s*>/gi;
+const XML_MODEL_OUTPUT_RE = /<\/?(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)[^>]*>/gi;
+const XML_MODEL_OUTPUT_CLOSE_RE = /<\/?(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\s*>/gi;
+// Strip skill invocation / structured plan XML tags emitted by models in Plan mode.
+const XML_SKILL_INVOCATION_RE = /<skill_invocation[\s\S]*?<\/skill_invocation>|<skill_invocation[^>]*\/>/gi;
+const XML_STRUCTURED_TAG_RE = /<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*>[\s\S]*?<\/(?:parameter|goal|subgoal|steps|step|constraint|context|scope)>|<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*\/>/gi;
+const XML_STRUCTURED_ORPHAN_CLOSE_RE = /<\/(?:parameter|goal|subgoal|steps|step|constraint|context|scope)>/gi;
 
 /**
  * Strip all XML tool call tags from content (for display purposes).
@@ -111,6 +120,9 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(/\bquestion\s+question="[^"]*"\s+options="[^"]*"\s*\/?>/g, "");
   // Strip Anthropic antml:function_calls / <invoke> blocks
   result = result.replace(/(?:antml:function_calls\s*)?<invoke[\s\S]*?<\/(?:antml:)?function_calls\s*>/gi, "");
+  // Strip generic <function_calls> blocks (Llama, Mistral, vLLM, OpenAI leaks)
+  result = result.replace(/<function_calls[\s\S]*?<\/function_calls>/gi, "");
+  result = result.replace(/<\/?function_calls[^>]*>/gi, "");
   // Strip orphan antml tags
   result = result.replace(/<\/?antml:[^>]*>/gi, "");
   // Strip orphan <invoke> tags
@@ -118,14 +130,28 @@ export function stripXmlToolCallTags(content: string): string {
   // Strip incomplete XML tool tags at end of content (arriving across streaming deltas)
   // Matches: <run_command command="ls -la$  (no closing > or />)
   result = result.replace(XML_INCOMPLETE_TAG_RE, "");
+  // Strip DeepSeek special tokens (unicode bracket tokens)
+  result = result.replace(/<\uff5c[\s\S]*?\uff5c>/g, "");
+  // Strip OpenAI internal channel/message tokens that may leak
+  result = result.replace(/<\|(?:channel|message|start|end|system_call)\|>/gi, "");
+  // Strip incomplete think/streaming tags at end of content
+  result = result.replace(/<think[^>]*$/gi, "");
+  result = result.replace(/<function_calls[^>]*$/gi, "");
   // Strip broken/malformed tag fragments from model output (e.g. ><]minimax[>][)
   result = result.replace(/>\]\s*<[^>]*>?\[</g, "");
   result = result.replace(/\]>\s*\[</g, "");
   result = result.replace(/<\]?\w+\[>?\]?\[?/g, "");
+  // Strip skill invocation / structured plan XML blocks (Plan mode)
+  result = result.replace(XML_SKILL_INVOCATION_RE, "");
+  result = result.replace(XML_STRUCTURED_TAG_RE, "");
+  result = result.replace(XML_STRUCTURED_ORPHAN_CLOSE_RE, "");
   // Strip common model output tags that aren't tool calls
   result = result.replace(XML_MODEL_OUTPUT_RE, "");
   // Strip orphan closing tags for the above
   result = result.replace(XML_MODEL_OUTPUT_CLOSE_RE, "");
+  // Strip incomplete skill/structured tags at end of content (streaming)
+  result = result.replace(/<skill_invocation[^>]*$/gi, "");
+  result = result.replace(/<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*$/gi, "");
   // Clean up excessive whitespace left behind
   result = result.replace(/\n{3,}/g, "\n\n").trim();
   return result;
@@ -245,7 +271,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         });
       }
     } catch (err) {
-      console.error("Failed to load settings, using defaults:", err);
+      if (import.meta.env.DEV) console.error("Failed to load settings, using defaults:", err);
       set({ loaded: true });
     }
   },
@@ -315,7 +341,7 @@ function loadPersistedWorkspaces(): { workspaces: Workspace[]; activeId: string 
         activeId: data.activeId ?? null,
       };
     }
-  } catch { console.warn("[Storage] Failed to load persisted workspaces"); }
+  } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); }
   return { workspaces: [], activeId: null };
 }
 
@@ -434,7 +460,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       await loadWorkspaceConfigAndSessions(path);
     } catch (err) {
       set({ loading: false });
-      console.error("Failed to open workspace:", err);
+      if (import.meta.env.DEV) console.error("Failed to open workspace:", err);
     }
   },
 
@@ -445,13 +471,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   setActiveWorkspace(id) {
     // Abort any active streaming session before switching
     // Use event bus to avoid circular dependency
+    const ws = get().workspaces.find((w) => w.id === id);
     import("./events").then(({ eventBus }) => {
-      eventBus.emit("workspace:switched", { workspaceId: id, path: "" });
+      eventBus.emit("workspace:switched", { workspaceId: id, path: ws?.path ?? "" });
     });
     // Clear all open tabs and file tree when switching projects (VS Code behavior)
     set({ activeWorkspaceId: id, openTabs: [], activeFilePath: null, fileTree: [] });
     savePersistedWorkspaces(get().workspaces, id);
-    const ws = get().workspaces.find((w) => w.id === id);
     if (ws) {
       void loadWorkspaceConfigAndSessions(ws.path);
       void get().loadFileTree(ws.path);
@@ -529,7 +555,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         eventBus.emit("workspace:file-opened", { path });
       });
     } catch (err) {
-      console.error("Failed to open file:", path, err);
+      if (import.meta.env.DEV) console.error("Failed to open file:", path, err);
     }
   },
 
@@ -576,7 +602,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const tree = await api.fs.listDir(ws.path);
       set({ fileTree: tree });
     } catch (err) {
-      console.error("Failed to refresh file tree:", err);
+      if (import.meta.env.DEV) console.error("Failed to refresh file tree:", err);
     }
   },
 
@@ -586,7 +612,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const tree = await api.fs.listDir(path);
       set({ fileTree: tree });
     } catch (err) {
-      console.error("Failed to load file tree:", err);
+      if (import.meta.env.DEV) console.error("Failed to load file tree:", err);
     }
   },
 
@@ -650,22 +676,31 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 
 // Subscribe to view mode changes to handle cross-store logic
 // This replaces the direct getState() calls that caused circular dependencies
-import("./events").then(({ eventBus }) => {
-  eventBus.on("ui:view-mode-changed", ({ mode }) => {
-    if (mode === "chat") {
-      // When switching to chat mode, close all open editor tabs
-      useWorkspace.setState({ openTabs: [], activeFilePath: null });
-    }
-    if (mode === "editor") {
-      // When switching to editor mode, load file tree for the active workspace
-      const wsId = useWorkspace.getState().activeWorkspaceId;
-      const ws = useWorkspace.getState().workspaces.find((w) => w.id === wsId);
-      if (ws) {
-        void useWorkspace.getState().loadFileTree(ws.path);
-      }
-    }
-  });
-});
+{
+  let _viewModeListenerRegistered = false;
+  try {
+    import("./events").then(({ eventBus }) => {
+      if (_viewModeListenerRegistered) return;
+      _viewModeListenerRegistered = true;
+      eventBus.on("ui:view-mode-changed", ({ mode }) => {
+        if (mode === "chat") {
+          // When switching to chat mode, close all open editor tabs
+          useWorkspace.setState({ openTabs: [], activeFilePath: null });
+        }
+        if (mode === "editor") {
+          // When switching to editor mode, load file tree for the active workspace
+          const wsId = useWorkspace.getState().activeWorkspaceId;
+          const ws = useWorkspace.getState().workspaces.find((w) => w.id === wsId);
+          if (ws) {
+            void useWorkspace.getState().loadFileTree(ws.path);
+          }
+        }
+      });
+    });
+  } catch (err) {
+    console.warn("[Store] Failed to register view-mode-changed listener:", err);
+  }
+}
 
 type GitState = {
   status: GitStatus | null;
@@ -739,7 +774,8 @@ function loadEnabledSkills(): Set<string> {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set(defaults);
     return new Set(parsed as string[]);
-  } catch {
+  } catch (err) {
+    console.warn("[useChat] Failed to load persisted data:", err);
     return new Set(defaults);
   }
 }
@@ -748,8 +784,8 @@ function saveEnabledSkills(s: Set<string>) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(ENABLED_SKILLS_STORAGE, JSON.stringify(Array.from(s)));
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.warn("[useChat] Failed to load persisted data:", err);
   }
 }
 
@@ -757,7 +793,7 @@ function loadPersistedVersions(): Record<string, import("@dalam/shared-types").C
   try {
     const raw = localStorage.getItem(SESSION_VERSIONS_KEY);
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); return {}; }
 }
 
 function savePersistedVersions(versions: Record<string, import("@dalam/shared-types").ChatVersion[]>) {
@@ -769,7 +805,7 @@ function loadPersistedMessages(): Record<string, import("@dalam/shared-types").C
   try {
     const raw = localStorage.getItem(SESSION_MESSAGES_KEY);
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); return {}; }
 }
 
 // Throttled message persistence: batches rapid localStorage writes during streaming.
@@ -794,7 +830,7 @@ function _doSavePersistedMessages(messages: MessagesMap) {
           console.warn("[Storage] Quota exceeded - dropping oldest sessions");
           const pruned3 = dropOldestSessions(pruned2, 3);
           try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3)); } catch {
-            console.error("[Storage] Failed to save messages even after aggressive pruning");
+            if (import.meta.env.DEV) console.error("[Storage] Failed to save messages even after aggressive pruning");
           }
         }
       }
@@ -803,7 +839,7 @@ function _doSavePersistedMessages(messages: MessagesMap) {
     }
   }
 }
-function savePersistedMessages(messages: MessagesMap) {
+export function savePersistedMessages(messages: MessagesMap) {
   _pendingMessagesRef = messages;
   if (_saveMessagesTimer) clearTimeout(_saveMessagesTimer);
   _saveMessagesTimer = setTimeout(() => {
@@ -865,7 +901,7 @@ function loadPersistedAgents(): Record<string, PrimaryAgentName> {
   try {
     const raw = localStorage.getItem(SESSION_AGENTS_KEY);
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); return {}; }
 }
 
 function savePersistedAgents(agents: Record<string, PrimaryAgentName>) {
@@ -877,10 +913,10 @@ function loadPersistedSessionSummaries(): ChatSessionSummary[] {
   try {
     const raw = localStorage.getItem(SESSION_SUMMARIES_KEY);
     return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); return []; }
 }
 
-function savePersistedSessionSummaries(sessions: ChatSessionSummary[]) {
+export function savePersistedSessionSummaries(sessions: ChatSessionSummary[]) {
   try { localStorage.setItem(SESSION_SUMMARIES_KEY, JSON.stringify(sessions)); } catch (e) { console.warn("Failed to save session summaries:", e); }
   void saveWorkspaceData();
 }
@@ -891,7 +927,7 @@ function loadPersistedCompactionSummaries(): Record<string, string> {
   try {
     const raw = localStorage.getItem(COMPACTION_SUMMARIES_KEY);
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); return {}; }
 }
 
 function savePersistedCompactionSummaries(summaries: Record<string, string>) {
@@ -922,7 +958,6 @@ const _antiThrashTimestamps: Record<string, number> = {}; // sessionId → times
 // Safety Timer Helper — eliminates 3× duplicated timer logic in sendMessage/appendStream
 // ============================================================================
 const SAFETY_TIMEOUT_MS = 120_000;
-let _safetyTimerRef: ReturnType<typeof setTimeout> | null = null;
 const TOOL_APPROVAL_TIMEOUT_MS = 600_000; // 10 min during tool approval
 
 function _createSafetyTimer(
@@ -992,7 +1027,6 @@ type DoomLoopResult = { message: string; severity: "warn" | "halt" };
 
 function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<string, unknown>): DoomLoopResult | null {
   const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
-  const history = _toolCallHistory[sessionId] ?? [];
   const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
   const currentCount = (failures[sig] ?? 0) + 1;
   failures[sig] = currentCount;
@@ -1006,25 +1040,14 @@ function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<st
   if (currentCount >= threshold) {
     return { message: `Doom loop detected: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agent appears stuck in a death spiral.`, severity: "warn" };
   }
-  // Count consecutive failures from the tail of history for this tool
-  const recentFailures = history.filter(h => h.name === toolName);
-  let consecutiveTailFailures = 0;
-  for (let i = recentFailures.length - 1; i >= 0; i--) {
-    // All entries in history are failures (only failures are recorded), so count from tail
-    consecutiveTailFailures++;
-  }
-  if (consecutiveTailFailures >= haltThreshold) {
-    return { message: `Tool guardrail HALTED: "${toolName}" has accumulated ${consecutiveTailFailures} failures across this session. The agentic loop has been stopped.`, severity: "halt" };
-  }
-  if (consecutiveTailFailures >= threshold) {
-    return { message: `Tool guardrail: "${toolName}" has accumulated ${consecutiveTailFailures} failures across this session. Consider changing strategy.`, severity: "warn" };
-  }
   return null;
 }
 
 function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
+  // Periodically prune stale sessions to prevent unbounded memory growth
+  _pruneDoomLoopMaps();
   const history = [...(_toolCallHistory[sessionId] ?? [])];
-  history.push({ name: toolName, args: JSON.stringify(toolArgs) });
+  history.push({ name: toolName, args: JSON.stringify(toolArgs, Object.keys(toolArgs).sort()) });
   _toolCallHistory[sessionId] = history.slice(-50);
   // Cap _toolFailureCounts to prevent unbounded growth across sessions
   const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
@@ -1037,8 +1060,21 @@ function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Recor
   }
 }
 
+// Global cap: if too many sessions accumulate, prune the oldest ones
+const MAX_SESSIONS_IN_DOOM_MAPS = 20;
+function _pruneDoomLoopMaps() {
+  const sessionIds = Object.keys(_toolCallHistory);
+  if (sessionIds.length > MAX_SESSIONS_IN_DOOM_MAPS) {
+    const toRemove = sessionIds.slice(0, sessionIds.length - MAX_SESSIONS_IN_DOOM_MAPS);
+    for (const id of toRemove) {
+      delete _toolCallHistory[id];
+      delete _toolFailureCounts[id];
+    }
+  }
+}
+
 function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
-  const sig = `${toolName}:${JSON.stringify(toolArgs)}`;
+  const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
   const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
   delete failures[sig];
   _toolFailureCounts[sessionId] = failures;
@@ -1130,8 +1166,6 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
       useChat.setState((s) => ({
         messages: [...s.messages, sysMsg],
         _sendInProgress: false,
-        _deltaBatchBuffer: "",
-        _deltaBatchTimer: null,
       }));
     }
   }).catch((compactErr) => {
@@ -1216,7 +1250,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
           const currentSettings = useSettings.getState().settings;
           const mergedSettings = { ...currentSettings, ...projConfig.settings };
           useSettings.setState({ settings: mergedSettings });
-          localStorage.setItem("dalam.settings.v1", JSON.stringify(mergedSettings));
+          try { localStorage.setItem("dalam.settings.v1", JSON.stringify(mergedSettings)); } catch (e) { console.warn("[Storage] Failed to save merged settings:", e); }
         }
         if (projConfig.providers) {
           const { providers } = useModelProviders.getState();
@@ -1225,7 +1259,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
             return projProv ? { ...p, ...projProv } : p;
           });
           useModelProviders.setState({ providers: nextProviders });
-          localStorage.setItem("dalam.providers.v1", JSON.stringify(nextProviders));
+          try { localStorage.setItem("dalam.providers.v1", JSON.stringify(nextProviders)); } catch (e) { console.warn("[Storage] Failed to save merged providers:", e); }
         }
 
         // Merge project-scoped MCP servers from config.json with user-scoped ones from localStorage
@@ -1260,9 +1294,9 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
         // Auto-connect any enabled & disconnected servers
         finalServers.forEach((server) => {
           if (server.enabled && server.status === "disconnected") {
-            void useSkillsMcp.getState().connectMcpServer(server.name).catch((err) =>
-              console.error(`Failed to auto-connect to MCP server ${server.name}:`, err)
-            );
+            void useSkillsMcp.getState().connectMcpServer(server.name).catch((err) => {
+              if (import.meta.env.DEV) console.error(`Failed to auto-connect to MCP server ${server.name}:`, err);
+            });
           }
         });
       } catch (e) {
@@ -1295,9 +1329,9 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
 
         globalMcpServers.forEach((server) => {
           if (server.enabled && server.status === "disconnected") {
-            void useSkillsMcp.getState().connectMcpServer(server.name).catch((err) =>
-              console.error(`Failed to auto-connect to MCP server ${server.name}:`, err)
-            );
+            void useSkillsMcp.getState().connectMcpServer(server.name).catch((err) => {
+              if (import.meta.env.DEV) console.error(`Failed to auto-connect to MCP server ${server.name}:`, err);
+            });
           }
         });
       } catch (e) {
@@ -1657,9 +1691,6 @@ type ChatState = {
   _sendInProgress: boolean;
   /** Timers for auto-removing denied tools and completed sub-agents from UI */
   _autoRemoveTimers: Set<ReturnType<typeof setTimeout>>;
-  /** Buffer for batching message-delta events to reduce React re-renders */
-  _deltaBatchBuffer: string;
-  _deltaBatchTimer: ReturnType<typeof setTimeout> | null;
   doomLoopWarningCount: number;
   /** Active sub-agents spawned via the task tool */
   subAgents: SubAgentState[];
@@ -1739,8 +1770,6 @@ export const useChat = create<ChatState>((set, get) => ({
   _compactingSessions: new Set<string>(),
   _safetyTimer: null,
   _sendInProgress: false,
-  _deltaBatchBuffer: "",
-  _deltaBatchTimer: null,
   doomLoopWarningCount: 0,
   _suppressSessionRestore: false,
   agentMode: "build" as import("@dalam/shared-types").AgentSessionMode,
@@ -1874,8 +1903,6 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlan: null,
       taskPlanSummary: null,
       streamingContent: "",
-      _deltaBatchBuffer: "",
-      _deltaBatchTimer: null,
       thinkingContent: "",
       _pendingChanges: [],
       chatSessions: [
@@ -1899,12 +1926,6 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
-    // Delta batch buffer is no longer used — message-delta flushes directly to streamingContent.
-    // This guard remains for backward compatibility with any in-flight deltas.
-    const buf = get()._deltaBatchBuffer;
-    if (buf) {
-      set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "" }));
-    }
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
     try {
@@ -1927,6 +1948,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [],
           _safetyTimer: null,
           subAgents: [],
+          messageQueue: [],
           chatSessions: get().chatSessions.map((s) =>
             s.id === sessionId ? { ...s, status: "aborted" as const, lastActivityAt: Date.now(), lastVisitedAt: Date.now() } : s
           ),
@@ -1941,9 +1963,33 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async sendMessage(content) {
-    const { isStreaming, _sendInProgress } = get();
-    if (isStreaming || _sendInProgress) return;
-    set({ _sendInProgress: true });
+    // If viewing history, exit history mode first (restore to latest messages)
+    const historyIdx = get().chatHistoryIdx;
+    if (historyIdx >= 0) {
+      const { chatHistory } = get();
+      const latestMessages = chatHistory[chatHistory.length - 1] ?? [];
+      set({ chatHistoryIdx: -1, messages: latestMessages });
+    }
+
+    // Atomic check-and-set to prevent race condition from rapid double-clicks
+    let sendBlocked = false;
+    set((s) => {
+      if (s.isStreaming || s._sendInProgress) {
+        sendBlocked = true;
+        return s; // No state change
+      }
+      return { _sendInProgress: true };
+    });
+    if (sendBlocked) return;
+
+    // Safety timeout: if _sendInProgress gets stuck true (e.g., unhandled exception), reset after 30s
+    const sendInProgressSafety = setTimeout(() => {
+      const s = get();
+      if (s._sendInProgress && !s.isStreaming) {
+        console.warn("[useChat] _sendInProgress safety timeout — resetting stuck state");
+        set({ _sendInProgress: false });
+      }
+    }, 30_000);
 
     let { session } = get();
     if (!session) {
@@ -1956,7 +2002,7 @@ export const useChat = create<ChatState>((set, get) => ({
         const sessionMode = get().agentMode || "build" as import("@dalam/shared-types").AgentSessionMode;
         await get().startSession(targetWs ?? "", sessionMode);
       } catch (err) {
-        console.error("Failed to start session:", err);
+        if (import.meta.env.DEV) console.error("Failed to start session:", err);
         set({ _sendInProgress: false, _suppressSessionRestore: false });
         return;
       }
@@ -2034,7 +2080,10 @@ export const useChat = create<ChatState>((set, get) => ({
       // Context overflow auto-compaction: handle errors thrown before streaming starts
       if (sendSessionId && _isContextOverflowError(msg)) {
         if (_handleContextOverflowRetry(sendSessionId)) {
-          return; // retry initiated
+          // Clear flags so user can interact while compaction runs async
+          clearTimeout(sendInProgressSafety);
+          set({ isStreaming: false, _sendInProgress: false, streamingContent: "", thinkingContent: "" });
+          return;
         }
       }
       // Standard error handling (non-overflow errors)
@@ -2052,8 +2101,6 @@ export const useChat = create<ChatState>((set, get) => ({
       set((s) => {
         const timer = s._safetyTimer;
         if (timer) clearTimeout(timer);
-        const dt = s._deltaBatchTimer;
-        if (dt) clearTimeout(dt);
         return {
           isStreaming: false,
           streamingStartedAt: null,
@@ -2062,8 +2109,6 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingToolCalls: [],
           pendingActivities: [],
           _safetyTimer: null,
-          _deltaBatchBuffer: "",
-          _deltaBatchTimer: null,
           messages: [...s.messages, errorMsg],
           sessionMessages: newSessionMessages,
           chatSessions: s.session
@@ -2078,40 +2123,29 @@ export const useChat = create<ChatState>((set, get) => ({
       savePersistedMessages(newSessionMessages);
       savePersistedSessionSummaries(get().chatSessions);
     }
-    // Clear safety timer on normal completion (message-end handles this)
-    // Timer is cleared by the catch block on error; on success it's cleared
-    // when streaming ends normally via the message-end handler
+    // Clear safety timer and reset _sendInProgress
+    clearTimeout(sendInProgressSafety);
     set({ _sendInProgress: false });
   },
 
   appendStream(event) {
     const _log = (...args: unknown[]) => {
-      try {
-        if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).__DALAM_DEBUG) {
-          console.log("[DALAM:store]", ...args);
-        }
-      } catch { /* ignore */ }
+      if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).__DALAM_DEBUG) {
+        console.log("[DALAM:store]", ...args);
+      }
     };
     _log(`appendStream: ${event.type}`, event.type === "message-delta" ? `len=${event.content?.length ?? 0}` : event.type === "message-end" ? `msgId=${event.messageId}` : "");
-    // Safety net: flush any residual delta batch buffer on non-delta events.
-    // Delta batch buffer is vestigial — message-delta now flushes directly.
-    // This guard handles edge cases with abort() race conditions.
-    if (event.type !== "message-delta") {
-      const buf = get()._deltaBatchBuffer;
-      if (buf) {
-        set((s) => ({ streamingContent: s.streamingContent + buf, _deltaBatchBuffer: "" }));
-      }
-    }
     // Reset safety timer on every stream event — the agent loop is alive
     // as long as events keep flowing. This prevents the timer from killing
     // active multi-turn agent loops (tool approval waits, sequential LLM calls).
     // If there are pending tool approvals, use the extended 10-minute timeout.
-    // Use module-level variable instead of Zustand state to avoid cascading re-renders.
-    if (_safetyTimerRef) {
-      clearTimeout(_safetyTimerRef);
+    {
+      const currentTimer = get()._safetyTimer;
+      if (currentTimer) clearTimeout(currentTimer);
       const pending = get().pendingToolCalls;
       const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
-      _safetyTimerRef = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
+      const newTimer = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
+      set({ _safetyTimer: newTimer });
     }
     switch (event.type) {
       case "message-start": {
@@ -2328,7 +2362,6 @@ export const useChat = create<ChatState>((set, get) => ({
           break;
         }
 
-        const planComplete = false; // Plan mode removed
         const currentTaskPlan = get().taskPlan;
         const currentTaskPlanSummary = get().taskPlanSummary;
         // Find the last user message to group this assistant turn under
@@ -2364,7 +2397,6 @@ export const useChat = create<ChatState>((set, get) => ({
           _pendingChanges: [],
           pendingToolCalls: [],
           pendingActivities: [],
-          ...(planComplete ? { planApproval: { planContent: finalContent, status: "pending" } } : {}),
           chatSessions: liveSession
             ? get().chatSessions.map((s) =>
                 s.id === liveSession.id
@@ -2374,16 +2406,19 @@ export const useChat = create<ChatState>((set, get) => ({
             : get().chatSessions,
         });
         // Process message queue: auto-send next queued message
-        // Use _queueProcessing guard to prevent races with concurrent user input
+        // Guard: only send if not already streaming or in-progress
         const { messageQueue } = get();
         if (messageQueue.length > 0) {
           const next = messageQueue[0];
           set({ messageQueue: messageQueue.slice(1) });
           setTimeout(() => {
-            // Double-check: only send if still not streaming AND this queue item hasn't been superseded
+            // Double-check: only send if still not streaming
             const state = get();
-            if (!state.isStreaming && !state._sendInProgress && state.messageQueue.indexOf(next) === -1) {
+            if (!state.isStreaming && !state._sendInProgress) {
               void get().sendMessage(next.content);
+            } else {
+              // Re-enqueue at front so it's tried again after streaming finishes
+              useChat.setState(s => ({ messageQueue: [next, ...s.messageQueue] }));
             }
           }, 300);
         }
@@ -2488,7 +2523,7 @@ export const useChat = create<ChatState>((set, get) => ({
               });
             }
           }).catch((err) => {
-            console.error("Permission dialog error:", err);
+            if (import.meta.env.DEV) console.error("Permission dialog error:", err);
             // If the dialog was dismissed/closed, deny the tool to unblock waitForToolApproval
             get().resolveToolApproval(tool.id, "denied");
           });
@@ -2519,6 +2554,9 @@ export const useChat = create<ChatState>((set, get) => ({
               if (msg.role !== "assistant" || !msg.toolCalls?.length) continue;
               const hasMatchingTc = msg.toolCalls.some((tc) => tc.id === event.toolCallId);
               if (!hasMatchingTc) continue;
+              // Guard: skip if this result was already applied (prevents double-patching in multi-turn loops)
+              const alreadyApplied = msg.toolCalls.some((tc) => tc.id === event.toolCallId && tc.result !== undefined);
+              if (alreadyApplied) break;
               const patchedToolCalls = msg.toolCalls.map((tc) =>
                 tc.id === event.toolCallId
                   ? { ...tc, status: (typeof event.result === "string" && event.result.startsWith("Error:") ? "failed" : "completed") as "completed" | "failed", result: event.result }
@@ -2668,7 +2706,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "activity-think": {
         set((s) => ({
-          thinkingContent: (s.thinkingContent + event.content).slice(-100000),
+          thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000),
         }));
         break;
       }
@@ -2851,7 +2889,7 @@ export const useChat = create<ChatState>((set, get) => ({
             });
           }
         }).catch((err) => {
-          console.error("Permission dialog error:", err);
+          if (import.meta.env.DEV) console.error("Permission dialog error:", err);
           // If the dialog was dismissed/closed, deny the tool to unblock the agent loop
           if (event.toolCallId) {
             get().resolveToolApproval(event.toolCallId, "denied");
@@ -2874,7 +2912,7 @@ export const useChat = create<ChatState>((set, get) => ({
           question: event.question,
           options: event.options ?? [],
         }).catch((err) => {
-          console.error("ask-question error:", err);
+          if (import.meta.env.DEV) console.error("ask-question error:", err);
           // Restore status on error so the UI doesn't get stuck
           if (questionSessionId) {
             try { useChat.getState().setSessionStatus(questionSessionId, "running"); } catch { /* ignore */ }
@@ -2955,8 +2993,6 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear safety timer on reset
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
-    const deltaTimer = get()._deltaBatchTimer;
-    if (deltaTimer) clearTimeout(deltaTimer);
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
     _toolCallResolvers.clear();
@@ -2976,8 +3012,6 @@ export const useChat = create<ChatState>((set, get) => ({
       _safetyTimer: null,
       _sendInProgress: false,
       subAgents: [],
-      _deltaBatchBuffer: "",
-      _deltaBatchTimer: null,
     });
   },
 
@@ -3026,8 +3060,6 @@ export const useChat = create<ChatState>((set, get) => ({
         messageQueue: [],
         _suppressSessionRestore: false,
         _safetyTimer: null,
-        _deltaBatchBuffer: "",
-        _deltaBatchTimer: null,
         todos: [],
         _pendingChanges: [],
         subAgents: [],
@@ -3613,7 +3645,7 @@ export const useChat = create<ChatState>((set, get) => ({
         try {
           if (sessionId) await api.agent.approveDiff(sessionId, tool.diffId);
         } catch (err) {
-          console.error("Failed to approve diff:", err);
+          if (import.meta.env.DEV) console.error("Failed to approve diff:", err);
           const failMsg = `Diff approval failed: ${err}`;
           set((s) => ({
             pendingToolCalls: s.pendingToolCalls.map((tc) =>
@@ -3638,7 +3670,7 @@ export const useChat = create<ChatState>((set, get) => ({
         try {
           if (sessionId) await api.agent.rejectDiff(sessionId, tool.diffId);
         } catch (err) {
-          console.error("Failed to reject diff:", err);
+          if (import.meta.env.DEV) console.error("Failed to reject diff:", err);
         }
       }
     }
@@ -3683,8 +3715,6 @@ export const useChat = create<ChatState>((set, get) => ({
     _toolCallResolvers.clear();
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
-    const deltaBatchTimer = get()._deltaBatchTimer;
-    if (deltaBatchTimer) clearTimeout(deltaBatchTimer);
     // Stop trajectory recording for old session
     if (latestSession) void stopRecording(latestSession.id).catch(() => {});
     // Clear doom loop + context overflow + compaction state
@@ -3749,8 +3779,6 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlanSummary: null,
       subAgents: [],
       _safetyTimer: null,
-      _deltaBatchBuffer: "",
-      _deltaBatchTimer: null,
       _suppressSessionRestore: true,
     });
     savePersistedSessionSummaries(finalizedSessions);
@@ -3957,7 +3985,15 @@ function saveMcpServers(servers: McpServer[]) {
       ...rest,
       status: "disconnected" as const,
     }));
-  localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(userServers));
+  try {
+    localStorage.setItem(MCP_STORAGE_KEY, JSON.stringify(userServers));
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      console.warn("[Storage] Quota exceeded saving MCP servers:", e);
+    } else {
+      console.warn("[Storage] Failed to save MCP servers:", e);
+    }
+  }
   void saveWorkspaceData();
 }
 
@@ -4102,8 +4138,16 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
         userSkillsOnly.push(sk);
       }
     });
-    localStorage.setItem(BUNDLED_SKILLS_STORAGE_KEY, JSON.stringify(bundledStates));
-    localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
+    try {
+      localStorage.setItem(BUNDLED_SKILLS_STORAGE_KEY, JSON.stringify(bundledStates));
+    } catch (e) {
+      console.warn("[Storage] Failed to save bundled skills states:", e);
+    }
+    try {
+      localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
+    } catch (e) {
+      console.warn("[Storage] Failed to save user skills:", e);
+    }
   },
   toggleMcp(name) {
     set((s) => ({
@@ -4127,14 +4171,22 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
       return { skills: [...s.skills, { ...skill, enabled: true, source: "user" as const }] };
     });
     const userSkillsOnly = get().skills.filter(sk => sk.source === "user");
-    localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
+    try {
+      localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
+    } catch (e) {
+      console.warn("[Storage] Failed to save user skills:", e);
+    }
   },
   removeSkill(name) {
     set((s) => ({
       skills: s.skills.filter((sk) => sk.name !== name),
     }));
     const userSkillsOnly = get().skills.filter(sk => sk.source === "user");
-    localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
+    try {
+      localStorage.setItem(USER_SKILLS_STORAGE_KEY, JSON.stringify(userSkillsOnly));
+    } catch (e) {
+      console.warn("[Storage] Failed to save user skills:", e);
+    }
   },
   addMcpServer(server) {
     set((s) => {
@@ -4198,7 +4250,7 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
       }));
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`MCP server "${name}" connection failed:`, errorMsg);
+      if (import.meta.env.DEV) console.error(`MCP server "${name}" connection failed:`, errorMsg);
       set((s) => ({
         mcpServers: s.mcpServers.map((m) =>
           m.name === name ? { ...m, status: "error", error: errorMsg } : m
@@ -4256,7 +4308,15 @@ function loadProviders(): ModelProvider[] {
 }
 
 function saveProviders(providers: ModelProvider[]) {
-  localStorage.setItem(PROVIDERS_STORAGE_KEY, JSON.stringify(providers));
+  try {
+    localStorage.setItem(PROVIDERS_STORAGE_KEY, JSON.stringify(providers));
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      console.warn("[Storage] Quota exceeded saving providers:", e);
+    } else {
+      console.warn("[Storage] Failed to save providers:", e);
+    }
+  }
   void saveWorkspaceData();
 }
 
@@ -4610,9 +4670,9 @@ export const useUI = create<UIState>((set, get) => ({
   setViewMode: (mode) => {
     const prevMode = get().viewMode;
     const patch: Partial<UIState> = { viewMode: mode };
-    // Auto-close the right panel when switching from editor mode to chat mode
-    // to prevent stale empty panels from taking up horizontal space
-    if (prevMode === "editor" && mode === "chat" && get().rightPanelOpen) {
+    // Always close the right panel when switching to chat/agent mode
+    // Agent mode doesn't need the right sidebar by default
+    if (mode === "chat" && get().rightPanelOpen) {
       patch.rightPanelOpen = false;
     }
     set(patch);

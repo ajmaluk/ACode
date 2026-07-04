@@ -16,7 +16,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { ShortcutsCheatsheet } from "@/components/ui/ShortcutsCheatsheet";
 import { ContextMenuProvider } from "@/components/ui/ContextMenu";
 import { WelcomeScreen } from "@/components/onboarding/WelcomeScreen";
-import { initializeConnectors } from "@/lib/connectors";
+import { initializeConnectors, shutdownConnectors } from "@/lib/connectors";
 import { setupNativeMenus } from "@/lib/nativeMenu";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import {
@@ -61,7 +61,7 @@ function SplashScreen() {
 export function App() {
   useProgressKeyframes();
   const [booted, setBooted] = useState(false);
-  const { load: loadSettings, settings, effectiveTheme } = useSettings();
+  const { settings, effectiveTheme } = useSettings();
   const { toggle: togglePalette, open: paletteOpen, setOpen: setPaletteOpen } =
     useCommandPalette();
   const { toggle: toggleShortcuts } = useShortcuts();
@@ -76,13 +76,14 @@ export function App() {
   const { mcpServers, connectMcpServer } = useSkillsMcp();
 
   // Handle initial bootstrap sequence
+  // Use ref-based loadSettings to avoid re-running on every render
   useEffect(() => {
     let cancelled = false;
 
     const bootstrap = async () => {
       try {
         // Stage 1: Load settings
-        await loadSettings();
+        await useSettings.getState().load();
         if (cancelled) return;
 
         // Stage 2: Load chat sessions & workspace configs
@@ -119,15 +120,10 @@ export function App() {
             }
           },
           (id, status) => console.debug("[Connector] status change:", id, status)
-        ).catch((err) => console.error("Failed to initialize connectors:", err));
+        ).catch((err) => { if (import.meta.env.DEV) console.error("Failed to initialize connectors:", err); });
 
-        // Stage 5: Connect MCP servers
-        const { mcpServers, connectMcpServer: connectMcp } = useSkillsMcp.getState();
-        await Promise.all(
-          mcpServers
-            .filter((s) => s.enabled && s.status === "disconnected")
-            .map((s) => connectMcp(s.name).catch((err) => console.error(`MCP ${s.name} failed:`, err)))
-        );
+        // Stage 5: MCP servers are connected by the useEffect after boot completes.
+        // (Removed duplicate connection logic — the useEffect at line 157 handles this.)
 
         // Stage 6: Set up native menus (macOS system menu bar)
         await setupNativeMenus();
@@ -137,7 +133,7 @@ export function App() {
           if (!cancelled) setBooted(true);
         }, 800);
       } catch (err) {
-        console.error("Bootstrap failed:", err);
+        if (import.meta.env.DEV) console.error("Bootstrap failed:", err);
         // Still boot even on error so user can see the UI
         setTimeout(() => {
           if (!cancelled) setBooted(true);
@@ -149,16 +145,17 @@ export function App() {
 
     return () => {
       cancelled = true;
+      void shutdownConnectors().catch(() => {});
     };
-  }, [loadSettings]);
+  }, []);
 
   // Connect all enabled MCP servers on startup (after boot)
   useEffect(() => {
     mcpServers.forEach((server) => {
       if (server.enabled && server.status === "disconnected") {
-        void connectMcpServer(server.name).catch((err) =>
-          console.error(`Failed to auto-connect to MCP server ${server.name}:`, err)
-        );
+        void connectMcpServer(server.name).catch((err) => {
+          if (import.meta.env.DEV) console.error(`Failed to auto-connect to MCP server ${server.name}:`, err);
+        });
       }
     });
   }, [mcpServers, connectMcpServer]);
@@ -194,7 +191,7 @@ export function App() {
                 await api.fs.writeFile(tab.path, tab.content);
                 workspace.markSaved(tab.path);
               } catch (err) {
-                console.error("Save failed:", err);
+                if (import.meta.env.DEV) console.error("Save failed:", err);
               }
             })();
           }
@@ -210,7 +207,7 @@ export function App() {
                 workspace.markSaved(tab.path);
               }
             } catch (err) {
-              console.error("Save all failed:", err);
+              if (import.meta.env.DEV) console.error("Save all failed:", err);
             }
           })();
           break;
@@ -236,7 +233,10 @@ export function App() {
         // View
 
         case "view.toggle-right-panel":
-          ui.toggleRightPanel();
+          // Only toggle right panel in chat/agent mode
+          if (ui.viewMode === "chat") {
+            ui.toggleRightPanel();
+          }
           break;
         case "view.toggle-word-wrap":
           void updateSetting("wordWrap", !settings.settings.wordWrap);
@@ -348,7 +348,9 @@ export function App() {
         return;
       }
       // Cmd/Ctrl+Shift+P: Command palette (VS Code convention)
+      // On macOS, native menu handles this — skip to prevent double-toggle
       if (mod && shift && e.key.toLowerCase() === "p" && !isTyping(e.target)) {
+        if (platform() === "mac") return;
         e.preventDefault();
         togglePalette();
         return;
@@ -366,8 +368,11 @@ export function App() {
       }
 
       if (mod && e.key.toLowerCase() === "n" && !isTyping(e.target)) {
+        // On macOS, native menu handles Cmd+N (file.new-file). Only handle chat creation on other platforms.
+        if (platform() === "mac") return;
         e.preventDefault();
         useChat.getState().newChat();
+        if (useUI.getState().viewMode !== "chat") useUI.getState().setViewMode("chat");
         return;
       }
       if (mod && e.key === "b" && !isTyping(e.target)) {
@@ -377,7 +382,10 @@ export function App() {
       }
       if (mod && e.key === "\\" && !isTyping(e.target)) {
         e.preventDefault();
-        useUI.getState().toggleRightPanel();
+        // Only toggle right panel in chat/agent mode
+        if (useUI.getState().viewMode === "chat") {
+          useUI.getState().toggleRightPanel();
+        }
         return;
       }
       if (mod && e.key === "`" && !isTyping(e.target)) {
@@ -404,7 +412,9 @@ export function App() {
         }
       }
       // Ctrl+E: Toggle between chat and editor view (only when workspace is active)
+      // On macOS, native menu handles view.agent-mode/view.editor-mode — skip to prevent double-set
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e" && !isTyping(e.target)) {
+        if (platform() === "mac") return;
         if (useWorkspace.getState().activeWorkspaceId) {
           e.preventDefault();
           useUI.getState().toggleViewMode();
@@ -527,14 +537,16 @@ export function App() {
             >
               {settings.theme === "dark" ? <Moon className="w-4 h-4" /> : settings.theme === "light" ? <Sun className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
             </button>
-            {/* Right panel toggle button — visible in both modes */}
-            <button
-              onClick={() => useUI.getState().toggleRightPanel()}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-              title="Toggle right panel"
-            >
-              <PanelRight className="w-4 h-4" />
-            </button>
+            {/* Right panel toggle button — only visible in chat/agent mode */}
+            {viewMode === "chat" && (
+              <button
+                onClick={() => useUI.getState().toggleRightPanel()}
+                className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+                title="Toggle right panel"
+              >
+                <PanelRight className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -563,10 +575,8 @@ export function App() {
                 <EditorPane />
               </ErrorBoundary>
             </Panel>
-            {/* Right panel — available in both chat and editor modes */}
-            {(
-              viewMode === "chat" || rightPanelOpen
-            ) && (
+            {/* Right panel — only available in chat/agent mode */}
+            {viewMode === "chat" && (
               <>
                 <PanelResizeHandle
                   className="panel-resizer horizontal"
@@ -615,7 +625,9 @@ export function App() {
         <PermissionDialog />
       </ErrorBoundary>
       {/* QuestionDialog removed — now rendered inline above input in ChatView */}
-      <Toaster />
+      <ErrorBoundary>
+        <Toaster />
+      </ErrorBoundary>
       </div>
     </ContextMenuProvider>
   );

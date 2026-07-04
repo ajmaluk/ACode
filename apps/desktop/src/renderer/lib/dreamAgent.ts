@@ -50,17 +50,17 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
   }
   activeDreams.add(workspacePath);
 
-  const api = createDalamAPI();
-  const model = useSettings.getState().settings.selectedModel;
+  try {
+    const api = createDalamAPI();
+    const model = useSettings.getState().settings.selectedModel;
 
-  if (!model) {
-    console.warn("[DreamAgent] No active model configured, skipping dream cycle.");
-    activeDreams.delete(workspacePath);
-    return { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 };
-  }
+    if (!model) {
+      console.warn("[DreamAgent] No active model configured, skipping dream cycle.");
+      return { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 };
+    }
 
-  // 1. Purge already-flagged stale memories from SQLite & update MEMORY.md
-  const purgedCount = await purgeStale();
+    // 1. Purge already-flagged stale memories from SQLite & update MEMORY.md
+    const purgedCount = await purgeStale();
 
   // 2. Validate file references (parallelized)
   const memories = await getAllMemories({ excludeStale: false });
@@ -80,7 +80,8 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
             : joinPath(workspacePath, mem.sourceFile);
           const fileExists = await exists(fullPath);
           return fileExists ? null : mem.id;
-        } catch {
+        } catch (err) {
+          console.warn("[DreamAgent] Failed to check memory file:", err);
           return null;
         }
       })
@@ -302,14 +303,15 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
   // Update MEMORY.md index
   await updateMemoryIndex(workspacePath);
 
-  activeDreams.delete(workspacePath);
-
   return {
     purgedCount,
     deduplicatedCount,
     dateAdjustedCount,
     validatedCount
   };
+  } finally {
+    activeDreams.delete(workspacePath);
+  }
 }
 
 /**
@@ -367,7 +369,7 @@ export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
         localStorage.setItem(`dalam.lastDreamTime.${workspacePath}`, Date.now().toString());
       })
       .catch(err => {
-        console.error("[DreamAgent] Background dream cycle failed:", err);
+        if (import.meta.env.DEV) console.error("[DreamAgent] Background dream cycle failed:", err);
       });
   }, 5000); // 5s deferral to not block application startup
 
@@ -468,7 +470,7 @@ Generate an elegant unified version. Output the result in clean markdown with ap
         refreshProjectSkills(projectSkills);
       }
     }
-  } catch {
-    // Graceful exit for cold workspaces containing zero initialized skill states
+  } catch (err) {
+    console.warn("[DreamAgent] Skill consolidation failed:", err);
   }
 }

@@ -33,6 +33,7 @@ export interface AppSettings {
   maxFileSize?: number;
   excludedPatterns?: string;
   doomLoopThreshold?: number;
+  customShortcuts?: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {

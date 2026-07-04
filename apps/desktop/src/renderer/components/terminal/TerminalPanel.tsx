@@ -8,6 +8,7 @@ import { Plus, X, Trash2, Bot, Wifi, ChevronDown, TerminalSquare, FolderOpen } f
 import "@xterm/xterm/css/xterm.css";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename } from "@/lib/pathUtils";
+import { isWindows } from "@/lib/platform";
 
 const DALAM_TERM_THEME = {
   background: "#0d0d0d",
@@ -15,6 +16,11 @@ const DALAM_TERM_THEME = {
   cursor: "#4f8ef7",
   cursorAccent: "#0d0d0d",
   selectionBackground: "#4f8ef744",
+  selectionForeground: "#ffffff",
+  selectionInactiveBackground: "#4f8ef722",
+  scrollbarSliderBackground: "#4f8ef744",
+  scrollbarSliderHoverBackground: "#4f8ef766",
+  scrollbarSliderActiveBackground: "#4f8ef788",
   black: "#000000",
   red: "#f44336",
   green: "#73c991",
@@ -47,9 +53,10 @@ interface TerminalTabContentProps {
   shell: ShellType;
   active: boolean;
   terminalsMapRef: React.MutableRefObject<Map<string, Terminal>>;
+  procIdsRef: React.MutableRefObject<Map<string, string>>;
 }
 
-function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: TerminalTabContentProps) {
+function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procIdsRef }: TerminalTabContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const procIdRef = useRef<string | null>(null);
@@ -67,7 +74,18 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
   }, [settings.terminalFont, settings.terminalFontSize, terminalsMapRef, tabId]);
 
   const activeRef = useRef(active);
-  useEffect(() => { activeRef.current = active; });
+  const pendingDataRef = useRef<string>("");
+  useEffect(() => {
+    activeRef.current = active;
+    // When tab becomes active, flush any buffered data
+    if (active && pendingDataRef.current) {
+      const term = terminalsMapRef.current.get(tabId);
+      if (term) {
+        term.write(pendingDataRef.current);
+      }
+      pendingDataRef.current = "";
+    }
+  }, [active, tabId, terminalsMapRef]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -112,12 +130,26 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
           return;
         }
         procIdRef.current = procId;
+        procIdsRef.current.set(tabId, procId);
 
         unsubData = api.terminal.onData(procId, (data) => {
+          if (isCleanedUp) return;
           if (activeRef.current) {
             term.write(data);
+          } else {
+            // Buffer data for inactive tabs so it's not lost
+            pendingDataRef.current += data;
+            // Cap buffer to prevent memory issues
+            if (pendingDataRef.current.length > 100000) {
+              pendingDataRef.current = pendingDataRef.current.slice(-50000);
+            }
           }
         });
+
+        if (isCleanedUp) {
+          api.terminal.kill(procId).catch(() => {});
+          return;
+        }
 
         inputDisposable = term.onData((data) => {
           if (procIdRef.current === procId) {
@@ -125,12 +157,25 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
           }
         });
 
+        // Ctrl+L / Cmd+L to clear terminal
+        term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          if (e.key === "l" && (e.ctrlKey || e.metaKey) && e.type === "keydown") {
+            term.clear();
+            term.scrollToBottom();
+            void api.terminal.writeInput(procId, "clear\r");
+            return false;
+          }
+          return true;
+        });
+
         const pendingCmd = useTerminal.getState().consumePendingCommand(tabId);
         if (pendingCmd) {
           api.terminal.writeInput(procId, pendingCmd + "\n").catch(() => {});
         }
       } catch (err) {
-        term.writeln(`\r\n\x1b[31mError spawning terminal: ${String(err)}\x1b[0m`);
+        if (!isCleanedUp) {
+          term.writeln(`\r\n\x1b[31mError spawning terminal: ${String(err)}\x1b[0m`);
+        }
       }
     };
 
@@ -146,9 +191,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
     };
 
     const ro = new ResizeObserver(() => {
-      if (activeRef.current) {
-        handleResize();
-      }
+      handleResize();
     });
     ro.observe(element);
 
@@ -164,6 +207,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
       // eslint-disable-next-line react-hooks/exhaustive-deps
       const currentTerminals = terminalsMapRef.current;
       currentTerminals.delete(tabId);
+      procIdsRef.current.delete(tabId);
 
       if (unsubData) unsubData();
       if (inputDisposable) inputDisposable.dispose();
@@ -176,7 +220,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef }: Term
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabId, cwd, shell]);
+  }, [tabId, cwd, shell, procIdsRef]);
 
   useEffect(() => {
     if (active) {
@@ -206,23 +250,34 @@ export function TerminalPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
 
-  // Close dropdowns on outside click
+  // Close dropdowns on outside click or Escape key
   useEffect(() => {
     if (!showAddDropdown && !showShellDropdown) return;
-    const handler = (e: MouseEvent) => {
+    const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (!target.closest("[data-dropdown]")) {
         setShowAddDropdown(false);
         setShowShellDropdown(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setShowAddDropdown(false);
+        setShowShellDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [showAddDropdown, showShellDropdown]);
 
   const workspaceName = basename(cwd);
 
   const terminalsRef = useRef<Map<string, Terminal>>(new Map());
+  const procIdsRef = useRef<Map<string, string>>(new Map());
 
   // Detect available shells on mount and when platform changes
   useEffect(() => {
@@ -250,15 +305,13 @@ export function TerminalPanel() {
 
         // Always show at least the platform default
         if (detected.length === 0) {
-          const isWin = navigator.userAgent.includes("Windows");
-          detected.push(isWin ? shellMap.powershell : shellMap.bash);
+          detected.push(isWindows() ? shellMap.powershell : shellMap.bash);
         }
 
         setAvailableShells(detected);
       } catch {
         // Fallback: show platform defaults
-        const isWin = navigator.userAgent.includes("Windows");
-        setAvailableShells(isWin ? [
+        setAvailableShells(isWindows() ? [
           { value: "powershell", label: "PowerShell", icon: "\u{26A1}" },
           { value: "pwsh", label: "PowerShell Core", icon: "P" },
           { value: "cmd", label: "Command Prompt", icon: ">" },
@@ -324,14 +377,16 @@ export function TerminalPanel() {
           <Tooltip content="New terminal in this project" side="top">
             <button
               className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex items-center gap-0.5"
-              onClick={() => setShowAddDropdown(!showAddDropdown)}
+              onClick={() => { setShowShellDropdown(false); setShowAddDropdown(!showAddDropdown); }}
+              aria-expanded={showAddDropdown}
+              aria-haspopup="menu"
             >
               <Plus className="w-3.5 h-3.5" />
               <ChevronDown className="w-2.5 h-2.5" />
             </button>
           </Tooltip>
           {showAddDropdown && (
-            <div className="absolute top-full left-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[200px]">
+            <div className="absolute top-full left-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[200px]" role="menu">
               <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary">
                 Shell
               </div>
@@ -340,6 +395,7 @@ export function TerminalPanel() {
                   key={shell.value}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                   onClick={() => handleAddTab(shell.value)}
+                  role="menuitem"
                 >
                   <span className="text-sm w-5 text-center">{shell.icon}</span>
                   <span>{shell.label}</span>
@@ -366,7 +422,9 @@ export function TerminalPanel() {
             <Tooltip content="Change shell type" side="top">
               <button
                 className="flex items-center gap-1 px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors text-[10px]"
-                onClick={() => setShowShellDropdown(!showShellDropdown)}
+                onClick={() => { setShowAddDropdown(false); setShowShellDropdown(!showShellDropdown); }}
+                aria-expanded={showShellDropdown}
+                aria-haspopup="menu"
               >
                 <TerminalSquare className="w-3 h-3" />
                 <span className="max-w-[70px] truncate">{activeTab.shell}</span>
@@ -374,7 +432,7 @@ export function TerminalPanel() {
               </button>
             </Tooltip>
             {showShellDropdown && (
-              <div className="absolute top-full right-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[180px]">
+              <div className="absolute top-full right-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[180px]" role="menu">
                 {availableShells.map((shell) => (
                   <button
                     key={shell.value}
@@ -384,6 +442,7 @@ export function TerminalPanel() {
                         : "text-dalam-text-primary hover:bg-dalam-bg-hover"
                     }`}
                     onClick={() => { if (activeTabId) handleShellChange(activeTabId, shell.value); }}
+                    role="menuitem"
                   >
                     <span className="text-sm w-5 text-center">{shell.icon}</span>
                     <span>{shell.label}</span>
@@ -420,6 +479,9 @@ export function TerminalPanel() {
                 term.clear();
                 term.scrollToBottom();
               }
+              // Also send clear command to the shell process
+              const procId = procIdsRef.current.get(activeTabId);
+              if (procId) void createDalamAPI().terminal.writeInput(procId, "clear\r");
             }}
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -465,6 +527,7 @@ export function TerminalPanel() {
                 shell={t.shell}
                 active={t.id === activeTabId}
                 terminalsMapRef={terminalsRef}
+                procIdsRef={procIdsRef}
               />
             </div>
           ))

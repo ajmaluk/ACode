@@ -69,6 +69,7 @@ export function ShortcutsCheatsheet() {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-8 animate-fade-in"
+      role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
       onClick={() => setOpen(false)}
     >
       <div

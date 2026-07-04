@@ -351,12 +351,12 @@ export async function loadSkillsFromDirectory(
         // Progressive disclosure: store metadata only, load content on demand
         const info = skillInfoFromParsed(frontmatter, "", skillMdPath, source);
         if (info) skills.push(info);
-      } catch {
-        // SKILL.md doesn't exist or can't be read — skip this skill folder
+      } catch (err) {
+        console.warn("[Skills] Failed to parse skill:", err);
       }
     }
-  } catch {
-    // skillsDir doesn't exist yet — not an error on first run
+  } catch (err) {
+    console.warn("[Skills] Failed to parse skill:", err);
   }
 
   return skills;

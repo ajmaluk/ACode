@@ -97,10 +97,10 @@ export function Breadcrumb() {
     <div
       ref={containerRef}
       className="h-7 px-3 flex items-center text-[11px] border-b border-dalam-border-primary bg-dalam-bg-secondary overflow-x-auto scrollbar-thin"
-      role="toolbar"
-      aria-label="Breadcrumb navigation"
+      role="navigation"
+      aria-label="Breadcrumb"
       onKeyDown={handleKeyDown}
-      tabIndex={-1}
+      tabIndex={0}
     >
       {pathParts.map((part, idx) => (
         <span key={`${idx}-${part}`} className="flex items-center flex-shrink-0">

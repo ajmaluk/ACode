@@ -119,12 +119,11 @@ let migrationAttempted = false;
 async function ensureDB(): Promise<IDBDatabase> {
   const db = await openDB();
   if (!migrationAttempted) {
+    migrationAttempted = true; // Set before to prevent retry storm on persistent failures
     try {
       await migrateFromLocalStorage();
-      migrationAttempted = true;
     } catch (e) {
       console.warn("[IndexedDB] Migration from localStorage failed:", e);
-      // Migration will be retried on next call to ensureDB.
     }
   }
   return db;
@@ -143,7 +142,8 @@ export async function idbGet(storeName: ObjectStoreName, key: string): Promise<u
       request.onsuccess = () => resolve(request.result ?? null);
       request.onerror = () => resolve(null);
     });
-  } catch {
+  } catch (err) {
+    console.warn("[Storage] IndexedDB read failed:", err);
     return null;
   }
 }

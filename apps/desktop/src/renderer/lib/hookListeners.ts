@@ -341,10 +341,10 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
   await runMemoryMaintenanceIfNeeded();
 
   // 5. Auto-crystallize skill from session (fire-and-forget)
-  triggerSkillCrystallization(event);
+  triggerSkillCrystallization(event).catch(() => {});
 
   // 6. Gene reflection (fire-and-forget)
-  runGeneReflection(event);
+  runGeneReflection(event).catch(() => {});
 }
 
 // ─── 3. Prompt Analytics (UserPromptSubmit) ───

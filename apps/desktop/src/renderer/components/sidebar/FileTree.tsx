@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -119,7 +119,7 @@ export function FileTree() {
   );
 }
 
-function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
+const TreeNode = React.memo(function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
   const [open, setOpen] = useState(depth < 2);
   const { activeFilePath, openFile, createFile, createDirectory, deletePath, renamePath } = useWorkspace();
   const openDiff = useDiffView((s) => s.openFile);
@@ -127,6 +127,15 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
   const isDir = node.type === "directory";
   const isActive = !isDir && activeFilePath === node.path;
   const indent = 4 + depth * 12;
+
+  // Reset open state when node path changes (e.g., workspace switch)
+  const prevPathRef = useRef(node.path);
+  useEffect(() => {
+    if (prevPathRef.current !== node.path) {
+      prevPathRef.current = node.path;
+      setOpen(depth < 2);
+    }
+  }, [node.path, depth]);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     const mod = modKey();
@@ -300,4 +309,4 @@ function TreeNode({ node, depth }: { node: FileNodeT; depth: number }) {
       )}
     </button>
   );
-}
+});
