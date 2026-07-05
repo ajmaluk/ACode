@@ -7,7 +7,7 @@ import { groupToolCallsForExecution, type ToolCall as ExecutorToolCall } from ".
 import { isWindows, platform } from "./platform";
 import { joinPath as joinPathUtil } from "./pathUtils";
 import { recordLlmCall } from "./metrics";
-import { popChange } from "./changeStack";
+import { parseUsageFromChunk, recordTokenUsage } from "./costTracker";
 
 // ---------------------------------------------------------------------------
 // Debug logging — set window.__DALAM_DEBUG = true in console to enable
@@ -37,6 +37,35 @@ const emittedSessionEnds = new Set<string>();
 // Per-session rate-limit backoff counter — isolated per session so concurrent
 // sessions don't interfere with each other's backoff state.
 const sessionRateLimitErrors = new Map<string, number>();
+
+// ─── MCP Stdio Connection Pool ────────────────────────────────
+// Persistent stdio connections for MCP servers. Avoids spawning a new
+// process per tool call — instead, connections are reused and cleaned
+// up after 30 minutes of inactivity.
+interface McpStdioConnection {
+  cmd: unknown; // Tauri Command instance
+  child: { write(input: string): Promise<void>; kill(): Promise<void> };
+  stdoutBuffer: string;
+  initialized: boolean;
+  lastUsed: number;
+  pendingRequests: Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>;
+  requestIdCounter: number;
+}
+const _mcpStdioConnections = new Map<string, McpStdioConnection>();
+const MCP_STDIO_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+// Periodic cleanup of idle MCP stdio connections
+setInterval(() => {
+  const now = Date.now();
+  for (const [serverName, conn] of _mcpStdioConnections) {
+    if (now - conn.lastUsed > MCP_STDIO_IDLE_TIMEOUT_MS) {
+      conn.child.kill().catch(() => {});
+      _mcpStdioConnections.delete(serverName);
+      _debugLog(`[MCP] Closed idle stdio connection: ${serverName}`);
+    }
+  }
+}, 60_000);
+
 
 // ─── Internal Types ─────────────────────────────────────────
 /** Shape of a provider entry from localStorage */
@@ -4165,6 +4194,39 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     } else {
       const command = server.command;
       if (!command) throw new Error("Stdio command is required");
+
+      // ── Connection Pool: reuse existing stdio connection if available ──
+      const existing = _mcpStdioConnections.get(serverName);
+      if (existing && existing.initialized) {
+        // Reuse existing connection
+        const conn = existing;
+        conn.lastUsed = Date.now();
+        const reqId = ++conn.requestIdCounter;
+        const reqIdStr = String(reqId);
+        const resultPromise = new Promise<string>((resolve, reject) => {
+          conn.pendingRequests.set(reqIdStr, { resolve: resolve as (value: unknown) => void, reject });
+          const req = JSON.stringify({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: { name: toolName, arguments: mcpArgs },
+            id: reqId,
+          }) + "\n";
+          conn.child.write(req).catch((err) => {
+            conn.pendingRequests.delete(reqIdStr);
+            reject(err);
+          });
+          // Timeout after 30s
+          setTimeout(() => {
+            if (conn.pendingRequests.has(reqIdStr)) {
+              conn.pendingRequests.delete(reqIdStr);
+              reject(new Error("Timeout waiting for tools/call response (30s)"));
+            }
+          }, 30000);
+        });
+        return await resultPromise;
+      }
+
+      // ── No existing connection — create a new one ──
       try {
         const { Command } = await import("@tauri-apps/plugin-shell");
         const cmd = Command.create(command, server.args ?? [], { env: server.env });
@@ -4175,9 +4237,20 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           let childProc: Awaited<ReturnType<typeof cmd.spawn>> | null = null;
           let jsonBuffer = "";
           let bracesDepth = 0;
+                    // Create the connection record now so we can register it immediately
+          const connRecord: McpStdioConnection = {
+            cmd,
+            child: null as unknown as McpStdioConnection["child"],
+            stdoutBuffer: "",
+            initialized: false,
+            lastUsed: Date.now(),
+            pendingRequests: new Map(),
+            requestIdCounter: 2,
+          };
 
           cmd.stdout.on("data", (data: string) => {
             outputBuffer += data;
+            connRecord.stdoutBuffer += data;
             const lines = outputBuffer.split("\n");
             outputBuffer = lines.pop() ?? "";
             for (const line of lines) {
@@ -4191,13 +4264,30 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                   if (ch === "{") bracesDepth++;
                   else if (ch === "}") bracesDepth--;
                 }
-                if (bracesDepth > 0) continue; // incomplete JSON, keep accumulating
+                if (bracesDepth > 0) continue;
 
-                // Complete JSON object — try to parse
                 try {
                   const parsed = JSON.parse(jsonBuffer);
                   jsonBuffer = "";
                   bracesDepth = 0;
+
+                  // Check if this is a response to a pending request
+                  if (parsed.id !== undefined && connRecord.pendingRequests.size > 0) {
+                    const pendingId = String(parsed.id);
+                    const pending = connRecord.pendingRequests.get(pendingId);
+                    if (pending) {
+                      connRecord.pendingRequests.delete(pendingId);
+                      if (parsed.error) {
+                        pending.reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
+                      } else {
+                        const content = parsed.result?.content || parsed.content || [];
+                        const text = content.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
+                        pending.resolve(text);
+                      }
+                    }
+                    continue;
+                  }
+
                   if (parsed.result?.content || parsed.content || parsed.error) {
                     resolved = true;
                     if (parsed.error) {
@@ -4215,7 +4305,6 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                   // Incomplete or malformed — keep buffering
                 }
               } else {
-                // Not a JSON object — reset
                 jsonBuffer = "";
                 bracesDepth = 0;
               }
@@ -4229,6 +4318,13 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           const doSpawn = async () => {
             try {
               childProc = await cmd.spawn();
+              connRecord.child = {
+                write: (input: string) => childProc!.write(input),
+                kill: () => childProc!.kill(),
+              };
+              // Register in pool before sending requests
+              _mcpStdioConnections.set(serverName, connRecord);
+
               const initReq = JSON.stringify({
                 jsonrpc: "2.0",
                 method: "initialize",
@@ -4238,22 +4334,22 @@ async function executeToolInner(name: string, args: Record<string, string>, work
               await childProc.write(initReq);
               const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
               await childProc.write(initNotif);
+              // Mark as initialized after handshake
+              connRecord.initialized = true;
+
               const req = JSON.stringify({
                 jsonrpc: "2.0",
                 method: "tools/call",
-                params: {
-                  name: toolName,
-                  arguments: mcpArgs,
-                },
+                params: { name: toolName, arguments: mcpArgs },
                 id: 2,
               }) + "\n";
               await childProc.write(req);
             } catch (spawnErr) {
+              _mcpStdioConnections.delete(serverName);
               if (!resolved) {
                 resolved = true;
                 reject(spawnErr instanceof Error ? spawnErr : new Error(String(spawnErr)));
               }
-              return;
             }
           };
 
@@ -4261,7 +4357,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
           setTimeout(() => {
             if (!resolved) {
-              childProc?.kill().catch(() => { });
+              childProc?.kill().catch(() => {});
+              _mcpStdioConnections.delete(serverName);
               reject(new Error("Timeout waiting for tools/call response (30s)"));
             }
           }, 30000);
@@ -4269,6 +4366,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
         return await resultPromise;
       } catch (err) {
+        _mcpStdioConnections.delete(serverName);
         const errMsg = (err as Error)?.message ?? String(err);
         throw new Error(`MCP tool "${toolName}" on server "${serverName}" failed: ${errMsg}`, { cause: err });
       }

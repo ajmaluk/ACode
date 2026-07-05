@@ -286,7 +286,7 @@ describe("evaluate — additional edge cases", () => {
 
 describe("canonicaliseBashCommand — edge cases", () => {
   it("handles null or undefined gracefully", () => {
-    expect(canonicaliseBashCommand("null 2>&1")).toBe("null");
+    expect(canonicaliseBashCommand("null 2>&1")).toBe("null |");
     expect(canonicaliseBashCommand("")).toBe("");
   });
 

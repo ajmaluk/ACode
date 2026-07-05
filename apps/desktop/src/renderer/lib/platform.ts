@@ -30,6 +30,14 @@ export function platform(): Platform {
   return cachedPlatform;
 }
 
+/**
+ * Reset the platform cache (used in tests to change platform mid-run).
+ */
+export function resetPlatformCache(): void {
+  cachedPlatform = null;
+}
+
+
 /** The primary modifier for shortcuts: ⌘ on macOS, Ctrl elsewhere. */
 export function modKey(): "⌘" | "Ctrl" {
   return platform() === "mac" ? "⌘" : "Ctrl";

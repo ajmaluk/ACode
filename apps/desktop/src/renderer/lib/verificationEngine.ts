@@ -140,6 +140,18 @@ export async function checkActualFileChanges(
   actualChanges: FileChange[],
   readFileFn?: (path: string) => Promise<string>
 ): Promise<UnmetCriteria[]> {
+  // Provide a default readFileFn that reads from the filesystem if none provided.
+  // This ensures contentPattern is always validated when specified in ExpectedFileChange.
+  if (!readFileFn) {
+    readFileFn = async (filePath: string) => {
+      try {
+        const api = await import("@/lib/dalamAPI").then(m => m.createDalamAPI());
+        return await api.fs.readFile(filePath);
+      } catch {
+        return "";
+      }
+    };
+  }
   return checkExpectedFiles(criteria, actualChanges, readFileFn);
 }
 

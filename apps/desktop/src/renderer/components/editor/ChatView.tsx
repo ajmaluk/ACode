@@ -708,20 +708,35 @@ Keyboard Shortcuts:
     }
 
     if (trimmed === "/undo") {
-      if (removedMessagesStack.length === 0) {
-        chat.injectSystemMessage("Nothing to undo.");
-        setValue("");
-        return;
-      }
-      // Pop the last removed message group and restore it
-      const lastGroup = removedMessagesStack[removedMessagesStack.length - 1];
-      const restored = lastGroup.messages;
-      const chatState = useChat.getState();
-      const sessionMsgs = { ...chatState.sessionMessages, [chat.activeSessionId!]: [...chatState.messages, ...restored] };
-      setRemovedMessagesStack((prev) => prev.slice(0, -1));
-      useChat.setState({ messages: [...chatState.messages, ...restored], sessionMessages: sessionMsgs });
-      savePersistedMessages(sessionMsgs);
-      chat.injectSystemMessage(`Restored ${restored.length} message(s).`);
+      // Phase 1: Try file-level undo (revert the last write_file/edit_file change)
+      import("@/lib/changeStack").then(async ({ applyUndo, peekChange, getChangeStackSize }) => {
+        const change = peekChange();
+        if (change) {
+          const result = await applyUndo();
+          if (result) {
+            chat.injectSystemMessage(
+              `**Undo**: Reverted changes in \`${result.filePath}\`.\n` +
+              `**Stack**: ${getChangeStackSize()} change(s) remaining.`
+            );
+            return;
+          }
+          // applyUndo failed — fall through to message undo
+        }
+
+        // Phase 2: Message-level undo (restore previously removed messages)
+        if (removedMessagesStack.length === 0) {
+          chat.injectSystemMessage("Nothing to undo.");
+          return;
+        }
+        const lastGroup = removedMessagesStack[removedMessagesStack.length - 1];
+        const restored = lastGroup.messages;
+        const chatState = useChat.getState();
+        const sessionMsgs = { ...chatState.sessionMessages, [chat.activeSessionId!]: [...chatState.messages, ...restored] };
+        setRemovedMessagesStack((prev) => prev.slice(0, -1));
+        useChat.setState({ messages: [...chatState.messages, ...restored], sessionMessages: sessionMsgs });
+        savePersistedMessages(sessionMsgs);
+        chat.injectSystemMessage(`Restored ${restored.length} message(s).`);
+      });
       setValue("");
       return;
     }

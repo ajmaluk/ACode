@@ -68,7 +68,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     suggestion: "Type mismatch in Go: $1 cannot be used as $2.",
   },
   {
-    pattern: /undefined: (.+?)/,
+    pattern: /undefined: (.+)/,
     suggestion: "Undefined identifier: $1. Check import or spelling.",
   },
 

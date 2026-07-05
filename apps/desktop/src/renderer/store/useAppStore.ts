@@ -99,6 +99,8 @@ const XML_STRIP_RE = new RegExp(
 const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi");
 const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
 const XML_INCOMPLETE_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi");
+// Strip model output tags WITH their content (e.g. <thinking>...</thinking>)
+const XML_MODEL_OUTPUT_CONTENT_RE = /<(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)[^>]*>[\s\S]*?<\/(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\s*>/gi;
 const XML_MODEL_OUTPUT_RE = /<\/?(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)[^>]*>/gi;
 const XML_MODEL_OUTPUT_CLOSE_RE = /<\/?(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\s*>/gi;
 // Strip skill invocation / structured plan XML tags emitted by models in Plan mode.
@@ -138,7 +140,10 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(XML_INCOMPLETE_TAG_RE, "");
   // Strip DeepSeek special tokens (unicode bracket tokens)
   result = result.replace(/<\uff5c[\s\S]*?\uff5c>/g, "");
-  // Strip OpenAI internal channel/message tokens that may leak
+  // Strip OpenAI internal channel tokens WITH their content (e.g. <|channel|>leaked text<|end|>)
+  result = result.replace(/<\|(?:channel|message|system_call)\|>[\s\S]*?<\|(?:channel|message|end|system_call)\|>/gi, "");
+  result = result.replace(/<\|start\|>[\s\S]*?<\|end\|>/gi, "");
+  // Strip any remaining OpenAI internal channel/message token markers
   result = result.replace(/<\|(?:channel|message|start|end|system_call)\|>/gi, "");
   // Strip incomplete think/streaming tags at end of content
   result = result.replace(/<think[^>]*$/gi, "");
@@ -151,7 +156,9 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(XML_SKILL_INVOCATION_RE, "");
   result = result.replace(XML_STRUCTURED_TAG_RE, "");
   result = result.replace(XML_STRUCTURED_ORPHAN_CLOSE_RE, "");
-  // Strip common model output tags that aren't tool calls
+  // Strip model output tags WITH their content (e.g. <thinking>...</thinking>)
+  result = result.replace(XML_MODEL_OUTPUT_CONTENT_RE, "");
+  // Strip remaining model output tag markers
   result = result.replace(XML_MODEL_OUTPUT_RE, "");
   // Strip orphan closing tags for the above
   result = result.replace(XML_MODEL_OUTPUT_CLOSE_RE, "");
@@ -159,7 +166,11 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(/<skill_invocation[^>]*$/gi, "");
   result = result.replace(/<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*$/gi, "");
   // Clean up excessive whitespace left behind
-  result = result.replace(/\n{3,}/g, "\n\n").trim();
+  // Collapse 3+ consecutive newlines into 2
+  result = result.replace(/\n{3,}/g, "\n\n");
+  // If the entire remaining content is just whitespace, return empty string
+  // (this handles cases where only tool calls were in the content and they've all been stripped)
+  if (result.trim() === "") result = "";
   return result;
 }
 
@@ -2277,6 +2288,18 @@ export const useChat = create<ChatState>((set, get) => ({
           runtimeEvent = { type: "ERROR", sessionId, error: event.error };
           break;
         }
+        case "tool-result": {
+          const toolResult = event as import("@dalam/shared-types").StreamEvent & { type: "tool-result"; toolCallId: string; result: string };
+          const isTimeout = toolResult.result?.includes("timed out");
+          if (isTimeout) {
+            // Timeout takes priority over result — marks the tool as errored
+            runtimeEvent = { type: "TOOL_TIMEOUT", toolCallId: toolResult.toolCallId };
+          } else {
+            const isSuccess = !toolResult.result?.startsWith("Error:");
+            runtimeEvent = { type: "TOOL_RESULT_RECEIVED", toolCallId: toolResult.toolCallId, success: isSuccess };
+          }
+          break;
+        }
       }
       if (runtimeEvent) {
         const oldState = get().runtimeState;
@@ -3117,7 +3140,7 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "thinking":
-        set((s) => ({ thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000) }));
+        set((s) => ({ thinkingContent: (s.thinkingContent + event.content).slice(-100000) }));
         break;
       case "status":
         set((s) => ({

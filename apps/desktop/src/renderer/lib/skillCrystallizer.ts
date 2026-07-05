@@ -145,9 +145,10 @@ ${formattedHistory}`;
                     notify({
                       kind: "warning",
                       title: "Skill Budget Exceeded",
-                      description: `Over 50 skills detected. Consider pruning before adding '${data.name}'.`,
+                      description: `Over 50 skills detected (${allSkillEntries.length} total). Prune before adding '${data.name}'.`,
                       durationMs: 10000
                     });
+                    return;
                   }
                 } catch {
                   // skills dir may not exist yet

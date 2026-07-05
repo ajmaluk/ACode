@@ -105,20 +105,7 @@ export async function runDreamCycle(
           staleCount,
           { totalInCategory: totalActive + staleCount }
         );
-        if (purgeProposal.status === "auto-accept" || purgeProposal.status === "user-review") {
-          if (purgeProposal.status === "auto-accept") {
-            purgedCount = await purgeStale();
-            purgeProposal.status = "applied";
-            purgeProposal.appliedAt = Date.now();
-          } else {
-            // Queue for user review — notify but don't apply yet
-            notifyFn?.(purgeProposal);
-          }
-          allProposals.push(purgeProposal);
-        } else {
-          // Rejected — silently skip
-          allProposals.push(purgeProposal);
-        }
+        allProposals.push(purgeProposal);
       }
     } catch (err) {
       console.warn("[DreamAgent] Failed to check stale memory count, skipping purge:", err);
@@ -166,18 +153,6 @@ export async function runDreamCycle(
         staleIds.length,
         { totalInCategory: totalWithFiles || 1 }
       );
-      if (validateProposal.status === "auto-accept") {
-        for (const id of staleIds) {
-          await markStale(id);
-          validatedCount++;
-        }
-        validateProposal.status = "applied";
-        validateProposal.appliedAt = Date.now();
-      } else if (validateProposal.status === "user-review") {
-        // Queue for user review — skip marking for now
-        notifyFn?.(validateProposal);
-      }
-      // else rejected — don't mark anything
       allProposals.push(validateProposal);
     }
 
@@ -208,36 +183,6 @@ export async function runDreamCycle(
           { avgAccessCount: 5 }
         );
 
-        if (reScoreProposal.status === "auto-accept" || reScoreProposal.status === "user-review") {
-          if (reScoreProposal.status === "auto-accept") {
-            for (const mem of allMemories) {
-              const score = scoreMemory(mem);
-              const oldTier = mem.tier;
-
-              // Promote: frequently accessed low/medium tier memories
-              if (oldTier !== "critical" && mem.accessCount >= 5 && score > 40) {
-                const newTier = oldTier === "low" ? "medium" : "high";
-                await db.execute(
-                  `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-                  [newTier, Date.now(), mem.id]
-                );
-                reScoredPromoted++;
-              }
-              // Demote: rarely accessed high-tier memories older than 30 days
-              else if (oldTier === "high" && mem.accessCount <= 1 && (Date.now() - mem.createdAt) > 30 * 86400000) {
-                await db.execute(
-                  `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-                  ["medium", Date.now(), mem.id]
-                );
-                reScoredDemoted++;
-              }
-            }
-            reScoreProposal.status = "applied";
-            reScoreProposal.appliedAt = Date.now();
-          } else {
-            notifyFn?.(reScoreProposal);
-          }
-        }
         allProposals.push(reScoreProposal);
       }
 

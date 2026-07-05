@@ -61,3 +61,34 @@ export function clearChanges(): void {
 export function getChangeStackSize(): number {
   return changeStack.length;
 }
+
+/**
+ * Apply the last change in reverse (undo).
+ * Writes the beforeContent back to the file and removes the record.
+ * Returns a description of what was undone, or null if stack is empty.
+ */
+export async function applyUndo(): Promise<{ filePath: string; restoredContent: string } | null> {
+  const change = popChange();
+  if (!change) return null;
+
+  try {
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    await writeTextFile(change.filePath, change.beforeContent);
+    return {
+      filePath: change.filePath,
+      restoredContent: change.beforeContent,
+    };
+  } catch (err) {
+    // If the file write fails, push the change back so it isn't lost
+    const msg = (err as Error)?.message ?? String(err);
+    console.warn(`[ChangeStack] Failed to undo ${change.filePath}: ${msg}`);
+    recordChange({
+      filePath: change.filePath,
+      beforeContent: change.beforeContent,
+      afterContent: change.afterContent,
+      toolCallId: change.toolCallId,
+      messageId: change.messageId,
+    });
+    return null;
+  }
+}

@@ -1,18 +1,28 @@
 /**
- * Tool Executor — Improved tool execution with parallel support and retry.
+ * Tool Executor — Improved tool execution with parallel support, retry, and per-tool timeout.
  *
  * This module provides:
  * 1. Parallel tool execution for independent tools
  * 2. Automatic retry with exponential backoff
  * 3. Tool dependency analysis
- * 4. Better error handling and recovery
+ * 4. Per-tool execution timeout
+ * 5. Better error handling and recovery
  *
  * Based on Claude Code's approach to tool execution.
  */
 
 import { validateToolArgs } from "./toolSchemas";
 import { recordChange } from "./changeStack";
-import { readFileSync, writeFileSync } from "fs";
+
+/** Async read of a file's text content, returning empty string on failure. */
+async function readFileBeforeEdit(path: string): Promise<string> {
+  try {
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    return await readTextFile(path);
+  } catch {
+    return "";
+  }
+}
 
 export interface ToolCall {
   name: string;
@@ -80,6 +90,71 @@ const RETRYABLE_ERRORS = [
   "network",
   "timeout",
 ];
+
+/**
+ * Per-tool timeouts in milliseconds.
+ * Defines maximum execution time per tool before it is considered timed out.
+ */
+const TOOL_TIMEOUTS: Record<string, number> = {
+  read_file: 15_000,
+  write_file: 30_000,
+  edit_file: 30_000,
+  run_command: 120_000,
+  grep_file: 30_000,
+  search_files: 60_000,
+  list_dir: 15_000,
+  git_status: 15_000,
+  git_log: 15_000,
+  git_branch: 10_000,
+  git_diff_file: 15_000,
+  git_commit: 30_000,
+  git_checkout: 15_000,
+  git_create_branch: 10_000,
+  clipboard_read: 5_000,
+  clipboard_write: 5_000,
+  notify: 5_000,
+  system_info: 5_000,
+  open_url: 5_000,
+  launch_app: 15_000,
+  reveal_in_finder: 5_000,
+  memory_save: 10_000,
+  memory_search: 10_000,
+  memory_delete: 5_000,
+  memory_stats: 5_000,
+  memory_maintain: 30_000,
+  memory_extract: 60_000,
+  memory_export: 30_000,
+  memory_import: 30_000,
+  task: 300_000,
+  mcp_tool: 60_000,
+  default: 30_000,
+};
+
+/**
+ * Get the timeout for a specific tool.
+ */
+function getToolTimeout(toolName: string): number {
+  return TOOL_TIMEOUTS[toolName] ?? TOOL_TIMEOUTS.default;
+}
+
+/**
+ * Execute an async function with a timeout.
+ * The promise is rejected if execution exceeds the specified timeout.
+ */
+async function executeWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  toolName: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`)),
+      timeoutMs
+    );
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId!));
+}
 
 /**
  * Check if an error is retryable.
@@ -187,7 +262,7 @@ export function groupToolCallsForExecution(toolCalls: ToolCall[]): ToolCall[][] 
 }
 
 /**
- * Execute a tool call with retry support.
+ * Execute a tool call with retry support and per-tool timeout.
  */
 export async function executeToolWithRetry(
   toolCall: ToolCall,
@@ -207,19 +282,29 @@ export async function executeToolWithRetry(
       if (!validated.valid) {
         throw new Error(validated.error);
       }
-      const result = await executeFn(toolCall.name, validated.args);
-      const durationMs = Date.now() - startTime;
 
-      // Record file changes for undo support
+      // Read beforeContent BEFORE execution to capture the original file state
+      let beforeContent = "";
       if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
         const path = String(toolCall.args.path ?? "");
         if (path) {
-          let beforeContent = "";
-          try {
-            beforeContent = readFileSync(path, "utf-8");
-          } catch {
-            beforeContent = "";
-          }
+          beforeContent = await readFileBeforeEdit(path);
+        }
+      }
+
+      // Execute with per-tool timeout
+      const timeoutMs = getToolTimeout(toolCall.name);
+      const result = await executeWithTimeout(
+        executeFn(toolCall.name, validated.args),
+        timeoutMs,
+        toolCall.name
+      );
+      const durationMs = Date.now() - startTime;
+
+      // Record file changes for undo support (beforeContent was captured pre-execution)
+      if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
+        const path = String(toolCall.args.path ?? "");
+        if (path) {
           const callId = `${toolCall.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const afterContent = toolCall.name === "write_file"
             ? String(toolCall.args.content ?? "")

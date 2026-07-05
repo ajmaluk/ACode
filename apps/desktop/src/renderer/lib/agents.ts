@@ -83,18 +83,25 @@ const _globRegexCache = new Map<string, RegExp>();
 function globToRegex(pattern: string): RegExp {
   const cached = _globRegexCache.get(pattern);
   if (cached) return cached;
-  // Handle brace expansion: {a,b} → (?:a|b)
+  // Step 1: Extract brace groups and replace with placeholders to avoid double-escaping
+  const braceGroups: string[] = [];
+  // Use sentinel strings (not control characters) to avoid eslint no-control-regex
   let expanded = pattern.replace(/\{([^}]+)\}/g, (_, group: string) => {
-    const parts = group.split(",").map(s => s.replace(/[.+^${}()|\\[\]/]/g, "\\$&"));
-    return "(?:" + parts.join("|") + ")";
+    const parts = group.split(",").map(s => s.trim().replace(/[.+^${}()|\\[\]/]/g, "\\$&"));
+    const result = "(?:" + parts.join("|") + ")";
+    braceGroups.push(result);
+    return `__BRACE${braceGroups.length - 1}__`;
   });
-  // Escape remaining glob special chars (but not the braces we already converted)
+  // Step 2: Escape remaining glob special chars (but not our placeholders)
   expanded = expanded.replace(/[.+^$()|\\[\]/]/g, "\\$&");
+  // Step 3: Convert glob patterns
   const regexStr = expanded
-    .replace(/\*\*/g, "\0GLOBSTAR\0")
+    .replace(/\*\*/g, "__GLOBSTAR__")
     .replace(/\*/g, "[^/]*")
     .replace(/\?/g, "[^/]")
-    .replace(/\0GLOBSTAR\0/g, ".*");
+    .replace(/__GLOBSTAR__/g, ".*")
+    // Step 4: Restore brace groups
+    .replace(/__BRACE(\d+)__/g, (_, idx) => braceGroups[parseInt(idx)] || "");
   const regex = new RegExp("^" + regexStr + "$");
   _globRegexCache.set(pattern, regex);
   return regex;
@@ -155,8 +162,7 @@ const BASH_ARITY: Record<string, number> = {
   "firebase deploy": 2, "flyctl deploy": 2, "git add": 2, "git branch": 2,
   "git checkout": 2, "git clone": 2, "git commit": 2, "git diff": 2,
   "git fetch": 2, "git log": 2, "git merge": 2, "git pull": 2,
-  "git push": 2, "git rebase": 2, "git reset": 2, "git stash": 2,
-  "git switch": 2, "go build": 2,
+  "git push": 2, "git rebase": 2, "git reset": 2,"git status": 2, "git stash": 2, "git switch": 2, "go build": 2,
   "gradle build": 2, "helm install": 2, "heroku logs": 2, "hugo new": 2,
   "kubectl get": 2, "kustomize build": 2, "make build": 2, "mc ls": 2,
   "minikube start": 2, "mongosh test": 2, "mysql -u": 2, "mvn compile": 2,

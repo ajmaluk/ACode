@@ -325,7 +325,8 @@ export function agentReducer(
       assert(
         newState.toolCallStatuses.get(event.toolCallId) === "running" ||
         newState.toolCallStatuses.get(event.toolCallId) === "error" ||
-        newState.toolCallStatuses.get(event.toolCallId) === "pending",
+        newState.toolCallStatuses.get(event.toolCallId) === "pending" ||
+        newState.toolCallStatuses.get(event.toolCallId) === "approved",
         `[AgentRuntime] INVARIANT VIOLATION: retry for toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`
       );
       newState.toolCallStatuses.set(event.toolCallId, "pending");
