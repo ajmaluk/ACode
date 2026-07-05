@@ -501,6 +501,19 @@ async function* streamOpenAI(
     }
     _tcArgBuffers.clear();
   } finally {
+    // Ensure buffers are flushed even on abort
+    if (_tcArgBuffers.size > 0) {
+      for (const [, buf] of _tcArgBuffers) {
+        try {
+          const parsedArgs = JSON.parse(buf.args || "{}");
+          const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
+          yield { type: "message-delta", messageId: "", content: "\n" + xmlTag + "\n" };
+        } catch {
+          yield { type: "message-delta", messageId: "", content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
+        }
+      }
+      _tcArgBuffers.clear();
+    }
     reader.releaseLock();
     if (abortHandlerOpenAI && signal) {
       signal.removeEventListener("abort", abortHandlerOpenAI);
@@ -1275,11 +1288,11 @@ You can combine multiple tools in one response:
 <read_file path="${workspacePath || "."}/package.json"/>
 `;
 
-        // Genes
-        const genePool = loadGenePool();
+        // Genes (SQLite-backed, per-workspace persistence)
+        const genePool = await loadGenePool();
         const rawHistory = conversationHistory ? [...conversationHistory] : [];
         const recentMsgs = rawHistory.filter((msg) => msg.role !== "system").slice(-5);
-        const activeGenes = expressGenes(genePool, cleanPrompt, recentMsgs);
+        const activeGenes = await expressGenes(genePool, cleanPrompt, recentMsgs);
         const genesPrompt = formatGenesForPrompt(activeGenes);
 
         // Inject browser context if user mentions @browser, @tab:, or @url: in their prompt
@@ -1461,7 +1474,9 @@ You can combine multiple tools in one response:
             result.push({ role: "system", content: `[COMPACTED HISTORY]\n${compactionSummary}\n` });
           }
           for (const m of msgs) {
-            result.push({ role: m.role === "user" ? "user" : "assistant", content: m.content });
+            // Map roles correctly: user→user, tool→user, everything else→assistant
+            const role = m.role === "user" || m.role === "tool" ? "user" : "assistant";
+            result.push({ role, content: m.content });
           }
           return result;
         }
@@ -1497,8 +1512,9 @@ You can combine multiple tools in one response:
 
         let emittedEndInThisIteration = false;
 
-        // Reset rate limit backoff at the start of each request
-        sessionRateLimitErrors.set(sessionId, 0);
+        // Don't reset rate limit backoff here — let it persist across turns
+        // to provide meaningful rate limit protection. Only reset on explicit
+        // success (line ~1798) or after a long quiet period.
 
         while (loopCount < MAX_LOOP_HARD) {
           loopCount++;
@@ -1785,7 +1801,7 @@ You can combine multiple tools in one response:
             // Re-create safety timer immediately for the next iteration
             // (message-end handler clears it, but the loop is still running)
             try {
-              const { resetSafetyTimer } = await import("../lib/safetyTimer");
+              const { resetSafetyTimer } = await import("./safetyTimer");
               resetSafetyTimer(
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 () => useChat.getState() as any,
@@ -1956,6 +1972,10 @@ You can combine multiple tools in one response:
         // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
         const streamCleanup = streamCleanups.get(sessionId);
         if (streamCleanup) streamCleanup();
+        streamCleanups.delete(sessionId);
+        streamCallbacks.delete(sessionId);
+        // Clean up rate limit errors for completed sessions
+        sessionRateLimitErrors.delete(sessionId);
         // Clean up SessionEnd dedup tracking AFTER all cleanup is done.
         // Use queueMicrotask instead of setTimeout to avoid a fragile 100ms timer
         // that can race with concurrent abort() calls.
@@ -2202,6 +2222,14 @@ You can combine multiple tools in one response:
     async clipboardHasImage() {
       const { invoke } = await import("@tauri-apps/api/core");
       return await invoke<boolean>("clipboard_has_image");
+    },
+    async clipboardReadImage(): Promise<string | null> {
+      const { invoke } = await import("@tauri-apps/api/core");
+      try {
+        return await invoke<string>("clipboard_read_image");
+      } catch {
+        return null;
+      }
     },
     async notify(payload: { title: string; body: string; icon?: string }) {
       const { invoke } = await import("@tauri-apps/api/core");

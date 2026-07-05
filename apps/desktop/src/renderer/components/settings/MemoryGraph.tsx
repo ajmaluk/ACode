@@ -49,7 +49,7 @@ export function MemoryGraph() {
     const build = async () => {
       const { mcpServers } = useSkillsMcp.getState();
       const { chatSessions, sessionMessages } = useChat.getState();
-      const genePool = loadGenePool();
+      const genePool = await loadGenePool();
       const { activeWorkspaceId, workspaces } = useWorkspace.getState();
       const ws = workspaces.find(w => w.id === activeWorkspaceId);
 

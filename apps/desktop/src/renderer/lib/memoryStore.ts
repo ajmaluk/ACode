@@ -799,7 +799,7 @@ Return ONLY the JSON array, no markdown fences.`;
 
 /** Parse a DB row into a MemoryEntry */
 function parseRow(row: MemoryEntryRow): MemoryEntry {
-  let tags: string[] = [];
+  let tags: string[];
   try {
     tags = typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []);
   } catch {

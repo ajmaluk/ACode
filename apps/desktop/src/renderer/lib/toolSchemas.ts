@@ -43,7 +43,7 @@ export const GrepFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
   pattern: z.string().min(1, "pattern is required"),
   regex: z.string().optional(),
-  max_results: z.string().optional(),
+  max_results: z.string().regex(/^\d+$/, "max_results must be a numeric string").optional(),
 });
 
 export const SearchFilesArgsSchema = z.object({
@@ -51,7 +51,7 @@ export const SearchFilesArgsSchema = z.object({
   path: z.string().optional(),
   glob: z.string().optional(),
   regex: z.string().optional(),
-  max_results: z.string().optional(),
+  max_results: z.string().regex(/^\d+$/, "max_results must be a numeric string").optional(),
 });
 
 export const RunCommandArgsSchema = z.object({
@@ -302,6 +302,7 @@ const DANGEROUS_PATH_PATTERNS = [
 const DANGEROUS_COMMANDS = [
   // Unix
   "rm -rf /",
+  "rm -rf /*",
   "mkfs",
   "dd if=",
   ":(){ :|:& };:",
@@ -316,6 +317,14 @@ const DANGEROUS_COMMANDS = [
   "bcdedit",
   "reg delete HKLM",
 ];
+
+/**
+ * Normalize a shell command for safety checking.
+ * Collapses multiple spaces, trims, and lowercases.
+ */
+function normalizeCommand(cmd: string): string {
+  return cmd.toLowerCase().replace(/\s+/g, " ").trim();
+}
 
 /**
  * Validate tool arguments against the registered schema.
@@ -380,11 +389,11 @@ export function validateToolArgs(
     }
   }
 
-  // Security checks for commands
+  // Security checks for commands (normalized to prevent bypass via whitespace)
   if (toolName === "run_command") {
-    const cmd = String(args.command || "").toLowerCase();
+    const cmd = normalizeCommand(String(args.command || ""));
     for (const dangerous of DANGEROUS_COMMANDS) {
-      if (cmd.includes(dangerous.toLowerCase())) {
+      if (cmd.includes(normalizeCommand(dangerous))) {
         return {
           valid: false,
           error: `Dangerous command blocked: contains '${dangerous}'`,

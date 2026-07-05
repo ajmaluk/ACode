@@ -27,7 +27,8 @@ export type HookEventName =
   | "UserPromptSubmit"
   | "PostToolUse"
   | "Stop"
-  | "SessionEnd";
+  | "SessionEnd"
+  | "ContextPressure";
 
 export interface SessionStartEvent {
   sessionId: string;
@@ -73,12 +74,24 @@ export interface SessionEndEvent {
   timestamp: number;
 }
 
+export interface ContextPressureEvent {
+  sessionId: string;
+  pressure: "none" | "low" | "medium" | "high";
+  pressureRatio: number;
+  totalTokens: number;
+  usableTokens: number;
+  shouldPrune: boolean;
+  shouldCompact: boolean;
+  timestamp: number;
+}
+
 export type HookEventPayloads = {
   SessionStart: SessionStartEvent;
   UserPromptSubmit: UserPromptSubmitEvent;
   PostToolUse: PostToolUseEvent;
   Stop: StopEvent;
   SessionEnd: SessionEndEvent;
+  ContextPressure: ContextPressureEvent;
 };
 
 // ---------------------------------------------------------------------------

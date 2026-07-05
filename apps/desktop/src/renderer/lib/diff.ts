@@ -266,8 +266,9 @@ function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: numb
         }
       }
     }
-    oldPos += CHUNK_SIZE;
-    newPos += CHUNK_SIZE;
+    // Advance positions by the actual chunk sizes consumed
+    oldPos += cn;
+    newPos += cm;
   }
   return ops;
 }

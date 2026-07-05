@@ -79,6 +79,96 @@ export function skillInfoFromParsed(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Skill Validation
+// ---------------------------------------------------------------------------
+
+export interface SkillValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * Validate a SKILL.md file format.
+ * Checks for required frontmatter fields, valid structure, and content quality.
+ */
+export function validateSkill(rawContent: string): SkillValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Check for frontmatter
+  if (!rawContent.startsWith("---")) {
+    errors.push("Missing YAML frontmatter (file must start with ---)");
+    return { valid: false, errors, warnings };
+  }
+
+  const { frontmatter, body } = parseFrontmatter(rawContent);
+
+  // Required fields
+  if (!frontmatter.name?.trim()) {
+    errors.push("Missing required field: name");
+  } else if (frontmatter.name.length > 100) {
+    warnings.push("Name is very long (>100 chars). Consider shortening.");
+  }
+
+  // Validate name format (alphanumeric, hyphens, underscores)
+  if (frontmatter.name && !/^[a-zA-Z0-9_-]+$/.test(frontmatter.name)) {
+    warnings.push("Name contains special characters. Use only alphanumeric, hyphens, and underscores.");
+  }
+
+  // Description validation
+  if (!frontmatter.description?.trim()) {
+    warnings.push("Missing description field. Adding a description helps users understand the skill.");
+  } else if (frontmatter.description.length > 200) {
+    warnings.push("Description is very long (>200 chars). Consider shortening.");
+  }
+
+  // Content validation
+  if (!body.trim()) {
+    errors.push("Empty skill body. The skill must have content after the frontmatter.");
+  } else if (body.length < 50) {
+    warnings.push("Skill body is very short (<50 chars). Consider adding more detailed instructions.");
+  } else if (body.length > 10000) {
+    warnings.push("Skill body is very long (>10K chars). Consider breaking into multiple skills.");
+  }
+
+  // Check for common issues
+  if (body.includes("```") && (body.match(/```/g)?.length ?? 0) % 2 !== 0) {
+    warnings.push("Unclosed code fence detected. Check for matching opening/closing ```.");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
+/**
+ * Dry-run a skill without executing it.
+ * Parses and validates the skill, returns the prompt that would be injected.
+ */
+export function dryRunSkill(rawContent: string): {
+  valid: boolean;
+  prompt?: string;
+  metadata?: Record<string, string>;
+  errors: string[];
+} {
+  const validation = validateSkill(rawContent);
+  if (!validation.valid) {
+    return { valid: false, errors: validation.errors };
+  }
+
+  const { frontmatter, body } = parseFrontmatter(rawContent);
+  return {
+    valid: true,
+    prompt: body,
+    metadata: frontmatter,
+    errors: [],
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Bundled skills — shipped with Dalam.
 // ----------------------------------------------------------------------------

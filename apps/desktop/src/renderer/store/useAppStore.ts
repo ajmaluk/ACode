@@ -4213,6 +4213,18 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
     const server = get().mcpServers.find((m) => m.name === name);
     if (!server) return;
 
+    // Check cache first
+    const { getCachedTools, cacheTools } = await import("../lib/mcpCache");
+    const cached = getCachedTools(name);
+    if (cached) {
+      set((s) => ({
+        mcpServers: s.mcpServers.map((m) =>
+          m.name === name ? { ...m, status: "connected", tools: cached.tools, error: undefined } : m
+        ),
+      }));
+      return;
+    }
+
     try {
       let tools: { name: string; description: string }[] = [];
       if (server.transport === "http") {
@@ -4248,6 +4260,9 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
           m.name === name ? { ...m, status: "connected", tools, error: undefined } : m
         ),
       }));
+
+      // Cache the tools for future use
+      cacheTools(name, tools, server.url);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       if (import.meta.env.DEV) console.error(`MCP server "${name}" connection failed:`, errorMsg);
@@ -4260,6 +4275,8 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
   },
   async disconnectMcpServer(name) {
     mcpHttpSessions.delete(name);
+    const { invalidateCache } = await import("../lib/mcpCache");
+    invalidateCache(name);
     set((s) => ({
       mcpServers: s.mcpServers.map((m) =>
         m.name === name ? { ...m, status: "disconnected", tools: [] } : m

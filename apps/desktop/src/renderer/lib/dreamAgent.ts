@@ -62,92 +62,92 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
     // 1. Purge already-flagged stale memories from SQLite & update MEMORY.md
     const purgedCount = await purgeStale();
 
-  // 2. Validate file references (parallelized)
-  const memories = await getAllMemories({ excludeStale: false });
-  let validatedCount = 0;
-  const { exists } = await import("@tauri-apps/plugin-fs");
+    // 2. Validate file references (parallelized)
+    const memories = await getAllMemories({ excludeStale: false });
+    let validatedCount = 0;
+    const { exists } = await import("@tauri-apps/plugin-fs");
 
-  // Check file existence in parallel batches of 20
-  const batchSize = 20;
-  for (let i = 0; i < memories.length; i += batchSize) {
-    const batch = memories.slice(i, i + batchSize);
-    const results = await Promise.allSettled(
-      batch.map(async (mem) => {
-        if (!mem.sourceFile) return null;
-        try {
-          const fullPath = mem.sourceFile.startsWith("/")
-            ? mem.sourceFile
-            : joinPath(workspacePath, mem.sourceFile);
-          const fileExists = await exists(fullPath);
-          return fileExists ? null : mem.id;
-        } catch (err) {
-          console.warn("[DreamAgent] Failed to check memory file:", err);
-          return null;
+    // Check file existence in parallel batches of 20
+    const batchSize = 20;
+    for (let i = 0; i < memories.length; i += batchSize) {
+      const batch = memories.slice(i, i + batchSize);
+      const results = await Promise.allSettled(
+        batch.map(async (mem) => {
+          if (!mem.sourceFile) return null;
+          try {
+            const fullPath = mem.sourceFile.startsWith("/")
+              ? mem.sourceFile
+              : joinPath(workspacePath, mem.sourceFile);
+            const fileExists = await exists(fullPath);
+            return fileExists ? null : mem.id;
+          } catch (err) {
+            console.warn("[DreamAgent] Failed to check memory file:", err);
+            return null;
+          }
+        })
+      );
+      for (const result of results) {
+        if (result.status === "fulfilled" && result.value) {
+          await markStale(result.value);
+          validatedCount++;
         }
-      })
-    );
-    for (const result of results) {
-      if (result.status === "fulfilled" && result.value) {
-        await markStale(result.value);
-        validatedCount++;
       }
     }
-  }
 
-  // 2.5. Re-score memories based on access patterns
-  // Promote frequently accessed low-tier memories and demote rarely accessed high-tier ones
-  try {
-    const { scoreMemory } = await import("./memoryStore");
-    const db = getDb();
-    const allMemories = await getAllMemories({ excludeStale: true });
-    let promoted = 0;
-    let demoted = 0;
+    // 2.5. Re-score memories based on access patterns
+    // Promote frequently accessed low-tier memories and demote rarely accessed high-tier ones
+    try {
+      const { scoreMemory } = await import("./memoryStore");
+      const db = getDb();
+      const allMemories = await getAllMemories({ excludeStale: true });
+      let promoted = 0;
+      let demoted = 0;
 
-    for (const mem of allMemories) {
-      const score = scoreMemory(mem);
-      const oldTier = mem.tier;
+      for (const mem of allMemories) {
+        const score = scoreMemory(mem);
+        const oldTier = mem.tier;
 
-      // Promote: frequently accessed low/medium tier memories
-      if (oldTier !== "critical" && mem.accessCount >= 5 && score > 40) {
-        const newTier = oldTier === "low" ? "medium" : "high";
-        await db.execute(
-          `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-          [newTier, Date.now(), mem.id]
-        );
-        promoted++;
+        // Promote: frequently accessed low/medium tier memories
+        if (oldTier !== "critical" && mem.accessCount >= 5 && score > 40) {
+          const newTier = oldTier === "low" ? "medium" : "high";
+          await db.execute(
+            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
+            [newTier, Date.now(), mem.id]
+          );
+          promoted++;
+        }
+        // Demote: rarely accessed high-tier memories older than 30 days
+        else if (oldTier === "high" && mem.accessCount <= 1 && (Date.now() - mem.createdAt) > 30 * 86400000) {
+          await db.execute(
+            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
+            ["medium", Date.now(), mem.id]
+          );
+          demoted++;
+        }
       }
-      // Demote: rarely accessed high-tier memories older than 30 days
-      else if (oldTier === "high" && mem.accessCount <= 1 && (Date.now() - mem.createdAt) > 30 * 86400000) {
-        await db.execute(
-          `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-          ["medium", Date.now(), mem.id]
-        );
-        demoted++;
+      if (promoted > 0 || demoted > 0) {
+        console.log(`[DreamAgent] Re-scored memories: ${promoted} promoted, ${demoted} demoted`);
       }
+    } catch (err) {
+      console.warn("[DreamAgent] Memory re-scoring failed:", err);
     }
-    if (promoted > 0 || demoted > 0) {
-      console.log(`[DreamAgent] Re-scored memories: ${promoted} promoted, ${demoted} demoted`);
-    }
-  } catch (err) {
-    console.warn("[DreamAgent] Memory re-scoring failed:", err);
-  }
 
-  // Reload memories for date cleanup
-  const activeMemories = await getAllMemories({ excludeStale: true });
+    // Reload memories for date cleanup
+    const activeMemories = await getAllMemories({ excludeStale: true });
 
-  // 3. Relative date adjustments via LLM
-  // NOTE: Each memory has unique content and creation timestamp, requiring individual LLM calls.
-  // Batching is not feasible here because the prompt includes memory-specific timestamps and
-  // content that must be processed independently to produce accurate absolute date replacements.
-  let dateAdjustedCount = 0;
-  const relativeTimeWords = /\b(recently|yesterday|last week|currently|now|tomorrow|ago|earlier today|this morning|a few days ago|last night|the other day)\b/i;
-  const MAX_LLM_DATE_ADJUSTMENTS = 20; // Cap API calls per dream cycle
+    // 3. Relative date adjustments via LLM
+    // NOTE: Each memory has unique content and creation timestamp, requiring individual LLM calls.
+    // Batching is not feasible here because the prompt includes memory-specific timestamps and
+    // content that must be processed independently to produce accurate absolute date replacements.
+    let dateAdjustedCount = 0;
+    const relativeTimeWords = /\b(recently|yesterday|last week|currently|now|tomorrow|ago|earlier today|this morning|a few days ago|last night|the other day)\b/i;
+    const MAX_LLM_DATE_ADJUSTMENTS = 20; // Cap API calls per dream cycle
 
-  for (const mem of activeMemories) {
-    if (dateAdjustedCount >= MAX_LLM_DATE_ADJUSTMENTS) break;
-    if (relativeTimeWords.test(mem.content)) {
-      try {
-        const prompt = `You are a memory cleaning assistant.
+    for (const mem of activeMemories) {
+      if (dateAdjustedCount >= MAX_LLM_DATE_ADJUSTMENTS) break;
+      if (relativeTimeWords.test(mem.content)) {
+        try {
+          const prompt = `You are a memory cleaning assistant.
 This memory was recorded at: ${new Date(mem.createdAt).toISOString()} (Unix timestamp: ${mem.createdAt}).
 The current time is: ${new Date().toISOString()}.
 
@@ -164,62 +164,62 @@ Output JSON format:
 }
 Return ONLY this JSON object. No markdown syntax or explanation.`;
 
-        const responseText = await api.agent.summarizeMessages(model, [
-          { role: "system", content: "You are a memory cleaning assistant. Return only a raw JSON block." },
-          { role: "user", content: prompt }
-        ]);
+          const responseText = await api.agent.summarizeMessages(model, [
+            { role: "system", content: "You are a memory cleaning assistant. Return only a raw JSON block." },
+            { role: "user", content: prompt }
+          ]);
 
-        const parsed = parseLLMJson<{ content?: string }>(responseText);
-        if (parsed?.content && parsed.content !== mem.content) {
-          const db = getDb();
-          const now = Date.now();
-          await db.execute(
-            `UPDATE memories SET content=?, updated_at=? WHERE id=?`,
-            [parsed.content, now, mem.id]
-          );
-          // Overwrite the markdown file to keep it in sync
-          await writeMemoryMarkdown(workspacePath, {
-            ...mem,
-            content: parsed.content,
-            updatedAt: now
-          });
-          dateAdjustedCount++;
+          const parsed = parseLLMJson<{ content?: string }>(responseText);
+          if (parsed?.content && parsed.content !== mem.content) {
+            const db = getDb();
+            const now = Date.now();
+            await db.execute(
+              `UPDATE memories SET content=?, updated_at=? WHERE id=?`,
+              [parsed.content, now, mem.id]
+            );
+            // Overwrite the markdown file to keep it in sync
+            await writeMemoryMarkdown(workspacePath, {
+              ...mem,
+              content: parsed.content,
+              updatedAt: now
+            });
+            dateAdjustedCount++;
+          }
+        } catch (e) {
+          console.warn(`[DreamAgent] Failed to adjust dates for memory ${mem.id}:`, e);
         }
-      } catch (e) {
-        console.warn(`[DreamAgent] Failed to adjust dates for memory ${mem.id}:`, e);
       }
     }
-  }
 
-  // Reload memories for duplicate matching
-  const freshMemories = await getAllMemories({ excludeStale: true });
+    // Reload memories for duplicate matching
+    const freshMemories = await getAllMemories({ excludeStale: true });
 
-  // 4. Deduplication and merging
-  // NOTE: Each memory pair has unique content requiring individual LLM merge calls.
-  // Sequential processing is required because: (1) each pair produces a unique merged
-  // result, (2) marking memories as stale mid-loop affects subsequent comparisons,
-  // and (3) the LLM needs full context of both memories to produce a coherent merge.
-  let deduplicatedCount = 0;
-  const categories = Array.from(new Set(freshMemories.map(m => m.category)));
-  // Cap LLM merge calls per dream cycle to prevent excessive API usage
-  const MAX_LLM_MERGES_PER_CYCLE = 10;
-  let llmMergeCount = 0;
+    // 4. Deduplication and merging
+    // NOTE: Each memory pair has unique content requiring individual LLM merge calls.
+    // Sequential processing is required because: (1) each pair produces a unique merged
+    // result, (2) marking memories as stale mid-loop affects subsequent comparisons,
+    // and (3) the LLM needs full context of both memories to produce a coherent merge.
+    let deduplicatedCount = 0;
+    const categories = Array.from(new Set(freshMemories.map(m => m.category)));
+    // Cap LLM merge calls per dream cycle to prevent excessive API usage
+    const MAX_LLM_MERGES_PER_CYCLE = 10;
+    let llmMergeCount = 0;
 
-  for (const category of categories) {
-    if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
-    const catMemories = freshMemories.filter(m => m.category === category);
-    for (let i = 0; i < catMemories.length; i++) {
+    for (const category of categories) {
       if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
-      for (let j = i + 1; j < catMemories.length; j++) {
+      const catMemories = freshMemories.filter(m => m.category === category);
+      for (let i = 0; i < catMemories.length; i++) {
         if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
-        const m1 = catMemories[i];
-        const m2 = catMemories[j];
-        if (m1.stale || m2.stale) continue;
+        for (let j = i + 1; j < catMemories.length; j++) {
+          if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
+          const m1 = catMemories[i];
+          const m2 = catMemories[j];
+          if (m1.stale || m2.stale) continue;
 
-        const similarity = jaccardSimilarity(m1.content, m2.content);
-        if (similarity > 0.55) {
-          try {
-            const prompt = `You are a memory consolidation assistant. Your task is to merge two related memory entries into a single, comprehensive memory entry.
+          const similarity = jaccardSimilarity(m1.content, m2.content);
+          if (similarity > 0.55) {
+            try {
+              const prompt = `You are a memory consolidation assistant. Your task is to merge two related memory entries into a single, comprehensive memory entry.
 
 Memory 1 (Created: ${new Date(m1.createdAt).toISOString()}):
 Summary: ${m1.summary}
@@ -248,67 +248,67 @@ Instructions:
 }
 Return ONLY this JSON object. No markdown syntax or explanation.`;
 
-            const responseText = await api.agent.summarizeMessages(model, [
-              { role: "system", content: "You are a memory consolidation assistant. Return only a raw JSON block." },
-              { role: "user", content: prompt }
-            ]);
+              const responseText = await api.agent.summarizeMessages(model, [
+                { role: "system", content: "You are a memory consolidation assistant. Return only a raw JSON block." },
+                { role: "user", content: prompt }
+              ]);
 
-            const parsed = parseLLMJson<{ summary?: string; content?: string; tier?: string; tags?: string[] }>(responseText);
+              const parsed = parseLLMJson<{ summary?: string; content?: string; tier?: string; tags?: string[] }>(responseText);
 
-            if (parsed?.summary && parsed.content) {
-              // Create the new merged memory
-              const validTiers = ["critical", "high", "medium", "low"] as const;
-              const mergedTier = parsed.tier && validTiers.includes(parsed.tier as typeof validTiers[number])
-                ? parsed.tier as typeof validTiers[number]
-                : m1.tier;
-              await saveMemory({
-                category,
-                tier: mergedTier,
-                summary: parsed.summary,
-                content: parsed.content,
-                tags: parsed.tags || Array.from(new Set([...m1.tags, ...m2.tags])),
-                sourceSession: m2.sourceSession || m1.sourceSession,
-                sourceFile: m2.sourceFile || m1.sourceFile
-              }, workspacePath);
+              if (parsed?.summary && parsed.content) {
+                // Create the new merged memory
+                const validTiers = ["critical", "high", "medium", "low"] as const;
+                const mergedTier = parsed.tier && validTiers.includes(parsed.tier as typeof validTiers[number])
+                  ? parsed.tier as typeof validTiers[number]
+                  : m1.tier;
+                await saveMemory({
+                  category,
+                  tier: mergedTier,
+                  summary: parsed.summary,
+                  content: parsed.content,
+                  tags: parsed.tags || Array.from(new Set([...m1.tags, ...m2.tags])),
+                  sourceSession: m2.sourceSession || m1.sourceSession,
+                  sourceFile: m2.sourceFile || m1.sourceFile
+                }, workspacePath);
 
-              // Mark old ones as stale
-              await markStale(m1.id);
-              await markStale(m2.id);
+                // Mark old ones as stale
+                await markStale(m1.id);
+                await markStale(m2.id);
 
-              m1.stale = true;
-              m2.stale = true;
-              deduplicatedCount++;
-              llmMergeCount++;
+                m1.stale = true;
+                m2.stale = true;
+                deduplicatedCount++;
+                llmMergeCount++;
+              }
+            } catch (e) {
+              console.warn(`[DreamAgent] Failed to merge memories ${m1.id} and ${m2.id}:`, e);
             }
-          } catch (e) {
-            console.warn(`[DreamAgent] Failed to merge memories ${m1.id} and ${m2.id}:`, e);
           }
         }
       }
     }
-  }
 
-  // Purge any newly marked stale memories
-  if (validatedCount > 0 || deduplicatedCount > 0) {
-    await purgeStale();
-  }
+    // Purge any newly marked stale memories
+    if (validatedCount > 0 || deduplicatedCount > 0) {
+      await purgeStale();
+    }
 
-  // Run skill consolidation optimization (Refactoring redundant workspace skills)
-  try {
-    await executeWorkspaceDreamOptimization(workspacePath);
-  } catch (err) {
-    console.warn("[DreamAgent] Failed to consolidate skills during dream cycle:", err);
-  }
+    // Run skill consolidation optimization (Refactoring redundant workspace skills)
+    try {
+      await executeWorkspaceDreamOptimization(workspacePath);
+    } catch (err) {
+      console.warn("[DreamAgent] Failed to consolidate skills during dream cycle:", err);
+    }
 
-  // Update MEMORY.md index
-  await updateMemoryIndex(workspacePath);
+    // Update MEMORY.md index
+    await updateMemoryIndex(workspacePath);
 
-  return {
-    purgedCount,
-    deduplicatedCount,
-    dateAdjustedCount,
-    validatedCount
-  };
+    return {
+      purgedCount,
+      deduplicatedCount,
+      dateAdjustedCount,
+      validatedCount
+    };
   } finally {
     activeDreams.delete(workspacePath);
   }

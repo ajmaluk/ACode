@@ -14,10 +14,14 @@
  *   3. VALIDATE — Gene is tested against historical sessions
  *   4. SOLIDIFY — Gene is committed to the gene pool
  *   5. EXPRESS — Gene influences future agent decisions
+ *
+ * Storage: SQLite via @tauri-apps/plugin-sql (per-workspace persistence)
+ * Previously used localStorage which was lost on workspace switch or browser clear.
  * ============================================================
  */
 
 import type { ChatMessage } from "@dalam/shared-types";
+import { getDb, isDatabaseReady } from "./database";
 
 // ─── Gene Types ──────────────────────────────────────────────
 
@@ -62,42 +66,136 @@ export interface DetectedPattern {
 
 // ─── Gene Pool Management ────────────────────────────────────
 
-const GENE_POOL_KEY = "dalam.genePool.v1";
+interface GeneRow {
+  id: string;
+  name: string;
+  description: string;
+  trigger_pattern: string;
+  action: string;
+  category: string;
+  confidence: number;
+  activation_count: number;
+  success_count: number;
+  created_at: number;
+  last_activated: number;
+  source: string;
+  tags: string;
+  workspace_id: string | null;
+}
 
-export function loadGenePool(): GenePool {
+function rowToGene(row: GeneRow): Gene {
+  let tags: string[];
   try {
-    const raw = localStorage.getItem(GENE_POOL_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (err) { console.warn("[Genes] Failed to load gene pool:", err); }
+    tags = typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []);
+  } catch { tags = []; }
   return {
-    genes: [],
-    version: 1,
-    lastEvolution: 0,
-    totalActivations: 0,
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    trigger: row.trigger_pattern,
+    action: row.action,
+    category: row.category as Gene["category"],
+    confidence: row.confidence,
+    activationCount: row.activation_count,
+    successCount: row.success_count,
+    createdAt: row.created_at,
+    lastActivatedAt: row.last_activated,
+    source: row.source as Gene["source"],
+    tags,
   };
 }
 
-export function saveGenePool(pool: GenePool): void {
+/**
+ * Load gene pool from SQLite. Falls back to empty pool if DB not ready.
+ */
+export async function loadGenePool(): Promise<GenePool> {
+  if (!isDatabaseReady()) {
+    return { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+  }
   try {
-    localStorage.setItem(GENE_POOL_KEY, JSON.stringify(pool));
+    const db = getDb();
+    const rows = await db.select(
+      `SELECT * FROM genes ORDER BY confidence DESC, created_at DESC`
+    ) as GeneRow[];
+    const genes = rows.map(rowToGene);
+    const totalActivations = genes.reduce((sum, g) => sum + g.activationCount, 0);
+    return {
+      genes,
+      version: 1,
+      lastEvolution: genes.length > 0 ? Math.max(...genes.map(g => g.lastActivatedAt)) : 0,
+      totalActivations,
+    };
   } catch (err) {
-    console.warn("[Genes] Failed to save gene pool:", err);
+    console.warn("[Genes] Failed to load gene pool from SQLite:", err);
+    return { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
   }
 }
 
-export function addGene(pool: GenePool, gene: Gene): GenePool {
+/**
+ * Save a single gene to SQLite (insert or update).
+ */
+export async function saveGene(gene: Gene): Promise<void> {
+  if (!isDatabaseReady()) return;
+  try {
+    const db = getDb();
+    await db.execute(
+      `INSERT OR REPLACE INTO genes (id, name, description, trigger_pattern, action, category, confidence, activation_count, success_count, created_at, last_activated, source, tags)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [gene.id, gene.name, gene.description, gene.trigger, gene.action, gene.category,
+       gene.confidence, gene.activationCount, gene.successCount, gene.createdAt,
+       gene.lastActivatedAt, gene.source, JSON.stringify(gene.tags)]
+    );
+  } catch (err) {
+    console.warn("[Genes] Failed to save gene:", err);
+  }
+}
+
+/**
+ * Save the entire gene pool to SQLite.
+ */
+export async function saveGenePool(pool: GenePool): Promise<void> {
+  for (const gene of pool.genes) {
+    await saveGene(gene);
+  }
+}
+
+/**
+ * Migrate genes from localStorage to SQLite (one-time migration).
+ */
+export async function migrateLocalStorageGenes(): Promise<number> {
+  const LEGACY_KEY = "dalam.genePool.v1";
+  try {
+    const raw = localStorage.getItem(LEGACY_KEY);
+    if (!raw) return 0;
+    const pool: GenePool = JSON.parse(raw);
+    if (!pool.genes || pool.genes.length === 0) return 0;
+
+    let migrated = 0;
+    for (const gene of pool.genes) {
+      await saveGene(gene);
+      migrated++;
+    }
+    // Clear localStorage after successful migration
+    localStorage.removeItem(LEGACY_KEY);
+    console.info(`[Genes] Migrated ${migrated} genes from localStorage to SQLite`);
+    return migrated;
+  } catch (err) {
+    console.warn("[Genes] Failed to migrate localStorage genes:", err);
+    return 0;
+  }
+}
+
+export async function addGene(pool: GenePool, gene: Gene): Promise<GenePool> {
   // Deduplication: check for genes with same name or similar trigger
   const existing = pool.genes.find(g => g.name === gene.name || g.trigger === gene.trigger);
   if (existing) {
     // Boost existing gene's confidence instead of creating duplicate
     const updatedConfidence = Math.min(1, existing.confidence + 0.05);
+    const updatedGene = { ...existing, confidence: updatedConfidence, activationCount: existing.activationCount + 1, lastActivatedAt: Date.now() };
+    await saveGene(updatedGene);
     return {
       ...pool,
-      genes: pool.genes.map(g =>
-        g.id === existing.id
-          ? { ...g, confidence: updatedConfidence, activationCount: g.activationCount + 1, lastActivatedAt: Date.now() }
-          : g
-      ),
+      genes: pool.genes.map(g => g.id === existing.id ? updatedGene : g),
     };
   }
 
@@ -106,33 +204,40 @@ export function addGene(pool: GenePool, gene: Gene): GenePool {
   if (genes.length > 50) {
     genes.sort((a, b) => b.confidence - a.confidence || b.createdAt - a.createdAt);
     genes = genes.slice(0, 50);
+    // Remove evicted genes from DB
+    if (isDatabaseReady()) {
+      const db = getDb();
+      const keepIds = new Set(genes.map(g => g.id));
+      for (const g of pool.genes) {
+        if (!keepIds.has(g.id)) {
+          await db.execute(`DELETE FROM genes WHERE id = ?`, [g.id]).catch(() => {});
+        }
+      }
+    }
   }
 
-  const newPool = {
-    ...pool,
-    genes,
-  };
-  saveGenePool(newPool);
-  return newPool;
+  await saveGene(gene);
+  return { ...pool, genes };
 }
 
-export function removeGene(pool: GenePool, geneId: string): GenePool {
-  return {
-    ...pool,
-    genes: pool.genes.filter(g => g.id !== geneId),
-  };
+export async function removeGene(pool: GenePool, geneId: string): Promise<GenePool> {
+  if (isDatabaseReady()) {
+    const db = getDb();
+    await db.execute(`DELETE FROM genes WHERE id = ?`, [geneId]).catch(() => {});
+  }
+  return { ...pool, genes: pool.genes.filter(g => g.id !== geneId) };
 }
 
 /**
  * Record a successful activation for a gene (increments successCount).
  */
-export function recordGeneSuccess(pool: GenePool, geneId: string): GenePool {
-  return {
-    ...pool,
-    genes: pool.genes.map(g =>
-      g.id === geneId ? { ...g, successCount: g.successCount + 1 } : g
-    ),
-  };
+export async function recordGeneSuccess(pool: GenePool, geneId: string): Promise<GenePool> {
+  const updated = pool.genes.map(g =>
+    g.id === geneId ? { ...g, successCount: g.successCount + 1 } : g
+  );
+  const gene = updated.find(g => g.id === geneId);
+  if (gene) await saveGene(gene);
+  return { ...pool, genes: updated };
 }
 
 // ─── Debounced Gene Pool Save ─────────────────────────────────
@@ -162,11 +267,11 @@ function getGeneTriggerRegex(trigger: string): RegExp | null {
  * Find genes that match a given context (prompt + recent messages).
  * Returns genes sorted by confidence and relevance.
  */
-export function expressGenes(
+export async function expressGenes(
   pool: GenePool,
   prompt: string,
   recentMessages: ChatMessage[]
-): Gene[] {
+): Promise<Gene[]> {
   const lowerPrompt = prompt.toLowerCase();
   const recentContent = recentMessages
     .slice(-5)
@@ -196,9 +301,9 @@ export function expressGenes(
     // Save updated pool (debounced to avoid race conditions)
     if (_pendingGeneSave) clearTimeout(_pendingGeneSave);
     _pendingGenePool = { ...pool, genes: updatedGenes };
-    _pendingGeneSave = setTimeout(() => {
+    _pendingGeneSave = setTimeout(async () => {
       if (_pendingGenePool) {
-        saveGenePool(_pendingGenePool);
+        await saveGenePool(_pendingGenePool);
         _pendingGenePool = null;
       }
     }, 50);
@@ -430,10 +535,10 @@ function findRepeatedPhrases(contents: string[]): string[] {
  * Solidify a candidate gene into the gene pool.
  * Validates the gene before adding it.
  */
-export function solidifyGene(
+export async function solidifyGene(
   pool: GenePool,
   candidate: Omit<Gene, "id" | "createdAt" | "lastActivatedAt">
-): { success: boolean; gene?: Gene; error?: string } {
+): Promise<{ success: boolean; gene?: Gene; error?: string }> {
   // Validate trigger is a valid regex
   try {
     new RegExp(candidate.trigger, "i");
@@ -453,8 +558,8 @@ export function solidifyGene(
     lastActivatedAt: 0,
   };
 
-  const newPool = addGene(pool, gene);
-  saveGenePool(newPool);
+  const newPool = await addGene(pool, gene);
+  await saveGenePool(newPool);
 
   return { success: true, gene };
 }
@@ -464,7 +569,7 @@ export function solidifyGene(
  * - Remove genes with low confidence and zero activations
  * - Boost confidence of frequently successful genes
  */
-export function evolveGenes(pool: GenePool): GenePool {
+export async function evolveGenes(pool: GenePool): Promise<GenePool> {
   const now = Date.now();
   const STALE_DAYS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -486,6 +591,22 @@ export function evolveGenes(pool: GenePool): GenePool {
 
   // Remove very low confidence genes
   const filtered = evolved.filter(g => g.confidence > 0.1 || g.activationCount > 0);
+
+  // Delete removed genes from DB
+  if (isDatabaseReady()) {
+    const db = getDb();
+    const keepIds = new Set(filtered.map(g => g.id));
+    for (const g of pool.genes) {
+      if (!keepIds.has(g.id)) {
+        await db.execute(`DELETE FROM genes WHERE id = ?`, [g.id]).catch(() => {});
+      }
+    }
+  }
+
+  // Save evolved genes
+  for (const gene of filtered) {
+    await saveGene(gene);
+  }
 
   return {
     ...pool,

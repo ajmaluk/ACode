@@ -6,7 +6,7 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(
       tauri_plugin_log::Builder::default()
-        .max_level(if cfg!(debug_assertions) {
+        .level(if cfg!(debug_assertions) {
           log::LevelFilter::Debug
         } else {
           log::LevelFilter::Warn
@@ -20,6 +20,8 @@ pub fn run() {
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_sql::Builder::default().build())
     .plugin(tauri_plugin_http::init())
+    .plugin(tauri_plugin_window_state::Builder::default().build())
+    .plugin(tauri_plugin_deep_link::init())
     .invoke_handler(tauri::generate_handler![
         // Git commands
         git::git_status,
@@ -33,6 +35,7 @@ pub fn run() {
         system::clipboard_read_text,
         system::clipboard_write_text,
         system::clipboard_has_image,
+        system::clipboard_read_image,
         system::notify,
         system::system_get_info,
         system::get_working_dir,

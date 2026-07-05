@@ -56,6 +56,24 @@ CREATE TABLE IF NOT EXISTS memories (
   stale         INTEGER DEFAULT 0
 );`;
 
+const GENES_TABLE = `
+CREATE TABLE IF NOT EXISTS genes (
+  id               TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  description      TEXT NOT NULL,
+  trigger_pattern  TEXT NOT NULL,
+  action           TEXT NOT NULL,
+  category         TEXT NOT NULL,
+  confidence       REAL NOT NULL DEFAULT 0.5,
+  activation_count INTEGER NOT NULL DEFAULT 0,
+  success_count    INTEGER NOT NULL DEFAULT 0,
+  created_at       INTEGER NOT NULL,
+  last_activated   INTEGER NOT NULL DEFAULT 0,
+  source           TEXT NOT NULL DEFAULT 'session',
+  tags             TEXT NOT NULL DEFAULT '[]',
+  workspace_id     TEXT
+);`;
+
 const FTS_TABLE = `
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   id UNINDEXED,
@@ -177,6 +195,7 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     // Create tables
     await db.execute(MEMORY_TABLE);
     await db.execute(FTS_TABLE);
+    await db.execute(GENES_TABLE);
 
     // Create triggers individually
     await db.execute(`
@@ -205,6 +224,8 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_tier     ON memories(tier);`);
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_stale    ON memories(stale);`);
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_genes_workspace ON genes(workspace_id);`);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_genes_confidence ON genes(confidence);`);
 
     return db;
   };

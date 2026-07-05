@@ -23,6 +23,7 @@ import type {
   PostToolUseEvent,
   StopEvent,
   SessionEndEvent,
+  ContextPressureEvent,
 } from "./hookBus";
 import { CTX } from "./memoryTypes";
 
@@ -303,19 +304,23 @@ async function runGeneReflection(event: SessionEndEvent): Promise<void> {
     const messages = useChat.getState().sessionMessages[event.sessionId] || [];
     if (messages.length < 4) return;
 
-    const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId } = await import("./genes");
+    const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId, migrateLocalStorageGenes } = await import("./genes");
+
+    // Migrate any legacy localStorage genes on first run
+    await migrateLocalStorageGenes();
+
     const reflection = reflectOnSession(messages, event.sessionId);
 
     if (reflection.suggestedGenes.length > 0) {
-      let pool = loadGenePool();
+      let pool = await loadGenePool();
       for (const candidate of reflection.suggestedGenes) {
         const uniqueCandidate = { ...candidate, id: createGeneId() };
-        pool = addGene(pool, uniqueCandidate);
+        pool = await addGene(pool, uniqueCandidate);
       }
       if (pool.genes.length > 10) {
-        pool = evolveGenes(pool);
+        pool = await evolveGenes(pool);
       }
-      saveGenePool(pool);
+      await saveGenePool(pool);
     }
   } catch (e) {
     console.warn("[HookListener] Gene reflection failed:", e);
@@ -334,16 +339,19 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
   // 2. Periodic cleanup of stale session stats (always run, not just when half-full)
   cleanupStaleStats();
 
-  // 3. Auto-extract memories from the last exchange
+  // 3. Auto-generate session title if not set
+  await autoGenerateSessionTitle(event);
+
+  // 4. Auto-extract memories from the last exchange
   await autoExtractMemories(event);
 
-  // 4. Periodic memory maintenance
+  // 5. Periodic memory maintenance
   await runMemoryMaintenanceIfNeeded();
 
-  // 5. Auto-crystallize skill from session (fire-and-forget)
+  // 6. Auto-crystallize skill from session (fire-and-forget)
   triggerSkillCrystallization(event).catch(() => {});
 
-  // 6. Gene reflection (fire-and-forget)
+  // 7. Gene reflection (fire-and-forget)
   runGeneReflection(event).catch(() => {});
 }
 
@@ -390,6 +398,131 @@ function onStop(event: StopEvent): void {
   );
 }
 
+// ─── 6. Session Title Generation ───
+/**
+ * Generate a descriptive title for a session based on the first user message.
+ * Uses heuristics to create a concise, meaningful title.
+ */
+const MAX_TITLE_LENGTH = 80;
+
+function generateSessionTitle(firstUserMessage: string): string {
+  if (!firstUserMessage) return "Untitled session";
+
+  // Extract the first line or first sentence
+  let title = firstUserMessage.split("\n")[0].trim();
+
+  // Remove common prefixes
+  title = title.replace(/^(please|can you|could you|help me|I need to|I want to|fix|add|update|change|remove|delete|implement|create|write|build|refactor|debug|test|optimize|improve)\s+/i, "");
+
+  // If still too long, truncate at word boundary
+  if (title.length > MAX_TITLE_LENGTH) {
+    title = title.slice(0, MAX_TITLE_LENGTH).replace(/\s+\S*$/, "");
+    if (title.length < MAX_TITLE_LENGTH) title += "...";
+  }
+
+  // Capitalize first letter
+  title = title.charAt(0).toUpperCase() + title.slice(1);
+
+  return title || "Untitled session";
+}
+
+/**
+ * Auto-generate a session title on first LLM response.
+ * This is called after the first assistant message is received.
+ */
+async function autoGenerateSessionTitle(event: SessionEndEvent): Promise<void> {
+  try {
+    const { useChat } = await import("../store/useAppStore");
+    const messages = useChat.getState().sessionMessages[event.sessionId];
+    if (!messages || messages.length < 2) return;
+
+    // Find the first user message
+    const firstUserMsg = messages.find(m => m.role === "user");
+    if (!firstUserMsg) return;
+
+    // Check if session already has a custom title
+    const session = useChat.getState().chatSessions.find(s => s.id === event.sessionId);
+    if (session?.title && session.title !== "Untitled session") return;
+
+    // Generate title from first user message
+    const title = generateSessionTitle(firstUserMsg.content);
+
+    // Update session title
+    useChat.getState().renameSession(event.sessionId, title);
+  } catch (e) {
+    console.warn("[HookListener] Failed to auto-generate session title:", e);
+  }
+}
+
+// ─── 6. Context Pressure Event ───
+/**
+ * Automatically extracts and saves key facts when context pressure is high.
+ * This prevents important information from being lost during compaction.
+ */
+let lastMemoryFlushTime = 0;
+const MEMORY_FLUSH_COOLDOWN_MS = 60_000; // 1 minute cooldown between flushes
+
+async function onContextPressure(event: ContextPressureEvent): Promise<void> {
+  // Only act on medium or high pressure
+  if (event.pressure === "none" || event.pressure === "low") return;
+
+  // Cooldown to prevent excessive memory writes
+  const now = Date.now();
+  if (now - lastMemoryFlushTime < MEMORY_FLUSH_COOLDOWN_MS) return;
+  lastMemoryFlushTime = now;
+
+  try {
+    const { useChat, useWorkspace } = await import("../store/useAppStore");
+    const { extractMemoriesFromExchange, saveMemory } = await import("./memoryStore");
+
+    const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
+    if (!sessionMessages || sessionMessages.length < 4) return;
+
+    // Get the last user-assistant exchange
+    let lastUserIdx = -1;
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      if (sessionMessages[i].role === "user") { lastUserIdx = i; break; }
+    }
+    if (lastUserIdx < 0) return;
+
+    let assistantIdx = -1;
+    for (let i = lastUserIdx + 1; i < sessionMessages.length; i++) {
+      if (sessionMessages[i].role === "assistant") { assistantIdx = i; break; }
+    }
+    if (assistantIdx < 0) return;
+
+    const userInput = sessionMessages[lastUserIdx].content;
+    const assistantResponse = sessionMessages[assistantIdx].content;
+
+    if (userInput.length + assistantResponse.length < 200) return;
+
+    const workspace = useWorkspace.getState().workspaces.find(
+      (w) => w.id === useWorkspace.getState().activeWorkspaceId
+    );
+    if (!workspace) return;
+
+    // Extract memories using heuristics (no LLM call for speed)
+    const entries = extractMemoriesFromExchange(userInput, assistantResponse, {
+      sessionId: event.sessionId,
+      maxEntries: 2, // Limit to avoid too many writes
+    });
+
+    for (const entry of entries) {
+      try {
+        await saveMemory(entry, workspace.path);
+      } catch { /* skip individual failures */ }
+    }
+
+    if (entries.length > 0) {
+      console.log(
+        `[ContextPressure] Auto-saved ${entries.length} memory entries at ${Math.round(event.pressureRatio * 100)}% pressure`
+      );
+    }
+  } catch (e) {
+    console.warn("[ContextPressure] Failed to auto-save memories:", e);
+  }
+}
+
 // ─── Registration ───
 
 /**
@@ -405,6 +538,7 @@ export function registerHookListeners(): {
     hookBus.on("UserPromptSubmit", onUserPromptSubmit),
     hookBus.on("SessionStart", onSessionStart),
     hookBus.on("Stop", onStop),
+    hookBus.on("ContextPressure", onContextPressure),
   ];
 
   return {

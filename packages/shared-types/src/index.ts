@@ -449,6 +449,7 @@ export interface DalamAPI {
     clipboardReadText(): Promise<string>;
     clipboardWriteText(text: string): Promise<void>;
     clipboardHasImage(): Promise<boolean>;
+    clipboardReadImage(): Promise<string | null>;
     notify(payload: { title: string; body: string; icon?: string }): Promise<void>;
     getSystemInfo(): Promise<{ os: string; arch: string; hostname: string; homeDir: string; shell: string; locale?: string }>;
     getWorkingDir(): Promise<string>;

@@ -9,6 +9,9 @@
  * - OpenCode: COMPACTION_BUFFER=20K, PRUNE_PROTECT=40K, backward-scan pruning,
  *   SUMMARY_TEMPLATE (Goal/Instructions/Discoveries/Accomplished)
  * - Claude Code: MEMORY.md pointer index (≤200 lines)
+ *
+ * Optimization: Token estimation uses LRU cache to avoid re-estimating
+ * unchanged text. Cache is invalidated when text changes.
  */
 
 import type { ChatMessage } from "@dalam/shared-types";
@@ -28,6 +31,41 @@ const CTX_LOCAL = {
   OUTPUT_RESERVE: 4_000,
 };
 
+// ─── Token Estimation Cache ──────────────────────────────────
+// LRU cache for token estimates to avoid re-computing for unchanged text.
+// Key: text content, Value: token count. Limited to 1000 entries.
+
+interface TokenCacheEntry {
+  text: string;
+  tokens: number;
+}
+
+const _tokenCache = new Map<string, TokenCacheEntry>();
+const TOKEN_CACHE_MAX = 1000;
+
+function getCachedTokenCount(text: string): number | null {
+  const entry = _tokenCache.get(text);
+  if (entry) return entry.tokens;
+  return null;
+}
+
+function setCachedTokenCount(text: string, tokens: number): void {
+  // Evict oldest entry if cache is full
+  if (_tokenCache.size >= TOKEN_CACHE_MAX) {
+    const firstKey = _tokenCache.keys().next().value;
+    if (firstKey !== undefined) _tokenCache.delete(firstKey);
+  }
+  _tokenCache.set(text, { text, tokens });
+}
+
+/**
+ * Clear the token estimation cache.
+ * Call when conversation is compacted or messages are significantly modified.
+ */
+export function clearTokenCache(): void {
+  _tokenCache.clear();
+}
+
 export type ContextStats = {
   totalTokens: number;
   usableTokens: number;
@@ -39,7 +77,88 @@ export type ContextStats = {
   shouldPrune: boolean;      // tool outputs should be pruned
   nextCheckpointTrigger: number | null; // next unfired trigger threshold (e.g. 0.20), or null if none pending
   shouldCompact: boolean;    // full compaction needed (≥95%)
+  shouldProactivePrune: boolean; // proactive tool output pruning (≥60%)
+  shouldProactiveCompact: boolean; // proactive compaction trigger (≥75%)
 };
+
+// ─── Proactive Context Management ────────────────────────────
+// Thresholds for proactive compression (more aggressive than reactive)
+const PROACTIVE_PRUNE_THRESHOLD = 0.60;  // Start pruning tool outputs at 60%
+const PROACTIVE_COMPACT_THRESHOLD = 0.75; // Trigger background compaction at 75%
+
+/**
+ * Check if proactive context management should be triggered.
+ * This is called before each LLM call to prevent sudden context loss.
+ *
+ * Returns an object with recommended actions:
+ * - shouldPrune: Proactively prune old tool outputs
+ * - shouldCompact: Trigger background compaction
+ * - reason: Human-readable reason for the action
+ */
+export function checkProactiveContextManagement(
+  messages: ChatMessage[],
+  maxContextTokens: number = 128000
+): { shouldPrune: boolean; shouldCompact: boolean; reason: string } {
+  const stats = computeContextStats(messages, maxContextTokens);
+
+  if (stats.pressureRatio >= PROACTIVE_COMPACT_THRESHOLD) {
+    return {
+      shouldPrune: true,
+      shouldCompact: true,
+      reason: `Context at ${Math.round(stats.pressureRatio * 100)}% — proactive compaction recommended`,
+    };
+  }
+
+  if (stats.pressureRatio >= PROACTIVE_PRUNE_THRESHOLD) {
+    return {
+      shouldPrune: true,
+      shouldCompact: false,
+      reason: `Context at ${Math.round(stats.pressureRatio * 100)}% — proactive tool output pruning recommended`,
+    };
+  }
+
+  return {
+    shouldPrune: false,
+    shouldCompact: false,
+    reason: `Context at ${Math.round(stats.pressureRatio * 100)}% — no action needed`,
+  };
+}
+
+/**
+ * Get proactive context management recommendations.
+ * Used by the UI to display context pressure indicators.
+ */
+export function getContextPressureRecommendation(
+  pressure: ContextPressure,
+  _pressureRatio: number
+): { color: string; label: string; action: string } {
+  switch (pressure) {
+    case "high":
+      return {
+        color: "#ef4444", // red
+        label: "High",
+        action: "Compaction recommended",
+      };
+    case "medium":
+      return {
+        color: "#f97316", // orange
+        label: "Medium",
+        action: "Monitor context usage",
+      };
+    case "low":
+      return {
+        color: "#eab308", // yellow
+        label: "Low",
+        action: "Approaching limit",
+      };
+    default:
+      return {
+        color: "#22c55e", // green
+        label: "Normal",
+        action: "No action needed",
+      };
+  }
+}
 
 /**
  * Compute the next checkpoint trigger that hasn't fired yet.
@@ -72,9 +191,16 @@ export function parseContextWindow(window: string | undefined): number {
  * - Whitespace/punctuation: ~1 char per token
  *
  * Based on OpenAI's tokenizer behavior and tiktoken benchmarks.
+ *
+ * Uses LRU cache to avoid re-computing for unchanged text.
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
+
+  // Check cache first
+  const cached = getCachedTokenCount(text);
+  if (cached !== null) return cached;
+
   let count = 0;
   let codeMode = false;
 
@@ -128,7 +254,12 @@ export function estimateTokens(text: string): number {
     }
   }
 
-  return Math.ceil(count);
+  const result = Math.ceil(count);
+
+  // Cache the result
+  setCachedTokenCount(text, result);
+
+  return result;
 }
 
 /**
@@ -194,6 +325,8 @@ export function computeContextStats(
     shouldPrune: totalTokens > (usableTokens - CTX.PRUNE_PROTECT),
     nextCheckpointTrigger: getNextCheckpointTrigger(ratio),
     shouldCompact: ratio >= CTX.COMPACT_THRESHOLD,
+    shouldProactivePrune: ratio >= PROACTIVE_PRUNE_THRESHOLD,
+    shouldProactiveCompact: ratio >= PROACTIVE_COMPACT_THRESHOLD,
   };
 }
 

@@ -83,7 +83,7 @@
       ]
     },
     "notification:default",
-    "notification:allow-show-notification",
+    "notification:allow-show",
     "notification:allow-request-permission",
     "notification:allow-is-permission-granted",
     "sql:default",

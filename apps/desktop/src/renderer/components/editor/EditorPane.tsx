@@ -555,8 +555,10 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
   const closeToRight = () => {
     const idx = openTabs.findIndex((t) => t.path === tabPath);
     if (idx >= 0) {
-      for (let i = idx + 1; i < openTabs.length; i++) {
-        closeTab(openTabs[i].path);
+      // Snapshot paths before iterating to avoid mutation-during-iteration bugs
+      const pathsToClose = openTabs.slice(idx + 1).map(t => t.path);
+      for (const path of pathsToClose) {
+        closeTab(path);
       }
     }
     onClose();
@@ -565,8 +567,10 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
   const closeToLeft = () => {
     const idx = openTabs.findIndex((t) => t.path === tabPath);
     if (idx >= 0) {
-      for (let i = 0; i < idx; i++) {
-        closeTab(openTabs[i].path);
+      // Snapshot paths before iterating to avoid mutation-during-iteration bugs
+      const pathsToClose = openTabs.slice(0, idx).map(t => t.path);
+      for (const path of pathsToClose) {
+        closeTab(path);
       }
     }
     onClose();

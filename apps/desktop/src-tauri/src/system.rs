@@ -260,10 +260,164 @@ pub async fn launch_app(
 // ---------------------------------------------------------------------------
 
 /// Check if there's an image in the clipboard.
-/// TODO: Full image support when Tauri clipboard manager adds image reads.
+/// Uses platform-specific APIs to detect image content.
 #[tauri::command]
 pub async fn clipboard_has_image(_app: tauri::AppHandle) -> Result<bool, String> {
-    Ok(false)
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, use NSPasteboard to check for image types
+        use std::process::Command;
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                r#"tell application "System Events" to (clipboard info) contains "picture""#,
+            ])
+            .output()
+            .map_err(|e| format!("Failed to check clipboard: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+        return Ok(stdout.contains("true") || stdout.contains("picture"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, use PowerShell to check clipboard for image content
+        use std::process::Command;
+        let ps_script = r#"
+            Add-Type -AssemblyName System.Windows.Forms
+            $clipboard = [System.Windows.Forms.Clipboard]::GetDataObject()
+            if ($clipboard -and $clipboard.GetDataPresent([System.Windows.Forms.DataFormats]::Bitmap)) {
+                Write-Output "true"
+            } else {
+                Write-Output "false"
+            }
+        "#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps_script])
+            .output()
+            .map_err(|e| format!("Failed to check clipboard: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+        return Ok(stdout == "true");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, use xclip to check for image content
+        use std::process::Command;
+        let output = Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .output();
+
+        match output {
+            Ok(o) => return Ok(o.status.success() && !o.stdout.is_empty()),
+            Err(_) => {
+                // xclip not available, try xsel
+                let output = Command::new("xsel")
+                    .args(["--clipboard", "--output", "--type", "image/png"])
+                    .output();
+                return Ok(output.map(|o| o.status.success() && !o.stdout.is_empty()).unwrap_or(false));
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Ok(false)
+    }
+}
+
+/// Read image data from clipboard as base64-encoded PNG.
+/// Returns the base64 string if an image is present, or an error if not.
+#[tauri::command]
+pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // Use osascript to save clipboard image to a temp file, then read it
+        let tmp_path = std::env::temp_dir().join("dalam_clipboard_image.png");
+        let script = format!(
+            r#"set theFile to POSIX file "{}"
+            try
+                set theImage to the clipboard as «class PNGf»
+                set fp to open for access theFile with write permission
+                write theImage to fp
+                close access fp
+            on error errMsg
+                try
+                    close access theFile
+                end try
+                error errMsg
+            end try"#,
+            tmp_path.to_string_lossy()
+        );
+
+        let output = Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|e| format!("Failed to read clipboard image: {e}"))?;
+
+        if !output.status.success() {
+            return Err("No image in clipboard".to_string());
+        }
+
+        // Read the file and encode as base64
+        let image_data = std::fs::read(&tmp_path)
+            .map_err(|e| format!("Failed to read clipboard image file: {e}"))?;
+
+        // Clean up temp file
+        let _ = std::fs::remove_file(&tmp_path);
+
+        use base64::Engine;
+        Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&image_data)))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let ps_script = r#"
+            Add-Type -AssemblyName System.Windows.Forms
+            $img = [System.Windows.Forms.Clipboard]::GetImage()
+            if ($img -ne $null) {
+                $ms = New-Object System.IO.MemoryStream
+                $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+                $bytes = $ms.ToArray()
+                [Convert]::ToBase64String($bytes)
+            }
+        "#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps_script])
+            .output()
+            .map_err(|e| format!("Failed to read clipboard image: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.is_empty() || !stdout.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=') {
+            return Err("No image in clipboard".to_string());
+        }
+
+        Ok(format!("data:image/png;base64,{}", stdout))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        let output = Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .output()
+            .map_err(|e| format!("Failed to read clipboard image: {e}"))?;
+
+        if !output.status.success() || output.stdout.is_empty() {
+            return Err("No image in clipboard".to_string());
+        }
+
+        use base64::Engine;
+        Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&output.stdout)))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Image clipboard not supported on this platform".to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
