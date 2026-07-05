@@ -34,6 +34,17 @@ export interface AppSettings {
   excludedPatterns?: string;
   doomLoopThreshold?: number;
   customShortcuts?: Record<string, string>;
+  modelProfiles?: ModelProfile[];
+  autoRouteModels?: boolean;
+}
+
+export interface ModelProfile {
+  id: string;
+  name: string;
+  providerId: string;
+  modelId: string;
+  useFor: ("simple" | "code" | "complex")[];
+  enabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -242,6 +253,10 @@ export type ChatSessionSummary = {
   /** A short preview of the last user message, for the sidebar tooltip. */
   preview?: string;
   versionCount: number;
+  /** Whether this session is archived (hidden from sidebar but recoverable) */
+  archived?: boolean;
+  /** Timestamp when the session was archived */
+  archivedAt?: number;
 };
 
 export type ChatVersion = {
@@ -292,6 +307,7 @@ export type StreamEvent =
   | { type: "activity-skill"; name: string; content: string; args?: string }
   | { type: "activity-bash"; command: string; result: string }
   | { type: "activity-plan"; plan: string }
+  | { type: "usage"; usage: { inputTokens: number; outputTokens: number; totalTokens: number } }
   | { type: "error"; error: string };
 
 // ============================================================================

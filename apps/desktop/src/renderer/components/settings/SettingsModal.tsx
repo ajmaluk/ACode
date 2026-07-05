@@ -7,7 +7,6 @@ import { useToasts, useToast } from "@/components/ui/toastStore";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { joinPath } from "@/lib/pathUtils";
 import { modKey, platform } from "@/lib/platform";
-import { MemoryGraph } from "./MemoryGraph";
 import { getConnectorConfigs, saveConnectorConfig, removeConnectorConfig, type ConnectorConfig } from "@/lib/connectors";
 import { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder";
 import {
@@ -1179,6 +1178,14 @@ function McpTab() {
 // ---- Memory Graph ----------------------------------------------------------
 
 function MemoryGraphTab() {
+  const [MemoryGraph, setMemoryGraph] = useState<(() => React.ReactNode) | null>(null);
+  useEffect(() => {
+    import("./MemoryGraph").then(({ MemoryGraph: MG }) => {
+      setMemoryGraph(() => MG);
+    }).catch(() => {
+      setMemoryGraph(() => () => <p className="text-sm text-dalam-text-muted">Failed to load memory graph.</p>);
+    });
+  }, []);
   return (
     <>
       <h1 className="text-3xl font-bold text-dalam-text-primary mb-2">Memory Graph</h1>
@@ -1186,7 +1193,7 @@ function MemoryGraphTab() {
         Visualize the neural network of memories, agents, skills, and genes.
         Click nodes to inspect their details and connections.
       </p>
-      <MemoryGraph />
+      {MemoryGraph ? <MemoryGraph /> : <p className="text-sm text-dalam-text-muted">Loading memory graph…</p>}
     </>
   );
 }

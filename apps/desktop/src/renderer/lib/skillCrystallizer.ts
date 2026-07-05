@@ -102,7 +102,24 @@ ${formattedHistory}`;
     }
     const data = JSON.parse(cleaned);
 
+    // GATE 1: Syntactic validity check
     if (data.shouldCrystallize && data.name && data.content) {
+      // Verify valid YAML frontmatter
+      const hasValidFrontmatter = /^---\s*\n[\s\S]*?\n---\s*\n/.test(data.content);
+      if (!hasValidFrontmatter) {
+        console.warn("[SkillCrystallizer] Syntactic gate rejected — missing valid YAML frontmatter");
+        return;
+      }
+      // Verify required frontmatter fields
+      const fmMatch = data.content.match(/^---\s*\n([\s\S]*?)\n---/);
+      if (fmMatch) {
+        const hasName = /^name:\s*\S+/m.test(fmMatch[1]);
+        const hasDescription = /^description:\s*\S+/m.test(fmMatch[1]);
+        if (!hasName || !hasDescription) {
+          console.warn("[SkillCrystallizer] Syntactic gate rejected — frontmatter missing required fields");
+          return;
+        }
+      }
       notify({
         kind: "info",
         title: "Crystallized New Skill",
@@ -114,13 +131,30 @@ ${formattedHistory}`;
             variant: "primary",
             onClick: async () => {
               try {
-                const { exists, mkdir, readTextFile } = await import("@tauri-apps/plugin-fs");
+                const { exists, mkdir, readTextFile, readDir } = await import("@tauri-apps/plugin-fs");
                 // Sanitize skill name to prevent path traversal
                 const safeName = data.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
                 const skillsDir = joinPath(workspacePath, `.dalam/skills/${safeName}`);
                 const skillFile = joinPath(skillsDir, "SKILL.md");
 
+                // GATE 3: Budget enforcement — warn if over 50 skills
+                try {
+                  const skillsRootDir = joinPath(workspacePath, ".dalam/skills");
+                  const allSkillEntries = await readDir(skillsRootDir);
+                  if (allSkillEntries.length >= 50) {
+                    notify({
+                      kind: "warning",
+                      title: "Skill Budget Exceeded",
+                      description: `Over 50 skills detected. Consider pruning before adding '${data.name}'.`,
+                      durationMs: 10000
+                    });
+                  }
+                } catch {
+                  // skills dir may not exist yet
+                }
+
                 // Check if skill already exists — warn user
+                // GATE 2: Dedup check — same name with identical content
                 if (await exists(skillFile)) {
                   const existingContent = await readTextFile(skillFile);
                   if (existingContent === data.content) {

@@ -10,6 +10,10 @@
  * Based on Claude Code's approach to tool execution.
  */
 
+import { validateToolArgs } from "./toolSchemas";
+import { recordChange } from "./changeStack";
+import { readFileSync, writeFileSync } from "fs";
+
 export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
@@ -85,6 +89,58 @@ function isRetryableError(error: string): boolean {
   return RETRYABLE_ERRORS.some(e => lower.includes(e.toLowerCase()));
 }
 
+// Tool call cost tracking
+export interface ToolCostRecord {
+  toolCallId: string;
+  sessionId: string;
+  name: string;
+  durationMs: number;
+  retries: number;
+  success: boolean;
+  timestamp: number;
+}
+
+const _toolCosts: Map<string, ToolCostRecord[]> = new Map();
+const MAX_COSTS_PER_SESSION = 500;
+
+export function recordToolCost(record: ToolCostRecord): void {
+  const sessionCosts = _toolCosts.get(record.sessionId) ?? [];
+  sessionCosts.push(record);
+  if (sessionCosts.length > MAX_COSTS_PER_SESSION) {
+    sessionCosts.splice(0, sessionCosts.length - MAX_COSTS_PER_SESSION);
+  }
+  _toolCosts.set(record.sessionId, sessionCosts);
+}
+
+export function clearSessionToolCosts(sessionId: string): void {
+  _toolCosts.delete(sessionId);
+}
+
+export function getSessionToolCosts(sessionId: string): {
+  totalCalls: number;
+  totalDurationMs: number;
+  totalRetries: number;
+  byTool: Record<string, { calls: number; durationMs: number }>;
+} {
+  const costs = _toolCosts.get(sessionId) ?? [];
+  const byTool: Record<string, { calls: number; durationMs: number }> = {};
+
+  for (const cost of costs) {
+    if (!byTool[cost.name]) {
+      byTool[cost.name] = { calls: 0, durationMs: 0 };
+    }
+    byTool[cost.name].calls++;
+    byTool[cost.name].durationMs += cost.durationMs;
+  }
+
+  return {
+    totalCalls: costs.length,
+    totalDurationMs: costs.reduce((sum, c) => sum + c.durationMs, 0),
+    totalRetries: costs.reduce((sum, c) => sum + c.retries, 0),
+    byTool,
+  };
+}
+
 /**
  * Check if two tool calls can run in parallel.
  */
@@ -136,7 +192,8 @@ export function groupToolCallsForExecution(toolCalls: ToolCall[]): ToolCall[][] 
 export async function executeToolWithRetry(
   toolCall: ToolCall,
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
-  emit?: (event: unknown) => void
+  emit?: (event: unknown) => void,
+  sessionId?: string
 ): Promise<ToolResult> {
   let lastError: string | null = null;
   let retries = 0;
@@ -145,12 +202,52 @@ export async function executeToolWithRetry(
     const startTime = Date.now();
 
     try {
-      const result = await executeFn(toolCall.name, toolCall.args);
+      // Validate args before execution
+      const validated = validateToolArgs(toolCall.name, toolCall.args);
+      if (!validated.valid) {
+        throw new Error(validated.error);
+      }
+      const result = await executeFn(toolCall.name, validated.args);
+      const durationMs = Date.now() - startTime;
+
+      // Record file changes for undo support
+      if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
+        const path = String(toolCall.args.path ?? "");
+        if (path) {
+          let beforeContent = "";
+          try {
+            beforeContent = readFileSync(path, "utf-8");
+          } catch {
+            beforeContent = "";
+          }
+          const callId = `${toolCall.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const afterContent = toolCall.name === "write_file"
+            ? String(toolCall.args.content ?? "")
+            : result;
+          recordChange({
+            filePath: path,
+            beforeContent,
+            afterContent,
+            toolCallId: callId,
+            messageId: sessionId ?? "unknown",
+          });
+        }
+      }
+
+      recordToolCost({
+        toolCallId: `${toolCall.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: sessionId ?? "unknown",
+        name: toolCall.name,
+        durationMs,
+        retries,
+        success: true,
+        timestamp: Date.now(),
+      });
       return {
         toolName: toolCall.name,
         result,
         success: true,
-        durationMs: Date.now() - startTime,
+        durationMs,
         retries,
       };
     } catch (err) {
@@ -173,11 +270,21 @@ export async function executeToolWithRetry(
       }
 
       // Non-retryable error or max retries exceeded
+      const failDurationMs = Date.now() - startTime;
+      recordToolCost({
+        toolCallId: `${toolCall.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: sessionId ?? "unknown",
+        name: toolCall.name,
+        durationMs: failDurationMs,
+        retries,
+        success: false,
+        timestamp: Date.now(),
+      });
       return {
         toolName: toolCall.name,
         result: `Error: ${lastError}`,
         success: false,
-        durationMs: Date.now() - startTime,
+        durationMs: failDurationMs,
         retries,
       };
     }
@@ -199,10 +306,11 @@ export async function executeToolWithRetry(
 export async function executeToolBatch(
   batch: ToolCall[],
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
-  emit?: (event: unknown) => void
+  emit?: (event: unknown) => void,
+  sessionId?: string
 ): Promise<ToolResult[]> {
   const results = await Promise.all(
-    batch.map(tc => executeToolWithRetry(tc, executeFn, emit))
+    batch.map(tc => executeToolWithRetry(tc, executeFn, emit, sessionId))
   );
   return results;
 }
@@ -214,7 +322,8 @@ export async function executeToolCalls(
   toolCalls: ToolCall[],
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: unknown) => void,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  sessionId?: string
 ): Promise<ToolResult[]> {
   const batches = groupToolCallsForExecution(toolCalls);
   const allResults: ToolResult[] = [];
@@ -233,7 +342,7 @@ export async function executeToolCalls(
       continue;
     }
 
-    const results = await executeToolBatch(batch, executeFn, emit);
+    const results = await executeToolBatch(batch, executeFn, emit, sessionId);
     allResults.push(...results);
   }
 

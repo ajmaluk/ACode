@@ -12,6 +12,7 @@ interface CacheEntry {
   tools: { name: string; description: string; inputSchema?: Record<string, unknown> }[];
   timestamp: number;
   serverUrl?: string;
+  ttlMs: number;
 }
 
 const CACHE_KEY_PREFIX = "dalam.mcp.cache.";
@@ -59,12 +60,13 @@ export function cacheTools(
   serverName: string,
   tools: { name: string; description: string; inputSchema?: Record<string, unknown> }[],
   serverUrl?: string,
-  _ttlMs: number = DEFAULT_TTL_MS
+  ttlMs: number = DEFAULT_TTL_MS
 ): void {
   const entry: CacheEntry = {
     tools,
     timestamp: Date.now(),
     serverUrl,
+    ttlMs,
   };
 
   // Store in memory
@@ -109,8 +111,9 @@ export function clearAllCaches(): void {
 /**
  * Check if a cache entry is expired.
  */
-function isExpired(entry: CacheEntry, ttlMs: number = DEFAULT_TTL_MS): boolean {
-  return Date.now() - entry.timestamp > ttlMs;
+function isExpired(entry: CacheEntry): boolean {
+  const ttl = entry.ttlMs ?? DEFAULT_TTL_MS;
+  return Date.now() - entry.timestamp > ttl;
 }
 
 /**

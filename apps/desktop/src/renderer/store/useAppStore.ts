@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { logPermission } from "../lib/security";
 import type {
   DalamAPI,
   AgentInfo,
@@ -32,6 +33,11 @@ import { basename, toPosix, joinPath, detectLanguage } from "@/lib/pathUtils";
 import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand } from "@/lib/agents";
 import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
 import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, tier1PruneToolOutputs, buildCompactionPrompt, parseContextWindow, CTX } from "@/lib/contextManager";
+import {
+  agentReducer,
+  createInitialRuntimeState,
+  type AgentRuntimeState,
+} from "@/lib/agentRuntimeContract";
 
 export { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent };
 export type { AgentInfo, AgentMode, PermissionAction, PermissionRule, PrimaryAgentName, SkillInfo, FileAttachment };
@@ -396,6 +402,8 @@ async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
       // Trigger background memory dream consolidation cycle if needed
       const { triggerDreamCycleIfNeeded } = await import("@/lib/dreamAgent");
       triggerDreamCycleIfNeeded(workspacePath);
+            // Store cancel function keyed by workspace for cancellation propagation
+            // This is called via abort() which routes through cancelSessionOperations
     } catch (e) {
       console.warn("Failed to initialize memory database:", e);
     }
@@ -823,17 +831,29 @@ function _doSavePersistedMessages(messages: MessagesMap) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
       console.warn("[Storage] Quota exceeded - truncating tool results");
       const pruned = truncateToolResults(messages);
-      try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned)); } catch {
+      let recovered = false;
+      try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned)); recovered = true; } catch {
         console.warn("[Storage] Quota exceeded - trimming old message content");
         const pruned2 = trimOldMessages(pruned);
-        try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned2)); } catch {
+        try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned2)); recovered = true; } catch {
           console.warn("[Storage] Quota exceeded - dropping oldest sessions");
           const pruned3 = dropOldestSessions(pruned2, 3);
-          try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3)); } catch {
+          try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3)); recovered = true; } catch {
             if (import.meta.env.DEV) console.error("[Storage] Failed to save messages even after aggressive pruning");
           }
         }
       }
+      // Notify user about storage pruning
+      void import("../components/ui/toastStore").then(({ useToasts }) => {
+        useToasts.getState().push({
+          kind: "warning",
+          title: "Storage space low",
+          description: recovered
+            ? "Recovered space by pruning old data. Consider exporting sessions."
+            : "Could not save data. Please export and clear old sessions.",
+          durationMs: 10000,
+        });
+      });
     } else {
       console.warn("Failed to save messages:", e);
     }
@@ -1084,6 +1104,7 @@ function _clearDoomLoopState(sessionId: string) {
   delete _toolCallHistory[sessionId];
   delete _toolFailureCounts[sessionId];
   delete _contextOverflowRetries[sessionId];
+  delete _contextBudgetFactor[sessionId];
 }
 
 // ============================================================================
@@ -1111,8 +1132,21 @@ function _isContextOverflowError(errorMsg: string): boolean {
 const _contextOverflowRetries: Record<string, number> = {};
 const MAX_CONTEXT_OVERFLOW_RETRIES = 2;
 
+// Context budget factor: reduced on each overflow retry to prevent infinite loops.
+// Starts at 1.0 (full budget) and is reduced by CONTEXT_BUDGET_REDUCTION_PER_RETRY on each retry.
+// Floors at MIN_CONTEXT_BUDGET_FACTOR to leave some minimal context for the model.
+const _contextBudgetFactor: Record<string, number> = {};
+const CONTEXT_BUDGET_REDUCTION_PER_RETRY = 0.2; // 20% reduction per retry
+const MIN_CONTEXT_BUDGET_FACTOR = 0.3;
+
+function _reduceContextBudget(sessionId: string): void {
+  const current = _contextBudgetFactor[sessionId] ?? 1.0;
+  _contextBudgetFactor[sessionId] = Math.max(MIN_CONTEXT_BUDGET_FACTOR, current - CONTEXT_BUDGET_REDUCTION_PER_RETRY);
+}
+
 function _clearContextOverflowRetries(sessionId: string) {
   delete _contextOverflowRetries[sessionId];
+  delete _contextBudgetFactor[sessionId];
 }
 
 /**
@@ -1123,18 +1157,53 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
   const retryCount = _contextOverflowRetries[sessionId] ?? 0;
   if (retryCount >= MAX_CONTEXT_OVERFLOW_RETRIES) {
     delete _contextOverflowRetries[sessionId];
+    // Surface actionable error instead of silent failure
+    const errorMsg: ChatMessage = {
+      id: "sys-" + crypto.randomUUID(),
+      role: "system",
+      content: `Context window overflow after ${MAX_CONTEXT_OVERFLOW_RETRIES} retries. Try starting a new session or using /compact manually.`,
+      timestamp: Date.now(),
+    };
+    const store = useChat.getState();
+    useChat.setState({ messages: [...store.messages, errorMsg], _sendInProgress: false });
     return false;
   }
   _contextOverflowRetries[sessionId] = retryCount + 1;
+  // Reduce context budget on each retry to break overflow loops
+  _reduceContextBudget(sessionId);
   const store = useChat.getState();
-  const infoMsg: ChatMessage = { id: "sys-" + crypto.randomUUID(), role: "system", content: `Context window exceeded. Compacting and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
+  const infoMsg: ChatMessage = { id: "sys-" + crypto.randomUUID(), role: "system", content: `Context window exceeded. Reducing budget and retrying... (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`, timestamp: Date.now() };
   const infoSM = { ...store.sessionMessages, [sessionId]: [...(store.sessionMessages[sessionId] ?? []), infoMsg] };
   useChat.setState({ messages: [...store.messages, infoMsg], sessionMessages: infoSM });
   savePersistedMessages(infoSM);
   const lastUserMsg = [...store.messages].reverse().find((m) => m.role === "user");
   if (!lastUserMsg) return false;
   console.warn(`[Chat] Context overflow in session - compacting and retrying (attempt ${retryCount + 1}/${MAX_CONTEXT_OVERFLOW_RETRIES})`);
-      void store.compactSessionHistory(sessionId).then(() => {
+
+  // Check context before compaction
+  const statsBefore = computeContextStats(store.messages);
+
+  void store.compactSessionHistory(sessionId).then(() => {
+    // Verify compaction was effective
+    const currentStore = useChat.getState();
+    const statsAfter = computeContextStats(currentStore.messages);
+    const tokensReclaimed = statsBefore.totalTokens - statsAfter.totalTokens;
+
+    if (tokensReclaimed < 1000) {
+      // Compaction didn't reclaim enough — don't retry
+      const failMsg: ChatMessage = {
+        id: "sys-" + crypto.randomUUID(),
+        role: "system",
+        content: `Context overflow: compaction only reclaimed ${tokensReclaimed} tokens. Consider starting a new session.`,
+        timestamp: Date.now(),
+      };
+      useChat.setState((s) => ({
+        messages: [...s.messages, failMsg],
+        isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [],
+      }));
+      return;
+    }
+
     useChat.setState((s) => {
       const sid = s.activeSessionId;
       const result: Partial<ChatState> = { isStreaming: false, streamingStartedAt: null, _sendInProgress: false, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [] };
@@ -1147,13 +1216,15 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
     const retryMsg = [...useChat.getState().messages].reverse().find((m) => m.role === "user");
     if (retryMsg) {
       const retrySid = sessionId;
+      // Capture streaming content at time of check for race-free comparison
+      const snapshotStreamingContent = useChat.getState().streamingContent;
       // Only auto-retry if user hasn't already manually retried (prevents double-send)
       setTimeout(() => {
         const state = useChat.getState();
         if (state.activeSessionId !== retrySid) return; // Session switched
         if (state._sendInProgress) return; // User already retried manually
         if (state.isStreaming) return; // Already streaming
-        if (state.streamingContent) return; // New content arrived (different from fresh state)
+        if (state.streamingContent !== snapshotStreamingContent) return; // Content changed
         void useChat.getState().sendMessage(retryMsg.content);
       }, 500);
     } else {
@@ -1687,6 +1758,8 @@ type ChatState = {
   messageQueue: Array<{ id: string; content: string; attachments?: FileAttachment[]; timestamp: number }>;
   compactionSummaries: Record<string, string>;
   _compactingSessions: Set<string>;
+  /** AbortControllers for cancellation propagation across streaming, tool exec, dream, compaction */
+  _abortControllers: Map<string, AbortController>;
   _safetyTimer: ReturnType<typeof setTimeout> | null;
   _sendInProgress: boolean;
   /** Timers for auto-removing denied tools and completed sub-agents from UI */
@@ -1694,6 +1767,8 @@ type ChatState = {
   doomLoopWarningCount: number;
   /** Active sub-agents spawned via the task tool */
   subAgents: SubAgentState[];
+  /** Track if we need to run verification after plan execution completes */
+  _pendingVerification: { workspacePath: string; planContent: string } | null;
   compactSessionHistory: (sessionId: string) => Promise<void>;
   setSelectedModel: (id: string) => Promise<void>;
   startSession: (workspacePath: string, mode: import("@dalam/shared-types").AgentSessionMode) => Promise<void>;
@@ -1704,6 +1779,8 @@ type ChatState = {
   cancelVersionRestore: () => void;
   confirmVersionRestore: () => void;
   abort: (sessionId: string) => Promise<void>;
+  /** Cancel all ongoing operations for a session (streaming, tools, dream, compaction) */
+  cancelSessionOperations: (sessionId: string) => void;
   appendStream: (event: StreamEvent) => void;
   setTodos: (todos: TodoItem[]) => void;
   updateTodo: (id: string, patch: Partial<TodoItem>) => void;
@@ -1735,7 +1812,10 @@ type ChatState = {
   steerQueueItem: (id: string) => void;
   clearQueue: () => void;
   injectSystemMessage: (content: string) => void;
+  verifyAfterPlanExecution: () => Promise<void>;
   load: () => Promise<void>;
+  /** Agent runtime state machine (tracks phase transitions) */
+  runtimeState: AgentRuntimeState;
 };
 
 export const useChat = create<ChatState>((set, get) => ({
@@ -1768,12 +1848,15 @@ export const useChat = create<ChatState>((set, get) => ({
   messageQueue: [],
   compactionSummaries: loadPersistedCompactionSummaries(),
   _compactingSessions: new Set<string>(),
+  _abortControllers: new Map<string, AbortController>(),
   _safetyTimer: null,
   _sendInProgress: false,
   doomLoopWarningCount: 0,
   _suppressSessionRestore: false,
   agentMode: "build" as import("@dalam/shared-types").AgentSessionMode,
   subAgents: [],
+  _pendingVerification: null,
+  runtimeState: createInitialRuntimeState(),
   _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
   _clearAutoRemoveTimers() {
     get()._autoRemoveTimers.forEach((timer) => clearTimeout(timer));
@@ -1899,6 +1982,7 @@ export const useChat = create<ChatState>((set, get) => ({
       messages: [],
       pendingToolCalls: [],
       pendingActivities: [],
+        _pendingVerification: null,
       todos: [],
       taskPlan: null,
       taskPlanSummary: null,
@@ -1923,6 +2007,8 @@ export const useChat = create<ChatState>((set, get) => ({
 
   async abort(sessionId) {
     const api = createDalamAPI();
+    // Cancel all ongoing operations for this session (dream, compaction, tools)
+    get().cancelSessionOperations(sessionId);
     // Clear safety timer on abort
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
@@ -1959,6 +2045,20 @@ export const useChat = create<ChatState>((set, get) => ({
         // Session was cleared by newChat — still reset _sendInProgress so user can send
         set({ _sendInProgress: false });
       }
+    }
+  },
+
+  /**
+   * Cancel all ongoing operations for a session.
+   * Aborts streaming, tool execution, dream cycle, and compaction.
+   */
+  cancelSessionOperations(sessionId: string) {
+    const controllers = get()._abortControllers;
+    const controller = controllers.get(sessionId);
+    if (controller) {
+      controller.abort();
+      controllers.delete(sessionId);
+      set({ _abortControllers: new Map(controllers) });
     }
   },
 
@@ -2147,6 +2247,54 @@ export const useChat = create<ChatState>((set, get) => ({
       const newTimer = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
       set({ _safetyTimer: newTimer });
     }
+
+    // Dispatch event through runtime contract for phase tracking
+    {
+      let runtimeEvent: import("@/lib/agentRuntimeContract").AgentEvent | null = null;
+      switch (event.type) {
+        case "message-start": {
+          runtimeEvent = { type: "STREAM_START", messageId: event.messageId };
+          break;
+        }
+        case "tool-call": {
+          runtimeEvent = { type: "TOOL_CALL", toolCallId: event.toolCall.id, toolName: event.toolCall.name };
+          break;
+        }
+        case "diff-proposed": {
+          // No separate event type — handled by the tool call flow
+          break;
+        }
+        case "message-end": {
+          const pending = get().pendingToolCalls;
+          const hasMoreTools = pending.some(
+            (tc) => tc.status === "awaiting-approval" || tc.status === "running" || tc.status === "pending"
+          );
+          runtimeEvent = { type: "STREAM_MESSAGE_END", messageId: event.messageId, hasMoreTools };
+          break;
+        }
+        case "error": {
+          const sessionId = get().activeSessionId ?? "";
+          runtimeEvent = { type: "ERROR", sessionId, error: event.error };
+          break;
+        }
+      }
+      if (runtimeEvent) {
+        const oldState = get().runtimeState;
+        const newRuntimeState = agentReducer(oldState, runtimeEvent, { debug: false });
+
+        // ── Phase Enforcement (must happen BEFORE set()) ──
+        // If the reducer returned the same reference (invalid transition), drop the event.
+        if (newRuntimeState === oldState) {
+          _log(`[AgentRuntime] phase enforcement: dropping ${event.type} — invalid transition from ${oldState.phase}`);
+          return; // Skip further processing for invalid events
+        }
+
+        if (newRuntimeState.phase !== oldState.phase) {
+          _log(`[AgentRuntime] phase: ${oldState.phase} → ${newRuntimeState.phase}`);
+        }
+        set({ runtimeState: newRuntimeState });
+      }
+    }
     switch (event.type) {
       case "message-start": {
         const pending = get().pendingToolCalls;
@@ -2187,29 +2335,61 @@ export const useChat = create<ChatState>((set, get) => ({
       case "diff-proposed": {
         const proposal = event.proposal;
         set((s) => {
-          // Try to find the tool that matches this file path first
-          let idx = s.pendingToolCalls.findIndex(
-            tc => (tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
-                  tc.args.path === proposal.filePath && !tc.diffId
-          );
-          // Fall back: try matching by tool name (write_file/edit_file) + any path arg
+          // Deterministic binding: prefer diffId-to-toolCall lookup first.
+          // FUTURE: The stream protocol should include toolCallId in diff-proposed events.
+          // Until then, heuristic fallbacks (Strategies 2-4) are used as a safety net
+          // with dev warnings to surface when they fire.
+          const proposalToolCallId = (proposal as { toolCallId?: string }).toolCallId;
+
+          // Strategy 1: Direct toolCallId match (most deterministic)
+          let idx = -1;
+          if (proposalToolCallId) {
+            idx = s.pendingToolCalls.findIndex(
+              tc => tc.id === proposalToolCallId && !tc.diffId
+            );
+          }
+
+          // Strategy 2: Match by filePath + edit tool name (precise)
           if (idx === -1) {
             idx = s.pendingToolCalls.findIndex(
               tc => (tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
+                    tc.args.path === proposal.filePath &&
                     (tc.name === "write_file" || tc.name === "edit_file") &&
-                    typeof tc.args.path === "string" && !tc.diffId
+                    !tc.diffId
             );
+            if (idx !== -1 && typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+              console.warn(`[DiffBinding] Using heuristic (filePath+toolName) for diff ${proposal.diffId} — stream protocol should provide toolCallId`);
+            }
           }
-          // Last resort: pick the most recent pending edit tool that has no diff yet
+
+          // Strategy 3: Match by content hash for write_file tools
+          if (idx === -1) {
+            idx = s.pendingToolCalls.findIndex(
+              tc => (tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
+                    tc.name === "write_file" &&
+                    typeof tc.args.content === "string" &&
+                    tc.args.content === proposal.newContent &&
+                    !tc.diffId
+            );
+            if (idx !== -1 && typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+              console.warn(`[DiffBinding] Using heuristic (contentHash) for diff ${proposal.diffId} — stream protocol should provide toolCallId`);
+            }
+          }
+
+          // Strategy 4 (final fallback): pick the most recent pending edit tool
           if (idx === -1) {
             for (let i = s.pendingToolCalls.length - 1; i >= 0; i--) {
               const tc = s.pendingToolCalls[i];
               if ((tc.status === "awaiting-approval" || tc.status === "pending" || tc.status === "completed") &&
                   !tc.diffId &&
-                  (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "write" || tc.name === "edit")) {
+                  (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "write" || tc.name === "edit") &&
+                  tc.args.path === proposal.filePath) {
                 idx = i;
                 break;
               }
+            }
+            if (idx !== -1 && typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+              console.warn(`[DiffBinding] Using heuristic (mostRecentEdit) for diff ${proposal.diffId} — stream protocol should provide toolCallId`);
             }
           }
 
@@ -2222,7 +2402,8 @@ export const useChat = create<ChatState>((set, get) => ({
               if (!msg.toolCalls) continue;
               const tcIdx = msg.toolCalls.findIndex(
                 tc => !tc.diffId &&
-                      (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "write" || tc.name === "edit")
+                      (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "write" || tc.name === "edit") &&
+                      tc.args.path === proposal.filePath
               );
               if (tcIdx !== -1) {
                 targetMsgIdx = m;
@@ -2272,6 +2453,7 @@ export const useChat = create<ChatState>((set, get) => ({
         // During intermediate turns (tool calls just executed, agentic loop continues
         // with tool approval waits), extend the timer to 10 minutes so the agent
         // loop isn't killed while waiting for user approval.
+        // Check if any pending tool calls have diffIds attached — these must not be orphaned.
         const existingTimer = get()._safetyTimer;
         if (existingTimer) {
           clearTimeout(existingTimer);
@@ -2284,6 +2466,48 @@ export const useChat = create<ChatState>((set, get) => ({
           } else {
             set({ _safetyTimer: null });
           }
+        }
+
+        // Invariant: message-end must not orphan tool calls with attached diffs
+        // If any pending tool calls have diffIds, they must all be resolved before
+        // clearing pendingToolCalls. If unresolved, we keep them so the UI can
+        // continue showing the diffs — break out early to prevent downstream clear.
+        const unresolvedDiffs = pendingToolCalls.filter(
+          (tc) => tc.diffId && tc.status !== "completed" && tc.status !== "failed"
+        );
+        if (unresolvedDiffs.length > 0) {
+          if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
+            console.warn(
+              `[AgentRuntime] INVARIANT: message-end with ${unresolvedDiffs.length} unresolved diff attachments. toolCallIds: ${unresolvedDiffs.map(t => t.id).join(", ")}. Keeping pendingToolCalls intact.`
+            );
+          }
+          // Enforce invariant: do NOT clear pendingToolCalls when unresolved diffs exist.
+          // Partial message-end: save current turn content but preserve tool state.
+          // Use streamingContent directly (not finalContent which is declared later via let).
+          const intermediateMsg: ChatMessage = {
+            id: event.messageId,
+            role: "assistant",
+            content: streamingContent || "(executing tools...)",
+            timestamp: Date.now(),
+            ...(thinkingContent ? { thinking: thinkingContent } : {}),
+            ...(_pendingChanges.length > 0 ? { fileChanges: [..._pendingChanges] } : {}),
+            ...(pendingToolCalls.length > 0 ? { toolCalls: pendingToolCalls } : {}),
+            ...(pendingActivities.length > 0 ? { activities: [...pendingActivities] } : {}),
+          };
+          const sessionId = get().activeSessionId;
+          const newSessionMessages = sessionId
+            ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), intermediateMsg] }
+            : get().sessionMessages;
+          set({
+            messages: [...get().messages, intermediateMsg],
+            sessionMessages: newSessionMessages,
+            // Keep pendingToolCalls intact — don't clear!
+            streamingContent: "",
+            thinkingContent: "",
+            _pendingChanges: [],
+          });
+          if (sessionId) savePersistedMessages(newSessionMessages);
+          break;
         }
 
         // Tools are already populated in pendingToolCalls via tool-call events
@@ -2428,8 +2652,23 @@ export const useChat = create<ChatState>((set, get) => ({
         }
         savePersistedMessages(newSessionMessages);
         savePersistedSessionSummaries(get().chatSessions);
+        // Auto-verification: if build agent produced changes (pending changes or fileChanges in messages),
+        // set _pendingVerification so verifyAfterPlanExecution will run the verification pipeline.
+        if (sessionId && !get()._pendingVerification) {
+          const pendingChanges = get()._pendingChanges;
+          const hasFileChanges = get().messages.some(m => m.fileChanges && m.fileChanges.length > 0);
+          if ((pendingChanges && pendingChanges.length > 0) || hasFileChanges) {
+            const liveSess = get().session;
+            if (liveSess?.workspacePath) {
+              set({ _pendingVerification: { workspacePath: liveSess.workspacePath, planContent: "" } });
+            }
+          }
+        }
         if (sessionId) {
           void get().compactSessionHistory(sessionId);
+          // Post-turn verification: if a plan was just executed, run verification
+          void get().verifyAfterPlanExecution();
+
           // Post-turn memory consolidation: async memory sync after each conversation turn
           // Inspired by Hermes memory lifecycle — extracts key facts from the conversation
           // and persists them to the memory store for future reference.
@@ -2484,6 +2723,15 @@ export const useChat = create<ChatState>((set, get) => ({
         // Auto-denied tools: mark as failed and resolve immediately so the
         // API layer's waitForToolApproval doesn't hang forever.
         if (denied) {
+          // Log audit trail
+          logPermission({
+            timestamp: Date.now(),
+            sessionId: get().activeSessionId ?? "",
+            toolName: tool.name,
+            command: commandStr,
+            decision: "deny",
+            source: "rule",
+          });
           const deniedTool = { ...tool, status: "failed" as const, result: "Denied by permission policy" };
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, deniedTool] }));
           get().resolveToolApproval(tool.id, "denied", "Denied by permission policy");
@@ -2510,6 +2758,15 @@ export const useChat = create<ChatState>((set, get) => ({
             ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
           }).then((decision) => {
             get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied");
+            // Log audit trail
+            logPermission({
+              timestamp: Date.now(),
+              sessionId: get().activeSessionId ?? "",
+              toolName: tool.name,
+              command: commandStr,
+              decision: decision === "always" ? "always" : decision === "allow" ? "allow" : "deny",
+              source: "user",
+            });
             // Persist "always allow" so future tools of the same kind are auto-approved
             if (decision === "always") {
               usePermission.getState().allowAlways({
@@ -2528,6 +2785,15 @@ export const useChat = create<ChatState>((set, get) => ({
             get().resolveToolApproval(tool.id, "denied");
           });
         } else {
+          // Log audit trail for auto-allow
+          logPermission({
+            timestamp: Date.now(),
+            sessionId: get().activeSessionId ?? "",
+            toolName: tool.name,
+            command: commandStr,
+            decision: "allow",
+            source: "auto",
+          });
           get().resolveToolApproval(tool.id, "approved");
         }
         break;
@@ -3006,6 +3272,10 @@ export const useChat = create<ChatState>((set, get) => ({
       pendingActivities: [],
       todos: [],
       _pendingChanges: [],
+      planApproval: null,
+      _pendingVerification: null,
+      messageQueue: [],
+      runtimeState: createInitialRuntimeState(),
       activeSessionId: null,
       restoredVersionId: null,
       preRestoreMessages: null,
@@ -3147,14 +3417,15 @@ export const useChat = create<ChatState>((set, get) => ({
     savePersistedSessionSummaries(get().chatSessions);
   },
 
-  removeSession(id) {
+  async removeSession(id) {
     const timer = get()._safetyTimer;
     if (timer) clearTimeout(timer);
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
     _toolCallResolvers.clear();
-    void get().abort(id).catch(() => {});
+    // Wait for abort to complete before cleanup to avoid race conditions
+    try { await get().abort(id); } catch { /* abort may throw, that's ok */ }
     void stopRecording(id).catch(() => {});
     // cleanupStream is handled inside abort()'s finally block
     // Clean all per-session caches to prevent memory leaks
@@ -3213,10 +3484,89 @@ export const useChat = create<ChatState>((set, get) => ({
     });
   },
 
+  archiveSession(id: string) {
+    const s = get();
+    const session = s.chatSessions.find(cs => cs.id === id);
+    if (!session) return;
+
+    // Mark session as archived
+    const updatedSessions = s.chatSessions.map(cs =>
+      cs.id === id ? { ...cs, archived: true, archivedAt: Date.now() } : cs
+    );
+
+    // Move messages to archive storage
+    const messages = s.sessionMessages[id];
+    const ws = useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId);
+    if (messages && ws) {
+      const archiveDir = joinPath(ws.path, ".dalam/archive");
+      void import("@tauri-apps/plugin-fs").then(async ({ exists, mkdir, writeFile }) => {
+        try {
+          if (!(await exists(archiveDir))) await mkdir(archiveDir, { recursive: true });
+          await writeFile(joinPath(archiveDir, `${id}.json`), new TextEncoder().encode(JSON.stringify(messages)));
+        } catch (err) {
+          console.warn("[Session] Failed to archive messages:", err);
+        }
+      });
+    }
+
+    // Remove from active storage
+    const { [id]: _removed, ...restMessages } = s.sessionMessages;
+    const { [id]: _removedV, ...restVersions } = s.sessionVersions;
+
+    set({
+      chatSessions: updatedSessions,
+      sessionMessages: restMessages,
+      sessionVersions: restVersions,
+    });
+    savePersistedSessionSummaries(updatedSessions);
+    _doSavePersistedMessages(restMessages);
+    savePersistedVersions(restVersions);
+  },
+
+  restoreSession(id: string) {
+    const s = get();
+    const session = s.chatSessions.find(cs => cs.id === id);
+    if (!session?.archived) return;
+
+    const ws = useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId);
+    if (!ws) return;
+
+    // Load archived messages
+    void import("@tauri-apps/plugin-fs").then(async ({ exists, readFile, remove }) => {
+      const archivePath = joinPath(ws.path, ".dalam/archive", `${id}.json`);
+      try {
+        if (await exists(archivePath)) {
+          const content = await readFile(archivePath);
+          const messages = JSON.parse(new TextDecoder().decode(content));
+
+          // Unarchive session
+          const updatedSessions = get().chatSessions.map(cs =>
+            cs.id === id ? { ...cs, archived: false, archivedAt: undefined } : cs
+          );
+
+          set({
+            chatSessions: updatedSessions,
+            sessionMessages: { ...get().sessionMessages, [id]: messages },
+          });
+          savePersistedSessionSummaries(updatedSessions);
+          _doSavePersistedMessages({ ...get().sessionMessages, [id]: messages });
+          await remove(archivePath);
+        }
+      } catch (err) {
+        console.warn("[Session] Failed to restore archived session:", err);
+      }
+    });
+  },
+
   approvePlan() {
-    const { agentMode, planApproval } = get();
+    const { agentMode, planApproval, session } = get();
+    const planContent = planApproval?.planContent ?? null;
     set({ planApproval: null });
-    if (agentMode === "plan" && planApproval?.planContent) {
+    // Set _pendingVerification so verification runs after plan execution
+    if (planContent && session?.workspacePath) {
+      set({ _pendingVerification: { workspacePath: session.workspacePath, planContent } });
+    }
+    if (agentMode === "plan" && planContent) {
       const buildMode = "build" as import("@dalam/shared-types").AgentSessionMode;
       set({ agentMode: buildMode });
       useAgents.getState().setActiveAgent(buildMode);
@@ -3224,8 +3574,7 @@ export const useChat = create<ChatState>((set, get) => ({
       setTimeout(() => {
         const state = get();
         if (!state.isStreaming && !state._sendInProgress) {
-          const plan = planApproval.planContent;
-          const executeMsg = `The user approved the plan. Execute it now.\n\nPlan:\n${plan}`;
+          const executeMsg = `The user approved the plan. Execute it now.\n\nPlan:\n${planContent}`;
           void state.sendMessage(executeMsg);
         }
       }, 500);
@@ -3347,6 +3696,58 @@ export const useChat = create<ChatState>((set, get) => ({
     savePersistedMessages(get().sessionMessages);
   },
 
+  /**
+   * Run verification after plan execution completes.
+   * Checks auto-detected commands and file changes, then injects results.
+   * If required checks fail, switches back to plan mode for replanning.
+   */
+  async verifyAfterPlanExecution() {
+    const state = get();
+    if (!state._pendingVerification) return;
+    const { workspacePath } = state._pendingVerification;
+    set({ _pendingVerification: null });
+    try {
+      const { buildDefaultCriteria, runVerificationPipeline } = await import("@/lib/verificationEngine");
+      const criteria = await buildDefaultCriteria(workspacePath);
+      if (criteria.verificationCommands.length === 0) return;
+      const changeList = state._pendingChanges.length > 0
+        ? state._pendingChanges
+        : state.messages.flatMap(m => m.fileChanges ?? []);
+      const result = await runVerificationPipeline(criteria, changeList);
+      const content = [
+        `## Verification Results ${result.status === "passed" ? "✅" : "❌"}`,
+        `**Duration:** ${result.durationMs}ms`,
+        `**Status:** ${result.status}`,
+        result.summary,
+      ].join("\n");
+      const verifMsg: ChatMessage = {
+        id: "verif-" + crypto.randomUUID(),
+        role: "system",
+        content,
+        timestamp: Date.now(),
+      };
+      const sessionId = get().activeSessionId;
+      if (sessionId) {
+        const updatedSessionsMsg = { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), verifMsg] };
+        set({
+          messages: [...get().messages, verifMsg],
+          sessionMessages: updatedSessionsMsg,
+        });
+        savePersistedMessages(updatedSessionsMsg);
+      }
+      // If verification failed, switch back to plan mode for self-correction
+      if (result.status !== "passed") {
+        const requiredFailed = result.commandResults.some(r => !r.passed);
+        if (requiredFailed) {
+          get().setAgentMode("plan" as import("@dalam/shared-types").AgentSessionMode);
+          set({ planApproval: { planContent: `The previous plan needs corrections.\n\n${result.summary}\n\nPlease revise the plan and propose fixes.`, status: "pending" } });
+        }
+      }
+    } catch (err) {
+      console.warn("[Verification] Failed to run verification:", err);
+    }
+  },
+
   saveVersion(sessionId, label) {
     const { messages, sessionVersions } = get();
     if (!messages.length) return;
@@ -3356,7 +3757,10 @@ export const useChat = create<ChatState>((set, get) => ({
       id: "ver-" + crypto.randomUUID(),
       sessionId,
       label,
-      messages: [...messages],
+      messages: [...messages].map(m => ({
+        ...m,
+        ...(m.toolCalls ? { toolCalls: m.toolCalls.map(tc => ({ ...tc, diff: undefined, diffId: undefined })) } : {}),
+      })),
       timestamp: Date.now(),
       parentVersionId: parentId,
     };
@@ -3380,7 +3784,17 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!versions) return;
     const version = versions.find((v) => v.id === versionId);
     if (!version) return;
-    const restoredMessages = [...version.messages];
+    // Strip stale diff artifacts but preserve tool results for context (Phase 6.3)
+    const restoredMessages = [...version.messages].map((m) => ({
+      ...m,
+      toolCalls: m.toolCalls ? m.toolCalls.map((tc) => ({
+        ...tc,
+        result: tc.result,  // Preserve result for context
+        diff: undefined,    // Diff is stale, remove
+        diffId: undefined,
+        status: "completed" as const,
+      })) : m.toolCalls,
+    }));
     const newSessionMessages = { ...sessionMessages, [sessionId]: restoredMessages };
     const lastUserMsg = [...restoredMessages].reverse().find((m) => m.role === "user");
     const preview = lastUserMsg
@@ -3420,6 +3834,9 @@ export const useChat = create<ChatState>((set, get) => ({
         restoredVersionId: null,
         preRestoreMessages: null,
         sessionMessages: newSessionMessages,
+        pendingToolCalls: [],
+        pendingActivities: [],
+        _pendingChanges: [],
         chatSessions: chatSessions.map((cs) =>
           cs.id === activeSessionId
             ? { ...cs, messageCount: messages.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
@@ -3429,7 +3846,7 @@ export const useChat = create<ChatState>((set, get) => ({
       savePersistedMessages(newSessionMessages);
       savePersistedSessionSummaries(get().chatSessions);
     } else {
-      set({ restoredVersionId: null, preRestoreMessages: null });
+      set({ restoredVersionId: null, preRestoreMessages: null, pendingToolCalls: [], pendingActivities: [], _pendingChanges: [] });
     }
   },
 
@@ -3447,6 +3864,9 @@ export const useChat = create<ChatState>((set, get) => ({
       sessionMessages: newSessionMessages,
       restoredVersionId: null,
       preRestoreMessages: null,
+      pendingToolCalls: [],
+      pendingActivities: [],
+      _pendingChanges: [],
       chatSessions: chatSessions.map((cs) =>
         cs.id === activeSessionId
           ? { ...cs, messageCount: restoredMessages.length, lastActivityAt: Date.now(), ...(preview ? { preview } : {}) }
@@ -3472,8 +3892,12 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async compactSessionHistory(sessionId) {
-    const { sessionMessages, selectedModelId, compactionSummaries, _compactingSessions } = get();
+    const { sessionMessages, selectedModelId, compactionSummaries, _compactingSessions, _abortControllers } = get();
     if (_compactingSessions.has(sessionId)) return;
+    // Create AbortController for cancellable compaction
+    const compactController = new AbortController();
+    _abortControllers.set(sessionId + "-compact", compactController);
+    set({ _abortControllers: new Map(_abortControllers) });
     const messages = sessionMessages[sessionId];
     if (!messages || messages.length <= 6) return;
 
@@ -3491,6 +3915,13 @@ export const useChat = create<ChatState>((set, get) => ({
     // Compaction throttle: don't attempt more than once per 30 seconds
     const lastAttempt = _lastCompactionAttempt[sessionId] ?? 0;
     if (Date.now() - lastAttempt < COMPACTION_THROTTLE_MS) return;
+    // Clean up compaction AbortController
+    const compactCtrl = get()._abortControllers.get(sessionId + "-compact");
+    if (compactCtrl) {
+      const ctrls = new Map(get()._abortControllers);
+      ctrls.delete(sessionId + "-compact");
+      set({ _abortControllers: ctrls });
+    }
     _lastCompactionAttempt[sessionId] = Date.now();
 
     // Minimum message count gate
@@ -3507,13 +3938,20 @@ export const useChat = create<ChatState>((set, get) => ({
       const allModels = useModelProviders.getState().getAllModels();
       const found = allModels.find((m) => m.model.modelId === modelId);
       const maxContext = parseContextWindow(found?.model.contextWindow);
+      // Apply context budget reduction from overflow retries to prevent infinite loops
+      const budgetFactor = _contextBudgetFactor[sessionId] ?? 1.0;
+      const reducedMaxContext = Math.round(maxContext * budgetFactor);
+
 
       // Use context manager to determine what to compact
-      const stats = computeContextStats(messages, maxContext);
+      const stats = computeContextStats(messages, reducedMaxContext);
       const currentTier = _compactionTier[sessionId] ?? 0;
 
       // Tier 1: Lightweight tool output pruning at 50% (no LLM call)
-      if (stats.pressureRatio >= CTX.TIER1_PRUNE_RATIO && currentTier < 1) {
+      const tier1Threshold = budgetFactor < 1.0
+        ? CTX.TIER1_PRUNE_RATIO * 0.75
+        : CTX.TIER1_PRUNE_RATIO;
+      if (stats.pressureRatio >= tier1Threshold && currentTier < 1) {
         const { pruned, tokensReclaimed } = tier1PruneToolOutputs(messages);
         if (tokensReclaimed > 0) {
           _compactionTier[sessionId] = 1;
@@ -3533,11 +3971,14 @@ export const useChat = create<ChatState>((set, get) => ({
       // Recompute stats after Tier 1 pruning so Tier 2 decisions use fresh data
       const freshStats = computeContextStats(
         get().sessionMessages[sessionId] ?? messages,
-        maxContext
+        reducedMaxContext
       );
 
       // Tier 2: Full LLM summarization at 85% (using TIER2_COMPACT_RATIO)
-      if (freshStats.pressureRatio >= CTX.TIER2_COMPACT_RATIO) {
+      const tier2Threshold = budgetFactor < 1.0
+        ? CTX.TIER2_COMPACT_RATIO * 0.8
+        : CTX.TIER2_COMPACT_RATIO;
+      if (freshStats.pressureRatio >= tier2Threshold) {
         // Use LIVE store messages (not stale snapshot) to avoid Tier 2 overwriting Tier 1 pruning.
         const liveMessages = get().sessionMessages[sessionId] ?? messages;
         const { toCompact } = selectMessagesForCompaction(liveMessages, 6);
@@ -4231,16 +4672,8 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
         const url = server.url;
         if (!url) throw new Error("HTTP Endpoint URL is required");
         // SSRF protection: validate URL before fetching
-        try {
-          const parsed = new URL(url);
-          if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only HTTP/HTTPS URLs are allowed");
-          const hostname = parsed.hostname;
-          const blocked = [/^localhost$/i, /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./, /^169\.254\./, /^0\./, /^::1$/, /^\[::1\]$/];
-          if (blocked.some(p => p.test(hostname))) throw new Error("Private/internal URLs are not allowed for MCP servers");
-        } catch (e) {
-          if (e instanceof Error && e.message.includes("not allowed")) throw e;
-          throw new Error("Invalid MCP server URL", { cause: e });
-        }
+        const { validateMcpUrl } = await import("../lib/security");
+        validateMcpUrl(url);
         const resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

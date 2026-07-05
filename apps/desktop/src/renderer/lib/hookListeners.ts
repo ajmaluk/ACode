@@ -339,14 +339,12 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
   // 2. Periodic cleanup of stale session stats (always run, not just when half-full)
   cleanupStaleStats();
 
-  // 3. Auto-generate session title if not set
-  await autoGenerateSessionTitle(event);
-
-  // 4. Auto-extract memories from the last exchange
-  await autoExtractMemories(event);
-
-  // 5. Periodic memory maintenance
-  await runMemoryMaintenanceIfNeeded();
+  // 3-5: Parallelize independent post-session tasks
+  await Promise.allSettled([
+    autoGenerateSessionTitle(event),
+    autoExtractMemories(event),
+    runMemoryMaintenanceIfNeeded(),
+  ]);
 
   // 6. Auto-crystallize skill from session (fire-and-forget)
   triggerSkillCrystallization(event).catch(() => {});

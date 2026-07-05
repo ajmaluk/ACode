@@ -1,7 +1,7 @@
-import MonacoEditor, { loader, type OnMount } from "@monaco-editor/react";
+import { loader, type OnMount } from "@monaco-editor/react";
 import { useSettings } from "@/store/useAppStore";
 import { detectLanguage } from "@/lib/pathUtils";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, Suspense, lazy } from "react";
 
 // Monaco editor instance type — the @monaco-editor/react OnMount callback provides this
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,6 +113,9 @@ const DALAM_DARK = {
   },
 };
 
+// Lazy load Monaco editor — defers the ~2MB bundle until the editor tab is first opened
+const MonacoEditor = lazy(() => import("@monaco-editor/react"));
+
 type Props = {
   path: string | null;
   content: string;
@@ -205,23 +208,32 @@ export function CodeView({ path, content, onChange, onEditorReady }: Props) {
   }), [settings.codeFontSize, settings.letterSpacing, settings.showLineNumbers, settings.wordWrap, settings.showMinimap, settings.cursorWidth, settings.bracketPairColorization, settings.showIndentGuides, settings.tabSize, onChange]);
 
   return (
-    <MonacoEditor
-      key={path ?? "empty"}
-      path={path ?? undefined}
-      value={content}
-      language={detectLanguage(path)}
-      theme={theme === "light" ? "dalam-light" : "dalam-dark"}
-      onChange={(v) => onChange?.(v ?? "")}
-      onMount={onMount}
-      loading={
-        <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
-          <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
-            <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
-            Loading editor...
-          </div>
+    <Suspense fallback={
+      <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
+        <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
+          <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
+          Loading editor...
         </div>
-      }
-      options={editorOptions}
-    />
+      </div>
+    }>
+      <MonacoEditor
+        key={path ?? "empty"}
+        path={path ?? undefined}
+        value={content}
+        language={detectLanguage(path)}
+        theme={theme === "light" ? "dalam-light" : "dalam-dark"}
+        onChange={(v) => onChange?.(v ?? "")}
+        onMount={onMount}
+        loading={
+          <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
+            <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
+              <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
+              Loading editor...
+            </div>
+          </div>
+        }
+        options={editorOptions}
+      />
+    </Suspense>
   );
 }

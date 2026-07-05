@@ -3,7 +3,11 @@ import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
 import { hookBus } from "./hookBus";
+import { groupToolCallsForExecution, type ToolCall as ExecutorToolCall } from "./toolExecutor";
 import { isWindows, platform } from "./platform";
+import { joinPath as joinPathUtil } from "./pathUtils";
+import { recordLlmCall } from "./metrics";
+import { popChange } from "./changeStack";
 
 // ---------------------------------------------------------------------------
 // Debug logging — set window.__DALAM_DEBUG = true in console to enable
@@ -28,6 +32,7 @@ const streamCleanups = new Map<string, () => void>();
 const fileWatchers = new Map<string, () => void>();
 const pendingDiffProposals = new Map<string, DiffProposal>();
 export const mcpHttpSessions = new Map<string, string>();
+const _mcpSessionMutexes = new Map<string, Promise<string | null>>();
 const emittedSessionEnds = new Set<string>();
 // Per-session rate-limit backoff counter — isolated per session so concurrent
 // sessions don't interfere with each other's backoff state.
@@ -68,9 +73,10 @@ interface AnthropicContentBlock {
   text?: string;
 }
 
-function joinPath(...parts: string[]): string {
-  return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
-}
+// joinPath imported from pathUtils — use joinPathUtil to distinguish
+// function joinPathUtil(...parts: string[]): string {
+//   return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
+// }
 
 function dirname(p: string): string {
   if (!p) return "";
@@ -232,6 +238,17 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
       if (!bodyCache) bodyCache = await resp.arrayBuffer();
       return bodyCache;
     };
+    
+    // Clone helper that handles both cached and uncached body
+    const cloneResponse = (): Response => {
+      if (bodyCache) {
+        return new Response(new Blob([bodyCache]), { status: resp.status, statusText: resp.statusText, headers: respHeaders });
+      }
+      // For uncached body, return a Response that will read from the original body
+      // Note: This is a best-effort clone; if the body has already been consumed, this will fail
+      return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders });
+    };
+    
     return {
       ok: resp.ok,
       status: resp.status,
@@ -244,7 +261,7 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
       text: async () => new TextDecoder().decode(await getBody()),
       json: async () => JSON.parse(new TextDecoder().decode(await getBody())),
       arrayBuffer: getBody,
-      clone: () => new Response(bodyCache ? new Blob([bodyCache]) : resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders }),
+      clone: cloneResponse,
     } as Response;
   } catch {
     // Fallback to browser fetch if plugin unavailable
@@ -406,6 +423,11 @@ async function* streamOpenAI(
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
           if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
+          // OpenAI usage comes in the final chunk with choices[0].finish_reason
+          if (json.usage) {
+            const usage = parseUsageFromChunk(json);
+            if (usage) yield { type: "usage" as const, usage };
+          }
           // Native function calling: accumulate delta.tool_calls into XML tags.
           // Arguments arrive incrementally — we buffer partial JSON by index
           // and only emit once parsing succeeds.
@@ -457,6 +479,10 @@ async function* streamOpenAI(
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
           if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
+          if (json.usage) {
+            const usage = parseUsageFromChunk(json);
+            if (usage) yield { type: "usage" as const, usage };
+          }
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
               const tcIdx = tc.index ?? 0;
@@ -605,6 +631,11 @@ async function* streamAnthropic(
           if (json.type === "content_block_delta" && json.delta?.thinking) {
             yield { type: "activity-think", content: json.delta.thinking };
           }
+          // Anthropic usage comes in the message_delta event at stream end
+          if (json.type === "message_delta" && json.usage) {
+            const usage = parseUsageFromChunk({ usage: json.usage });
+            if (usage) yield { type: "usage" as const, usage };
+          }
         } catch (e) {
           if (e instanceof ProviderError) throw e;
           console.warn("SSE parse error (Anthropic):", e);
@@ -625,6 +656,10 @@ async function* streamAnthropic(
           }
           if (json.type === "content_block_delta" && json.delta?.thinking) {
             yield { type: "activity-think", content: json.delta.thinking };
+          }
+          if (json.type === "message_delta" && json.usage) {
+            const usage = parseUsageFromChunk({ usage: json.usage });
+            if (usage) yield { type: "usage" as const, usage };
           }
         } catch (e) {
           if (e instanceof ProviderError) throw e;
@@ -682,7 +717,7 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
     if (!entry.name) continue;
     if (JUNK_FILES.has(entry.name)) continue;
     if (entry.isDirectory && JUNK_DIRS.has(entry.name)) continue;
-    const fullPath = joinPath(dirPath, entry.name!);
+    const fullPath = joinPathUtil(dirPath, entry.name!);
     if (entry.isDirectory) {
       const children = maxDepth > 1 ? await readDirRecursive(fullPath, maxDepth - 1, maxFiles, _count, _visited) : [];
       nodes.push({ name: entry.name!, path: fullPath, type: "directory", gitStatus: null, children });
@@ -736,13 +771,13 @@ const dalamAPI: DalamAPI = {
     },
     async createFile(parentPath, name) {
       const { writeFile, exists } = await import("@tauri-apps/plugin-fs");
-      const fullPath = joinPath(parentPath, name);
+      const fullPath = joinPathUtil(parentPath, name);
       if (!(await exists(fullPath))) await writeFile(fullPath, new Uint8Array());
       return { name, path: fullPath, type: "file" };
     },
     async createDirectory(parentPath, name) {
       const { mkdir, exists } = await import("@tauri-apps/plugin-fs");
-      const fullPath = joinPath(parentPath, name);
+      const fullPath = joinPathUtil(parentPath, name);
       if (!(await exists(fullPath))) await mkdir(fullPath);
       return { name, path: fullPath, type: "directory" };
     },
@@ -763,7 +798,7 @@ const dalamAPI: DalamAPI = {
     async renamePath(path, newName) {
       const { rename, readFile, writeFile: fsWriteFile, remove: fsRemove } = await import("@tauri-apps/plugin-fs");
       const parentDir = dirname(path);
-      const newPath = joinPath(parentDir, newName);
+      const newPath = joinPathUtil(parentDir, newName);
       try {
         await rename(path, newPath);
       } catch {
@@ -906,6 +941,22 @@ const dalamAPI: DalamAPI = {
     async sendPrompt(sessionId, prompt, conversationHistory?, agentName?, attachments?) {
       const { settings, providerId, modelId, config } = getActiveProvider();
 
+      // Multi-model routing: select model based on prompt complexity
+      let activeModelId = modelId;
+      let activeConfig = config;
+      if (settings.autoRouteModels && settings.modelProfiles && settings.modelProfiles.length > 0) {
+        const { selectModelForPrompt } = await import("./modelRouter");
+        const routed = selectModelForPrompt(prompt, settings.modelProfiles, modelId);
+        if (routed.modelId !== modelId && routed.providerId) {
+          const routedConfig = getProviderConfig(routed.providerId);
+          if (routedConfig) {
+            activeModelId = routed.modelId;
+            activeConfig = routedConfig;
+            _debugLog(`[sendPrompt] Auto-routed to ${activeModelId} (complexity: ${routed.complexity})`);
+          }
+        }
+      }
+
       /** Assemble the system prompt and context blocks for the LLM. */
       async function assembleContext(cleanPrompt: string): Promise<string> {
         const { useChat, useSkillsMcp, useWorkspace } = await import("../store/useAppStore");
@@ -977,7 +1028,7 @@ const dalamAPI: DalamAPI = {
         if (workspacePath) {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
-            const memoryPath = joinPath(workspacePath, ".dalam/memory.json");
+            const memoryPath = joinPathUtil(workspacePath, ".dalam/memory.json");
             if (await exists(memoryPath)) {
               const memoryContent = await dalamAPI.fs.readFile(memoryPath);
               const memoryObj = JSON.parse(memoryContent);
@@ -1016,7 +1067,7 @@ const dalamAPI: DalamAPI = {
         if (workspacePath) {
           try {
             const { exists } = await import("@tauri-apps/plugin-fs");
-            const contextPath = joinPath(workspacePath, ".dalam/context.json");
+            const contextPath = joinPathUtil(workspacePath, ".dalam/context.json");
             if (await exists(contextPath)) {
               const contextContent = await dalamAPI.fs.readFile(contextPath);
               const contextObj = JSON.parse(contextContent);
@@ -1024,7 +1075,7 @@ const dalamAPI: DalamAPI = {
                 let pinnedBlock = "\n\n=== PINNED FILES ===\nThe following files are pinned in your context. You should keep their contents in mind:\n";
                 for (const filePath of contextObj.pinnedFiles) {
                   try {
-                    const fullPath = joinPath(workspacePath, filePath);
+                    const fullPath = joinPathUtil(workspacePath, filePath);
                     if (await exists(fullPath)) {
                       const fileContent = await dalamAPI.fs.readFile(fullPath);
                       pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${fileContent}\n`;
@@ -1582,8 +1633,9 @@ You can combine multiple tools in one response:
           await rateLimitDelay();
 
           const maxTokens = settings.maxTokens ?? 4096;
-          _debugLog(`[sendPrompt] Turn ${loopCount}: starting stream, model=${modelId}, messages=${messages.length}`);
-          const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, messages, ac.signal, maxTokens);
+          _debugLog(`[sendPrompt] Turn ${loopCount}: starting stream, model=${activeModelId}, messages=${messages.length}`);
+          const llmStartTime = Date.now();
+          const stream = streamChat(activeConfig.baseUrl, activeConfig.apiKey, activeConfig.apiFormat || "openai", activeModelId, messages, ac.signal, maxTokens);
           let fullContent = "";
           let lastMessageId = "";
           let eventCount = 0;
@@ -1594,8 +1646,13 @@ You can combine multiple tools in one response:
               fullContent += event.content;
               lastMessageId = event.messageId;
             }
+            if (event.type === "usage") {
+              recordTokenUsage(sessionId, modelId, event.usage);
+            }
             emit(event);
           }
+          const llmDurationMs = Date.now() - llmStartTime;
+          recordLlmCall(llmDurationMs, false);
           _debugLog(`[sendPrompt] Turn ${loopCount}: stream ended, events=${eventCount}, contentLen=${fullContent.length}, contentPreview=${fullContent.slice(0, 200)}`);
 
           totalFullContent += fullContent;
@@ -1681,69 +1738,141 @@ You can combine multiple tools in one response:
               }
             } catch { /* store not available */ }
 
-            // Execute tools with approval
+            // Execute tools with approval — parallel for read-only, sequential for write tools
             const toolResults: string[] = [];
             let abortedMidBatch = false;
-            for (const tc of toolCallMetas) {
-              _debugLog(`[sendPrompt] Turn ${loopCount}: executing tool ${tc.id} (${tc.name})`);
-              // Check abort signal before each tool execution
-              if (ac.signal.aborted) {
-                emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
-                abortedMidBatch = true;
-                break;
-              }
-              const decision = await waitForToolApproval(tc.id, ac.signal);
-              _debugLog(`[sendPrompt] Turn ${loopCount}: tool ${tc.id} approval decision: ${decision}`);
-              if (ac.signal.aborted) {
-                emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
-                abortedMidBatch = true;
-                break;
-              }
-              if (decision === "approved") {
-                const isAutoApproved = autoApprovedTools.has(tc.id);
-                const toolStartTime = Date.now();
-                try {
-                  let result: string;
-                  // Sub-agent task execution (OpenCode pattern)
-                  if (tc.name === "task") {
-                    result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
-                  } else {
-                    result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
-                  }
-                  const durationMs = Date.now() - toolStartTime;
-                  emit({ type: "tool-result", toolCallId: tc.id, result });
 
-                  // Emit activity events
-                  if (tc.name === "read_file" || tc.name === "list_dir") {
-                    emit({ type: "activity-explore", query: (tc.args.path as string) ?? ".", kind: tc.name === "read_file" ? "definition" : "files", matches: [{ path: (tc.args.path as string) ?? "." }] });
-                  } else if (tc.name === "grep_file" || tc.name === "search_files") {
-                    emit({ type: "activity-explore", query: (tc.args.pattern as string) ?? "", kind: "grep", matches: result.split("\n").filter(Boolean).map((line: string) => ({ path: line.split(":")[0] ?? "", preview: line })) });
-                  } else if (tc.name === "run_command") {
-                    emit({ type: "activity-bash", command: tc.args.command as string, result });
-                  } else if (tc.name === "write_file" || tc.name === "edit_file") {
-                    emit({ type: "activity-bash", command: `${tc.name} ${(tc.args.path as string) ?? ""}`, result });
-                  }
+            // Group tool calls into parallel batches using dependency analysis
+            const executorToolCalls: (ExecutorToolCall & { originalIndex: number })[] = toolCallMetas.map((tc, idx) => ({
+              name: tc.name,
+              args: tc.args as Record<string, unknown>,
+              raw: "",
+              originalIndex: idx,
+            }));
+            const batches = groupToolCallsForExecution(executorToolCalls);
 
-                  await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
-                  // Truncate large results (especially sub-agent) to prevent context overflow
-                  const MAX_RESULT_CHARS = 30000;
-                  const truncatedResult = result.length > MAX_RESULT_CHARS
-                    ? result.slice(0, MAX_RESULT_CHARS) + `\n\n[Result truncated: ${result.length} chars total, showing first ${MAX_RESULT_CHARS}]`
-                    : result;
-                  toolResults.push(`[Tool result for ${tc.name}]\n${truncatedResult || "(no output)"}`);
-                } catch (err) {
-                  const errMsg = (err as Error)?.message ?? String(err);
-                  emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
-                  await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
-                  toolResults.push(`[Tool error for ${tc.name}]\nError: ${errMsg}`);
+            for (const batch of batches) {
+              // Map batch back to original toolCallMetas by original index
+              const batchMetas = batch.map(bc =>
+                toolCallMetas[(bc as ExecutorToolCall & { originalIndex: number }).originalIndex]
+              );
+
+              if (batch.length === 1) {
+                // Single tool: execute sequentially (preserves existing approval flow)
+                const tc = batchMetas[0]!;
+                _debugLog(`[sendPrompt] Turn ${loopCount}: executing tool ${tc.id} (${tc.name})`);
+                if (ac.signal.aborted) {
+                  emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
+                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                  abortedMidBatch = true;
+                  break;
+                }
+                const decision = await waitForToolApproval(tc.id, ac.signal);
+                _debugLog(`[sendPrompt] Turn ${loopCount}: tool ${tc.id} approval decision: ${decision}`);
+                if (ac.signal.aborted) {
+                  emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
+                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                  abortedMidBatch = true;
+                  break;
+                }
+                if (decision === "approved") {
+                  const isAutoApproved = autoApprovedTools.has(tc.id);
+                  const toolStartTime = Date.now();
+                  try {
+                    let result: string;
+                    if (tc.name === "task") {
+                      result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                    } else {
+                      result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
+                    }
+                    const durationMs = Date.now() - toolStartTime;
+                    emit({ type: "tool-result", toolCallId: tc.id, result });
+                    if (tc.name === "read_file" || tc.name === "list_dir") {
+                      emit({ type: "activity-explore", query: (tc.args.path as string) ?? ".", kind: tc.name === "read_file" ? "definition" : "files", matches: [{ path: (tc.args.path as string) ?? "." }] });
+                    } else if (tc.name === "grep_file" || tc.name === "search_files") {
+                      emit({ type: "activity-explore", query: (tc.args.pattern as string) ?? "", kind: "grep", matches: result.split("\n").filter(Boolean).map((line: string) => ({ path: line.split(":")[0] ?? "", preview: line })) });
+                    } else if (tc.name === "run_command") {
+                      emit({ type: "activity-bash", command: tc.args.command as string, result });
+                    } else if (tc.name === "write_file" || tc.name === "edit_file") {
+                      emit({ type: "activity-bash", command: `${tc.name} ${(tc.args.path as string) ?? ""}`, result });
+                    }
+                    await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
+                    const truncatedResult = truncateToolResult(result, tc.name);
+                    toolResults.push(`[Tool result for ${tc.name}]\n${truncatedResult || "(no output)"}`);
+                  } catch (err) {
+                    const errMsg = (err as Error)?.message ?? String(err);
+                    const { matchErrorPattern } = await import("./errorPatterns");
+                    const errorMatch = matchErrorPattern(errMsg);
+                    const suggestion = errorMatch ? `\nSuggestion: ${errorMatch.suggestion}` : "";
+                    emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
+                    await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
+                    toolResults.push(`[Tool error for ${tc.name}]\nError: ${errMsg}${suggestion}`);
+                  }
+                } else {
+                  emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
+                  toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
                 }
               } else {
-                // Emit tool-result for denied tools to keep store in sync
-                emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
-                toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
+                // Multiple read-only tools: execute in parallel
+                _debugLog(`[sendPrompt] Turn ${loopCount}: executing ${batch.length} read-only tools in parallel`);
+                const parallelResults = await Promise.allSettled(
+                  batchMetas.map(async (tc) => {
+                    if (ac.signal.aborted) {
+                      emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
+                      return `[TOOL RESULT: ${tc.name}]\nAborted by user.`;
+                    }
+                    const decision = await waitForToolApproval(tc.id, ac.signal);
+                    if (ac.signal.aborted) {
+                      emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
+                      return `[TOOL RESULT: ${tc.name}]\nAborted by user.`;
+                    }
+                    if (decision !== "approved") {
+                      emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
+                      return `[Tool result for ${tc.name}]\nPermission Denied by user.`;
+                    }
+                    const isAutoApproved = autoApprovedTools.has(tc.id);
+                    const toolStartTime = Date.now();
+                    try {
+                      let result: string;
+                      if (tc.name === "task") {
+                        result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                      } else {
+                        result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
+                      }
+                      const durationMs = Date.now() - toolStartTime;
+                      emit({ type: "tool-result", toolCallId: tc.id, result });
+                      if (tc.name === "read_file" || tc.name === "list_dir") {
+                        emit({ type: "activity-explore", query: (tc.args.path as string) ?? ".", kind: tc.name === "read_file" ? "definition" : "files", matches: [{ path: (tc.args.path as string) ?? "." }] });
+                      } else if (tc.name === "grep_file" || tc.name === "search_files") {
+                        emit({ type: "activity-explore", query: (tc.args.pattern as string) ?? "", kind: "grep", matches: result.split("\n").filter(Boolean).map((line: string) => ({ path: line.split(":")[0] ?? "", preview: line })) });
+                      }
+                      await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
+                      const truncatedResult = truncateToolResult(result, tc.name);
+                      return `[Tool result for ${tc.name}]\n${truncatedResult || "(no output)"}`;
+                    } catch (err) {
+                      const errMsg = (err as Error)?.message ?? String(err);
+                      const { matchErrorPattern } = await import("./errorPatterns");
+                      const errorMatch = matchErrorPattern(errMsg);
+                      const suggestion = errorMatch ? `\nSuggestion: ${errorMatch.suggestion}` : "";
+                      emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
+                      await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
+                      return `[Tool error for ${tc.name}]\nError: ${errMsg}${suggestion}`;
+                    }
+                  })
+                );
+                for (const result of parallelResults) {
+                  if (result.status === "fulfilled") {
+                    toolResults.push(result.value);
+                  } else {
+                    toolResults.push(`[Tool error]\n${result.reason?.message || "Unknown error"}`);
+                  }
+                }
+                if (ac.signal.aborted) {
+                  abortedMidBatch = true;
+                }
               }
+
+              if (abortedMidBatch) break;
             }
 
             // Emit tool-result for any remaining tools skipped by abort
@@ -2381,23 +2510,65 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
 
 // Pre-compiled regex patterns for parseToolCalls
 const ATTRCapture = '((?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\')\\s*)*';
-  const ATTRSelfClose = ATTRCapture + '\\s*\\/?>';
+const ATTRSelfClose = ATTRCapture + '\\s*\\/?>';
 // ATTRClose was unused — removed
 
-  // Capture content between opening and closing tags (non-self-closing tags)
-  const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*>';
+// Capture content between opening and closing tags (non-self-closing tags)
+const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*';
+
+// All tool regex patterns pre-compiled at module level (compiled once, reused per call)
+const REGEX_READ_FILE = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
+const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)<\/write_file>/gi;
+const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*)<\/edit_file>/gi;
+const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
+const REGEX_GREP_FILE = new RegExp(`<grep_file\\s+${ATTRSelfClose}`, "gi");
+const REGEX_SEARCH_FILES = new RegExp(`<search_files\\s+${ATTRSelfClose}`, "gi");
+const REGEX_RUN_COMMAND = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
+const REGEX_GIT_STATUS = /<git_status\s*\/?>/gi;
+const REGEX_GIT_COMMIT = /<git_commit\s+message=["']([^"']+)["']\s*\/?>/gi;
+const REGEX_GIT_LOG = /<git_log\s*\/?>/gi;
+const REGEX_GIT_BRANCH = /<git_branch\s*\/?>/gi;
+const REGEX_GIT_CHECKOUT = new RegExp(`<git_checkout\\s+${ATTRSelfClose}`, "gi");
+const REGEX_GIT_DIFF_FILE = new RegExp(`<git_diff_file\\s+${ATTRSelfClose}`, "gi");
+const REGEX_CLIPBOARD_READ = /<clipboard_read\s*\/?>/gi;
+const REGEX_CLIPBOARD_WRITE = /<clipboard_write>([\s\S]*?)<\/clipboard_write>/gi;
+const REGEX_NOTIFY = new RegExp(`<notify\\s+${ATTRSelfClose}`, "gi");
+const REGEX_SYSTEM_INFO = /<system_info\s*\/?>/gi;
+const REGEX_OPEN_URL = new RegExp(`<open_url\\s+${ATTRSelfClose}`, "gi");
+const REGEX_LAUNCH_APP = /<launch_app\s+([^>]*)\/?>/gi;
+const REGEX_REVEAL_IN_FINDER = /<reveal_in_finder\s+([^>]*)\/?>/gi;
+const REGEX_MEMORY_SAVE = /<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi;
+const REGEX_MEMORY_SEARCH = /<memory_search\s+([^>]*)\/?>/gi;
+const REGEX_MEMORY_DELETE = /<memory_delete\s+([^>]*)\/?>/gi;
+const REGEX_MEMORY_STATS = /<memory_stats\s*\/?>/gi;
+const REGEX_MEMORY_MAINTAIN = /<memory_maintain\s*\/?>/gi;
+const REGEX_MEMORY_EXTRACT = /<memory_extract\s*\/?>/gi;
+const REGEX_MEMORY_EXPORT = /<memory_export\s*\/?>/gi;
+const REGEX_MEMORY_IMPORT = /<memory_import\s*\/?>/gi;
+const REGEX_TASK = /<task\s+([^>]*)\/?>/gi;
+const REGEX_OPEN_PANEL = /<open_panel\s+([^>]*)\/?>/gi;
+const REGEX_SCREENSHOT = /<screenshot\s*\/?>/gi;
+const REGEX_BROWSER_NAVIGATE = /<browser_navigate\s+([^>]*)\/?>/gi;
+const REGEX_RUN_PREVIEW = /<run_preview\s+([^>]*)\/?>/gi;
+const REGEX_BROWSER_EXECUTE = /<browser_execute\s+([^>]*)\/?>/gi;
+const REGEX_BROWSER_EXECUTE_BLOCK = /<browser_execute>([\s\S]*?)<\/browser_execute>/gi;
+const REGEX_CREATE_TASK_PLAN = /<create_task_plan\s+([^>]*)\/?>/gi;
+const REGEX_CREATE_TASK_PLAN_BLOCK = /<create_task_plan>([\s\S]*?)<\/create_task_plan>/gi;
+const REGEX_QUESTION = /<question\s+([^>]*)\/?>/gi;
+const REGEX_QUESTION_BLOCK = /<question>([\s\S]*?)<\/question>/gi;
+const REGEX_MALFORMED_QUESTION = /\bquestion\s+question="([^"]*)"\s+options="([^"]*)"\s*\/?/gi;
+const REGEX_MCP_TAG = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
+const REGEX_ANTML_BLOCK = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
+const REGEX_INVOKE = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
 
 async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 
-  // Reset lastIndex on global regexes
   const toolCalls: ParsedToolCall[] = [];
-  // Quoted-string-aware attribute pattern: matches "..." or '...' (handles > inside quotes)
-  
-
-  // 1. read_file — handle both self-closing <read_file path="..."/> and with offset/limit
-  const readFileRegex = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
   let match: RegExpExecArray | null;
-  while ((match = readFileRegex.exec(text)) !== null) {
+
+  // 1. read_file
+  REGEX_READ_FILE.lastIndex = 0;
+  while ((match = REGEX_READ_FILE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.path) {
       toolCalls.push({ name: "read_file", args: attrs, raw: match[0] });
@@ -2405,161 +2576,162 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   }
 
   // 2. write_file — greedy match to handle closing tags in content
-  const writeFileRegex = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)<\/write_file>/gi;
-  while ((match = writeFileRegex.exec(text)) !== null) {
+  REGEX_WRITE_FILE.lastIndex = 0;
+  while ((match = REGEX_WRITE_FILE.exec(text)) !== null) {
     toolCalls.push({ name: "write_file", args: { path: match[1], content: match[2] }, raw: match[0] });
   }
 
   // 3. edit_file — support optional occurrence attribute
   // Use greedy match to prevent premature closing on </edit_file> in content
-  const editFileRegex = /<edit_file\s+path=["']([^"']+)["']\s*(?:occurrence|occurence)=["'](\d+)["']?\s*>([\s\S]*)<\/edit_file>/gi;
-  while ((match = editFileRegex.exec(text)) !== null) {
+  REGEX_EDIT_FILE.lastIndex = 0;
+  while ((match = REGEX_EDIT_FILE.exec(text)) !== null) {
     const innerText = match[3];
     const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(innerText);
     const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(innerText);
     if (searchMatch && replaceMatch) {
+      const args: Record<string, string> = {
+        path: match[1],
+        search: searchMatch[1],
+        replace: replaceMatch[1],
+      };
+      if (match[2]) args.occurrence = match[2];
       toolCalls.push({
         name: "edit_file",
-        args: { 
-          path: match[1], 
-          occurrence: match[2],
-          search: searchMatch[1], 
-          replace: replaceMatch[1] 
-        },
+        args,
         raw: match[0]
       });
     }
   }
 
-  // 4. list_dir — handle both self-closing and closing tags
-  const listDirRegex = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
-  while ((match = listDirRegex.exec(text)) !== null) {
+  // 4. list_dir
+  REGEX_LIST_DIR.lastIndex = 0;
+  while ((match = REGEX_LIST_DIR.exec(text)) !== null) {
     toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
   }
 
-  // 5. grep_file — quoted-string-aware to prevent > truncation in patterns
-  const grepFileRegex = new RegExp(`<grep_file\\s+${ATTRSelfClose}`, "gi");
-  while ((match = grepFileRegex.exec(text)) !== null) {
+  // 5. grep_file
+  REGEX_GREP_FILE.lastIndex = 0;
+  while ((match = REGEX_GREP_FILE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.path && attrs.pattern) {
       toolCalls.push({ name: "grep_file", args: { path: attrs.path, pattern: attrs.pattern, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
     }
   }
 
-  // 6. search_files — quoted-string-aware to prevent > truncation
-  const searchFilesRegex = new RegExp(`<search_files\\s+${ATTRSelfClose}`, "gi");
-  while ((match = searchFilesRegex.exec(text)) !== null) {
+  // 6. search_files
+  REGEX_SEARCH_FILES.lastIndex = 0;
+  while ((match = REGEX_SEARCH_FILES.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.pattern) {
       toolCalls.push({ name: "search_files", args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
     }
   }
 
-  // 7. run_command — handle both self-closing and closing tags
-  const runCommandRegex = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
-  while ((match = runCommandRegex.exec(text)) !== null) {
+  // 7. run_command
+  REGEX_RUN_COMMAND.lastIndex = 0;
+  while ((match = REGEX_RUN_COMMAND.exec(text)) !== null) {
     toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
   }
 
-  // 6. git_status — handle both self-closing and closing tags
-  const gitStatusRegex = /<git_status\s*\/?>/gi;
-  while ((match = gitStatusRegex.exec(text)) !== null) {
+  // 8. git_status
+  REGEX_GIT_STATUS.lastIndex = 0;
+  while ((match = REGEX_GIT_STATUS.exec(text)) !== null) {
     toolCalls.push({ name: "git_status", args: {}, raw: match[0] });
   }
 
-  // 7. git_commit — handle both self-closing and closing tags
-  const gitCommitRegex = /<git_commit\s+message=["']([^"']+)["']\s*\/?>/gi;
-  while ((match = gitCommitRegex.exec(text)) !== null) {
+  // 9. git_commit
+  REGEX_GIT_COMMIT.lastIndex = 0;
+  while ((match = REGEX_GIT_COMMIT.exec(text)) !== null) {
     toolCalls.push({ name: "git_commit", args: { message: match[1] }, raw: match[0] });
   }
 
-  // 8. git_log — handle both self-closing and closing tags
-  const gitLogRegex = /<git_log\s*\/?>/gi;
-  while ((match = gitLogRegex.exec(text)) !== null) {
+  // 10. git_log
+  REGEX_GIT_LOG.lastIndex = 0;
+  while ((match = REGEX_GIT_LOG.exec(text)) !== null) {
     toolCalls.push({ name: "git_log", args: {}, raw: match[0] });
   }
 
-  // 8b. git_branch — list branches
-  const gitBranchRegex = /<git_branch\s*\/?>/gi;
-  while ((match = gitBranchRegex.exec(text)) !== null) {
+  // 11. git_branch
+  REGEX_GIT_BRANCH.lastIndex = 0;
+  while ((match = REGEX_GIT_BRANCH.exec(text)) !== null) {
     toolCalls.push({ name: "git_branch", args: {}, raw: match[0] });
   }
 
-  // 8c. git_checkout — switch branch
-  const gitCheckoutRegex = new RegExp(`<git_checkout\\s+${ATTRSelfClose}`, "gi");
-  while ((match = gitCheckoutRegex.exec(text)) !== null) {
+  // 12. git_checkout
+  REGEX_GIT_CHECKOUT.lastIndex = 0;
+  while ((match = REGEX_GIT_CHECKOUT.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.branch) {
       toolCalls.push({ name: "git_checkout", args: attrs, raw: match[0] });
     }
   }
 
-  // 8d. git_diff_file — diff a specific file
-  const gitDiffFileRegex = new RegExp(`<git_diff_file\\s+${ATTRSelfClose}`, "gi");
-  while ((match = gitDiffFileRegex.exec(text)) !== null) {
+  // 13. git_diff_file
+  REGEX_GIT_DIFF_FILE.lastIndex = 0;
+  while ((match = REGEX_GIT_DIFF_FILE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.path) {
       toolCalls.push({ name: "git_diff_file", args: attrs, raw: match[0] });
     }
   }
 
-  // 9. clipboard_read — handle both self-closing and closing tags
-  const clipboardReadRegex = /<clipboard_read\s*\/?>/gi;
-  while ((match = clipboardReadRegex.exec(text)) !== null) {
+  // 14. clipboard_read
+  REGEX_CLIPBOARD_READ.lastIndex = 0;
+  while ((match = REGEX_CLIPBOARD_READ.exec(text)) !== null) {
     toolCalls.push({ name: "clipboard_read", args: {}, raw: match[0] });
   }
 
-  // 10. clipboard_write
-  const clipboardWriteRegex = /<clipboard_write>([\s\S]*?)<\/clipboard_write>/gi;
-  while ((match = clipboardWriteRegex.exec(text)) !== null) {
+  // 15. clipboard_write
+  REGEX_CLIPBOARD_WRITE.lastIndex = 0;
+  while ((match = REGEX_CLIPBOARD_WRITE.exec(text)) !== null) {
     toolCalls.push({ name: "clipboard_write", args: { text: match[1] }, raw: match[0] });
   }
 
-  // 11. notify — quoted-string-aware
-  const notifyRegex = new RegExp(`<notify\\s+${ATTRSelfClose}`, "gi");
-  while ((match = notifyRegex.exec(text)) !== null) {
+  // 16. notify
+  REGEX_NOTIFY.lastIndex = 0;
+  while ((match = REGEX_NOTIFY.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.title) {
       toolCalls.push({ name: "notify", args: { title: attrs.title, body: attrs.body ?? "" }, raw: match[0] });
     }
   }
 
-  // 12. system_info
-  const systemInfoRegex = /<system_info\s*\/?>/gi;
-  while ((match = systemInfoRegex.exec(text)) !== null) {
+  // 17. system_info
+  REGEX_SYSTEM_INFO.lastIndex = 0;
+  while ((match = REGEX_SYSTEM_INFO.exec(text)) !== null) {
     toolCalls.push({ name: "system_info", args: {}, raw: match[0] });
   }
 
-  // 13. open_url — quoted-string-aware
-  const openUrlRegex = new RegExp(`<open_url\\s+${ATTRSelfClose}`, "gi");
-  while ((match = openUrlRegex.exec(text)) !== null) {
+  // 18. open_url
+  REGEX_OPEN_URL.lastIndex = 0;
+  while ((match = REGEX_OPEN_URL.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.url) {
       toolCalls.push({ name: "open_url", args: { url: attrs.url }, raw: match[0] });
     }
   }
 
-  // 14. launch_app — use [^>]* to prevent catastrophic backtracking
-  const launchAppRegex = /<launch_app\s+([^>]*)\/?>/gi;
-  while ((match = launchAppRegex.exec(text)) !== null) {
+  // 19. launch_app
+  REGEX_LAUNCH_APP.lastIndex = 0;
+  while ((match = REGEX_LAUNCH_APP.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.name) {
       toolCalls.push({ name: "launch_app", args: { name: attrs.name, args: attrs.args, cwd: attrs.cwd }, raw: match[0] });
     }
   }
 
-  // 15. reveal_in_finder — use [^>]* to prevent catastrophic backtracking
-  const revealRegex = /<reveal_in_finder\s+([^>]*)\/?>/gi;
-  while ((match = revealRegex.exec(text)) !== null) {
+  // 20. reveal_in_finder
+  REGEX_REVEAL_IN_FINDER.lastIndex = 0;
+  while ((match = REGEX_REVEAL_IN_FINDER.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.path) {
       toolCalls.push({ name: "reveal_in_finder", args: { path: attrs.path }, raw: match[0] });
     }
   }
 
-  // 16. memory_save
-  const memorySaveRegex = /<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi;
-  while ((match = memorySaveRegex.exec(text)) !== null) {
+  // 21. memory_save
+  REGEX_MEMORY_SAVE.lastIndex = 0;
+  while ((match = REGEX_MEMORY_SAVE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     toolCalls.push({
       name: "memory_save",
@@ -2574,9 +2746,9 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     });
   }
 
-  // 17. memory_search — use [^>]* to prevent catastrophic backtracking
-  const memorySearchRegex = /<memory_search\s+([^>]*)\/?>/gi;
-  while ((match = memorySearchRegex.exec(text)) !== null) {
+  // 22. memory_search
+  REGEX_MEMORY_SEARCH.lastIndex = 0;
+  while ((match = REGEX_MEMORY_SEARCH.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.query) {
       toolCalls.push({
@@ -2587,9 +2759,9 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 18. memory_delete
-  const memoryDeleteRegex = /<memory_delete\s+([^>]*)\/?>/gi;
-  while ((match = memoryDeleteRegex.exec(text)) !== null) {
+  // 23. memory_delete
+  REGEX_MEMORY_DELETE.lastIndex = 0;
+  while ((match = REGEX_MEMORY_DELETE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.id) {
       toolCalls.push({
@@ -2600,39 +2772,39 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 19. memory_stats — handle both self-closing and closing tags
-  const memoryStatsRegex = /<memory_stats\s*\/?>/gi;
-  while ((match = memoryStatsRegex.exec(text)) !== null) {
+  // 24. memory_stats
+  REGEX_MEMORY_STATS.lastIndex = 0;
+  while ((match = REGEX_MEMORY_STATS.exec(text)) !== null) {
     toolCalls.push({ name: "memory_stats", args: {}, raw: match[0] });
   }
 
-  // 20. memory_maintain — handle both self-closing and closing tags
-  const memoryMaintainRegex = /<memory_maintain\s*\/?>/gi;
-  while ((match = memoryMaintainRegex.exec(text)) !== null) {
+  // 25. memory_maintain
+  REGEX_MEMORY_MAINTAIN.lastIndex = 0;
+  while ((match = REGEX_MEMORY_MAINTAIN.exec(text)) !== null) {
     toolCalls.push({ name: "memory_maintain", args: {}, raw: match[0] });
   }
 
-  // 21. memory_extract — handle both self-closing and closing tags
-  const memoryExtractRegex = /<memory_extract\s*\/?>/gi;
-  while ((match = memoryExtractRegex.exec(text)) !== null) {
+  // 26. memory_extract
+  REGEX_MEMORY_EXTRACT.lastIndex = 0;
+  while ((match = REGEX_MEMORY_EXTRACT.exec(text)) !== null) {
     toolCalls.push({ name: "memory_extract", args: {}, raw: match[0] });
   }
 
-  // 22. memory_export — handle both self-closing and closing tags
-  const memoryExportRegex = /<memory_export\s*\/?>/gi;
-  while ((match = memoryExportRegex.exec(text)) !== null) {
+  // 27. memory_export
+  REGEX_MEMORY_EXPORT.lastIndex = 0;
+  while ((match = REGEX_MEMORY_EXPORT.exec(text)) !== null) {
     toolCalls.push({ name: "memory_export", args: {}, raw: match[0] });
   }
 
-  // 23. memory_import — handle both self-closing and closing tags
-  const memoryImportRegex = /<memory_import\s*\/?>/gi;
-  while ((match = memoryImportRegex.exec(text)) !== null) {
+  // 28. memory_import
+  REGEX_MEMORY_IMPORT.lastIndex = 0;
+  while ((match = REGEX_MEMORY_IMPORT.exec(text)) !== null) {
     toolCalls.push({ name: "memory_import", args: {}, raw: match[0] });
   }
 
-  // 24. task (sub-agent spawn) — OpenCode pattern
-  const taskRegex = /<task\s+([^>]*)\/?>/gi;
-  while ((match = taskRegex.exec(text)) !== null) {
+  // 29. task (sub-agent spawn)
+  REGEX_TASK.lastIndex = 0;
+  while ((match = REGEX_TASK.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.prompt) {
       toolCalls.push({
@@ -2648,83 +2820,83 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 25. open_panel — switch right panel tab
-  const openPanelRegex = /<open_panel\s+([^>]*)\/?>/gi;
-  while ((match = openPanelRegex.exec(text)) !== null) {
+  // 30. open_panel
+  REGEX_OPEN_PANEL.lastIndex = 0;
+  while ((match = REGEX_OPEN_PANEL.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.panel) {
       toolCalls.push({ name: "open_panel", args: attrs, raw: match[0] });
     }
   }
 
-  // 26. screenshot — capture screen
-  const screenshotRegex = /<screenshot\s*\/?>/gi;
-  while ((match = screenshotRegex.exec(text)) !== null) {
+  // 31. screenshot
+  REGEX_SCREENSHOT.lastIndex = 0;
+  while ((match = REGEX_SCREENSHOT.exec(text)) !== null) {
     toolCalls.push({ name: "screenshot", args: {}, raw: match[0] });
   }
 
-  // 27. browser_navigate — navigate browser to URL
-  const browserNavRegex = /<browser_navigate\s+([^>]*)\/?>/gi;
-  while ((match = browserNavRegex.exec(text)) !== null) {
+  // 32. browser_navigate
+  REGEX_BROWSER_NAVIGATE.lastIndex = 0;
+  while ((match = REGEX_BROWSER_NAVIGATE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.url) {
       toolCalls.push({ name: "browser_navigate", args: attrs, raw: match[0] });
     }
   }
 
-  // 28. run_preview — start dev server and show preview
-  const runPreviewRegex = /<run_preview\s+([^>]*)\/?>/gi;
-  while ((match = runPreviewRegex.exec(text)) !== null) {
+  // 33. run_preview
+  REGEX_RUN_PREVIEW.lastIndex = 0;
+  while ((match = REGEX_RUN_PREVIEW.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.command) {
       toolCalls.push({ name: "run_preview", args: attrs, raw: match[0] });
     }
   }
 
-  // 29. browser_execute — run JavaScript in browser context
-  const browserExecRegex = /<browser_execute\s+([^>]*)\/?>/gi;
-  while ((match = browserExecRegex.exec(text)) !== null) {
+  // 34. browser_execute (self-closing)
+  REGEX_BROWSER_EXECUTE.lastIndex = 0;
+  while ((match = REGEX_BROWSER_EXECUTE.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.script) {
       toolCalls.push({ name: "browser_execute", args: attrs, raw: match[0] });
     }
   }
   // Also handle <browser_execute>script content</browser_execute>
-  const browserExecBlockRegex = /<browser_execute>([\s\S]*?)<\/browser_execute>/gi;
-  while ((match = browserExecBlockRegex.exec(text)) !== null) {
+  REGEX_BROWSER_EXECUTE_BLOCK.lastIndex = 0;
+  while ((match = REGEX_BROWSER_EXECUTE_BLOCK.exec(text)) !== null) {
     toolCalls.push({ name: "browser_execute", args: { script: match[1].trim() }, raw: match[0] });
   }
 
-  // 30. create_task_plan — create/update task plan
-  const createTaskPlanRegex = /<create_task_plan\s+([^>]*)\/?>/gi;
-  while ((match = createTaskPlanRegex.exec(text)) !== null) {
+  // 35. create_task_plan (self-closing)
+  REGEX_CREATE_TASK_PLAN.lastIndex = 0;
+  while ((match = REGEX_CREATE_TASK_PLAN.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.tasks) {
       toolCalls.push({ name: "create_task_plan", args: attrs, raw: match[0] });
     }
   }
   // Also handle <create_task_plan>task list</create_task_plan>
-  const createTaskPlanBlockRegex = /<create_task_plan>([\s\S]*?)<\/create_task_plan>/gi;
-  while ((match = createTaskPlanBlockRegex.exec(text)) !== null) {
+  REGEX_CREATE_TASK_PLAN_BLOCK.lastIndex = 0;
+  while ((match = REGEX_CREATE_TASK_PLAN_BLOCK.exec(text)) !== null) {
     toolCalls.push({ name: "create_task_plan", args: { tasks: match[1].trim() }, raw: match[0] });
   }
 
-  // 31. question — ask user a question
-  const questionRegex = /<question\s+([^>]*)\/?>/gi;
-  while ((match = questionRegex.exec(text)) !== null) {
+  // 36. question (self-closing)
+  REGEX_QUESTION.lastIndex = 0;
+  while ((match = REGEX_QUESTION.exec(text)) !== null) {
     const attrs = parseAttributes(match[1]);
     if (attrs.question) {
       toolCalls.push({ name: "question", args: attrs, raw: match[0] });
     }
   }
   // Also handle <question>text</question>
-  const questionBlockRegex = /<question>([\s\S]*?)<\/question>/gi;
-  while ((match = questionBlockRegex.exec(text)) !== null) {
+  REGEX_QUESTION_BLOCK.lastIndex = 0;
+  while ((match = REGEX_QUESTION_BLOCK.exec(text)) !== null) {
     toolCalls.push({ name: "question", args: { question: match[1].trim() }, raw: match[0] });
   }
   // Handle malformed question tags without opening < (LLM output quirk)
-  const malformedQuestionRegex = /\bquestion\s+question="([^"]*)"\s+options="([^"]*)"\s*\/?/gi;
-  while ((match = malformedQuestionRegex.exec(text)) !== null) {
+  REGEX_MALFORMED_QUESTION.lastIndex = 0;
+  while ((match = REGEX_MALFORMED_QUESTION.exec(text)) !== null) {
     // Only add if not already captured by the proper regex
     if (match[1] && !toolCalls.some(tc => tc.name === "question" && tc.args.question === match![1])) {
       toolCalls.push({ name: "question", args: { question: match[1], options: match[2] }, raw: match[0] });
@@ -2734,7 +2906,6 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 25. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
-  const mcpTagRegex = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
   // Hoisted dynamic import to avoid repeating per match
   let mcpServers: { name: string; enabled: boolean; transport?: string; url?: string; command?: string; args?: string[]; env?: Record<string, string> }[] = [];
   try {
@@ -2742,7 +2913,8 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     mcpServers = useSkillsMcp.getState().mcpServers;
   } catch { /* MCP store not available, skip server lookup */ }
   let mcpMatch;
-  while ((mcpMatch = mcpTagRegex.exec(text)) !== null) {
+  REGEX_MCP_TAG.lastIndex = 0;
+  while ((mcpMatch = REGEX_MCP_TAG.exec(text)) !== null) {
     const rawTag = mcpMatch[0];
     const afterPrefix = mcpMatch[1]; // everything after "mcp_" before attributes/close
     const bodyOrAttrs = mcpMatch[2] || "";
@@ -2824,16 +2996,16 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
         const safeEnd = fullBlock.length >= mcpMatch[0].length
           ? mcpMatch.index + fullBlock.length
           : naturalEnd;
-        mcpTagRegex.lastIndex = safeEnd;
+        REGEX_MCP_TAG.lastIndex = safeEnd;
       }
     }
   }
 
   // 25. Anthropic antml:function_calls / <invoke> format
   // Models like MiniMax output: antml:function_calls<invoke name="tool">parameter name="key">value</antml:parameter></antml:function_calls
-  const antmlBlockRegex = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
   let antmlMatch;
-  while ((antmlMatch = antmlBlockRegex.exec(text)) !== null) {
+  REGEX_ANTML_BLOCK.lastIndex = 0;
+  while ((antmlMatch = REGEX_ANTML_BLOCK.exec(text)) !== null) {
     const toolName = antmlMatch[1];
     const inner = antmlMatch[2];
     const args: Record<string, string> = {};
@@ -2850,9 +3022,9 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   }
 
   // 26. Standalone <invoke> tags without wrapping antml:function_calls
-  const invokeRegex = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
   let invokeMatch;
-  while ((invokeMatch = invokeRegex.exec(text)) !== null) {
+  REGEX_INVOKE.lastIndex = 0;
+  while ((invokeMatch = REGEX_INVOKE.exec(text)) !== null) {
     // Skip if already captured by the antml block regex above
     if (toolCalls.some(tc => tc.raw.includes(invokeMatch![0]))) continue;
     const toolName = invokeMatch[1];
@@ -2959,6 +3131,52 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
   });
 }
 
+// Per-tool execution timeouts (ms)
+const TOOL_TIMEOUTS: Record<string, number> = {
+  read_file: 10_000,
+  write_file: 30_000,
+  edit_file: 30_000,
+  run_command: 60_000,
+  grep_file: 30_000,
+  search_files: 60_000,
+  git_status: 15_000,
+  git_commit: 30_000,
+  git_log: 15_000,
+  git_branch: 15_000,
+  git_checkout: 15_000,
+  git_diff_file: 15_000,
+  list_dir: 10_000,
+  default: 30_000,
+};
+
+// Unified tool result truncation limits (chars)
+const TOOL_RESULT_LIMITS = {
+  default: 30_000,
+  run_command: 50_000,
+  sub_agent: 15_000,
+  read_file: 100_000,
+} as const;
+
+function truncateToolResult(result: string, toolName: string): string {
+  const limit = (TOOL_RESULT_LIMITS as Record<string, number>)[toolName] ?? TOOL_RESULT_LIMITS.default;
+  if (result.length <= limit) return result;
+  return result.slice(0, limit) + `\n\n[Truncated at ${limit} chars, showing first ${limit} of ${result.length} total]`;
+}
+
+async function executeWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  toolName: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => { if (timer !== undefined) clearTimeout(timer); }),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    }),
+  ]);
+}
+
 async function executeTool(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
   // Validate args against Zod schema
   const { validateToolArgs } = await import("./toolSchemas");
@@ -2966,6 +3184,12 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   if (!validation.valid) {
     return `Error: ${validation.error}`;
   }
+
+  const timeout = TOOL_TIMEOUTS[name] ?? TOOL_TIMEOUTS.default;
+  return executeWithTimeout(executeToolInner(name, args, workspacePath, emit, autoApprove), timeout, name);
+}
+
+async function executeToolInner(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
 
   if (name === "read_file") {
     const { readFile, stat } = await import("@tauri-apps/plugin-fs");
@@ -3238,7 +3462,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       for (const entry of entries) {
         if (!entry.name || results.length >= maxResults) break;
         if (JUNK_DIRS.has(entry.name)) continue;
-        const full = joinPath(dir, entry.name!);
+        const full = joinPathUtil(dir, entry.name!);
         if (entry.isDirectory) {
           await searchDir(full, depth + 1, visited);
         } else {
@@ -3296,11 +3520,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
       ),
     ]);
 
-    const maxLen = 50000;
-    if (output.length > maxLen) {
-      return output.slice(0, maxLen) + `\n\n[Output truncated at ${Math.round(maxLen / 1024)}KB — total was ${Math.round(output.length / 1024)}KB. Use head/tail to inspect portions.]`;
-    }
-    return output;
+    return truncateToolResult(output, "run_command");
   }
 
   if (name === "git_status") {
@@ -3789,6 +4009,23 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   }
 
   if (name.startsWith("mcp_")) {
+    // Coerce string args to proper types for MCP servers
+    function coerceMcpArgs(raw: Record<string, string>): Record<string, unknown> {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(raw)) {
+        if (v === "true") out[k] = true;
+        else if (v === "false") out[k] = false;
+        else if (v === "null") out[k] = null;
+        else if (v !== "" && !isNaN(Number(v))) out[k] = Number(v);
+        else if ((v.startsWith("[") && v.endsWith("]")) || (v.startsWith("{") && v.endsWith("}"))) {
+          try { out[k] = JSON.parse(v); } catch { out[k] = v; }
+        }
+        else out[k] = v;
+      }
+      return out;
+    }
+    const mcpArgs = coerceMcpArgs(args);
+
     // Parse "mcp_{serverName}_{toolName}" — server name may contain underscores
     const afterPrefix = name.slice(4); // remove "mcp_"
     const { useSkillsMcp } = await import("../store/useAppStore");
@@ -3824,29 +4061,45 @@ async function executeTool(name: string, args: Record<string, string>, workspace
     if (server.transport === "http") {
       const url = server.url;
       if (!url) throw new Error("HTTP Endpoint URL is required");
+      // SSRF protection: validate URL before execution
+      const { validateMcpUrl } = await import("./security");
+      validateMcpUrl(url);
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      const existingSessionId = mcpHttpSessions.get(serverName);
+      let existingSessionId = mcpHttpSessions.get(serverName);
+      if (!existingSessionId) {
+        // Mutex: if another call is already initializing, wait for it
+        const existingMutex = _mcpSessionMutexes.get(serverName);
+        if (existingMutex) {
+          existingSessionId = (await existingMutex) ?? undefined;
+        } else {
+          const initPromise = (async (): Promise<string | null> => {
+            try {
+              const initResp = await corsFetch(url, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: 1 }),
+              });
+              if (!initResp.ok) throw new Error(`HTTP ${initResp.status} during MCP initialize`);
+              const initJson = await initResp.json();
+              if (initJson.error) throw new Error(initJson.error.message || JSON.stringify(initJson.error));
+              const sid = initResp.headers.get("mcp-session-id");
+              if (sid) mcpHttpSessions.set(serverName, sid);
+              await corsFetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...(sid ? { "Mcp-Session-Id": sid } : {}) },
+                body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+              });
+              return sid;
+            } finally {
+              _mcpSessionMutexes.delete(serverName);
+            }
+          })();
+          _mcpSessionMutexes.set(serverName, initPromise);
+          existingSessionId = (await initPromise) ?? undefined;
+        }
+      }
       if (existingSessionId) {
         headers["Mcp-Session-Id"] = existingSessionId;
-      } else {
-        const initResp = await corsFetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: 1 }),
-        });
-        if (!initResp.ok) throw new Error(`HTTP ${initResp.status} during MCP initialize`);
-        const initJson = await initResp.json();
-        if (initJson.error) throw new Error(initJson.error.message || JSON.stringify(initJson.error));
-        const sessionId = initResp.headers.get("mcp-session-id");
-        if (sessionId) {
-          headers["Mcp-Session-Id"] = sessionId;
-          mcpHttpSessions.set(serverName, sessionId);
-        }
-        await corsFetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
-        });
       }
       // tools/call
       const resp = await corsFetch(url, {
@@ -3857,7 +4110,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
           method: "tools/call",
           params: {
             name: toolName,
-            arguments: args,
+            arguments: mcpArgs,
           },
           id: 2,
         }),
@@ -3920,6 +4173,8 @@ async function executeTool(name: string, args: Record<string, string>, workspace
           let outputBuffer = "";
           let resolved = false;
           let childProc: Awaited<ReturnType<typeof cmd.spawn>> | null = null;
+          let jsonBuffer = "";
+          let bracesDepth = 0;
 
           cmd.stdout.on("data", (data: string) => {
             outputBuffer += data;
@@ -3927,24 +4182,42 @@ async function executeTool(name: string, args: Record<string, string>, workspace
             outputBuffer = lines.pop() ?? "";
             for (const line of lines) {
               const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith("{")) continue;
-              try {
-                const parsed = JSON.parse(trimmed);
-                if (parsed.result?.content || parsed.content || parsed.error) {
-                  resolved = true;
-                  if (parsed.error) {
-                    reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
-                  } else if (!parsed || typeof parsed !== "object" || (!("result" in parsed) && !("content" in parsed))) {
-                    resolve(`[MCP Error: Invalid response format from server "${serverName}"]`);
-                  } else {
-                    const content = parsed.result?.content || parsed.content || [];
-                    const text = content.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
-                    resolve(text);
-                  }
-                  return;
+              if (!trimmed) continue;
+
+              // Accumulate JSON across multiple lines by tracking brace depth
+              jsonBuffer += (jsonBuffer ? "\n" : "") + trimmed;
+              if (jsonBuffer.startsWith("{")) {
+                for (const ch of trimmed) {
+                  if (ch === "{") bracesDepth++;
+                  else if (ch === "}") bracesDepth--;
                 }
-              } catch {
-                // Not valid JSON — skip this line
+                if (bracesDepth > 0) continue; // incomplete JSON, keep accumulating
+
+                // Complete JSON object — try to parse
+                try {
+                  const parsed = JSON.parse(jsonBuffer);
+                  jsonBuffer = "";
+                  bracesDepth = 0;
+                  if (parsed.result?.content || parsed.content || parsed.error) {
+                    resolved = true;
+                    if (parsed.error) {
+                      reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
+                    } else if (!parsed || typeof parsed !== "object" || (!("result" in parsed) && !("content" in parsed))) {
+                      resolve(`[MCP Error: Invalid response format from server "${serverName}"]`);
+                    } else {
+                      const content = parsed.result?.content || parsed.content || [];
+                      const text = content.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
+                      resolve(text);
+                    }
+                    return;
+                  }
+                } catch {
+                  // Incomplete or malformed — keep buffering
+                }
+              } else {
+                // Not a JSON object — reset
+                jsonBuffer = "";
+                bracesDepth = 0;
               }
             }
           });
@@ -3970,7 +4243,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
                 method: "tools/call",
                 params: {
                   name: toolName,
-                  arguments: args,
+                  arguments: mcpArgs,
                 },
                 id: 2,
               }) + "\n";
@@ -4269,10 +4542,7 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
           if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "completed", result: toolResult };
           emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
           // Truncate large sub-agent tool results to prevent context overflow
-          const MAX_SUB_RESULT = 15000;
-          const truncatedResult = toolResult.length > MAX_SUB_RESULT
-            ? toolResult.slice(0, MAX_SUB_RESULT) + `\n\n[Truncated: ${toolResult.length} chars]`
-            : toolResult;
+          const truncatedResult = truncateToolResult(toolResult, "sub_agent");
           subHistory.push({ role: "user", content: `[Tool result for ${st.name}]\n${truncatedResult || "(no output)"}` });
         } catch (err) {
           const errMsg = (err as Error)?.message ?? String(err);

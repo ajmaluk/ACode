@@ -25,10 +25,12 @@
 export type HookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
+  | "PreToolUse"
   | "PostToolUse"
   | "Stop"
   | "SessionEnd"
-  | "ContextPressure";
+  | "ContextPressure"
+  | "ContextCompaction";
 
 export interface SessionStartEvent {
   sessionId: string;
@@ -45,6 +47,14 @@ export interface UserPromptSubmitEvent {
   conversationHistory: unknown[];
   agentName: string;
   attachments: { name: string; mimeType: string }[];
+  timestamp: number;
+}
+
+export interface PreToolUseEvent {
+  sessionId: string;
+  toolCallId: string;
+  name: string;
+  args: Record<string, unknown>;
   timestamp: number;
 }
 
@@ -85,13 +95,24 @@ export interface ContextPressureEvent {
   timestamp: number;
 }
 
+export interface ContextCompactionEvent {
+  sessionId: string;
+  messagesBefore: number;
+  messagesAfter: number;
+  tokensReclaimed: number;
+  tier: 1 | 2;
+  timestamp: number;
+}
+
 export type HookEventPayloads = {
   SessionStart: SessionStartEvent;
   UserPromptSubmit: UserPromptSubmitEvent;
+  PreToolUse: PreToolUseEvent;
   PostToolUse: PostToolUseEvent;
   Stop: StopEvent;
   SessionEnd: SessionEndEvent;
   ContextPressure: ContextPressureEvent;
+  ContextCompaction: ContextCompactionEvent;
 };
 
 // ---------------------------------------------------------------------------
@@ -225,3 +246,39 @@ class HookEventBus {
 // ---------------------------------------------------------------------------
 
 export const hookBus = new HookEventBus();
+
+// ---------------------------------------------------------------------------
+// PreToolUse helper — emit + collect block decisions
+// ---------------------------------------------------------------------------
+
+export interface PreToolUseResult {
+  allow: boolean;
+  reason?: string;
+}
+
+const _preToolUseResults = new Map<string, PreToolUseResult>();
+
+export function setPreToolUseResult(toolCallId: string, result: PreToolUseResult): void {
+  _preToolUseResults.set(toolCallId, result);
+}
+
+export async function emitPreToolUse(
+  sessionId: string,
+  toolCallId: string,
+  name: string,
+  args: Record<string, unknown>
+): Promise<PreToolUseResult> {
+  _preToolUseResults.delete(toolCallId);
+
+  await hookBus.emit("PreToolUse", {
+    sessionId,
+    toolCallId,
+    name,
+    args,
+    timestamp: Date.now(),
+  });
+
+  const result = _preToolUseResults.get(toolCallId) ?? { allow: true };
+  _preToolUseResults.delete(toolCallId);
+  return result;
+}

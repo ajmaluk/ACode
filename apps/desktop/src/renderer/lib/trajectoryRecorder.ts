@@ -495,7 +495,21 @@ if (typeof window !== "undefined") {
       clearInterval(flushTimer);
       flushTimer = null;
     }
-    // Best-effort final flush of all buffered sessions
-    void flushAll();
+    // Synchronous best-effort: persist any remaining buffered turns
+    for (const [sessionId, buffer] of buffers) {
+      if (buffer.turns.length > 0 && buffer.workspacePath && !flushing.has(sessionId)) {
+        const api = createDalamAPI();
+        const filePath = joinPath(buffer.workspacePath, ".dalam", TRAJECTORY_DIR, `trajectory-${sessionId}.jsonl`);
+        const newLines = buffer.turns.map(t => JSON.stringify(t)).join("\n") + "\n";
+        // Read existing + append new, fire-and-forget
+        api.fs.readFile(filePath).then(existing => {
+          return api.fs.writeFile(filePath, existing + newLines);
+        }).catch(() => {
+          // File may not exist yet — try write-only
+          api.fs.writeFile(filePath, newLines).catch(() => {});
+        });
+        buffer.turns = [];
+      }
+    }
   });
 }

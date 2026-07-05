@@ -1,12 +1,21 @@
-import React, { useMemo } from "react";
+/* eslint-disable react-refresh/only-export-components */
+
+import React, { useMemo, lazy, Suspense } from "react";
 import {
   FileText, Copy, RotateCcw, Info,
 } from "lucide-react";
 import { useChat } from "@/store/useAppStore";
 import { useToast } from "@/components/ui/toastStore";
 import { splitCodeFences } from "@/lib/chatUtils";
-import { ThinkingBlock, ToolCallsList, ChangesCard, TodoBlock, SkillBlock, PlanBlock, BashActivityBlock, TaskPlanBlock, ContextGatheringGroup, QuestionAccordion } from "./ActivityBlocks";
 import { CodeBlock, MarkdownContent, StreamingContent } from "./ChatRendering";
+import {
+  ThinkingBlock,
+  ToolCallsList,
+  TodoBlock,
+  TaskPlanBlock,
+  QuestionAccordion,
+  ChangesCard,
+} from "./ActivityBlocks";
 
 export const EMPTY_ACTIVITIES: never[] = [];
 
@@ -108,27 +117,27 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
 
       {/* Activity blocks (explore / read / skill / bash / plan) */}
       {hasActivities && (
-          <div className="my-0.5">
-            {contextActivities.length > 0 && (
-              <ContextGatheringGroup activities={contextActivities} />
-            )}
-            {otherActivities.map((activity) => {
-              const ak = activity.id;
-              if (activity.type === "skill") {
-                return <SkillBlock key={ak} name={activity.name} content={activity.content} args={activity.args} />;
-              }
-              if (activity.type === "bash") {
-                return <BashActivityBlock key={ak} command={activity.command} result={activity.result} />;
-              }
-              if (activity.type === "plan") {
-                return <PlanBlock key={ak} plan={activity.plan} />;
-              }
-              if (activity.type === "think") {
-                return <ThinkingBlock key={ak} content={activity.content} />;
-              }
-              return null;
-            })}
-          </div>
+        <div className="my-0.5">
+          {contextActivities.length > 0 && (
+            <ContextGatheringGroup activities={contextActivities} />
+          )}
+          {otherActivities.map((activity) => {
+            const ak = activity.id;
+            if (activity.type === "skill") {
+              return <SkillBlock key={ak} name={activity.name} content={activity.content} args={activity.args} />;
+            }
+            if (activity.type === "bash") {
+              return <BashActivityBlock key={ak} command={activity.command} result={activity.result} />;
+            }
+            if (activity.type === "plan") {
+              return <PlanBlock key={ak} plan={activity.plan} />;
+            }
+            if (activity.type === "think") {
+              return <ThinkingBlock key={ak} content={activity.content} />;
+            }
+            return null;
+          })}
+        </div>
       )}
 
 
@@ -153,22 +162,30 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
 
       {/* Tool calls from this AI turn */}
       {!pending && hasToolCalls && (
-        <ToolCallsList toolCalls={message.toolCalls!} />
+        <Suspense fallback={<div className="text-xs text-dalam-text-muted">Loading tool calls...</div>}>
+          <ToolCallsList toolCalls={message.toolCalls!} />
+        </Suspense>
       )}
 
       {/* Todo checklist */}
       {!pending && hasTodos && (
-        <TodoBlock todos={message.todos!} />
+        <Suspense fallback={<div className="text-xs text-dalam-text-muted">Loading todos...</div>}>
+          <TodoBlock todos={message.todos!} />
+        </Suspense>
       )}
 
       {/* Task plan checklist */}
       {!pending && message.taskPlan && message.taskPlan.length > 0 && (
-        <TaskPlanBlock tasks={message.taskPlan} summary={message.taskPlanSummary} />
+        <Suspense fallback={<div className="text-xs text-dalam-text-muted">Loading task plan...</div>}>
+          <TaskPlanBlock tasks={message.taskPlan} summary={message.taskPlanSummary} />
+        </Suspense>
       )}
 
       {/* Questions asked by the agent */}
       {!pending && message.questions && message.questions.length > 0 && (
-        <QuestionAccordion questions={message.questions} />
+        <Suspense fallback={<div className="text-xs text-dalam-text-muted">Loading questions...</div>}>
+          <QuestionAccordion questions={message.questions} />
+        </Suspense>
       )}
 
       {/* Changes card */}
@@ -239,3 +256,10 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
     !tcChanged && !fcChanged && !actChanged
   );
 });
+
+import {
+  ContextGatheringGroup,
+  SkillBlock,
+  BashActivityBlock,
+  PlanBlock,
+} from "./ActivityBlocks";

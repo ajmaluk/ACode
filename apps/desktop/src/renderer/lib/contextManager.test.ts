@@ -7,9 +7,14 @@ import {
   tier1PruneToolOutputs,
   computeContextStats,
   estimateTokens,
+  estimateMessageTokens,
   parseContextWindow,
   buildCompactionPrompt,
   computePressure,
+  checkProactiveContextManagement,
+  getContextPressureRecommendation,
+  getNextCheckpointTrigger,
+  clearTokenCache,
 } from "./contextManager";
 import type { ChatMessage } from "@dalam/shared-types";
 
@@ -556,6 +561,126 @@ describe("tier2PruneToolOutputs — pruning threshold", () => {
     ];
     const { tokensReclaimed } = pruneToolOutputs(messages);
     expect(tokensReclaimed).toBeGreaterThan(0);
+  });
+});
+
+// ─── Proactive Context Management Tests ──────────────────────────
+
+describe("checkProactiveContextManagement", () => {
+  it("returns no action needed for low context usage", () => {
+    const result = checkProactiveContextManagement([userMsg("hi")], 128000);
+    expect(result.shouldPrune).toBe(false);
+    expect(result.shouldCompact).toBe(false);
+    expect(result.reason).toContain("no action needed");
+  });
+
+  it("recommends prune for high context usage (60-74%)", () => {
+    // Generate enough tokens to hit 60-74% pressure ratio
+    // With a huge message, we can drive the ratio up
+    const bigMsg = userMsg("x".repeat(200000));
+    const result = checkProactiveContextManagement([bigMsg], 100000);
+    // usableTokens = 100000 - 4000 (OUTPUT_RESERVE) - 20000 (COMPACTION_BUFFER) = 76000
+    // A message of 200K chars at ~0.25 tokens/char = ~50000 tokens → ~65% ratio
+    expect(result.shouldPrune).toBe(true);
+    if (!result.shouldCompact) {
+      expect(result.reason).toContain("pruning");
+    }
+  });
+
+  it("recommends compaction for very high context usage (≥75%)", () => {
+    const hugeMsg = userMsg("x".repeat(300000));
+    const result = checkProactiveContextManagement([hugeMsg], 100000);
+    // 300K chars at ~0.25 tokens/char = ~75000 tokens → ~98% ratio
+    expect(result.shouldCompact).toBe(true);
+    expect(result.reason).toContain("compaction");
+  });
+});
+
+describe("getContextPressureRecommendation", () => {
+  it("returns green Normal for none pressure", () => {
+    const rec = getContextPressureRecommendation("none", 0);
+    expect(rec.color).toBe("#22c55e");
+    expect(rec.label).toBe("Normal");
+    expect(rec.action).toBe("No action needed");
+  });
+
+  it("returns yellow Low for low pressure", () => {
+    const rec = getContextPressureRecommendation("low", 0.55);
+    expect(rec.color).toBe("#eab308");
+    expect(rec.label).toBe("Low");
+    expect(rec.action).toBe("Approaching limit");
+  });
+
+  it("returns orange Medium for medium pressure", () => {
+    const rec = getContextPressureRecommendation("medium", 0.75);
+    expect(rec.color).toBe("#f97316");
+    expect(rec.label).toBe("Medium");
+    expect(rec.action).toBe("Monitor context usage");
+  });
+
+  it("returns red High for high pressure", () => {
+    const rec = getContextPressureRecommendation("high", 0.9);
+    expect(rec.color).toBe("#ef4444");
+    expect(rec.label).toBe("High");
+    expect(rec.action).toBe("Compaction recommended");
+  });
+});
+
+describe("getNextCheckpointTrigger", () => {
+  it("returns 0.20 when no triggers have fired", () => {
+    expect(getNextCheckpointTrigger(0)).toBe(0.20);
+  });
+
+  it("returns 0.45 after 0.20 has fired", () => {
+    expect(getNextCheckpointTrigger(0.25)).toBe(0.45);
+  });
+
+  it("returns 0.70 after 0.45 has fired", () => {
+    expect(getNextCheckpointTrigger(0.50)).toBe(0.70);
+  });
+
+  it("returns null after all triggers have fired", () => {
+    expect(getNextCheckpointTrigger(0.75)).toBeNull();
+    expect(getNextCheckpointTrigger(1)).toBeNull();
+  });
+
+  it("handles negative firedUpToPercent", () => {
+    expect(getNextCheckpointTrigger(-1)).toBe(0.20);
+  });
+});
+
+describe("estimateMessageTokens", () => {
+  it("counts content tokens plus role/metadata overhead", () => {
+    const msg = userMsg("hello");
+    const tokens = estimateMessageTokens(msg);
+    // 5 chars at ~0.25 tokens/char ≈ 2 tokens + 4 overhead = 6
+    expect(tokens).toBeGreaterThan(4);
+    expect(tokens).toBeLessThan(10);
+  });
+
+  it("adds overhead for tool calls", () => {
+    const msg = assistantMsg("checking", [{ id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" }]);
+    const tokens = estimateMessageTokens(msg);
+    // content tokens + 4 (role) + 20 (tool call overhead)
+    expect(tokens).toBeGreaterThan(20);
+  });
+
+  it("adds overhead for file changes", () => {
+    const msg = userMsg("modified file");
+    msg.fileChanges = [{ path: "/x.ts", action: "modified", additions: 1, deletions: 0 }];
+    const tokens = estimateMessageTokens(msg);
+    expect(tokens).toBeGreaterThan(10);
+  });
+});
+
+describe("clearTokenCache", () => {
+  it("clears the token estimation cache", () => {
+    // First call populates cache
+    estimateTokens("hello world");
+    // Should not throw
+    expect(() => clearTokenCache()).not.toThrow();
+    // Should be usable after clear
+    expect(estimateTokens("hello world")).toBeGreaterThan(0);
   });
 });
 

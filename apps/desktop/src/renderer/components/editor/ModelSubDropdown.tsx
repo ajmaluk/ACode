@@ -38,7 +38,7 @@ export function ModelSubDropdown({ hoveredProvider, providerRowRefs, modelRef, p
     };
     scrollEl.addEventListener('scroll', onScroll, { passive: true });
     return () => scrollEl.removeEventListener('scroll', onScroll);
-  }, [hoveredProvider, enabledModels.length]);
+  }, [hoveredProvider, enabledModels.length, modelRef, providerRowRefs]);
 
   if (!p || enabledModels.length === 0) return null;
 

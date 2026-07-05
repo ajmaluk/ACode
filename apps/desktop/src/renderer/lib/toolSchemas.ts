@@ -298,32 +298,66 @@ const DANGEROUS_PATH_PATTERNS = [
 /**
  * Commands that are too dangerous to execute.
  * Includes both Unix and Windows-specific dangerous patterns.
+ * Patterns are checked against normalized commands (lowercase, whitespace-collapsed).
  */
 const DANGEROUS_COMMANDS = [
-  // Unix
+  // Unix - destructive file operations
   "rm -rf /",
   "rm -rf /*",
+  "rm -fr /",
+  "rm -fr /*",
+  "rm -rf ~",
+  "rm -rf ~/",
+  // Unix - disk/format operations
   "mkfs",
   "dd if=",
-  ":(){ :|:& };:",
-  "chmod 777 /",
   "> /dev/sda",
+  "> /dev/nvme",
+  // Unix - fork bombs
+  ":(){ :|:& };:",
+  ":(){ :|:&};:",
+  // Unix - permission escalation
+  "chmod 777 /",
+  "chmod -R 777 /",
+  "chown -R",
+  // Unix - moving system files
   "mv /* ",
-  // Windows
+  "mv /etc/",
+  "mv /usr/",
+  // Unix - downloading and executing
+  "curl | sh",
+  "curl | bash",
+  "wget | sh",
+  "wget | bash",
+  "curl -s | sh",
+  "curl -s | bash",
+  // Windows - destructive operations
   "Format-Volume",
   "Remove-Item -Recurse -Force C:\\",
+  "Remove-Item -Recurse -Force C:/",
   "del /s /q C:\\",
+  "del /s /q C:/",
   "rmdir /s /q C:\\",
+  "rmdir /s /q C:/",
   "bcdedit",
   "reg delete HKLM",
+  // Windows - PowerShell dangerous
+  "Stop-Computer",
+  "Restart-Computer",
+  "Set-ExecutionPolicy Unrestricted",
 ];
 
 /**
  * Normalize a shell command for safety checking.
- * Collapses multiple spaces, trims, and lowercases.
+ * Collapses multiple spaces, trims, lowercases, and removes common obfuscation.
  */
 function normalizeCommand(cmd: string): string {
-  return cmd.toLowerCase().replace(/\s+/g, " ").trim();
+  return cmd
+    .toLowerCase()
+    .replace(/\s+/g, " ")  // Collapse whitespace
+    .replace(/["']/g, "")  // Remove quotes (common bypass)
+    .replace(/\\/g, "")    // Remove backslashes (Windows paths)
+    .trim();
 }
 
 /**

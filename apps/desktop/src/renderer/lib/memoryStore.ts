@@ -198,10 +198,17 @@ export async function searchMemories(
     WHERE memories_fts MATCH ?`;
   const safeQuery = query;
   // Break multi-word query into individual tokens for better search results
-  // Escape FTS5 special characters in each token, including double quotes
-  const escapeFts = (t: string) => t.replace(/['"*+\-()^~\\:|]/g, ' ').replace(/"/g, ' ');
-  const tokens = safeQuery.split(/\s+/).filter(Boolean);
-  const ftsQuery = tokens.map(t => `"${escapeFts(t)}"`).join(" OR ");
+  // Escape FTS5 special characters in each token
+  function escapeFts5Token(token: string): string {
+    return token
+      .replace(/['"*+\-()^~\\:|/{}[\]!@]/g, ' ')  // Strip FTS5 special chars
+      .replace(/"/g, ' ')                          // Strip double quotes
+      .trim();
+  }
+  const tokens = safeQuery.split(/\s+/).map(escapeFts5Token).filter(t => t.length > 0);
+  const ftsQuery = tokens.length > 0
+    ? tokens.map(t => `"${t}"`).join(" OR ")
+    : '""';  // Empty query matches nothing
   const params: (string | number)[] = [ftsQuery];
 
   if (category) {
@@ -396,9 +403,55 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
     if (msg.includes("forbidden") || msg.includes("scope")) {
       console.debug("[MemoryStore] Workspace inaccessible, skipping markdown write");
     } else {
-      console.warn("[MemoryStore] Failed to write markdown:", e);
+      console.warn("[MemoryStore] Failed to write markdown, queuing retry:", e);
+      _pendingWrites.push({ entry, workspacePath, retries: 0, timestamp: Date.now() });
     }
   }
+}
+
+// Write retry queue for failed markdown writes
+interface PendingWrite {
+  entry: MemoryEntry;
+  workspacePath: string;
+  retries: number;
+  timestamp: number;
+}
+
+const _pendingWrites: PendingWrite[] = [];
+const MAX_WRITE_RETRIES = 3;
+const WRITE_RETRY_DELAY_MS = 5000;
+
+/**
+ * Process pending markdown write retries. Call periodically (e.g., every 30s).
+ */
+export async function processPendingWrites(): Promise<void> {
+  const now = Date.now();
+  const stillPending: PendingWrite[] = [];
+
+  for (const write of _pendingWrites) {
+    if (write.retries >= MAX_WRITE_RETRIES) {
+      console.error(`[MemoryStore] Giving up on markdown write for ${write.entry.id} after ${MAX_WRITE_RETRIES} retries`);
+      continue;
+    }
+
+    if (now - write.timestamp < WRITE_RETRY_DELAY_MS * (write.retries + 1)) {
+      stillPending.push(write);
+      continue;
+    }
+
+    try {
+      await writeMemoryMarkdown(write.workspacePath, write.entry);
+    } catch {
+      stillPending.push({
+        ...write,
+        retries: write.retries + 1,
+        timestamp: now,
+      });
+    }
+  }
+
+  _pendingWrites.length = 0;
+  _pendingWrites.push(...stillPending);
 }
 
 /**
@@ -932,6 +985,17 @@ export function scoreMemory(m: MemoryEntry): number {
 
   // Verified bonus
   if (m.verified) score += 5;
+
+  // Source quality bonus
+  if (m.sourceSession) score += 2;  // Extracted from conversation
+  if (m.sourceFile) score += 1;     // References a specific file
+
+  // Tag richness bonus (more tags = more searchable)
+  score += Math.min(3, m.tags.length);
+
+  // Content quality heuristic
+  if (m.content.length > 50 && m.content.length < 500) score += 2;
+  if (m.summary.length > 20 && m.summary.length < 150) score += 1;
 
   return Math.max(0, score);
 }

@@ -74,6 +74,34 @@ CREATE TABLE IF NOT EXISTS genes (
   workspace_id     TEXT
 );`;
 
+const KV_STORE_TABLE = `
+CREATE TABLE IF NOT EXISTS kv_store (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);`;
+
+const CODE_INDEX_TABLE = `
+CREATE TABLE IF NOT EXISTS code_index (
+  id          TEXT PRIMARY KEY,
+  file_path   TEXT NOT NULL,
+  file_name   TEXT NOT NULL,
+  content     TEXT NOT NULL,
+  language    TEXT,
+  size_bytes  INTEGER,
+  indexed_at  INTEGER NOT NULL
+);`;
+
+const CODE_INDEX_FTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS code_index_fts USING fts5(
+  id UNINDEXED,
+  file_path,
+  file_name,
+  content,
+  language UNINDEXED,
+  content='code_index',
+  content_rowid='rowid'
+);`;
+
 const FTS_TABLE = `
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
   id UNINDEXED,
@@ -196,6 +224,9 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     await db.execute(MEMORY_TABLE);
     await db.execute(FTS_TABLE);
     await db.execute(GENES_TABLE);
+    await db.execute(KV_STORE_TABLE);
+    await db.execute(CODE_INDEX_TABLE);
+    await db.execute(CODE_INDEX_FTS);
 
     // Create triggers individually
     await db.execute(`
@@ -226,6 +257,30 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`);
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_genes_workspace ON genes(workspace_id);`);
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_genes_confidence ON genes(confidence);`);
+
+    // Code index triggers
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS code_index_ai AFTER INSERT ON code_index BEGIN
+        INSERT INTO code_index_fts(rowid, id, file_path, file_name, content, language)
+        VALUES (new.rowid, new.id, new.file_path, new.file_name, new.content, new.language);
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS code_index_ad AFTER DELETE ON code_index BEGIN
+        INSERT INTO code_index_fts(code_index_fts, rowid, id, file_path, file_name, content, language)
+        VALUES ('delete', old.rowid, old.id, old.file_path, old.file_name, old.content, old.language);
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS code_index_au AFTER UPDATE ON code_index BEGIN
+        INSERT INTO code_index_fts(code_index_fts, rowid, id, file_path, file_name, content, language)
+        VALUES ('delete', old.rowid, old.id, old.file_path, old.file_name, old.content, old.language);
+        INSERT INTO code_index_fts(rowid, id, file_path, file_name, content, language)
+        VALUES (new.rowid, new.id, new.file_path, new.file_name, new.content, new.language);
+      END;
+    `);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_code_path ON code_index(file_path);`);
+    await db.execute(`CREATE INDEX IF NOT EXISTS idx_code_lang ON code_index(language);`);
 
     return db;
   };

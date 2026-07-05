@@ -303,21 +303,37 @@ pub async fn clipboard_has_image(_app: tauri::AppHandle) -> Result<bool, String>
 
     #[cfg(target_os = "linux")]
     {
-        // On Linux, use xclip to check for image content
-        use std::process::Command;
-        let output = Command::new("xclip")
-            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
-            .output();
-
-        match output {
-            Ok(o) => return Ok(o.status.success() && !o.stdout.is_empty()),
-            Err(_) => {
-                // xclip not available, try xsel
-                let output = Command::new("xsel")
-                    .args(["--clipboard", "--output", "--type", "image/png"])
-                    .output();
-                return Ok(output.map(|o| o.status.success() && !o.stdout.is_empty()).unwrap_or(false));
+        // Try Wayland first (wl-paste)
+        {
+            use std::process::Command;
+            let output = Command::new("wl-paste")
+                .args(["--type", "image/png"])
+                .output();
+            if let Ok(o) = output {
+                if o.status.success() && !o.stdout.is_empty() {
+                    return Ok(true);
+                }
             }
+        }
+        // Fall back to X11 (xclip)
+        {
+            use std::process::Command;
+            let output = Command::new("xclip")
+                .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+                .output();
+            if let Ok(o) = output {
+                if o.status.success() && !o.stdout.is_empty() {
+                    return Ok(true);
+                }
+            }
+        }
+        // Fall back to xsel
+        {
+            use std::process::Command;
+            let output = Command::new("xsel")
+                .args(["--clipboard", "--output", "--type", "image/png"])
+                .output();
+            return Ok(output.map(|o| o.status.success() && !o.stdout.is_empty()).unwrap_or(false));
         }
     }
 
@@ -401,6 +417,20 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
     #[cfg(target_os = "linux")]
     {
         use std::process::Command;
+        use base64::Engine;
+
+        // Try Wayland first (wl-paste)
+        let output = Command::new("wl-paste")
+            .args(["--type", "image/png"])
+            .output();
+
+        if let Ok(o) = output {
+            if o.status.success() && !o.stdout.is_empty() {
+                return Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&o.stdout)));
+            }
+        }
+
+        // Fall back to X11 (xclip)
         let output = Command::new("xclip")
             .args(["-selection", "clipboard", "-t", "image/png", "-o"])
             .output()
@@ -410,7 +440,6 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
             return Err("No image in clipboard".to_string());
         }
 
-        use base64::Engine;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&output.stdout)))
     }
 
@@ -679,29 +708,7 @@ pub async fn get_disk_space(path: String) -> Result<DiskSpace, String> {
             }
         }
 
-        // Fallback to wmic if PowerShell fails
-        let output = std::process::Command::new("wmic")
-            .args(["logicaldisk", "where", &format!("DeviceID='{}:'", drive_letter)])
-            .args(["get", "Size,FreeSpace", "/format:csv"])
-            .output()
-            .map_err(|e| format!("Failed to get disk space: {e}"))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty() && !l.starts_with("Node")).collect();
-        if let Some(line) = lines.last() {
-            let parts: Vec<&str> = line.split(',').collect();
-            if parts.len() >= 3 {
-                let available: u64 = parts[1].trim().parse().unwrap_or(0);
-                let total: u64 = parts[2].trim().parse().unwrap_or(0);
-                return Ok(DiskSpace {
-                    total_bytes: total,
-                    available_bytes: available,
-                    used_bytes: total.saturating_sub(available),
-                });
-            }
-        }
-
-        return Err("Failed to parse disk space output".to_string());
+        return Err("Failed to parse disk space output from PowerShell".to_string());
     }
 
     #[cfg(not(target_os = "windows"))]

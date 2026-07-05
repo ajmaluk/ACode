@@ -242,17 +242,89 @@ export async function recordGeneSuccess(pool: GenePool, geneId: string): Promise
 
 // ─── Debounced Gene Pool Save ─────────────────────────────────
 
-let _pendingGeneSave: ReturnType<typeof setTimeout> | null = null;
-let _pendingGenePool: GenePool | null = null;
+interface GeneSaveQueueEntry {
+  pool: GenePool;
+  activationCounts: Map<string, number>;
+}
+
+const _saveQueue: GeneSaveQueueEntry[] = [];
+let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueGeneSave(pool: GenePool, activationCounts: Map<string, number>): void {
+  _saveQueue.push({
+    pool: JSON.parse(JSON.stringify(pool)),
+    activationCounts: new Map(activationCounts),
+  });
+  if (!_saveTimer) {
+    _saveTimer = setTimeout(processGeneSaveQueue, 50);
+  }
+}
+
+async function processGeneSaveQueue(): Promise<void> {
+  if (_saveQueue.length === 0) {
+    _saveTimer = null;
+    return;
+  }
+
+  // Use the latest pool as base, then apply all queued activation counts
+  const basePool = _saveQueue[_saveQueue.length - 1].pool;
+  const mergedCounts = new Map<string, number>();
+
+  for (const entry of _saveQueue) {
+    for (const [geneId, count] of entry.activationCounts) {
+      mergedCounts.set(geneId, (mergedCounts.get(geneId) || 0) + count);
+    }
+  }
+
+  _saveQueue.length = 0;
+
+  const updatedGenes = basePool.genes.map(gene => {
+    const count = mergedCounts.get(gene.id) || 0;
+    if (count > 0) {
+      return { ...gene, activationCount: gene.activationCount + count };
+    }
+    return gene;
+  });
+
+  await saveGenePool({ ...basePool, genes: updatedGenes });
+  
+  // If new entries were added during await, schedule another save
+  if (_saveQueue.length > 0 && !_saveTimer) {
+    _saveTimer = setTimeout(processGeneSaveQueue, 50);
+  } else {
+    _saveTimer = null;
+  }
+}
 
 // ─── Gene Expression ─────────────────────────────────────────
 
 // Cache compiled regexes for gene triggers to avoid recompilation per prompt
 const _geneTriggerCache = new Map<string, RegExp | null>();
 
+const MAX_TRIGGER_LENGTH = 200;
+const DANGEROUS_REGEX_PATTERNS = [
+  /(.*a.*){100,}/,  // Catastrophic backtracking
+  /\(\?/,           // Lookahead/lookbehind (expensive)
+];
+
 function getGeneTriggerRegex(trigger: string): RegExp | null {
   const cached = _geneTriggerCache.get(trigger);
   if (cached !== undefined) return cached;
+
+  if (trigger.length > MAX_TRIGGER_LENGTH) {
+    console.warn(`[Genes] Trigger too long (${trigger.length} chars), skipping: ${trigger.slice(0, 50)}...`);
+    _geneTriggerCache.set(trigger, null);
+    return null;
+  }
+
+  for (const pattern of DANGEROUS_REGEX_PATTERNS) {
+    if (pattern.test(trigger)) {
+      console.warn(`[Genes] Dangerous regex pattern detected, skipping: ${trigger.slice(0, 50)}...`);
+      _geneTriggerCache.set(trigger, null);
+      return null;
+    }
+  }
+
   try {
     const regex = new RegExp(trigger, "i");
     _geneTriggerCache.set(trigger, regex);
@@ -291,22 +363,16 @@ export async function expressGenes(
 
   // Track activation for matched genes
   if (matched.length > 0) {
+    const activationCounts = new Map<string, number>();
     const updatedGenes = pool.genes.map(g => {
       const m = matched.find(mg => mg.id === g.id);
       if (m) {
-        return { ...g, activationCount: g.activationCount + 1, lastActivatedAt: Date.now() };
+        activationCounts.set(g.id, 1);
+        return { ...g, lastActivatedAt: Date.now() };
       }
       return g;
     });
-    // Save updated pool (debounced to avoid race conditions)
-    if (_pendingGeneSave) clearTimeout(_pendingGeneSave);
-    _pendingGenePool = { ...pool, genes: updatedGenes };
-    _pendingGeneSave = setTimeout(async () => {
-      if (_pendingGenePool) {
-        await saveGenePool(_pendingGenePool);
-        _pendingGenePool = null;
-      }
-    }, 50);
+    queueGeneSave({ ...pool, genes: updatedGenes }, activationCounts);
   }
 
   return matched;

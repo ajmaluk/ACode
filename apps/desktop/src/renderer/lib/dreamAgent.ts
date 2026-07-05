@@ -24,11 +24,16 @@ import {
   jaccardSimilarity,
   parseLLMJson,
 } from "./memoryStore";
-import { getDb } from "./database";
+import { getDb, isDatabaseReady } from "./database";
 import { createDalamAPI } from "./dalamAPI";
 import { useSettings } from "../store/useAppStore";
 import { joinPath } from "@/lib/pathUtils";
 import { loadProjectSkills, refreshProjectSkills } from "./skills";
+import {
+  createProposal,
+  type DreamProposal,
+  type PipelineResult,
+} from "./dreamProposalPipeline";
 
 export interface DreamReport {
   purgedCount: number;
@@ -37,16 +42,30 @@ export interface DreamReport {
   validatedCount: number;
 }
 
+/** Extended result including proposal pipeline output */
+export interface DreamCycleResult {
+  report: DreamReport;
+  proposals: PipelineResult;
+}
+
 // Mutex to prevent concurrent dream cycles for the same workspace
 const activeDreams = new Set<string>();
 
 /**
  * Runs a full memory dream consolidation cycle using the active LLM.
+ * Proposals are scored and routed: auto-accept applies immediately,
+ * user-review proposals are surfaced via notifyFn, low-score are rejected.
  */
-export async function runDreamCycle(workspacePath: string): Promise<DreamReport> {
+export async function runDreamCycle(
+  workspacePath: string,
+  notifyFn?: (proposal: DreamProposal) => void
+): Promise<DreamCycleResult> {
   if (activeDreams.has(workspacePath)) {
     console.log(`[DreamAgent] Dream cycle already running for ${workspacePath}, skipping.`);
-    return { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 };
+    return {
+      report: { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 },
+      proposals: { autoAccepted: [], queuedForReview: [], rejected: [] },
+    };
   }
   activeDreams.add(workspacePath);
 
@@ -56,18 +75,62 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
 
     if (!model) {
       console.warn("[DreamAgent] No active model configured, skipping dream cycle.");
-      return { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 };
+      return {
+        report: { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 },
+        proposals: { autoAccepted: [], queuedForReview: [], rejected: [] },
+      };
     }
 
+    // ── Proposal pipeline: collect and route proposals ──
+    const allProposals: DreamProposal[] = [];
+
     // 1. Purge already-flagged stale memories from SQLite & update MEMORY.md
-    const purgedCount = await purgeStale();
+    // Count stale entries first to decide if a proposal is warranted
+    let purgedCount = 0;
+    try {
+      const db = getDb();
+      const staleRows = await db.select(
+        `SELECT COUNT(*) as count FROM memories WHERE stale=1`
+      ) as { count: number }[];
+      const staleCount = staleRows[0]?.count ?? 0;
+      if (staleCount > 0) {
+        const totalRows = await db.select(
+          `SELECT COUNT(*) as count FROM memories WHERE stale=0`
+        ) as { count: number }[];
+        const totalActive = totalRows[0]?.count ?? 0;
+        const purgeProposal = createProposal(
+          "purge-stale",
+          `Purge ${staleCount} stale memory entr${staleCount === 1 ? "y" : "ies"}`,
+          { staleCount, totalActive },
+          staleCount,
+          { totalInCategory: totalActive + staleCount }
+        );
+        if (purgeProposal.status === "auto-accept" || purgeProposal.status === "user-review") {
+          if (purgeProposal.status === "auto-accept") {
+            purgedCount = await purgeStale();
+            purgeProposal.status = "applied";
+            purgeProposal.appliedAt = Date.now();
+          } else {
+            // Queue for user review — notify but don't apply yet
+            notifyFn?.(purgeProposal);
+          }
+          allProposals.push(purgeProposal);
+        } else {
+          // Rejected — silently skip
+          allProposals.push(purgeProposal);
+        }
+      }
+    } catch (err) {
+      console.warn("[DreamAgent] Failed to check stale memory count, skipping purge:", err);
+    }
 
     // 2. Validate file references (parallelized)
     const memories = await getAllMemories({ excludeStale: false });
     let validatedCount = 0;
     const { exists } = await import("@tauri-apps/plugin-fs");
 
-    // Check file existence in parallel batches of 20
+    // First, collect all stale-eligible IDs without applying marks
+    const staleIds: string[] = [];
     const batchSize = 20;
     for (let i = 0; i < memories.length; i += batchSize) {
       const batch = memories.slice(i, i + batchSize);
@@ -88,45 +151,98 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
       );
       for (const result of results) {
         if (result.status === "fulfilled" && result.value) {
-          await markStale(result.value);
-          validatedCount++;
+          staleIds.push(result.value);
         }
       }
     }
 
+    // Create proposal for file validation marks
+    if (staleIds.length > 0) {
+      const totalWithFiles = memories.filter(m => m.sourceFile).length;
+      const validateProposal = createProposal(
+        "mark-stale",
+        `Mark ${staleIds.length} memor${staleIds.length === 1 ? "y" : "ies"} stale — source files no longer exist`,
+        { staleIds, totalChecked: memories.length, totalWithFiles },
+        staleIds.length,
+        { totalInCategory: totalWithFiles || 1 }
+      );
+      if (validateProposal.status === "auto-accept") {
+        for (const id of staleIds) {
+          await markStale(id);
+          validatedCount++;
+        }
+        validateProposal.status = "applied";
+        validateProposal.appliedAt = Date.now();
+      } else if (validateProposal.status === "user-review") {
+        // Queue for user review — skip marking for now
+        notifyFn?.(validateProposal);
+      }
+      // else rejected — don't mark anything
+      allProposals.push(validateProposal);
+    }
+
     // 2.5. Re-score memories based on access patterns
     // Promote frequently accessed low-tier memories and demote rarely accessed high-tier ones
+    let reScoredPromoted = 0;
+    let reScoredDemoted = 0;
     try {
       const { scoreMemory } = await import("./memoryStore");
       const db = getDb();
       const allMemories = await getAllMemories({ excludeStale: true });
-      let promoted = 0;
-      let demoted = 0;
 
-      for (const mem of allMemories) {
-        const score = scoreMemory(mem);
-        const oldTier = mem.tier;
+      // First, count candidates for the proposal
+      const promoteCandidates = allMemories.filter(
+        m => m.tier !== "critical" && m.accessCount >= 5
+      );
+      const demoteCandidates = allMemories.filter(
+        m => m.tier === "high" && m.accessCount <= 1 && (Date.now() - m.createdAt) > 30 * 86400000
+      );
+      const totalCandidates = promoteCandidates.length + demoteCandidates.length;
 
-        // Promote: frequently accessed low/medium tier memories
-        if (oldTier !== "critical" && mem.accessCount >= 5 && score > 40) {
-          const newTier = oldTier === "low" ? "medium" : "high";
-          await db.execute(
-            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-            [newTier, Date.now(), mem.id]
-          );
-          promoted++;
+      if (totalCandidates > 0) {
+        const reScoreProposal = createProposal(
+          "re-score",
+          `Re-score ${totalCandidates} memor${totalCandidates === 1 ? "y" : "ies"} based on access patterns (${promoteCandidates.length} promote, ${demoteCandidates.length} demote)`,
+          { promoteCount: promoteCandidates.length, demoteCount: demoteCandidates.length, totalMemories: allMemories.length },
+          totalCandidates,
+          { avgAccessCount: 5 }
+        );
+
+        if (reScoreProposal.status === "auto-accept" || reScoreProposal.status === "user-review") {
+          if (reScoreProposal.status === "auto-accept") {
+            for (const mem of allMemories) {
+              const score = scoreMemory(mem);
+              const oldTier = mem.tier;
+
+              // Promote: frequently accessed low/medium tier memories
+              if (oldTier !== "critical" && mem.accessCount >= 5 && score > 40) {
+                const newTier = oldTier === "low" ? "medium" : "high";
+                await db.execute(
+                  `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
+                  [newTier, Date.now(), mem.id]
+                );
+                reScoredPromoted++;
+              }
+              // Demote: rarely accessed high-tier memories older than 30 days
+              else if (oldTier === "high" && mem.accessCount <= 1 && (Date.now() - mem.createdAt) > 30 * 86400000) {
+                await db.execute(
+                  `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
+                  ["medium", Date.now(), mem.id]
+                );
+                reScoredDemoted++;
+              }
+            }
+            reScoreProposal.status = "applied";
+            reScoreProposal.appliedAt = Date.now();
+          } else {
+            notifyFn?.(reScoreProposal);
+          }
         }
-        // Demote: rarely accessed high-tier memories older than 30 days
-        else if (oldTier === "high" && mem.accessCount <= 1 && (Date.now() - mem.createdAt) > 30 * 86400000) {
-          await db.execute(
-            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-            ["medium", Date.now(), mem.id]
-          );
-          demoted++;
-        }
+        allProposals.push(reScoreProposal);
       }
-      if (promoted > 0 || demoted > 0) {
-        console.log(`[DreamAgent] Re-scored memories: ${promoted} promoted, ${demoted} demoted`);
+
+      if (reScoredPromoted > 0 || reScoredDemoted > 0) {
+        console.log(`[DreamAgent] Re-scored memories: ${reScoredPromoted} promoted, ${reScoredDemoted} demoted`);
       }
     } catch (err) {
       console.warn("[DreamAgent] Memory re-scoring failed:", err);
@@ -143,150 +259,187 @@ export async function runDreamCycle(workspacePath: string): Promise<DreamReport>
     const relativeTimeWords = /\b(recently|yesterday|last week|currently|now|tomorrow|ago|earlier today|this morning|a few days ago|last night|the other day)\b/i;
     const MAX_LLM_DATE_ADJUSTMENTS = 20; // Cap API calls per dream cycle
 
-    for (const mem of activeMemories) {
-      if (dateAdjustedCount >= MAX_LLM_DATE_ADJUSTMENTS) break;
-      if (relativeTimeWords.test(mem.content)) {
-        try {
-          const prompt = `You are a memory cleaning assistant.
-This memory was recorded at: ${new Date(mem.createdAt).toISOString()} (Unix timestamp: ${mem.createdAt}).
-The current time is: ${new Date().toISOString()}.
+    // Count candidates first for proposal creation
+    const dateCandidates = activeMemories.filter(m => relativeTimeWords.test(m.content));
+    if (dateCandidates.length > 0) {
+      const dateProposal = createProposal(
+        "date-adjust",
+        `Adjust relative dates in ${Math.min(dateCandidates.length, MAX_LLM_DATE_ADJUSTMENTS)} memor${dateCandidates.length === 1 ? "y" : "ies"}`,
+        { candidateCount: dateCandidates.length, maxAdjustments: MAX_LLM_DATE_ADJUSTMENTS },
+        Math.min(dateCandidates.length, MAX_LLM_DATE_ADJUSTMENTS),
+        { totalInCategory: activeMemories.length }
+      );
 
-Memory content:
-"${mem.content}"
+      if (dateProposal.status === "auto-accept" || dateProposal.status === "user-review") {
+        if (dateProposal.status === "auto-accept") {
+          // Batch date adjustments: send up to 10 memories per LLM call
+          const BATCH_SIZE = 10;
+          const toProcess = dateCandidates.slice(0, MAX_LLM_DATE_ADJUSTMENTS);
 
-Instructions:
-If the memory content contains relative time references (like "recently", "yesterday", "last week", "currently", "now", "tomorrow", "ago"), rewrite them to be absolute or date-anchored so they don't become incorrect over time (e.g. "implemented yesterday" -> "implemented on ${new Date(mem.createdAt - 24 * 60 * 60 * 1000).toISOString().split('T')[0]}").
-If no relative time expressions are present, return the original content exactly.
+          for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
+            const batch = toProcess.slice(i, i + BATCH_SIZE);
+            try {
+              const memoryList = batch.map((m, idx) =>
+                `[${idx}] Created: ${new Date(m.createdAt).toISOString()}\nContent: ${m.content}`
+              ).join('\n\n');
 
-Output JSON format:
-{
-  "content": "Updated content"
-}
-Return ONLY this JSON object. No markdown syntax or explanation.`;
+              const responseText = await api.agent.summarizeMessages(model, [
+                { role: "system", content: "You are a memory cleaning assistant. Return only a raw JSON array." },
+                { role: "user", content: `Current date: ${new Date().toISOString()}\n\nFor each memory below, replace relative time references (recently, yesterday, last week, currently, now, tomorrow, ago, earlier today, this morning, a few days ago, last night, the other day) with absolute dates.\n\nMemories:\n${memoryList}\n\nReturn a JSON array where each item is: { "id": index, "content": "updated content" }\nKeep the index matching the input order. If no relative time expressions, return the original content.` }
+              ]);
 
-          const responseText = await api.agent.summarizeMessages(model, [
-            { role: "system", content: "You are a memory cleaning assistant. Return only a raw JSON block." },
-            { role: "user", content: prompt }
-          ]);
-
-          const parsed = parseLLMJson<{ content?: string }>(responseText);
-          if (parsed?.content && parsed.content !== mem.content) {
-            const db = getDb();
-            const now = Date.now();
-            await db.execute(
-              `UPDATE memories SET content=?, updated_at=? WHERE id=?`,
-              [parsed.content, now, mem.id]
-            );
-            // Overwrite the markdown file to keep it in sync
-            await writeMemoryMarkdown(workspacePath, {
-              ...mem,
-              content: parsed.content,
-              updatedAt: now
-            });
-            dateAdjustedCount++;
+              const parsed = parseLLMJson<Array<{ id: number; content: string }>>(responseText);
+              if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                  if (item.id >= 0 && item.id < batch.length) {
+                    const mem = batch[item.id];
+                    if (item.content && item.content !== mem.content) {
+                      const db = getDb();
+                      const now = Date.now();
+                      await db.execute(
+                        `UPDATE memories SET content=?, updated_at=? WHERE id=?`,
+                        [item.content, now, mem.id]
+                      );
+                      await writeMemoryMarkdown(workspacePath, {
+                        ...mem,
+                        content: item.content,
+                        updatedAt: now
+                      });
+                      dateAdjustedCount++;
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn(`[DreamAgent] Failed to batch-adjust dates:`, e);
+            }
           }
-        } catch (e) {
-          console.warn(`[DreamAgent] Failed to adjust dates for memory ${mem.id}:`, e);
+          dateProposal.status = "applied";
+          dateProposal.appliedAt = Date.now();
+        } else {
+          notifyFn?.(dateProposal);
         }
       }
+      allProposals.push(dateProposal);
     }
 
     // Reload memories for duplicate matching
     const freshMemories = await getAllMemories({ excludeStale: true });
 
     // 4. Deduplication and merging
-    // NOTE: Each memory pair has unique content requiring individual LLM merge calls.
-    // Sequential processing is required because: (1) each pair produces a unique merged
-    // result, (2) marking memories as stale mid-loop affects subsequent comparisons,
-    // and (3) the LLM needs full context of both memories to produce a coherent merge.
+    // NOTE: Cluster memories by similarity first, then merge clusters with LLM.
+    // This reduces O(n²) pairwise comparisons to O(n) clustering.
+    let totalLLMRequests = 0;
     let deduplicatedCount = 0;
     const categories = Array.from(new Set(freshMemories.map(m => m.category)));
-    // Cap LLM merge calls per dream cycle to prevent excessive API usage
     const MAX_LLM_MERGES_PER_CYCLE = 10;
+    const MAX_TOTAL_LLM_REQUESTS = 30;
     let llmMergeCount = 0;
 
+    // Phase 1: Cluster memories by category + similarity (O(n) with early exit)
+    interface MemoryCluster {
+      members: typeof freshMemories;
+      totalAccess: number;
+    }
+    const clusters: MemoryCluster[] = [];
+    const assigned = new Set<string>();
+
     for (const category of categories) {
-      if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
-      const catMemories = freshMemories.filter(m => m.category === category);
-      for (let i = 0; i < catMemories.length; i++) {
-        if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
-        for (let j = i + 1; j < catMemories.length; j++) {
-          if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
-          const m1 = catMemories[i];
-          const m2 = catMemories[j];
-          if (m1.stale || m2.stale) continue;
+      const catMemories = freshMemories.filter(m => m.category === category && !m.stale);
+      for (const mem of catMemories) {
+        if (assigned.has(mem.id)) continue;
+        const cluster: MemoryCluster = { members: [mem], totalAccess: mem.accessCount };
+        assigned.add(mem.id);
 
-          const similarity = jaccardSimilarity(m1.content, m2.content);
-          if (similarity > 0.55) {
-            try {
-              const prompt = `You are a memory consolidation assistant. Your task is to merge two related memory entries into a single, comprehensive memory entry.
-
-Memory 1 (Created: ${new Date(m1.createdAt).toISOString()}):
-Summary: ${m1.summary}
-Content: ${m1.content}
-Tags: ${m1.tags.join(", ")}
-Category: ${m1.category}
-Tier: ${m1.tier}
-
-Memory 2 (Created: ${new Date(m2.createdAt).toISOString()}):
-Summary: ${m2.summary}
-Content: ${m2.content}
-Tags: ${m2.tags.join(", ")}
-Category: ${m2.category}
-Tier: ${m2.tier}
-
-Instructions:
-1. Combine the factual details of both entries. Do not lose key facts or context.
-2. If there are contradictions, prefer the newer entry.
-3. Produce a consolidated memory entry.
-4. Output the result in the following JSON format:
-{
-  "summary": "Short consolidated summary (<= 150 chars)",
-  "content": "Detailed consolidated content",
-  "tags": ["consolidated", "tags"],
-  "tier": "tier (critical|high|medium|low)"
-}
-Return ONLY this JSON object. No markdown syntax or explanation.`;
-
-              const responseText = await api.agent.summarizeMessages(model, [
-                { role: "system", content: "You are a memory consolidation assistant. Return only a raw JSON block." },
-                { role: "user", content: prompt }
-              ]);
-
-              const parsed = parseLLMJson<{ summary?: string; content?: string; tier?: string; tags?: string[] }>(responseText);
-
-              if (parsed?.summary && parsed.content) {
-                // Create the new merged memory
-                const validTiers = ["critical", "high", "medium", "low"] as const;
-                const mergedTier = parsed.tier && validTiers.includes(parsed.tier as typeof validTiers[number])
-                  ? parsed.tier as typeof validTiers[number]
-                  : m1.tier;
-                await saveMemory({
-                  category,
-                  tier: mergedTier,
-                  summary: parsed.summary,
-                  content: parsed.content,
-                  tags: parsed.tags || Array.from(new Set([...m1.tags, ...m2.tags])),
-                  sourceSession: m2.sourceSession || m1.sourceSession,
-                  sourceFile: m2.sourceFile || m1.sourceFile
-                }, workspacePath);
-
-                // Mark old ones as stale
-                await markStale(m1.id);
-                await markStale(m2.id);
-
-                m1.stale = true;
-                m2.stale = true;
-                deduplicatedCount++;
-                llmMergeCount++;
-              }
-            } catch (e) {
-              console.warn(`[DreamAgent] Failed to merge memories ${m1.id} and ${m2.id}:`, e);
-            }
+        for (const other of catMemories) {
+          if (assigned.has(other.id) || mem.id === other.id) continue;
+          // Quick pre-filter: same category already guaranteed, check tag overlap first
+          const tagOverlap = mem.tags.filter(t => other.tags.includes(t)).length;
+          if (tagOverlap > 0 && jaccardSimilarity(mem.content, other.content) > 0.55) {
+            cluster.members.push(other);
+            cluster.totalAccess += other.accessCount;
+            assigned.add(other.id);
           }
+        }
+
+        if (cluster.members.length > 1) {
+          clusters.push(cluster);
         }
       }
     }
+
+    // Sort clusters by importance: member count × total access (most important first)
+    clusters.sort((a, b) => (b.members.length * b.totalAccess) - (a.members.length * a.totalAccess));
+
+    const totalCandidatePairs = clusters.reduce((sum, c) => sum + c.members.length - 1, 0);
+
+    let dedupProposal: DreamProposal | null = null;
+    if (totalCandidatePairs > 0) {
+      dedupProposal = createProposal(
+        "deduplicate-merge",
+        `Merge up to ${Math.min(clusters.length, MAX_LLM_MERGES_PER_CYCLE)} memory cluster${clusters.length === 1 ? "" : "s"} via LLM`,
+        { candidatePairs: totalCandidatePairs, maxMerges: MAX_LLM_MERGES_PER_CYCLE, categories: categories.length },
+        Math.min(totalCandidatePairs, MAX_LLM_MERGES_PER_CYCLE),
+        { similarity: 0.65 }
+      );
+    }
+
+    const shouldRunDedup = dedupProposal !== null && (dedupProposal.status === "auto-accept" || dedupProposal.status === "user-review");
+
+    if (shouldRunDedup && dedupProposal !== null) {
+      if (dedupProposal.status === "auto-accept") {
+        // Phase 2: Merge clusters with single LLM call per cluster
+        for (const cluster of clusters) {
+          if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
+          if (totalLLMRequests >= MAX_TOTAL_LLM_REQUESTS) break;
+
+          const memberList = cluster.members.map((m, idx) =>
+            `[${idx}] Tier: ${m.tier}, Created: ${new Date(m.createdAt).toISOString()}\nSummary: ${m.summary}\nContent: ${m.content}\nTags: ${m.tags.join(", ")}`
+          ).join('\n\n');
+
+          try {
+            totalLLMRequests++;
+            const responseText = await api.agent.summarizeMessages(model, [
+              { role: "system", content: "You are a memory consolidation assistant. Return only a raw JSON block." },
+              { role: "user", content: `Merge these related memories into one comprehensive entry.\n\nMemories:\n${memberList}\n\nInstructions:\n1. Combine factual details. Do not lose key facts.\n2. Prefer newer information on contradictions.\n3. Output JSON: { "summary": "short summary", "content": "detailed content", "tags": ["tags"], "tier": "tier" }\nReturn ONLY this JSON object.` }
+            ]);
+
+            const parsed = parseLLMJson<{ summary?: string; content?: string; tier?: string; tags?: string[] }>(responseText);
+
+            if (parsed?.summary && parsed.content) {
+              const validTiers = ["critical", "high", "medium", "low"] as const;
+              const mergedTier = parsed.tier && validTiers.includes(parsed.tier as typeof validTiers[number])
+                ? parsed.tier as typeof validTiers[number]
+                : cluster.members[0].tier;
+              await saveMemory({
+                category: cluster.members[0].category,
+                tier: mergedTier,
+                summary: parsed.summary,
+                content: parsed.content,
+                tags: parsed.tags || Array.from(new Set(cluster.members.flatMap(m => m.tags))),
+                sourceSession: cluster.members[0].sourceSession,
+                sourceFile: cluster.members[0].sourceFile
+              }, workspacePath);
+
+              // Mark originals stale
+              for (const member of cluster.members) {
+                await markStale(member.id);
+              }
+
+              deduplicatedCount++;
+              llmMergeCount++;
+            }
+          } catch (e) {
+            console.warn(`[DreamAgent] Failed to merge cluster:`, e);
+          }
+        }
+        dedupProposal.status = "applied";
+        dedupProposal.appliedAt = Date.now();
+      } else {
+        notifyFn?.(dedupProposal);
+      }
+    }
+    if (dedupProposal !== null) allProposals.push(dedupProposal);
 
     // Purge any newly marked stale memories
     if (validatedCount > 0 || deduplicatedCount > 0) {
@@ -295,7 +448,10 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
 
     // Run skill consolidation optimization (Refactoring redundant workspace skills)
     try {
-      await executeWorkspaceDreamOptimization(workspacePath);
+      const skillProposals = await executeWorkspaceDreamOptimization(workspacePath, allProposals, notifyFn);
+      if (skillProposals) {
+        allProposals.push(...skillProposals);
+      }
     } catch (err) {
       console.warn("[DreamAgent] Failed to consolidate skills during dream cycle:", err);
     }
@@ -303,11 +459,21 @@ Return ONLY this JSON object. No markdown syntax or explanation.`;
     // Update MEMORY.md index
     await updateMemoryIndex(workspacePath);
 
+    // Process all collected proposals through the pipeline
+    const pipelineResult: PipelineResult = {
+      autoAccepted: allProposals.filter(p => p.status === "applied"),
+      queuedForReview: allProposals.filter(p => p.status === "user-review"),
+      rejected: allProposals.filter(p => p.status === "rejected"),
+    };
+
     return {
-      purgedCount,
-      deduplicatedCount,
-      dateAdjustedCount,
-      validatedCount
+      report: {
+        purgedCount,
+        deduplicatedCount,
+        dateAdjustedCount,
+        validatedCount
+      },
+      proposals: pipelineResult,
     };
   } finally {
     activeDreams.delete(workspacePath);
@@ -344,36 +510,76 @@ export function cancelAllDreamCycles(): void {
 }
 
 /**
+ * Get last dream time from SQLite kv_store.
+ * Falls back to 0 if database is not ready.
+ */
+async function getLastDreamTime(workspacePath: string): Promise<number> {
+  if (!isDatabaseReady()) return 0;
+  try {
+    const db = getDb();
+    const result = await db.select(
+      "SELECT value FROM kv_store WHERE key = ?",
+      [`lastDreamTime.${workspacePath}`]
+    ) as { value: string }[];
+    return result.length > 0 ? parseInt(result[0].value, 10) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Set last dream time in SQLite kv_store.
+ */
+async function setLastDreamTime(workspacePath: string, time: number): Promise<void> {
+  if (!isDatabaseReady()) return;
+  try {
+    const db = getDb();
+    await db.execute(
+      "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+      [`lastDreamTime.${workspacePath}`, time.toString()]
+    );
+  } catch (err) {
+    console.warn("[DreamAgent] Failed to save dream time:", err);
+  }
+}
+
+/**
  * Triggers background consolidation if >= 24 hours have elapsed.
  * Returns a cancel function that can be used to abort the deferred dream cycle.
  */
-export function triggerDreamCycleIfNeeded(workspacePath: string): () => void {
-  const lastDreamStr = localStorage.getItem(`dalam.lastDreamTime.${workspacePath}`);
-  const now = Date.now();
-  if (lastDreamStr) {
-    const lastDream = parseInt(lastDreamStr, 10);
-    const minMs = 24 * 60 * 60 * 1000; // 24 hours
-    if (now - lastDream < minMs) {
-      return () => {}; // Not enough time passed, return no-op cancel
+export function triggerDreamCycleIfNeeded(
+  workspacePath: string,
+  dreamNotifyFn?: (proposal: DreamProposal) => void
+): () => void {
+  // Check dream timing asynchronously via SQLite
+  getLastDreamTime(workspacePath).then((lastDream) => {
+    const now = Date.now();
+    if (lastDream > 0) {
+      const minMs = 24 * 60 * 60 * 1000; // 24 hours
+      if (now - lastDream < minMs) {
+        return; // Not enough time passed
+      }
     }
-  }
 
-  // Cancel any existing pending dream for this workspace
-  cancelDreamCycle(workspacePath);
+    // Cancel any existing pending dream for this workspace
+    cancelDreamCycle(workspacePath);
 
-  // Run dream cycle in background with cancellation support
-  const timeoutId = setTimeout(() => {
-    activeDreamTimeouts.delete(workspacePath);
-    runDreamCycle(workspacePath)
-      .then(() => {
-        localStorage.setItem(`dalam.lastDreamTime.${workspacePath}`, Date.now().toString());
-      })
-      .catch(err => {
-        if (import.meta.env.DEV) console.error("[DreamAgent] Background dream cycle failed:", err);
-      });
-  }, 5000); // 5s deferral to not block application startup
+    // Run dream cycle in background with cancellation support
+    const timeoutId = setTimeout(() => {
+      activeDreamTimeouts.delete(workspacePath);
+      runDreamCycle(workspacePath, dreamNotifyFn)
+        .then(() => {
+          setLastDreamTime(workspacePath, Date.now());
+        })
+        .catch(err => {
+          if (import.meta.env.DEV) console.error("[DreamAgent] Background dream cycle failed:", err);
+        });
+    }, 5000); // 5s deferral to not block application startup
 
-  activeDreamTimeouts.set(workspacePath, timeoutId);
+    activeDreamTimeouts.set(workspacePath, timeoutId);
+  }).catch(err => {
+    if (import.meta.env.DEV) console.warn("[DreamAgent] Failed to check dream timing:", err);
+  });
 
   // Return a cancel function for the caller
   return () => {
@@ -391,7 +597,12 @@ if (typeof window !== "undefined") {
  * Scans the workspace skills directory, detects duplicates using Jaccard token clustering,
  * and refactors them into a consolidated skill using background LLM runs.
  */
-export async function executeWorkspaceDreamOptimization(workspacePath: string): Promise<void> {
+export async function executeWorkspaceDreamOptimization(
+  workspacePath: string,
+  existingAllProposals?: DreamProposal[],
+  existingNotifyFn?: (proposal: DreamProposal) => void
+): Promise<DreamProposal[]> {
+  const skillProposals: DreamProposal[] = [];
   const skillsPath = joinPath(workspacePath, ".dalam/skills");
   const api = createDalamAPI();
   
@@ -422,7 +633,7 @@ export async function executeWorkspaceDreamOptimization(workspacePath: string): 
         const skillB = discoveredSkills[j]!;
         
         // Use jaccardSimilarity directly (no thin wrapper)
-        if (jaccardSimilarity(skillA.rawContent, skillB.rawContent) <= 0.45) continue;
+        if (jaccardSimilarity(skillA.rawContent, skillB.rawContent) <= 0.65) continue;
         
         const consolidationPrompt = `You are a background compilation refactoring process.
 We found two highly similar, overlapping procedural instructions files inside our local project workspace configuration.
@@ -448,12 +659,34 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           continue;
         }
 
-        // Re-write consolidated results back to primary node entry point
-        await writeFile(skillA.fullPath, new TextEncoder().encode(response));
-        
-        // Drop redundant micro-skill directories
-        const oldTargetDir = joinPath(skillsPath, skillB.name);
-        await remove(oldTargetDir, { recursive: true });
+        // Backup skill A before modification for rollback on failure
+        const backupDir = joinPath(workspacePath, ".dalam/skills-backup", Date.now().toString());
+        try {
+          const { mkdir, readFile: readFileFs } = await import("@tauri-apps/plugin-fs");
+          await mkdir(backupDir, { recursive: true });
+          const backupA = joinPath(backupDir, `${skillA.name}.md`);
+          await writeFile(backupA, await readFileFs(skillA.fullPath));
+          const backupB = joinPath(backupDir, `${skillB.name}.md`);
+          await writeFile(backupB, await readFileFs(skillB.fullPath));
+
+          // Re-write consolidated results back to primary node entry point
+          await writeFile(skillA.fullPath, new TextEncoder().encode(response));
+
+          // Drop redundant micro-skill directories
+          const oldTargetDir = joinPath(skillsPath, skillB.name);
+          await remove(oldTargetDir, { recursive: true });
+        } catch (writeErr) {
+          // Rollback: restore skill A from backup
+          try {
+            const backupA = joinPath(backupDir, `${skillA.name}.md`);
+            const { readFile: readFs } = await import("@tauri-apps/plugin-fs");
+            const restored = await readFs(backupA);
+            await writeFile(skillA.fullPath, restored);
+          } catch {
+            console.error(`[DreamAgent] Failed to rollback skill ${skillA.name} after consolidation error`);
+          }
+          throw writeErr;
+        }
 
         // Update skillA content IN the array so subsequent comparisons use merged version.
         // Must re-read from array (not stale destructured `skillA` which has old rawContent).
@@ -468,9 +701,26 @@ Generate an elegant unified version. Output the result in clean markdown with ap
         // Reload skills registry so UI updates
         const projectSkills = await loadProjectSkills(workspacePath, api.fs);
         refreshProjectSkills(projectSkills);
+
+        // Create a proposal for this skill consolidation
+        const skillConsolidateProposal = createProposal(
+          "consolidate-skill",
+          `Merged skill "${skillA.name}" with overlapping "${skillB.name}"`,
+          { keptName: skillA.name, removedName: skillB.name, similarity: jaccardSimilarity(skillA.rawContent, skillB.rawContent) },
+          2,
+          { similarity: jaccardSimilarity(skillA.rawContent, skillB.rawContent) }
+        );
+        if (skillConsolidateProposal.status === "auto-accept") {
+          skillConsolidateProposal.status = "applied";
+          skillConsolidateProposal.appliedAt = Date.now();
+        } else if (skillConsolidateProposal.status === "user-review") {
+          existingNotifyFn?.(skillConsolidateProposal);
+        }
+        skillProposals.push(skillConsolidateProposal);
       }
     }
   } catch (err) {
     console.warn("[DreamAgent] Skill consolidation failed:", err);
   }
+  return skillProposals;
 }

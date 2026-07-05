@@ -203,11 +203,13 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
       window.removeEventListener("resize", handleResize);
       ro.disconnect();
 
-      // Capture ref value at effect time (not cleanup) to avoid stale ref access
+      // Capture ref values at effect time (not cleanup) to avoid stale ref access
       // eslint-disable-next-line react-hooks/exhaustive-deps
       const currentTerminals = terminalsMapRef.current;
       currentTerminals.delete(tabId);
-      procIdsRef.current.delete(tabId);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      const currentProcIds = procIdsRef.current;
+      currentProcIds.delete(tabId);
 
       if (unsubData) unsubData();
       if (inputDisposable) inputDisposable.dispose();

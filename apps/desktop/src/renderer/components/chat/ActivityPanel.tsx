@@ -1,3 +1,5 @@
+/* eslint-disable react-refresh/only-export-components */
+
 import React, { useState } from "react";
 import {
   X, FileCode, FilePlus,
@@ -8,7 +10,6 @@ import {
 } from "lucide-react";
 import { useChat } from "@/store/useAppStore";
 import { ThinkingBlock, TaskPlanBlock, SubAgentList } from "./ActivityBlocks";
-
 // ============================================================================
 // WorkingTimer — elapsed time display
 // ============================================================================
@@ -268,20 +269,9 @@ export const StreamingActivityPanel = React.memo(function StreamingActivityPanel
                 <InlineActivityRow
                   key={`plan-${idx}`}
                   icon={<ClipboardList className="w-3 h-3 flex-shrink-0" />}
-                  label="Planning"
-                  target={activity.plan || "Creating plan"}
-                  status={status}
-                />
-              );
-            }
-            if (activity.type === "think") {
-              return (
-                <InlineActivityRow
-                  key={`think-${idx}`}
-                  icon={<Brain className="w-3 h-3 flex-shrink-0" />}
-                  label="Thinking"
-                  target={activity.content?.slice(0, 60) || "Analyzing"}
-                  status={status}
+                  label="Plan"
+                  target={activity.plan.slice(0, 60)}
+                  status="completed"
                 />
               );
             }

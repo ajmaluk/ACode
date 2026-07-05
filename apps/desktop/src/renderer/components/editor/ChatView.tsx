@@ -10,7 +10,7 @@ import {
 import { useToast } from "@/components/ui/toastStore";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
-import { CostDisplay } from "@/components/chat/CostDisplay";
+import { SessionCostTracker } from "@/components/chat/SessionCostTracker";
 import { MessageQueue } from "@/components/chat/MessageQueue";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { formatTime } from "@/lib/chatUtils";
@@ -262,6 +262,14 @@ function ChatView() {
     [messages]
   );
 
+  // Virtualization: only render last 200 messages to avoid DOM bloat
+  const VISIBLE_WINDOW = 200;
+  const [showOlderCount, setShowOlderCount] = useState(0);
+  const totalVisible = VISIBLE_WINDOW + showOlderCount * VISIBLE_WINDOW;
+  const hiddenCount = Math.max(0, visibleMessages.length - totalVisible);
+  const displayedMessages = visibleMessages.slice(hiddenCount);
+  const showLoadOlder = hiddenCount > 0;
+
   // Reset confirmation dialog state
   const [resetConfirmState, setResetConfirmState] = useState<{
     messageId: string;
@@ -337,7 +345,7 @@ function ChatView() {
       });
     }
     return () => cancelAnimationFrame(scrollRafRef.current);
-  }, [messages]);
+  }, [messages, isUserScrolledUp, scrollRef]);
 
   const hasMessages = messages.length > 0;
 
@@ -425,7 +433,11 @@ function ChatView() {
     // Save removed messages to stack for restore
     const versions = sessionVersions[activeSessionId] ?? [];
     const lastVersion = versions.slice(-1)[0];
-    setRemovedMessagesStack((prev) => [...prev, { messages: removed, versionId: lastVersion?.id ?? "" }]);
+    setRemovedMessagesStack((prev) => {
+      const next = [...prev, { messages: removed, versionId: lastVersion?.id ?? "" }];
+      // Cap stack at 50 entries to prevent unbounded memory growth
+      return next.length > 50 ? next.slice(-50) : next;
+    });
     // Update preview and chatSessions
     const lastUserMsg = [...kept].reverse().find((m) => m.role === "user");
     const preview = lastUserMsg
@@ -537,6 +549,7 @@ function ChatView() {
   /help       - Show this help notification
   /clear      - Start a fresh task/chat session
   /compact    - Compresses history using compaction summaries
+  /cost       - Show token usage and cost breakdown for this session
   /dream      - Run background memory consolidation cycle
   /crystallize - Assess chat history for skill crystallization
   /login      - Opens Settings -> Models to configure API keys
@@ -574,13 +587,51 @@ Keyboard Shortcuts:
       return;
     }
 
+    if (trimmed === "/cost") {
+      const sessionId = chat.activeSessionId;
+      if (sessionId) {
+        import("@/lib/costTracker").then(({ formatCostDetailed }) => {
+          chat.injectSystemMessage(formatCostDetailed(sessionId));
+        });
+      } else {
+        toast.warning("No active chat session.");
+      }
+      setValue("");
+      return;
+    }
+
+    if (trimmed.startsWith("/metrics")) {
+      import("@/lib/metrics").then(({ formatMetrics, resetMetrics }) => {
+        if (trimmed === "/metrics reset") {
+          resetMetrics();
+          chat.injectSystemMessage("Performance metrics reset.");
+        } else {
+          chat.injectSystemMessage(formatMetrics());
+        }
+      });
+      setValue("");
+      return;
+    }
+
     if (trimmed === "/dream") {
       const workspacePath = useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId)?.path;
       if (workspacePath) {
         toast.info("Running memory consolidation cycle...");
         import("@/lib/dreamAgent").then(({ runDreamCycle }) => {
-          runDreamCycle(workspacePath).then((report) => {
-            chat.injectSystemMessage(`### 🌙 Dream Cycle Report\nConsolidation cycle completed:\n- **Purged**: ${report.purgedCount} memories\n- **Validated**: ${report.validatedCount} file references\n- **Merged & Deduplicated**: ${report.deduplicatedCount} memories\n- **Adjusted relative dates**: ${report.dateAdjustedCount} memories`);
+          runDreamCycle(workspacePath).then((result) => {
+            const r = result.report;
+            const p = result.proposals;
+            let reportText = `### 🌙 Dream Cycle Report\nConsolidation cycle completed:\n- **Purged**: ${r.purgedCount} memories\n- **Validated**: ${r.validatedCount} file references\n- **Merged & Deduplicated**: ${r.deduplicatedCount} memories\n- **Adjusted relative dates**: ${r.dateAdjustedCount} memories`;
+            if (p.autoAccepted.length > 0) {
+              reportText += `\n- **Auto-applied**: ${p.autoAccepted.length} proposals (score >= 7)`;
+            }
+            if (p.queuedForReview.length > 0) {
+              reportText += `\n- **Awaiting review**: ${p.queuedForReview.length} proposal${p.queuedForReview.length === 1 ? "" : "s"} (score >= 4)`;
+            }
+            if (p.rejected.length > 0) {
+              reportText += `\n- **Rejected**: ${p.rejected.length} low-scoring proposal${p.rejected.length === 1 ? "" : "s"}`;
+            }
+            chat.injectSystemMessage(reportText);
           }).catch((err: unknown) => {
             chat.injectSystemMessage(`Dream cycle failed: ${(err as Error).message || String(err)}`);
           });
@@ -652,6 +703,25 @@ Keyboard Shortcuts:
         ? `Model "${model}" supports native thinking output. Reasoning is active.`
         : `Model "${model}" does not natively output deep thinking tokens. Use o1/o3-mini/deepseek-r1 models for extended reasoning.`;
       chat.injectSystemMessage(statusText);
+      setValue("");
+      return;
+    }
+
+    if (trimmed === "/undo") {
+      if (removedMessagesStack.length === 0) {
+        chat.injectSystemMessage("Nothing to undo.");
+        setValue("");
+        return;
+      }
+      // Pop the last removed message group and restore it
+      const lastGroup = removedMessagesStack[removedMessagesStack.length - 1];
+      const restored = lastGroup.messages;
+      const chatState = useChat.getState();
+      const sessionMsgs = { ...chatState.sessionMessages, [chat.activeSessionId!]: [...chatState.messages, ...restored] };
+      setRemovedMessagesStack((prev) => prev.slice(0, -1));
+      useChat.setState({ messages: [...chatState.messages, ...restored], sessionMessages: sessionMsgs });
+      savePersistedMessages(sessionMsgs);
+      chat.injectSystemMessage(`Restored ${restored.length} message(s).`);
       setValue("");
       return;
     }
@@ -1089,7 +1159,7 @@ Add your project's common commands here so Dalam knows how to build:
                   {messages.length} {messages.length === 1 ? "message" : "messages"}
                 </span>
                 <span className="text-dalam-text-muted/40">·</span>
-                <CostDisplay />
+                <SessionCostTracker modelId={useSettings.getState().settings.selectedModel} />
                 <span className="flex items-center gap-1" title="Approximate token count (1 token ≈ 4 chars)">
                   <Sparkles className="w-3 h-3" />
                   {Math.ceil(messages.reduce((sum, m) => sum + m.content.length, 0) / 4).toLocaleString()} tokens
@@ -1104,7 +1174,15 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
               </div>
             )}
-            {visibleMessages.map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={handleResetToMessage} onResetClick={handleResetClick} isLast={idx === arr.length - 1} />)}
+            {showLoadOlder && (
+              <button
+                onClick={() => setShowOlderCount(c => c + 1)}
+                className="mx-auto block px-4 py-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-active rounded-lg transition-colors"
+              >
+                Show {Math.min(hiddenCount, VISIBLE_WINDOW)} older messages ({hiddenCount} hidden)
+              </button>
+            )}
+            {displayedMessages.map((m, idx, arr) => <ChatMessage key={m.id} message={m} onResetToMessage={handleResetToMessage} onResetClick={handleResetClick} isLast={idx === arr.length - 1} />)}
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">
@@ -1386,7 +1464,7 @@ function StreamingMessageWrapper({
       });
     }
     return () => cancelAnimationFrame(streamScrollRafRef.current);
-  }, [cleanStreamingContent, cleanThinkingContent]);
+  }, [cleanStreamingContent, cleanThinkingContent, isUserScrolledUp, scrollRef]);
 
   // Memoize streaming message object to prevent re-render cascade
   const streamingMessage = React.useMemo(() => ({

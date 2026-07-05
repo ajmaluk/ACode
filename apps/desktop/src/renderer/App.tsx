@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Suspense, lazy } from "react";
 import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { TitleBar } from "@/components/editor/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
@@ -7,7 +7,7 @@ import { PanelLeft, PanelRight, ChevronLeft, ChevronRight, MessageSquare, Code2,
 import { RightPanel } from "@/components/rightpanel/RightPanel";
 import { BottomPanel } from "@/components/terminal/BottomPanel";
 import { CommandPalette } from "@/components/palette/CommandPalette";
-import { SettingsModal } from "@/components/settings/SettingsModal";
+const SettingsModal = lazy(() => import("@/components/settings/SettingsModal").then(m => ({ default: m.SettingsModal })));
 import { PermissionDialog } from "@/components/permissions/PermissionDialog";
 // QuestionDialog removed — now rendered inline above input in ChatView
 import { Toaster } from "@/components/ui/Toaster";
@@ -444,7 +444,9 @@ export function App() {
       <ContextMenuProvider>
         <ErrorBoundary>
           <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
-            <SettingsModal />
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-dalam-text-secondary">Loading settings...</div>}>
+              <SettingsModal />
+            </Suspense>
             <CommandPalette />
             <PermissionDialog />
             {/* QuestionDialog removed — now rendered inline above input in ChatView */}

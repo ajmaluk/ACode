@@ -19,7 +19,7 @@ import type { ChatMessage } from "@dalam/shared-types";
 export type ContextPressure = "none" | "low" | "medium" | "high";
 
 // Import shared CTX from memoryTypes to avoid duplication
-import { CTX } from "./memoryTypes";
+import { CTX, OUTPUT_RESERVES } from "./memoryTypes";
 
 // Re-export for backward compatibility
 export { CTX } from "./memoryTypes";
@@ -28,7 +28,7 @@ export { CTX } from "./memoryTypes";
 // calculation, not the MiMo budget — keep it small for accurate pressure detection)
 const CTX_LOCAL = {
   ...CTX,
-  OUTPUT_RESERVE: 4_000,
+  OUTPUT_RESERVE: OUTPUT_RESERVES.PRESSURE,
 };
 
 // ─── Token Estimation Cache ──────────────────────────────────
@@ -260,6 +260,36 @@ export function estimateTokens(text: string): number {
   setCachedTokenCount(text, result);
 
   return result;
+}
+
+// tiktoken-based estimation (when available)
+let _tiktokenAvailable: boolean | null = null;
+let _cachedEstimator: ((text: string) => number) | null = null;
+
+/**
+ * Get the best available token estimator.
+ * Uses tiktoken (±5% accuracy) when available, falls back to heuristic (±20-30%).
+ */
+export async function getReliableEstimator(): Promise<(text: string) => number> {
+  if (_cachedEstimator) return _cachedEstimator;
+
+  if (_tiktokenAvailable === null) {
+    try {
+      const { countTokens } = await import("./tokenizer");
+      countTokens("test", "gpt-4");
+      _tiktokenAvailable = true;
+    } catch {
+      _tiktokenAvailable = false;
+    }
+  }
+
+  if (_tiktokenAvailable) {
+    const { countTokens } = await import("./tokenizer");
+    _cachedEstimator = (text: string) => countTokens(text, "gpt-4");
+  } else {
+    _cachedEstimator = estimateTokens;
+  }
+  return _cachedEstimator;
 }
 
 /**
@@ -508,10 +538,41 @@ export function buildCompactionPrompt(
   messages: ChatMessage[],
   previousSummary?: string
 ): { role: string; content: string }[] {
-  const formatted = messages.map((m) => ({
-    role: m.role === "user" ? "user" : "assistant",
-    content: m.content,
-  }));
+  const formatted = messages.map((m) => {
+    let content = m.content;
+
+    // Preserve tool call results
+    if (m.toolCalls?.length) {
+      const toolSummary = m.toolCalls
+        .filter(tc => tc.result)
+        .map(tc => `[${tc.name}] ${tc.result?.slice(0, 500)}`)
+        .join('\n');
+      if (toolSummary) {
+        content += `\n\nTool Results:\n${toolSummary}`;
+      }
+    }
+
+    // Preserve file changes
+    if (m.fileChanges?.length) {
+      const changeSummary = m.fileChanges
+        .map(fc => `${fc.action}: ${fc.path}`)
+        .join('\n');
+      content += `\n\nFile Changes:\n${changeSummary}`;
+    }
+
+    // Preserve todos
+    if (m.todos?.length) {
+      const todoSummary = m.todos
+        .map(t => `${t.status === 'completed' ? '✓' : '○'} ${t.content}`)
+        .join('\n');
+      content += `\n\nTodos:\n${todoSummary}`;
+    }
+
+    return {
+      role: m.role === "user" ? "user" : "assistant",
+      content,
+    };
+  });
 
   if (previousSummary) {
     return [

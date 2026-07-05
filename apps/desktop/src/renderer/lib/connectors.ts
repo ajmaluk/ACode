@@ -705,6 +705,68 @@ function saveConnectorConfigs(configs: ConnectorConfig[]): void {
 }
 
 /**
+ * Create a connector instance from a config.
+ */
+function createConnectorFromConfig(
+  config: ConnectorConfig
+): Connector | null {
+  switch (config.type) {
+    case "webhook":
+      return new WebhookConnector({
+        id: config.id,
+        name: config.name,
+        ...(config.config as { port?: number; path?: string; authToken?: string }),
+      });
+    case "file-watcher":
+      return new FileWatcherConnector({
+        id: config.id,
+        name: config.name,
+        ...(config.config as { paths?: string[]; pollIntervalMs?: number }),
+      });
+    case "cron":
+      return new CronConnector({
+        id: config.id,
+        name: config.name,
+        ...(config.config as { jobs?: CronJob[] }),
+      });
+    case "telegram":
+      return new TelegramConnector({
+        id: config.id,
+        name: config.name,
+        ...(config.config as { botToken: string; allowedUsers?: number[]; webhookUrl?: string }),
+      });
+    case "whatsapp":
+      return new WhatsAppConnector({
+        id: config.id,
+        name: config.name,
+        ...(config.config as { bridgeUrl: string; authToken?: string; allowedUsers?: string[] }),
+      });
+    default:
+      console.warn("Connector", `Unknown connector type: ${config.type}`);
+      return null;
+  }
+}
+
+/**
+ * Initialize a single connector from config.
+ */
+async function initializeSingleConnector(
+  config: ConnectorConfig,
+  onMessage: (message: ConnectorMessage) => void,
+  onStatusChange: (connectorId: string, status: string) => void,
+): Promise<void> {
+  const connector = createConnectorFromConfig(config);
+  if (!connector) return;
+
+  registerConnector(connector);
+
+  await connector.start({
+    onMessage,
+    onStatusChange: (status) => onStatusChange(config.id, status),
+  });
+}
+
+/**
  * Initialize all enabled connectors from stored config.
  */
 export async function initializeConnectors(
@@ -717,55 +779,7 @@ export async function initializeConnectors(
     if (!config.enabled) continue;
 
     try {
-      let connector: Connector;
-
-      switch (config.type) {
-        case "webhook":
-          connector = new WebhookConnector({
-            id: config.id,
-            name: config.name,
-            ...(config.config as { port?: number; path?: string; authToken?: string }),
-          });
-          break;
-        case "file-watcher":
-          connector = new FileWatcherConnector({
-            id: config.id,
-            name: config.name,
-            ...(config.config as { paths?: string[]; pollIntervalMs?: number }),
-          });
-          break;
-        case "cron":
-          connector = new CronConnector({
-            id: config.id,
-            name: config.name,
-            ...(config.config as { jobs?: CronJob[] }),
-          });
-          break;
-        case "telegram":
-          connector = new TelegramConnector({
-            id: config.id,
-            name: config.name,
-            ...(config.config as { botToken: string; allowedUsers?: number[]; webhookUrl?: string }),
-          });
-          break;
-        case "whatsapp":
-          connector = new WhatsAppConnector({
-            id: config.id,
-            name: config.name,
-            ...(config.config as { bridgeUrl: string; authToken?: string; allowedUsers?: string[] }),
-          });
-          break;
-        default:
-          console.warn("Connector", `Unknown connector type: ${config.type}`);
-          continue;
-      }
-
-      registerConnector(connector);
-
-      await connector.start({
-        onMessage,
-        onStatusChange: (status) => onStatusChange(config.id, status),
-      });
+      await initializeSingleConnector(config, onMessage, onStatusChange);
     } catch (err) {
       if (import.meta.env.DEV) console.error("Connector", `Failed to start connector ${config.name}`, { error: String(err) });
     }
@@ -790,9 +804,13 @@ export async function shutdownConnectors(): Promise<void> {
 }
 
 /**
- * Add or update a connector config.
+ * Add or update a connector config. Restarts the connector if it's running.
  */
-export async function saveConnectorConfig(config: ConnectorConfig): Promise<void> {
+export async function saveConnectorConfig(
+  config: ConnectorConfig,
+  onMessage?: (message: ConnectorMessage) => void,
+  onStatusChange?: (connectorId: string, status: string) => void,
+): Promise<void> {
   const configs = loadConnectorConfigs();
   const idx = configs.findIndex(c => c.id === config.id);
   if (idx >= 0) {
@@ -802,11 +820,20 @@ export async function saveConnectorConfig(config: ConnectorConfig): Promise<void
   }
   saveConnectorConfigs(configs);
 
-  // Restart the connector if it's running
+  // Stop the existing connector if running
   const connector = connectors.get(config.id);
   if (connector) {
     try { await connector.stop(); } catch { /* ignore */ }
     connectors.delete(config.id);
+  }
+
+  // Re-initialize if enabled and callbacks are provided
+  if (config.enabled && onMessage && onStatusChange) {
+    try {
+      await initializeSingleConnector(config, onMessage, onStatusChange);
+    } catch (err) {
+      console.warn(`[Connectors] Failed to restart ${config.id}:`, err);
+    }
   }
 }
 

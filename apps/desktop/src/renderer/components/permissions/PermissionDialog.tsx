@@ -1,6 +1,13 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { usePermission } from "@/store/useAppStore";
 import { Terminal, AlertCircle, Check, X, Shield } from "lucide-react";
+
+const OPTIONS = [
+  { key: "allow",  label: "Allow",  sub: "Allow only this time",              icon: Check, action: "allow" as const },
+  { key: "always", label: "Always allow in this project", sub: "Do not ask again for the same command", icon: Shield, action: "always" as const },
+  { key: "deny",   label: "Deny",   sub: "Reject it for now",                 icon: X, action: "deny" as const },
+];
+const NUM_OPTIONS = OPTIONS.length;
 
 export function PermissionDialog() {
   const { request, resolve, cancel } = usePermission();
@@ -13,16 +20,9 @@ export function PermissionDialog() {
   useEffect(() => { resolveRef.current = resolve; }, [resolve]);
   useEffect(() => { cancelRef.current = cancel; }, [cancel]);
 
-  const options = [
-    { key: "allow",  label: "Allow",  sub: "Allow only this time",              icon: Check, action: "allow" as const },
-    { key: "always", label: "Always allow in this project", sub: "Do not ask again for the same command", icon: Shield, action: "always" as const },
-    { key: "deny",   label: "Deny",   sub: "Reject it for now",                 icon: X, action: "deny" as const },
-  ];
-  const NUM_OPTIONS = options.length;
-
-  const decide = (idx: number) => {
-    resolveRef.current(options[idx]?.action ?? "deny");
-  };
+  const decide = useCallback((idx: number) => {
+    resolveRef.current(OPTIONS[idx]?.action ?? "deny");
+  }, []);
 
   const [requestId, setRequestId] = useState(request?.id);
   const prevRequestIdRef = useRef<string | undefined>(undefined);
@@ -70,7 +70,7 @@ export function PermissionDialog() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
      
-  }, [request, NUM_OPTIONS]);
+  }, [request, decide]);
 
   useEffect(() => {
     if (request) containerRef.current?.focus();
@@ -127,7 +127,7 @@ export function PermissionDialog() {
 
           {/* Options */}
           <div className="space-y-1 pt-1">
-            {options.map((opt, idx) => {
+            {OPTIONS.map((opt, idx) => {
               const Icon = opt.icon;
               const active = idx === selected;
               return (
@@ -160,7 +160,7 @@ export function PermissionDialog() {
             onClick={() => decide(selectedRef.current)}
             className="px-3 py-1.5 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
           >
-            Confirm {options[selected].label}
+            Confirm {OPTIONS[selected].label}
           </button>
         </div>
       </div>

@@ -1,22 +1,74 @@
 /**
  * ============================================================
- * MULTI-FILE DIFF — Batch Diff Approval Component
+ * MULTI-FILE DIFF — Inline Diff Preview Component
  * ============================================================
  *
- * Shows all file changes from an agent turn in a unified
- * diff view with approve/reject controls per file and batch.
- * Addresses Issue #22 (No Multi-File Diff Preview).
+ * Shows all file changes from an agent turn with expandable
+ * inline diff hunks, approve/reject controls per file and batch.
  * ============================================================
  */
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import { useChat } from "@/store/useAppStore";
-import { Check, X, FileText } from "lucide-react";
+import type { DiffProposal } from "@dalam/shared-types";
+import { Check, X, FileText, ChevronDown, ChevronRight } from "lucide-react";
+
+interface PendingDiffInfo {
+  id: string;
+  diffId: string;
+  filePath: string;
+  additions: number;
+  deletions: number;
+  diff?: DiffProposal;
+}
+
+function InlineDiffHunks({ diff }: { diff: DiffProposal }) {
+  const [expanded, setExpanded] = useState(false);
+  const maxLines = 20;
+  const allLines = diff.hunks.flatMap((h) => h.lines);
+  const truncated = allLines.length > maxLines && !expanded;
+  const visibleLines = truncated ? allLines.slice(0, maxLines) : allLines;
+
+  if (allLines.length === 0) return null;
+
+  return (
+    <div className="ml-6 mb-1">
+      <div className="font-mono text-[11px] leading-[18px] bg-dalam-bg-primary/50 rounded border border-dalam-border-primary overflow-x-auto">
+        {visibleLines.map((line, i) => (
+          <div
+            key={i}
+            className={`px-2 ${
+              line.type === "add"
+                ? "bg-dalam-git-added/10 text-dalam-git-added"
+                : line.type === "remove"
+                ? "bg-dalam-git-deleted/10 text-dalam-git-deleted"
+                : "text-dalam-text-secondary"
+            }`}
+          >
+            <span className="inline-block w-4 text-right mr-2 opacity-40">
+              {line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}
+            </span>
+            {line.content}
+          </div>
+        ))}
+        {truncated && (
+          <button
+            onClick={() => setExpanded(true)}
+            className="w-full px-2 py-0.5 text-dalam-accent hover:underline text-left"
+          >
+            ... {allLines.length - maxLines} more lines
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export const MultiFileDiffSummary: React.FC = () => {
   const pendingToolCalls = useChat((s) => s.pendingToolCalls);
   const resolveToolApproval = useChat((s) => s.resolveToolApproval);
   const [batchResolving, setBatchResolving] = useState(false);
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -24,8 +76,7 @@ export const MultiFileDiffSummary: React.FC = () => {
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Collect all pending diffs
-  const pendingDiffs = useMemo(() => {
+  const pendingDiffs: PendingDiffInfo[] = useMemo(() => {
     return pendingToolCalls
       .filter((tc) => tc.diffId && tc.status === "awaiting-approval")
       .map((tc) => ({
@@ -34,6 +85,7 @@ export const MultiFileDiffSummary: React.FC = () => {
         filePath: tc.diff?.filePath ?? (tc.args.path as string) ?? "unknown",
         additions: tc.diff?.hunks?.reduce((n, h) => n + h.newLines, 0) ?? 0,
         deletions: tc.diff?.hunks?.reduce((n, h) => n + h.oldLines, 0) ?? 0,
+        diff: tc.diff,
       }));
   }, [pendingToolCalls]);
 
@@ -41,6 +93,15 @@ export const MultiFileDiffSummary: React.FC = () => {
 
   const totalAdditions = pendingDiffs.reduce((s, d) => s + d.additions, 0);
   const totalDeletions = pendingDiffs.reduce((s, d) => s + d.deletions, 0);
+
+  const toggleFile = (id: string) => {
+    setExpandedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="mx-4 mb-3 rounded-lg border border-dalam-border-primary bg-dalam-bg-secondary/50 overflow-hidden">
@@ -60,9 +121,7 @@ export const MultiFileDiffSummary: React.FC = () => {
               try {
                 const ids = pendingDiffs.map((d) => d.id);
                 await Promise.allSettled(ids.map((id) => resolveToolApproval(id, "approved")));
-              } catch {
-                // Individual failures handled upstream by resolveToolApproval
-              } finally {
+              } catch { /* handled upstream */ } finally {
                 if (mountedRef.current) setBatchResolving(false);
               }
             }}
@@ -78,9 +137,7 @@ export const MultiFileDiffSummary: React.FC = () => {
               try {
                 const ids = pendingDiffs.map((d) => d.id);
                 await Promise.allSettled(ids.map((id) => resolveToolApproval(id, "denied")));
-              } catch {
-                // Individual failures handled upstream by resolveToolApproval
-              } finally {
+              } catch { /* handled upstream */ } finally {
                 if (mountedRef.current) setBatchResolving(false);
               }
             }}
@@ -93,39 +150,49 @@ export const MultiFileDiffSummary: React.FC = () => {
         </div>
       </div>
 
-      {/* File list */}
+      {/* File list with inline diffs */}
       <div className="divide-y divide-dalam-border-primary">
-        {pendingDiffs.map((diff) => (
-          <div
-            key={diff.id}
-            className="flex items-center justify-between px-3 py-1.5 hover:bg-dalam-bg-hover transition-colors"
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <FileText size={14} className="text-dalam-text-muted shrink-0" />
-              <span className="text-xs font-mono truncate text-dalam-text-primary">{diff.filePath}</span>
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              <span className="text-[10px] text-dalam-git-added">+{diff.additions}</span>
-              <span className="text-[10px] text-dalam-git-deleted">-{diff.deletions}</span>
-              <div className="flex items-center gap-1">
+        {pendingDiffs.map((diff) => {
+          const isExpanded = expandedFiles.has(diff.id);
+          return (
+            <div key={diff.id} className="hover:bg-dalam-bg-hover transition-colors">
+              <div className="flex items-center justify-between px-3 py-1.5">
                 <button
-                  onClick={() => resolveToolApproval(diff.id, "approved")}
-                  className="p-0.5 text-dalam-git-added hover:opacity-80 transition-colors"
-                  title="Approve"
+                  onClick={() => toggleFile(diff.id)}
+                  className="flex items-center gap-2 min-w-0 text-left"
                 >
-                  <Check size={12} />
+                  {diff.diff && diff.diff.hunks.length > 0 ? (
+                    isExpanded ? <ChevronDown size={12} className="text-dalam-text-muted shrink-0" /> : <ChevronRight size={12} className="text-dalam-text-muted shrink-0" />
+                  ) : (
+                    <FileText size={14} className="text-dalam-text-muted shrink-0" />
+                  )}
+                  <span className="text-xs font-mono truncate text-dalam-text-primary">{diff.filePath}</span>
                 </button>
-                <button
-                  onClick={() => resolveToolApproval(diff.id, "denied")}
-                  className="p-0.5 text-dalam-git-deleted hover:opacity-80 transition-colors"
-                  title="Reject"
-                >
-                  <X size={12} />
-                </button>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-[10px] text-dalam-git-added">+{diff.additions}</span>
+                  <span className="text-[10px] text-dalam-git-deleted">-{diff.deletions}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => resolveToolApproval(diff.id, "approved")}
+                      className="p-0.5 text-dalam-git-added hover:opacity-80 transition-colors"
+                      title="Approve"
+                    >
+                      <Check size={12} />
+                    </button>
+                    <button
+                      onClick={() => resolveToolApproval(diff.id, "denied")}
+                      className="p-0.5 text-dalam-git-deleted hover:opacity-80 transition-colors"
+                      title="Reject"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
               </div>
+              {isExpanded && diff.diff && <InlineDiffHunks diff={diff.diff} />}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
