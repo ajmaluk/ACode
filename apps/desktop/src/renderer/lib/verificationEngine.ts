@@ -54,7 +54,7 @@ async function runShellCommand(command: string): Promise<{ exitCode: number; std
   try {
     // Wrap command in a shell invocation that captures exit code
     // Use double-quoting for safer escaping that handles $'...' and backticks
-    const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+    const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/\n/g, '\\n');
     const wrapped = `bash -c "${escaped} 2>&1; echo "\\n__EXIT_CODE__=$?""`;
     // Use a system.exec-like approach — we'll use the agent's runCommand tool
     // which returns stdout/stderr. For now, return a promise that resolves

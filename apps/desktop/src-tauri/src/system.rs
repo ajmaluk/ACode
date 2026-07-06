@@ -351,7 +351,10 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
     {
         use std::process::Command;
         // Use osascript to save clipboard image to a temp file, then read it
-        let tmp_path = std::env::temp_dir().join("dalam_clipboard_image.png");
+        let tmp_path = std::env::temp_dir().join(format!(
+            "dalam_clipboard_{}.png",
+            std::process::id()
+        ));
         let script = format!(
             r#"set theFile to POSIX file "{}"
             try
@@ -459,6 +462,15 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if !p.exists() {
         return Err(format!("Path does not exist: {}", path));
+    }
+    #[cfg(unix)]
+    {
+        let restricted = ["/etc", "/sys", "/proc"];
+        for r in &restricted {
+            if p.starts_with(r) {
+                return Err(format!("Access to system path '{}' is not allowed", path));
+            }
+        }
     }
     let target = if p.is_file() {
         p.parent().unwrap_or(p)

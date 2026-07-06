@@ -24,12 +24,12 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net blob: 'unsafe-eval'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self' ipc: http: https: ws: wss:"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://cdn.jsdelivr.net blob: 'unsafe-eval'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self' ipc: http: https: ws: wss:; worker-src 'self'; manifest-src 'self'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["dmg", "app"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -48,10 +48,6 @@
   "plugins": {
     "shell": {
       "open": true
-    },
-    "window-state": {
-      "label": "main",
-      "maximized": false
     },
     "deep-link": {
       "mobile": [],

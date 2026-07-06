@@ -11,7 +11,7 @@ try {
   const stored = localStorage.getItem("dalam.settings.v1");
   if (stored) {
     const s = JSON.parse(stored);
-    const theme = s.theme || "dark";
+    const theme = s.theme || "system";
     let effective: "light" | "dark" = theme as "light" | "dark";
     if (theme === "system") {
       effective = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -32,6 +32,14 @@ try {
 
 // Register hook listeners for tool usage logging, session auto-save, etc.
 registerHookListeners();
+
+// Global unhandled promise rejection handler — log in DEV, let production handle naturally
+window.addEventListener("unhandledrejection", (event) => {
+  if (import.meta.env.DEV) {
+    console.error("[UnhandledRejection]", event.reason);
+  }
+  // Do NOT call event.preventDefault() — it suppresses error reporting in Tauri
+});
 
 const rootEl = document.getElementById("root");
 if (!rootEl) {

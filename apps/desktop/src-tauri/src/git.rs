@@ -144,7 +144,7 @@ pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
         return Err("Commit message too long (max 4096 bytes)".to_string());
     }
     let output = Command::new("git")
-        .args(["commit", "-m", &message])
+        .args(["commit", "-m", &message, "--"])
         .current_dir(&path)
         .output()
         .map_err(|e| format!("git commit failed: {}", e))?;
@@ -245,7 +245,7 @@ pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
     let path = validate_git_path(&path)?;
     // Block dangerous branch names that could be misinterpreted
     let lower = branch.to_lowercase();
-    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || branch.contains("..") || branch.contains('\\') || branch.contains('@') || branch.contains('{') || branch.contains(' ') {
+    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || branch.starts_with('-') || branch.ends_with(".lock") || (branch == ".git" || branch.contains("/.git")) || branch.contains("..") || branch.contains('\\') || branch.contains('@') || branch.contains('{') || branch.contains(' ') {
         return Err(format!("Invalid branch name: '{}'", branch));
     }
     let output = Command::new("git")
@@ -266,7 +266,7 @@ pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
 pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
     let path = validate_git_path(&path)?;
     let lower = name.to_lowercase();
-    if ["head", "orig_head", "fetch_head", "merge_head"].contains(&lower.as_str()) || name.contains("..") || name.contains('\\') || name.contains('@') || name.contains('{') || name.contains(' ') {
+    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || name.starts_with('-') || name.ends_with(".lock") || (name == ".git" || name.contains("/.git")) || name.contains("..") || name.contains('\\') || name.contains('@') || name.contains('{') || name.contains(' ') {
         return Err(format!("Invalid branch name: '{}'", name));
     }
     let output = Command::new("git")

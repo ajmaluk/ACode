@@ -13,7 +13,7 @@ export function MessageQueue() {
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
   const editValueRef = useRef(editValue);
-  useEffect(() => { editValueRef.current = editValue; });
+  useEffect(() => { editValueRef.current = editValue; }, [editValue]);
 
   const handleDragStart = useCallback((idx: number) => {
     dragItem.current = idx;

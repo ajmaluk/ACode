@@ -21,6 +21,10 @@ export function FindBar({ onSearch, onReplace, onReplaceAll, onClose, matchCount
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (showReplace !== undefined) setShowReplace(showReplace);
+  }, [showReplace]);
+
+  useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);

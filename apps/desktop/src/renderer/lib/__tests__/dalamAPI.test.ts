@@ -5,7 +5,7 @@
  * Tauri-dependent functions (createDalamAPI()) are tested with structural
  * shape checks rather than full integration.
  */
-import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   ProviderError,
   getRecentFiles,
@@ -13,23 +13,6 @@ import {
   corsFetch,
   createDalamAPI,
 } from "../dalamAPI";
-
-// Mock localStorage for node test environment
-beforeAll(() => {
-  const store: Record<string, string> = {};
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-    get length() { return Object.keys(store).length; },
-    key: (index: number) => Object.keys(store)[index] ?? null,
-  });
-});
-
-afterAll(() => {
-  vi.unstubAllGlobals();
-});
 
 // ============================================================================
 // ProviderError

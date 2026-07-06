@@ -13,6 +13,7 @@
     "lint:fix": "eslint src/renderer/ --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "tauri": "tauri"
   },
   "dependencies": {

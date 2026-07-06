@@ -94,7 +94,7 @@ const connectorConfigs: Map<string, ConnectorConfig> = new Map();
  */
 export function registerConnector(connector: Connector): void {
   connectors.set(connector.id, connector);
-  console.log("Connector", `Registered connector: ${connector.name} (${connector.type})`);
+  if (import.meta.env.DEV) console.log("Connector", `Registered connector: ${connector.name} (${connector.type})`);
 }
 
 /**
@@ -138,13 +138,13 @@ export class WebhookConnector implements Connector {
     console.warn("[WebhookConnector] Webhook server is a stub — actual HTTP server requires runtime environment. Marking as connected.");
     this.connected = true;
     events.onStatusChange("connected");
-    console.log("Webhook", `Started webhook listener on port ${this.port}${this.path}`);
+    if (import.meta.env.DEV) console.log("Webhook", `Started webhook listener on port ${this.port}${this.path}`);
   }
 
   async stop(): Promise<void> {
     this.connected = false;
     this.events?.onStatusChange("disconnected");
-    console.log("Webhook", "Stopped webhook listener");
+    if (import.meta.env.DEV) console.log("Webhook", "Stopped webhook listener");
   }
 
   isConnected(): boolean {
@@ -223,7 +223,7 @@ export class FileWatcherConnector implements Connector {
     }
 
     events.onStatusChange("connected");
-    console.log("FileWatcher", `Started watching ${this.watchPaths.length} paths (poll every ${this.pollIntervalMs}ms)`);
+    if (import.meta.env.DEV) console.log("FileWatcher", `Started watching ${this.watchPaths.length} paths (poll every ${this.pollIntervalMs}ms)`);
   }
 
   private async poll(): Promise<void> {
@@ -311,7 +311,7 @@ export class CronConnector implements Connector {
       if (job.enabled) this.scheduleJob(job);
     }
 
-    console.log("Cron", `Started with ${this.jobs.filter(j => j.enabled).length} active jobs`);
+    if (import.meta.env.DEV) console.log("Cron", `Started with ${this.jobs.filter(j => j.enabled).length} active jobs`);
   }
 
   async stop(): Promise<void> {
@@ -495,7 +495,7 @@ export class TelegramConnector implements Connector {
       const resp = await fetch(`https://api.telegram.org/bot${this.botToken}/getMe`);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.description || "Invalid token");
-      console.log("Telegram", `Connected as @${data.result.username}`);
+      if (import.meta.env.DEV) console.log("Telegram", `Connected as @${data.result.username}`);
       this.connected = true;
       events.onStatusChange("connected");
       // Start polling for updates
@@ -607,7 +607,7 @@ export class WhatsAppConnector implements Connector {
       if (!resp.ok) throw new Error(`Bridge returned ${resp.status}`);
       this.connected = true;
       events.onStatusChange("connected");
-      console.log("WhatsApp", "Connected to bridge");
+      if (import.meta.env.DEV) console.log("WhatsApp", "Connected to bridge");
       // Poll for new messages
       this.pollTimer = setInterval(() => void this.poll(), 3000);
       void this.poll();

@@ -498,12 +498,12 @@ function ProgressTab() {
   const { todos, taskPlan, taskPlanSummary, isStreaming } = useChat();
   // Combine todos and taskPlan for display
   const allTasks = [
-    ...todos.map(t => ({ id: t.id, title: t.content, status: t.status === "in_progress" ? "running" as const : t.status === "completed" ? "done" as const : t.status === "failed" ? "failed" as const : "pending" as const })),
+    ...todos.map(t => ({ id: t.id, title: t.content, status: t.status === "in_progress" ? "running" as const : t.status === "completed" ? "completed" as const : t.status === "failed" ? "failed" as const : "pending" as const })),
     ...(taskPlan ?? []).map(t => ({ id: t.id, title: t.title, status: t.status })),
   ];
   const activeTasks = allTasks.filter((t) => t.status === "running");
   const pendingTasks = allTasks.filter((t) => t.status === "pending");
-  const completedTasks = allTasks.filter((t) => t.status === "done");
+  const completedTasks = allTasks.filter((t) => t.status === "completed");
   const failedTasks = allTasks.filter((t) => t.status === "failed");
 
   if (allTasks.length === 0) {

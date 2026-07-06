@@ -66,6 +66,35 @@ describe("isPrivateHost", () => {
     expect(isPrivateHost("167772161")).toBe(true); // 10.0.0.1
   });
 
+  it("detects octal IP representations", () => {
+    expect(isPrivateHost("0177.0.0.1")).toBe(true); // 127.0.0.1
+    expect(isPrivateHost("010.0.0.1")).toBe(true); // 10.0.0.1
+  });
+
+  it("detects hex IPs with dots via URL normalization", () => {
+    // 0x7f.0.0.1 → URL normalization detects it as 127.0.0.1
+    expect(isPrivateHost("0x7f.0.0.1")).toBe(true);
+  });
+
+  it("detects IPv6-mapped IPv4 addresses", () => {
+    expect(isPrivateHost("::ffff:127.0.0.1")).toBe(true);
+    expect(isPrivateHost("[::ffff:127.0.0.1]")).toBe(true);
+    expect(isPrivateHost("::ffff:10.0.0.1")).toBe(true);
+    expect(isPrivateHost("[::ffff:192.168.1.1]")).toBe(true);
+  });
+
+  it("blocks DNS rebinding via nip.io and sslip.io", () => {
+    expect(isPrivateHost("127.0.0.1.nip.io")).toBe(true);
+    expect(isPrivateHost("169.254.169.254.sslip.io")).toBe(true);
+    expect(isPrivateHost("10.0.0.1.nip.io")).toBe(true);
+  });
+
+  it("allows legitimate subdomains of nip.io-like patterns", () => {
+    // These are NOT DNS rebinding — they're just regular domains
+    expect(isPrivateHost("example.com")).toBe(false);
+    expect(isPrivateHost("api.nipper.io")).toBe(false); // not nip.io
+  });
+
   it("returns false for public hosts", () => {
     expect(isPrivateHost("example.com")).toBe(false);
     expect(isPrivateHost("api.github.com")).toBe(false);
@@ -207,5 +236,22 @@ describe("audit logging", () => {
     expect(() => JSON.parse(json)).not.toThrow();
     const parsed = JSON.parse(json);
     expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  it("caps audit log at 1000 entries", () => {
+    // Add entries that will exceed the cap
+    for (let i = 0; i < 1010; i++) {
+      logPermission({
+        timestamp: Date.now() + i,
+        sessionId: "cap-test",
+        toolName: "test_tool",
+        decision: "allow",
+        source: "auto",
+      });
+    }
+
+    const log = getAuditLog("cap-test");
+    // Should have at most 1000 entries (oldest ones trimmed)
+    expect(log.length).toBeLessThanOrEqual(1000);
   });
 });

@@ -90,7 +90,13 @@ export const NotifyArgsSchema = z.object({
 export const SystemInfoArgsSchema = z.object({});
 
 export const OpenUrlArgsSchema = z.object({
-  url: z.string().url("must be a valid URL"),
+  url: z.string().url("must be a valid URL").refine(
+    (url) => {
+      try { return ["http:", "https:", "mailto:"].includes(new URL(url).protocol); }
+      catch { return false; }
+    },
+    "Only http, https, and mailto URLs are allowed"
+  ),
 });
 
 export const LaunchAppArgsSchema = z.object({
@@ -385,6 +391,23 @@ export function validateToolArgs(
           return { valid: false, error: `MCP tool ${toolName}: arg '${key}' cannot be a function` };
         }
       }
+      // Security scan for string arg values — block dangerous paths and commands
+      for (const val of Object.values(args)) {
+        if (typeof val === "string") {
+          for (const pattern of DANGEROUS_PATH_PATTERNS) {
+            if (pattern.test(val)) {
+              return { valid: false, error: `MCP tool ${toolName}: path not allowed` };
+            }
+          }
+          const normalizedCmd = normalizeCommand(val);
+          for (const dangerous of DANGEROUS_COMMANDS) {
+            const normalizedDangerous = normalizeCommand(dangerous);
+            if (normalizedCmd === normalizedDangerous || normalizedCmd.startsWith(normalizedDangerous + " ")) {
+              return { valid: false, error: `MCP tool ${toolName}: dangerous command blocked` };
+            }
+          }
+        }
+      }
       return { valid: true, args };
     }
     return { valid: false, error: `Unknown tool: ${toolName}` };
@@ -411,8 +434,8 @@ export function validateToolArgs(
   }
 
   // Security checks for file operations
-  if (["read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files", "reveal_in_finder"].includes(toolName)) {
-    const path = String(args.path ?? (toolName === "search_files" ? args.pattern ?? "" : ""));
+  if (["read_file", "write_file", "edit_file", "list_dir", "grep_file", "get_disk_space", "reveal_in_finder"].includes(toolName)) {
+    const path = String(args.path ?? "");
     for (const pattern of DANGEROUS_PATH_PATTERNS) {
       if (pattern.test(path)) {
         return {
@@ -423,11 +446,38 @@ export function validateToolArgs(
     }
   }
 
+  // Security check for launch_app cwd
+  if (toolName === "launch_app") {
+    const cwd = String(args.cwd ?? "");
+    if (cwd) {
+      for (const pattern of DANGEROUS_PATH_PATTERNS) {
+        if (pattern.test(cwd)) {
+          return {
+            valid: false,
+            error: `Path not allowed: ${cwd}`,
+          };
+        }
+      }
+    }
+  }
+
   // Security checks for commands (normalized to prevent bypass via whitespace)
   if (toolName === "run_command") {
     const cmd = normalizeCommand(String(args.command || ""));
     for (const dangerous of DANGEROUS_COMMANDS) {
-      if (cmd.includes(normalizeCommand(dangerous))) {
+      const normalizedDangerous = normalizeCommand(dangerous);
+      // Patterns ending with / (like "rm -rf /") need care:
+      // Block "rm -rf /" and "echo && rm -rf /" but allow "rm -rf /tmp/build"
+      // Use negative lookahead to ensure the pattern is NOT followed by path chars
+      let matched: boolean;
+      if (normalizedDangerous.endsWith("/")) {
+        const escaped = normalizedDangerous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`${escaped}(?![\\w/])`);
+        matched = regex.test(cmd);
+      } else {
+        matched = cmd === normalizedDangerous || cmd.startsWith(normalizedDangerous + " ") || cmd.includes(normalizedDangerous);
+      }
+      if (matched) {
         return {
           valid: false,
           error: `Dangerous command blocked: contains '${dangerous}'`,

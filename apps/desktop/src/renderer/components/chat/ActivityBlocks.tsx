@@ -906,11 +906,11 @@ export const TodoBlock = React.memo(function TodoBlock({ todos }: { todos: TodoI
 export type TaskPlanItem = {
   id: string;
   title: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "pending" | "running" | "completed" | "failed";
 };
 
 export const TaskPlanBlock = React.memo(function TaskPlanBlock({ tasks, summary }: { tasks: TaskPlanItem[]; summary?: string | null }) {
-  const completed = tasks.filter((t) => t.status === "done").length;
+  const completed = tasks.filter((t) => t.status === "completed").length;
   const total = tasks.length;
   const current = tasks.find((t) => t.status === "running");
 
@@ -938,7 +938,7 @@ export const TaskPlanBlock = React.memo(function TaskPlanBlock({ tasks, summary 
     >
       <ul className="space-y-1">
         {tasks.map((task) => {
-          const isDone = task.status === "done";
+          const isDone = task.status === "completed";
           const isRunning = task.status === "running";
           const isFailed = task.status === "failed";
           return (

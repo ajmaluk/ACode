@@ -162,3 +162,29 @@ export function clearSessionCost(sessionId: string): void {
 export function setModelPricing(modelId: string, input: number, output: number): void {
   _pricing[modelId] = { input, output };
 }
+
+/**
+ * Get current pricing for all models (for settings UI).
+ */
+export function getModelPricing(): Record<string, { input: number; output: number }> {
+  return { ..._pricing };
+}
+
+/**
+ * Load custom pricing overrides from a JSON record.
+ */
+export function loadPricingOverrides(overrides: Record<string, { input: number; output: number }>): void {
+  for (const [model, price] of Object.entries(overrides)) {
+    if (price.input > 0 && price.output > 0) {
+      _pricing[model] = price;
+    }
+  }
+}
+
+/**
+ * Reset pricing to defaults.
+ */
+export function resetPricing(): void {
+  Object.keys(_pricing).forEach(k => delete _pricing[k]);
+  Object.assign(_pricing, DEFAULT_PRICING);
+}

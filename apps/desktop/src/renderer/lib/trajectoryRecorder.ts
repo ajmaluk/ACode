@@ -98,7 +98,7 @@ export async function startRecording(
   if (buffers.has(sessionId)) return; // Already recording
 
   buffers.set(sessionId, { turns: [], lastFlush: Date.now(), workspacePath });
-  console.log("Trajectory", `Started recording session ${sessionId}`, { workspacePath });
+  if (import.meta.env.DEV) console.log("Trajectory", `Started recording session ${sessionId}`, { workspacePath });
 
   // Ensure trajectory directory exists — create .dalam first, then trajectories
   try {
@@ -133,28 +133,32 @@ export async function startRecording(
  * Stop recording and flush remaining turns for a session.
  */
 export async function stopRecording(sessionId: string): Promise<void> {
-  const buffer = buffers.get(sessionId);
-  if (!buffer) return;
+  try {
+    const buffer = buffers.get(sessionId);
+    if (!buffer) return;
 
-  // Flush remaining turns
-  await flushBuffer(sessionId);
+    // Flush remaining turns
+    await flushBuffer(sessionId);
 
-  // Only delete the buffer if there are no remaining unsent turns.
-  // If flushBuffer failed, turns were restored to the buffer — keep them
-  // for a future retry rather than silently dropping them.
-  const afterFlush = buffers.get(sessionId);
-  if (!afterFlush || afterFlush.turns.length === 0) {
-    buffers.delete(sessionId);
-  } else {
-    console.warn("Trajectory", `Session ${sessionId} has ${afterFlush.turns.length} unsent turns after stopRecording — keeping buffer for retry`);
-  }
+    // Only delete the buffer if there are no remaining unsent turns.
+    // If flushBuffer failed, turns were restored to the buffer — keep them
+    // for a future retry rather than silently dropping them.
+    const afterFlush = buffers.get(sessionId);
+    if (!afterFlush || afterFlush.turns.length === 0) {
+      buffers.delete(sessionId);
+    } else {
+      console.warn("Trajectory", `Session ${sessionId} has ${afterFlush.turns.length} unsent turns after stopRecording — keeping buffer for retry`);
+    }
 
-  console.log("Trajectory", `Stopped recording session ${sessionId}`);
+    if (import.meta.env.DEV) console.log("Trajectory", `Stopped recording session ${sessionId}`);
 
-  // Stop timer if no more sessions
-  if (buffers.size === 0 && flushTimer) {
-    clearInterval(flushTimer);
-    flushTimer = null;
+    // Stop timer if no more sessions
+    if (buffers.size === 0 && flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+  } catch (err) {
+    if (import.meta.env.DEV) console.warn("[Trajectory] Error stopping recording:", err);
   }
 }
 
@@ -447,7 +451,7 @@ export async function exportTrajectories(
     // Delay revocation to ensure the download has started reading the blob
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-    console.log("Trajectory", `Exported ${records.length} trajectory records`);
+    if (import.meta.env.DEV) console.log("Trajectory", `Exported ${records.length} trajectory records`);
     return link.download;
   } catch (e) {
     if (import.meta.env.DEV) console.error("Trajectory", "Export failed", { error: String(e) });

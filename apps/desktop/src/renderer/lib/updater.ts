@@ -20,7 +20,7 @@ export interface UpdateInfo {
 export async function checkForUpdates(): Promise<UpdateInfo> {
   try {
     // Dynamic import — module may not be available in all environments
-    const updater = await Function('return import("@tauri-apps/plugin-updater")')() as { check: () => Promise<{ version: string; body?: string } | null> };
+    const updater = await import("@tauri-apps/plugin-updater") as { check: () => Promise<{ version: string; body?: string } | null> };
     const update = await updater.check();
 
     if (update) {
@@ -44,22 +44,29 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 export async function installUpdate(
   onProgress?: (percent: number) => void
 ): Promise<void> {
-  const updater = await Function('return import("@tauri-apps/plugin-updater")')() as {
-    check: () => Promise<{ downloadAndInstall: (cb: (event: { data?: { event: string; contentLength?: number; data?: { chunkLength?: number } } }) => void) => Promise<void> } | null>;
-  };
-  const process = await Function('return import("@tauri-apps/plugin-process")')() as { relaunch: () => Promise<void> };
+  try {
+    const updater = await import("@tauri-apps/plugin-updater") as {
+      check: () => Promise<{ downloadAndInstall: (cb: (event: { data?: { event: string; contentLength?: number; data?: { chunkLength?: number } } }) => void) => Promise<void> } | null>;
+    };
+    const process = await import("@tauri-apps/plugin-process") as { relaunch: () => Promise<void> };
 
-  const update = await updater.check();
-  if (!update) throw new Error("No update available");
-
-  await update.downloadAndInstall((event) => {
-    if (event.data && event.data.event === "Progress") {
-      const chunkLength = event.data.data?.chunkLength ?? 0;
-      onProgress?.(chunkLength);
-    } else if (event.data && event.data.event === "Finished") {
-      onProgress?.(100);
+    const update = await updater.check();
+    if (!update) {
+      console.warn("[Updater] No update available");
+      return;
     }
-  });
 
-  await process.relaunch();
+    await update.downloadAndInstall((event) => {
+      if (event.data && event.data.event === "Progress") {
+        const chunkLength = event.data.data?.chunkLength ?? 0;
+        onProgress?.(chunkLength);
+      } else if (event.data && event.data.event === "Finished") {
+        onProgress?.(100);
+      }
+    });
+
+    await process.relaunch();
+  } catch (err) {
+    console.warn("[Updater] Failed to install update:", err);
+  }
 }

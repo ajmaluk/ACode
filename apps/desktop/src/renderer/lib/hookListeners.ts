@@ -102,7 +102,7 @@ function onPostToolUse(event: PostToolUseEvent): void {
   toolStats.totalMs += event.durationMs;
   if (event.error) toolStats.errors++;
 
-  console.log(`[ToolUse] ${event.toolName} | ${event.durationMs}ms | session: ${event.sessionId.slice(0, 8)}` + (event.error ? ` | ERROR: ${event.error}` : ""));
+  if (import.meta.env.DEV) console.log(`[ToolUse] ${event.toolName} | ${event.durationMs}ms | session: ${event.sessionId.slice(0, 8)}` + (event.error ? ` | ERROR: ${event.error}` : ""));
 }
 
 // ─── 2. Auto-Save Context on SessionEnd ───
@@ -365,7 +365,7 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
 function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
   const historySize = event.conversationHistory.length;
   const hasAttachments = event.attachments.length > 0;
-  console.log(
+  if (import.meta.env.DEV) console.log(
     `[Prompt] ${event.sessionId.slice(0, 8)} | ` +
     `${event.prompt.length} chars | ` +
     `${historySize} msgs` +
@@ -378,7 +378,7 @@ function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
  * Logs when a new session begins with context about the workspace and model.
  */
 function onSessionStart(event: SessionStartEvent): void {
-  console.log(
+  if (import.meta.env.DEV) console.log(
     `[SessionStart] ${event.sessionId.slice(0, 8)} | ` +
     `model: ${event.model} | agent: ${event.agentName} | mode: ${event.mode}`
   );
@@ -389,7 +389,7 @@ function onSessionStart(event: SessionStartEvent): void {
  * Logs when an LLM turn completes, with tool call counts.
  */
 function onStop(event: StopEvent): void {
-  console.log(
+  if (import.meta.env.DEV) console.log(
     `[TurnStop] ${event.sessionId} | ` +
     `${event.messageCount} msgs | ` +
     `${event.toolCallsExecuted} tool call(s)`
@@ -512,7 +512,7 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
     }
 
     if (entries.length > 0) {
-      console.log(
+      if (import.meta.env.DEV) console.log(
         `[ContextPressure] Auto-saved ${entries.length} memory entries at ${Math.round(event.pressureRatio * 100)}% pressure`
       );
     }

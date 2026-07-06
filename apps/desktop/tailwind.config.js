@@ -27,7 +27,6 @@ export default {
           accent: {
             primary: "rgb(var(--dalam-accent-primary) / <alpha-value>)",
             hover: "rgb(var(--dalam-accent-hover) / <alpha-value>)",
-            subtle: "rgba(79, 142, 247, 0.1)",
           },
           git: {
             modified: "rgb(var(--dalam-git-modified) / <alpha-value>)",

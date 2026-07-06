@@ -7,6 +7,17 @@
   ],
   "permissions": [
     "core:default",
+    "deep-link:default",
+    "deep-link:allow-register",
+    "deep-link:allow-unregister",
+    "fs:allow-stat",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
     {
       "identifier": "fs:allow-read-file",
       "allow": [

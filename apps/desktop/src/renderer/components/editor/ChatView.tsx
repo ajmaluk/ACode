@@ -1063,6 +1063,7 @@ Add your project's common commands here so Dalam knows how to build:
                     ref={mainTextareaRef}
                     className="chat-input w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted resize-none overflow-y-auto min-h-[28px] max-h-[400px]"
                     placeholder="Ask Dalam anything, @ to add files, / for commands, $ for skills, # for related conversations"
+                    aria-label="Chat message input"
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
                     onKeyDown={handleKeyDown}
@@ -1287,7 +1288,9 @@ Add your project's common commands here so Dalam knows how to build:
               )}
               <textarea ref={followupTextareaRef}
                 className="chat-input w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-[400px]"
-                placeholder={messageQueue.length > 0 ? "Keep typing to queue follow-up changes" : "Ask for follow-up changes"} value={value} onChange={(e) => setValue(e.target.value)}
+                placeholder={messageQueue.length > 0 ? "Keep typing to queue follow-up changes" : "Ask for follow-up changes"}
+                aria-label="Follow-up message input"
+                value={value} onChange={(e) => setValue(e.target.value)}
                 onKeyDown={handleFollowupKeyDown} rows={1} />
               <PromptAutocomplete
                 value={value}

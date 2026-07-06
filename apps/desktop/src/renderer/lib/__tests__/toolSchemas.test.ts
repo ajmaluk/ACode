@@ -191,6 +191,32 @@ describe("validateToolArgs", () => {
       const result = validateToolArgs("run_command", { command: "git rm -rf dir" });
       expect(result.valid).toBe(true);
     });
+
+    it("allows rm -rf on /tmp (not root)", () => {
+      const result = validateToolArgs("run_command", { command: "rm -rf /tmp/build" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("blocks chown -R (in dangerous list)", () => {
+      const result = validateToolArgs("run_command", { command: "chown -R user:user /var/app" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks rm -rf / exactly", () => {
+      const result = validateToolArgs("run_command", { command: "rm -rf /tmp" });
+      // This should be allowed since /tmp != /
+      expect(result.valid).toBe(true);
+    });
+
+    it("blocks Format-Volume (Windows)", () => {
+      const result = validateToolArgs("run_command", { command: "Format-Volume -DriveLetter D" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks Stop-Computer (Windows)", () => {
+      const result = validateToolArgs("run_command", { command: "Stop-Computer" });
+      expect(result.valid).toBe(false);
+    });
   });
 
   describe("git commands", () => {
@@ -258,8 +284,34 @@ describe("validateToolArgs", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("accepts mailto URL", () => {
+      const result = validateToolArgs("open_url", { url: "mailto:user@example.com" });
+      expect(result.valid).toBe(true);
+    });
+
     it("rejects invalid URL", () => {
       const result = validateToolArgs("open_url", { url: "not-a-url" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects javascript: protocol", () => {
+      const result = validateToolArgs("open_url", { url: "javascript:alert(1)" });
+      expect(result.valid).toBe(false);
+      expect(result.valid || result.error).toContain("http");
+    });
+
+    it("rejects file: protocol", () => {
+      const result = validateToolArgs("open_url", { url: "file:///etc/passwd" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects data: protocol", () => {
+      const result = validateToolArgs("open_url", { url: "data:text/html,<script>alert(1)</script>" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects blob: protocol", () => {
+      const result = validateToolArgs("open_url", { url: "blob:https://example.com/id" });
       expect(result.valid).toBe(false);
     });
   });
@@ -327,6 +379,33 @@ describe("validateToolArgs", () => {
       expect(result.valid).toBe(false);
       expect(result.valid || result.error).toContain("function");
     });
+
+    it("rejects MCP tool with dangerous path traversal", () => {
+      const result = validateToolArgs("mcp_read_file", { path: "../../etc/passwd" });
+      expect(result.valid).toBe(false);
+      expect(result.valid || result.error).toContain("path not allowed");
+    });
+
+    it("rejects MCP tool with /etc/ path", () => {
+      const result = validateToolArgs("mcp_file_op", { target: "/etc/shadow" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects MCP tool with dangerous command", () => {
+      const result = validateToolArgs("mcp_shell", { input: "rm -rf /" });
+      expect(result.valid).toBe(false);
+      expect(result.valid || result.error).toContain("dangerous command");
+    });
+
+    it("rejects MCP tool with tilde path", () => {
+      const result = validateToolArgs("mcp_file", { path: "~/secret.txt" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts MCP tool with safe string args", () => {
+      const result = validateToolArgs("mcp_api", { endpoint: "/users", method: "GET" });
+      expect(result.valid).toBe(true);
+    });
   });
 
   describe("unknown tools", () => {
@@ -334,6 +413,40 @@ describe("validateToolArgs", () => {
       const result = validateToolArgs("nonexistent_tool", {});
       expect(result.valid).toBe(false);
       expect(result.valid || result.error).toContain("Unknown");
+    });
+  });
+
+  describe("get_disk_space", () => {
+    it("accepts valid path", () => {
+      const result = validateToolArgs("get_disk_space", { path: "/home/user" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects path traversal", () => {
+      const result = validateToolArgs("get_disk_space", { path: "../../etc" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects /etc/ path", () => {
+      const result = validateToolArgs("get_disk_space", { path: "/etc/" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("launch_app", () => {
+    it("accepts valid args", () => {
+      const result = validateToolArgs("launch_app", { name: "firefox" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects cwd with path traversal", () => {
+      const result = validateToolArgs("launch_app", { name: "app", cwd: "../../etc" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts safe cwd", () => {
+      const result = validateToolArgs("launch_app", { name: "app", cwd: "/home/user/project" });
+      expect(result.valid).toBe(true);
     });
   });
 });

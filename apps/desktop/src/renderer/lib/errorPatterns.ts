@@ -2,6 +2,13 @@
  * Error Patterns — matches common error messages and suggests fixes.
  */
 
+const SAFE_MODULE_RE = /^[a-zA-Z0-9@/\-_.]+$/;
+
+function sanitizeModuleName(name: string): string | null {
+  if (!SAFE_MODULE_RE.test(name)) return null;
+  return name;
+}
+
 interface ErrorPattern {
   pattern: RegExp;
   suggestion: string;
@@ -13,12 +20,18 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     pattern: /Cannot find module '(.+?)'/,
     suggestion: "Module not found. Try installing it: npm install $1",
-    autoFix: (m) => ({ command: `npm install ${m[1]}` }),
+    autoFix: (m) => {
+      const mod = sanitizeModuleName(m[1]);
+      return mod ? { command: `npm install ${mod}` } : null;
+    },
   },
   {
     pattern: /Module not found: Can't resolve '(.+?)'/,
     suggestion: "Module not found. Try installing it: npm install $1",
-    autoFix: (m) => ({ command: `npm install ${m[1]}` }),
+    autoFix: (m) => {
+      const mod = sanitizeModuleName(m[1]);
+      return mod ? { command: `npm install ${mod}` } : null;
+    },
   },
   {
     pattern: /Type '(.+?)' is not assignable to type '(.+?)'/,
@@ -41,7 +54,10 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     pattern: /ModuleNotFoundError: No module named '(.+?)'/,
     suggestion: "Python module not found. Try installing: pip install $1",
-    autoFix: (m) => ({ command: `pip install ${m[1]}` }),
+    autoFix: (m) => {
+      const mod = sanitizeModuleName(m[1]);
+      return mod ? { command: `pip install ${mod}` } : null;
+    },
   },
   {
     pattern: /ImportError: cannot import name '(.+?)' from '(.+?)'/,

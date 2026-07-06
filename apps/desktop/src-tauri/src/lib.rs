@@ -22,7 +22,6 @@ pub fn run() {
     .plugin(tauri_plugin_http::init())
     .plugin(tauri_plugin_window_state::Builder::default().build())
     .plugin(tauri_plugin_deep_link::init())
-    .plugin(tauri_plugin_updater::Builder::new().build())
     .invoke_handler(tauri::generate_handler![
         // Git commands
         git::git_status,
@@ -53,5 +52,8 @@ pub fn run() {
         system::detect_installed_ides,
     ])
     .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .unwrap_or_else(|e| {
+        eprintln!("Error running Dalam: {}", e);
+        std::process::exit(1);
+    });
 }

@@ -259,7 +259,11 @@ export async function getCodeIndexStats(): Promise<{
  * Clear the code index.
  */
 export async function clearCodeIndex(): Promise<void> {
-  if (!isDatabaseReady()) return;
-  const db = getDb();
-  await db.execute("DELETE FROM code_index");
+  try {
+    if (!isDatabaseReady()) return;
+    const db = getDb();
+    await db.execute("DELETE FROM code_index");
+  } catch {
+    // Silently ignore — index will be rebuilt on next scan
+  }
 }

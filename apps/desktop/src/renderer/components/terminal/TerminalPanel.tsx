@@ -10,7 +10,7 @@ import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename } from "@/lib/pathUtils";
 import { isWindows } from "@/lib/platform";
 
-const DALAM_TERM_THEME = {
+const DALAM_TERM_DARK_THEME = {
   background: "#0d0d0d",
   foreground: "#e0e0e0",
   cursor: "#4f8ef7",
@@ -39,6 +39,39 @@ const DALAM_TERM_THEME = {
   brightWhite: "#ffffff",
 };
 
+const DALAM_TERM_LIGHT_THEME = {
+  background: "#ffffff",
+  foreground: "#1e1e1e",
+  cursor: "#4f8ef7",
+  cursorAccent: "#ffffff",
+  selectionBackground: "#4f8ef744",
+  selectionForeground: "#000000",
+  selectionInactiveBackground: "#4f8ef722",
+  scrollbarSliderBackground: "#4f8ef744",
+  scrollbarSliderHoverBackground: "#4f8ef766",
+  scrollbarSliderActiveBackground: "#4f8ef788",
+  black: "#000000",
+  red: "#e06c75",
+  green: "#73c991",
+  yellow: "#d19a66",
+  blue: "#4f8ef7",
+  magenta: "#c792ea",
+  cyan: "#7fdbca",
+  white: "#1e1e1e",
+  brightBlack: "#666666",
+  brightRed: "#ff6b6b",
+  brightGreen: "#a0f0a0",
+  brightYellow: "#f0e0a0",
+  brightBlue: "#7fb3ff",
+  brightMagenta: "#dfb0ff",
+  brightCyan: "#a0e8e0",
+  brightWhite: "#ffffff",
+};
+
+function getTermTheme(isDark: boolean) {
+  return isDark ? DALAM_TERM_DARK_THEME : DALAM_TERM_LIGHT_THEME;
+}
+
 type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh" | "sh";
 
 interface ShellOption {
@@ -60,7 +93,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const procIdRef = useRef<string | null>(null);
-  const { settings } = useSettings();
+  const { settings, effectiveTheme } = useSettings();
 
   useEffect(() => {
     const term = terminalsMapRef.current.get(tabId);
@@ -92,7 +125,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
     if (!element) return;
 
     const term = new Terminal({
-      theme: DALAM_TERM_THEME,
+      theme: getTermTheme(effectiveTheme() === "dark"),
       fontFamily: settings.terminalFont ? `${settings.terminalFont}, SF Mono, Menlo, monospace` : "JetBrains Mono, SF Mono, Menlo, monospace",
       fontSize: settings.terminalFontSize || 13,
       lineHeight: 1.2,

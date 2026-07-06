@@ -1716,8 +1716,7 @@ You can combine multiple tools in one response:
           // FIX: Single parse pass for display content — strip all tool tags from
           // the ORIGINAL fullContent (not safeTextForParsing which had code blocks
           // already removed, causing garbled fragments in display).
-          const { stripXmlToolCallTags: stripForDisplay } = await import("../store/useAppStore");
-          const _displayContent = stripForDisplay(fullContent).trim();
+          // The UI store independently strips tags for display via stripXmlToolCallTags.
 
           // Push RAW content to API history so the LLM sees its own tool calls.
           // The UI store independently strips tags for display.

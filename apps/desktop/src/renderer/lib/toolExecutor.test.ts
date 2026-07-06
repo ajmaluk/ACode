@@ -7,6 +7,9 @@ import {
   executeToolWithRetry,
   executeToolBatch,
   executeToolCalls,
+  recordToolCost,
+  clearSessionToolCosts,
+  getSessionToolCosts,
   type ToolCall,
   type ToolResult,
 } from "./toolExecutor";
@@ -407,6 +410,156 @@ describe("toolExecutor", () => {
         expect(results[0].result).toContain("Aborted");
         expect(mockExecuteFn).not.toHaveBeenCalled();
       });
+    });
+
+    describe("retry logic", () => {
+      it("retries on ECONNRESET error", async () => {
+        let callCount = 0;
+        const retryFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+          callCount++;
+          if (callCount === 1) throw new Error("ECONNRESET: connection reset");
+          return "success on retry";
+        });
+
+        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const result = await executeToolWithRetry(tc, retryFn);
+        expect(result.success).toBe(true);
+        expect(result.result).toBe("success on retry");
+        expect(result.retries).toBe(1);
+        expect(retryFn).toHaveBeenCalledTimes(2);
+      });
+
+      it("retries on HTTP 429 error", async () => {
+        let callCount = 0;
+        const retryFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+          callCount++;
+          if (callCount <= 2) throw new Error("HTTP 429: rate limited");
+          return "success after 2 retries";
+        });
+
+        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const result = await executeToolWithRetry(tc, retryFn);
+        expect(result.success).toBe(true);
+        expect(result.retries).toBe(2);
+      });
+
+      it("does not retry on non-retryable errors", async () => {
+        const noRetryFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+          throw new Error("Permission denied: access denied");
+        });
+
+        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const result = await executeToolWithRetry(tc, noRetryFn);
+        expect(result.success).toBe(false);
+        expect(result.retries).toBe(0);
+        expect(noRetryFn).toHaveBeenCalledTimes(1);
+      });
+
+      it("gives up after max retries", async () => {
+        const alwaysFailFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+          throw new Error("ETIMEDOUT: operation timed out");
+        });
+
+        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const result = await executeToolWithRetry(tc, alwaysFailFn);
+        expect(result.success).toBe(false);
+        expect(result.retries).toBe(2); // MAX_RETRIES = 2
+        expect(alwaysFailFn).toHaveBeenCalledTimes(3); // initial + 2 retries
+      });
+    });
+
+    describe("per-tool timeout", () => {
+      it("times out a slow tool", async () => {
+        vi.useFakeTimers();
+        try {
+          // slowFn never resolves — it hangs until timeout
+          const slowFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(() => new Promise(() => {}));
+          const tc: ToolCall = { name: "clipboard_read", args: {}, raw: "" };
+          const resultPromise = executeToolWithRetry(tc, slowFn);
+          // Advance timers past the 5s clipboard_read timeout
+          vi.advanceTimersByTime(6_000);
+          const result = await resultPromise;
+          expect(result.success).toBe(false);
+          expect(result.result).toContain("timed out");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    describe("empty batch", () => {
+      it("returns empty array for empty batch", async () => {
+        const results = await executeToolBatch([], mockExecuteFn);
+        expect(results).toEqual([]);
+      });
+    });
+  });
+
+  describe("cost tracking", () => {
+    beforeEach(() => {
+      clearSessionToolCosts("test-session");
+    });
+
+    it("records tool cost", () => {
+      recordToolCost({
+        toolCallId: "call-1",
+        sessionId: "test-session",
+        name: "read_file",
+        durationMs: 100,
+        retries: 0,
+        success: true,
+        timestamp: Date.now(),
+      });
+
+      const stats = getSessionToolCosts("test-session");
+      expect(stats.totalCalls).toBe(1);
+      expect(stats.totalDurationMs).toBe(100);
+      expect(stats.byTool.read_file.calls).toBe(1);
+    });
+
+    it("aggregates multiple costs", () => {
+      recordToolCost({ toolCallId: "c1", sessionId: "test-session", name: "read_file", durationMs: 100, retries: 0, success: true, timestamp: Date.now() });
+      recordToolCost({ toolCallId: "c2", sessionId: "test-session", name: "read_file", durationMs: 200, retries: 1, success: true, timestamp: Date.now() });
+      recordToolCost({ toolCallId: "c3", sessionId: "test-session", name: "write_file", durationMs: 50, retries: 0, success: true, timestamp: Date.now() });
+
+      const stats = getSessionToolCosts("test-session");
+      expect(stats.totalCalls).toBe(3);
+      expect(stats.totalDurationMs).toBe(350);
+      expect(stats.totalRetries).toBe(1);
+      expect(stats.byTool.read_file.calls).toBe(2);
+      expect(stats.byTool.write_file.calls).toBe(1);
+    });
+
+    it("clears session costs", () => {
+      recordToolCost({ toolCallId: "c1", sessionId: "test-session", name: "read_file", durationMs: 100, retries: 0, success: true, timestamp: Date.now() });
+      clearSessionToolCosts("test-session");
+
+      const stats = getSessionToolCosts("test-session");
+      expect(stats.totalCalls).toBe(0);
+    });
+
+    it("returns empty stats for unknown session", () => {
+      const stats = getSessionToolCosts("nonexistent-session");
+      expect(stats.totalCalls).toBe(0);
+      expect(stats.totalDurationMs).toBe(0);
+      expect(stats.byTool).toEqual({});
+    });
+
+    it("caps at 500 entries per session", () => {
+      for (let i = 0; i < 510; i++) {
+        recordToolCost({
+          toolCallId: `c${i}`,
+          sessionId: "cap-test",
+          name: "read_file",
+          durationMs: 1,
+          retries: 0,
+          success: true,
+          timestamp: Date.now(),
+        });
+      }
+
+      const stats = getSessionToolCosts("cap-test");
+      expect(stats.totalCalls).toBe(500);
     });
   });
 });

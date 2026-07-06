@@ -7,6 +7,7 @@ import { FindBar } from "@/components/editor/FindBar";
 import { QuickOpen } from "@/components/editor/QuickOpen";
 import { GoToLine } from "@/components/editor/GoToLine";
 import { ChatView } from "@/components/editor/ChatView";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import {
   X, FileCode, FilePlus, Circle,
   Check, Code2,
@@ -440,7 +441,9 @@ export function EditorPane() {
   return (
     <div className="h-full flex flex-col bg-dalam-bg-primary">
       <div className="flex-1 min-h-0">
-        <ChatView />
+        <ErrorBoundary>
+          <ChatView />
+        </ErrorBoundary>
       </div>
     </div>
   );

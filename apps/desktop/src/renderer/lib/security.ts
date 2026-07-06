@@ -6,6 +6,8 @@
 export function isPrivateHost(hostname: string): boolean {
   // IPv6 loopback/link-local
   if (hostname === "::1" || hostname === "[::1]") return true;
+  // IPv6-mapped IPv4 (e.g. [::ffff:127.0.0.1] or ::ffff:127.0.0.1)
+  if (/^\[?::ffff:\d+\.\d+\.\d+\.\d+\]?$/i.test(hostname)) return true;
   // IPv4 private ranges
   if (/^127\./.test(hostname)) return true;
   if (/^10\./.test(hostname)) return true;
@@ -13,10 +15,14 @@ export function isPrivateHost(hostname: string): boolean {
   if (/^169\.254\./.test(hostname)) return true;
   if (/^0\./.test(hostname)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
+  // Octal IP (e.g. 0177.0.0.1 → 127.0.0.1)
+  if (/^0[0-7]+(\.[0-7]+)*$/.test(hostname)) return true;
   // Cloud metadata endpoints
   if (/^metadata\.google\.internal$/i.test(hostname)) return true;
   if (/^instance-data\.local$/i.test(hostname)) return true;
   if (/^169\.254\.169\.254$/.test(hostname)) return true;
+  // DNS rebinding via nip.io / sslip.io
+  if (/\.(nip\.io|sslip\.io)$/i.test(hostname)) return true;
   // Catch bare integer IP representations
   if (hostname.includes(".")) {
     try {

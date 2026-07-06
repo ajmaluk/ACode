@@ -128,7 +128,7 @@ export type ChatMessage = {
   todos?: TodoItem[];
   activities?: PendingActivity[];
   attachments?: FileAttachment[];
-  taskPlan?: { id: string; title: string; status: "pending" | "running" | "done" | "failed" }[];
+  taskPlan?: { id: string; title: string; status: "pending" | "running" | "completed" | "failed" }[];
   taskPlanSummary?: string;
   /** Questions asked by the agent and user's answers */
   questions?: { id: string; question: string; options: string[]; answer: string; timestamp: number }[];

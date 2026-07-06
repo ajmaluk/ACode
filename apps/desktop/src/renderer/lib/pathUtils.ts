@@ -143,6 +143,46 @@ export function pathsEqual(a: string, b: string, caseInsensitive = false): boole
 // Language detection from file paths
 // ============================================================================
 
+const LANGUAGE_MAP: Record<string, string> = {
+  ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
+  js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+  json: "json", jsonc: "json",
+  md: "markdown", mdx: "markdown",
+  py: "python", pyi: "python",
+  rs: "rust",
+  go: "go",
+  java: "java",
+  rb: "ruby",
+  php: "php",
+  swift: "swift",
+  kt: "kotlin", kts: "kotlin",
+  cs: "csharp",
+  cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+  c: "c", h: "c",
+  hcl: "hcl", tf: "hcl",
+  css: "css", scss: "scss", less: "less",
+  html: "html", htm: "html", vue: "html", astro: "html",
+  xml: "xml", svg: "xml",
+  sql: "sql",
+  sh: "shell", bash: "shell", zsh: "shell", fish: "shell", ksh: "shell",
+  ps1: "powershell",
+  yaml: "yaml", yml: "yaml",
+  toml: "toml",
+  ini: "ini", cfg: "ini", conf: "ini",
+  graphql: "graphql", gql: "graphql",
+  sol: "solidity",
+  dart: "dart",
+  lua: "lua",
+  r: "r",
+  ex: "elixir", exs: "elixir",
+  erl: "erlang",
+  hs: "haskell",
+  ml: "ocaml", mli: "ocaml",
+  zig: "zig",
+  nim: "nim",
+  v: "verilog", sv: "verilog", vhdl: "vhdl",
+};
+
 /** Detect the editor language / Monaco language ID from a file path. */
 export function detectLanguage(path: string | null): string {
   if (!path) return "plaintext";
@@ -160,47 +200,7 @@ export function detectLanguage(path: string | null): string {
   if (fileName === "Podfile") return "ruby";
   if (fileName === "Vagrantfile") return "ruby";
 
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
-    js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-    json: "json", jsonc: "json",
-    md: "markdown", mdx: "markdown",
-    py: "python", pyi: "python",
-    rs: "rust",
-    go: "go",
-    java: "java",
-    rb: "ruby",
-    php: "php",
-    swift: "swift",
-    kt: "kotlin", kts: "kotlin",
-    cs: "csharp",
-    cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
-    c: "c", h: "c",
-    hcl: "hcl", tf: "hcl",
-    css: "css", scss: "scss", less: "less",
-    html: "html", htm: "html", vue: "html", astro: "html",
-    xml: "xml", svg: "xml",
-    sql: "sql",
-    sh: "shell", bash: "shell", zsh: "shell", fish: "shell", ksh: "shell",
-    ps1: "powershell",
-    yaml: "yaml", yml: "yaml",
-    toml: "toml",
-    ini: "ini", cfg: "ini", conf: "ini",
-    graphql: "graphql", gql: "graphql",
-    sol: "solidity",
-    dart: "dart",
-    lua: "lua",
-    r: "r",
-    ex: "elixir", exs: "elixir",
-    erl: "erlang",
-    hs: "haskell",
-    ml: "ocaml", mli: "ocaml",
-    zig: "zig",
-    nim: "nim",
-    v: "verilog", sv: "verilog", vhdl: "vhdl",
-  };
-
-  return map[ext] ?? "plaintext";
+  return LANGUAGE_MAP[ext] ?? "plaintext";
 }
 
 /**

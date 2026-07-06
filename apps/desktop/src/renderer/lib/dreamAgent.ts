@@ -61,7 +61,7 @@ export async function runDreamCycle(
   notifyFn?: (proposal: DreamProposal) => void
 ): Promise<DreamCycleResult> {
   if (activeDreams.has(workspacePath)) {
-    console.log(`[DreamAgent] Dream cycle already running for ${workspacePath}, skipping.`);
+    if (import.meta.env.DEV) console.log(`[DreamAgent] Dream cycle already running for ${workspacePath}, skipping.`);
     return {
       report: { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 },
       proposals: { autoAccepted: [], queuedForReview: [], rejected: [] },
@@ -187,7 +187,7 @@ export async function runDreamCycle(
       }
 
       if (reScoredPromoted > 0 || reScoredDemoted > 0) {
-        console.log(`[DreamAgent] Re-scored memories: ${reScoredPromoted} promoted, ${reScoredDemoted} demoted`);
+        if (import.meta.env.DEV) console.log(`[DreamAgent] Re-scored memories: ${reScoredPromoted} promoted, ${reScoredDemoted} demoted`);
       }
     } catch (err) {
       console.warn("[DreamAgent] Memory re-scoring failed:", err);
@@ -439,7 +439,7 @@ export function cancelDreamCycle(workspacePath: string): void {
   if (timeoutId !== undefined) {
     clearTimeout(timeoutId);
     activeDreamTimeouts.delete(workspacePath);
-    console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${workspacePath}`);
+    if (import.meta.env.DEV) console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${workspacePath}`);
   }
 }
 
@@ -449,7 +449,7 @@ export function cancelDreamCycle(workspacePath: string): void {
 export function cancelAllDreamCycles(): void {
   for (const [path, timeoutId] of activeDreamTimeouts) {
     clearTimeout(timeoutId);
-    console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${path}`);
+    if (import.meta.env.DEV) console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${path}`);
   }
   activeDreamTimeouts.clear();
 }
@@ -514,7 +514,7 @@ export function triggerDreamCycleIfNeeded(
       activeDreamTimeouts.delete(workspacePath);
       runDreamCycle(workspacePath, dreamNotifyFn)
         .then(() => {
-          setLastDreamTime(workspacePath, Date.now());
+          void setLastDreamTime(workspacePath, Date.now());
         })
         .catch(err => {
           if (import.meta.env.DEV) console.error("[DreamAgent] Background dream cycle failed:", err);

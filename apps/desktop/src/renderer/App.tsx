@@ -33,31 +33,6 @@ import {
 } from "@/store/useAppStore";
 import { platform } from "@/lib/platform";
 
-// Splash / loading screen — icon only, no text
-function SplashScreen() {
-  return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-dalam-bg-primary">
-      <div className="relative animate-float">
-        <img
-          src="/icon.svg"
-          alt=""
-          className="w-24 h-24 object-contain"
-          style={{
-            animation: "marble-drift 3s ease-in-out infinite",
-          }}
-        />
-        <div
-          className="absolute inset-0 blur-2xl opacity-40"
-          style={{
-            background: "radial-gradient(circle, rgba(107,0,255,0.3) 0%, transparent 70%)",
-            animation: "pulse-glow 2s ease-in-out infinite",
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
 export function App() {
   useProgressKeyframes();
   const [booted, setBooted] = useState(false);
@@ -434,10 +409,15 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePalette, toggleShortcuts, setPaletteOpen]);
 
-  // Show splash screen during initial load
-  if (!booted) {
-    return <SplashScreen />;
-  }
+  // Signal HTML splash to hide when boot completes
+  useEffect(() => {
+    if (booted) {
+      window.dispatchEvent(new CustomEvent("dalam:booted"));
+    }
+  }, [booted]);
+
+  // HTML splash is still visible — render nothing until boot completes
+  if (!booted) return null;
 
   if (settingsOpen) {
     return (
@@ -539,8 +519,8 @@ export function App() {
             >
               {settings.theme === "dark" ? <Moon className="w-4 h-4" /> : settings.theme === "light" ? <Sun className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
             </button>
-            {/* Right panel toggle button — only visible in chat/agent mode */}
-            {viewMode === "chat" && (
+            {/* Right panel toggle button — only visible in chat/agent mode with an active workspace */}
+            {viewMode === "chat" && activeWorkspaceId && (
               <button
                 onClick={() => useUI.getState().toggleRightPanel()}
                 className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
@@ -577,8 +557,8 @@ export function App() {
                 <EditorPane />
               </ErrorBoundary>
             </Panel>
-            {/* Right panel — only available in chat/agent mode */}
-            {viewMode === "chat" && (
+            {/* Right panel — only available in chat/agent mode with an active workspace */}
+            {viewMode === "chat" && activeWorkspaceId && (
               <>
                 <PanelResizeHandle
                   className="panel-resizer horizontal"

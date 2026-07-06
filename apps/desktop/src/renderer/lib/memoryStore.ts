@@ -196,7 +196,6 @@ export async function searchMemories(
     FROM memories m
     JOIN memories_fts ON memories_fts.id = m.id
     WHERE memories_fts MATCH ?`;
-  const safeQuery = query;
   // Break multi-word query into individual tokens for better search results
   // Escape FTS5 special characters in each token
   function escapeFts5Token(token: string): string {
@@ -205,7 +204,7 @@ export async function searchMemories(
       .replace(/"/g, ' ')                          // Strip double quotes
       .trim();
   }
-  const tokens = safeQuery.split(/\s+/).map(escapeFts5Token).filter(t => t.length > 0);
+  const tokens = query.split(/\s+/).map(escapeFts5Token).filter(t => t.length > 0);
   const ftsQuery = tokens.length > 0
     ? tokens.map(t => `"${t}"`).join(" OR ")
     : '""';  // Empty query matches nothing
@@ -274,25 +273,33 @@ async function searchMemoriesFallback(
  * getCriticalMemories() — Always-inject critical tier entries.
  */
 export async function getCriticalMemories(limit = 10): Promise<MemoryEntry[]> {
-  const db = getDb();
-  const rows = await db.select(
-    `SELECT * FROM memories WHERE tier = 'critical' AND stale = 0 ORDER BY last_accessed DESC LIMIT ?`,
-    [limit]
-  ) as MemoryEntryRow[];
-  return rows.map(parseRow);
+  try {
+    const db = getDb();
+    const rows = await db.select(
+      `SELECT * FROM memories WHERE tier = 'critical' AND stale = 0 ORDER BY last_accessed DESC LIMIT ?`,
+      [limit]
+    ) as MemoryEntryRow[];
+    return rows.map(parseRow);
+  } catch {
+    return [];
+  }
 }
 
 /**
  * getAllMemories() — Full list (for dream agent, export, etc.)
  */
 export async function getAllMemories(opts: { excludeStale?: boolean } = {}): Promise<MemoryEntry[]> {
-  const db = getDb();
-  const { excludeStale = true } = opts;
-  const sql = excludeStale
-    ? `SELECT * FROM memories WHERE stale = 0 ORDER BY updated_at DESC`
-    : `SELECT * FROM memories ORDER BY updated_at DESC`;
-  const rows = await db.select(sql) as MemoryEntryRow[];
-  return rows.map(parseRow);
+  try {
+    const db = getDb();
+    const { excludeStale = true } = opts;
+    const sql = excludeStale
+      ? `SELECT * FROM memories WHERE stale = 0 ORDER BY updated_at DESC`
+      : `SELECT * FROM memories ORDER BY updated_at DESC`;
+    const rows = await db.select(sql) as MemoryEntryRow[];
+    return rows.map(parseRow);
+  } catch {
+    return [];
+  }
 }
 
 // ============================================================
@@ -1008,28 +1015,32 @@ export function scoreMemory(m: MemoryEntry): number {
  *  - Never accessed AND created >14 days ago AND tier is low
  */
 export async function detectStaleMemories(): Promise<string[]> {
-  const db = getDb();
-  const now = Date.now();
-  const DAY = 86_400_000;
-  const staleIds: string[] = [];
+  try {
+    const db = getDb();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    const staleIds: string[] = [];
 
-  // 1. Not accessed in >30 days, low/medium tier
-  const oldAccess = await db.select(
-    `SELECT * FROM memories WHERE stale = 0 AND last_accessed > 0
-     AND last_accessed < ? AND tier IN ('low', 'medium')`,
-    [now - 30 * DAY]
-  ) as MemoryEntryRow[];
-  staleIds.push(...oldAccess.map((r: MemoryEntryRow) => r.id));
+    // 1. Not accessed in >30 days, low/medium tier
+    const oldAccess = await db.select(
+      `SELECT * FROM memories WHERE stale = 0 AND last_accessed > 0
+       AND last_accessed < ? AND tier IN ('low', 'medium')`,
+      [now - 30 * DAY]
+    ) as MemoryEntryRow[];
+    staleIds.push(...oldAccess.map((r: MemoryEntryRow) => r.id));
 
-  // 2. Never accessed, created >14 days ago, low tier
-  const neverAccessed = await db.select(
-    `SELECT * FROM memories WHERE stale = 0 AND access_count = 0
-     AND created_at < ? AND tier = 'low'`,
-    [now - 14 * DAY]
-  ) as MemoryEntryRow[];
-  staleIds.push(...neverAccessed.map((r: MemoryEntryRow) => r.id));
+    // 2. Never accessed, created >14 days ago, low tier
+    const neverAccessed = await db.select(
+      `SELECT * FROM memories WHERE stale = 0 AND access_count = 0
+       AND created_at < ? AND tier = 'low'`,
+      [now - 14 * DAY]
+    ) as MemoryEntryRow[];
+    staleIds.push(...neverAccessed.map((r: MemoryEntryRow) => r.id));
 
-  return [...new Set(staleIds)];
+    return [...new Set(staleIds)];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -1037,17 +1048,21 @@ export async function detectStaleMemories(): Promise<string[]> {
  * Returns count of newly stale entries.
  */
 export async function autoMarkStale(): Promise<number> {
-  const staleIds = await detectStaleMemories();
-  if (staleIds.length === 0) return 0;
+  try {
+    const staleIds = await detectStaleMemories();
+    if (staleIds.length === 0) return 0;
 
-  const db = getDb();
-  const now = Date.now();
-  const placeholders = staleIds.map(() => "?").join(",");
-  await db.execute(
-    `UPDATE memories SET stale=1, updated_at=? WHERE id IN (${placeholders})`,
-    [now, ...staleIds]
-  );
-  return staleIds.length;
+    const db = getDb();
+    const now = Date.now();
+    const placeholders = staleIds.map(() => "?").join(",");
+    await db.execute(
+      `UPDATE memories SET stale=1, updated_at=? WHERE id IN (${placeholders})`,
+      [now, ...staleIds]
+    );
+    return staleIds.length;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -1058,36 +1073,40 @@ export async function autoMarkStale(): Promise<number> {
 export async function enforceMemoryBudget(
   budget: number = CTX.MEMORY_BUDGET
 ): Promise<number> {
-  const db = getDb();
-  const total = await db.select(
-    `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
-  ) as { count: number }[];
-  const currentCount = total[0]?.count ?? 0;
-  if (currentCount <= budget) return 0;
+  try {
+    const db = getDb();
+    const total = await db.select(
+      `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
+    ) as { count: number }[];
+    const currentCount = total[0]?.count ?? 0;
+    if (currentCount <= budget) return 0;
 
-  const excess = currentCount - budget;
+    const excess = currentCount - budget;
 
-  // Get all non-critical memories ordered by quality score (lowest first)
-  const rows = await db.select(
-    `SELECT * FROM memories WHERE stale = 0 AND tier != 'critical'
-     ORDER BY access_count ASC, updated_at ASC LIMIT ?`,
-    [excess + 10] // fetch a few extra for scoring
-  ) as MemoryEntryRow[];
+    // Get all non-critical memories ordered by quality score (lowest first)
+    const rows = await db.select(
+      `SELECT * FROM memories WHERE stale = 0 AND tier != 'critical'
+       ORDER BY access_count ASC, updated_at ASC LIMIT ?`,
+      [excess + 10] // fetch a few extra for scoring
+    ) as MemoryEntryRow[];
 
-  // Score and sort to find the worst candidates
-  const candidates = rows.map(parseRow).map((m: MemoryEntry) => ({ entry: m, score: scoreMemory(m) }));
-  candidates.sort((a: { entry: MemoryEntry; score: number }, b: { entry: MemoryEntry; score: number }) => a.score - b.score);
+    // Score and sort to find the worst candidates
+    const candidates = rows.map(parseRow).map((m: MemoryEntry) => ({ entry: m, score: scoreMemory(m) }));
+    candidates.sort((a: { entry: MemoryEntry; score: number }, b: { entry: MemoryEntry; score: number }) => a.score - b.score);
 
-  const toPrune = candidates.slice(0, excess).map((c: { entry: MemoryEntry; score: number }) => c.entry.id);
-  if (toPrune.length === 0) return 0;
+    const toPrune = candidates.slice(0, excess).map((c: { entry: MemoryEntry; score: number }) => c.entry.id);
+    if (toPrune.length === 0) return 0;
 
-  const placeholders = toPrune.map(() => "?").join(",");
-  await db.execute(
-    `UPDATE memories SET stale=1, updated_at=? WHERE id IN (${placeholders})`,
-    [Date.now(), ...toPrune]
-  );
+    const placeholders = toPrune.map(() => "?").join(",");
+    await db.execute(
+      `UPDATE memories SET stale=1, updated_at=? WHERE id IN (${placeholders})`,
+      [Date.now(), ...toPrune]
+    );
 
-  return toPrune.length;
+    return toPrune.length;
+  } catch {
+    return 0;
+  }
 }
 
 /**

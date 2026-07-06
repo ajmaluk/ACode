@@ -832,7 +832,10 @@ let _saveMessagesTimer: ReturnType<typeof setTimeout> | null = null;
 let _pendingMessagesRef: Record<string, import("@dalam/shared-types").ChatMessage[]> | null = null;
 const SAVE_MESSAGES_DEBOUNCE_MS = 200;
 if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", () => flushSavePersistedMessages());
+  window.addEventListener("beforeunload", () => {
+    flushSavePersistedMessages();
+    flushSaveWorkspaceData();
+  });
 }
 type MessagesMap = Record<string, import("@dalam/shared-types").ChatMessage[]>;
 function _doSavePersistedMessages(messages: MessagesMap) {
@@ -1489,9 +1492,31 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
             status: (lastSession.status === "completed" || lastSession.status === "aborted" || lastSession.status === "error") ? "idle" : lastSession.status,
           };
           useChat.setState({
+            activeSessionId: lastSession.id,
             session: restoredSession,
             messages: data.sessionMessages?.[lastSession.id] || [],
+            _sendInProgress: false,
+            isStreaming: false,
+            streamingContent: "",
+            thinkingContent: "",
+            pendingToolCalls: [],
+            pendingActivities: [],
+            pendingAttachments: [],
+            restoredVersionId: null,
+            preRestoreMessages: null,
+            messageQueue: [],
+            todos: [],
+            _pendingChanges: [],
+            subAgents: [],
           });
+          // Restore terminal state for the restored session
+          try {
+            useTerminal.getState().restoreForSession(lastSession.id);
+          } catch { /* terminal store may not be loaded yet */ }
+          // Clear diff view — it's per-session
+          try {
+            useDiffView.getState().close();
+          } catch { /* diff view store may not be loaded yet */ }
         } else {
           useChat.setState({
             session: null,
@@ -1579,6 +1604,15 @@ let _saveWorkspaceDataTimer: ReturnType<typeof setTimeout> | null = null;
 export async function saveWorkspaceData() {
   if (_saveWorkspaceDataTimer) clearTimeout(_saveWorkspaceDataTimer);
   _saveWorkspaceDataTimer = setTimeout(() => void _doSaveWorkspaceData(), 100);
+}
+
+/** Immediately flush any pending workspace data save (called on beforeunload). */
+export function flushSaveWorkspaceData(): void {
+  if (_saveWorkspaceDataTimer) {
+    clearTimeout(_saveWorkspaceDataTimer);
+    _saveWorkspaceDataTimer = null;
+    void _doSaveWorkspaceData();
+  }
 }
 
 async function _doSaveWorkspaceData() {
@@ -1734,7 +1768,7 @@ export type TodoStatus = TodoItem["status"];
 type TaskPlanItem = {
   id: string;
   title: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "pending" | "running" | "completed" | "failed";
 };
 
 type ChatState = {
@@ -3065,7 +3099,7 @@ export const useChat = create<ChatState>((set, get) => ({
         } else if (event.command === "completed") {
           set((s) => ({
             taskPlan: s.taskPlan
-              ? s.taskPlan.map((t) => t.status !== "done" ? { ...t, status: "done" as const } : t)
+              ? s.taskPlan.map((t) => t.status !== "completed" ? { ...t, status: "completed" as const } : t)
               : s.taskPlan,
             taskPlanSummary: event.result || "Task completed",
           }));
@@ -3915,12 +3949,16 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async compactSessionHistory(sessionId) {
-    const { sessionMessages, selectedModelId, compactionSummaries, _compactingSessions, _abortControllers } = get();
+    const { sessionMessages, selectedModelId, compactionSummaries, _compactingSessions } = get();
     if (_compactingSessions.has(sessionId)) return;
     // Create AbortController for cancellable compaction
     const compactController = new AbortController();
-    _abortControllers.set(sessionId + "-compact", compactController);
-    set({ _abortControllers: new Map(_abortControllers) });
+    // Atomically update the Map to avoid race condition with concurrent compactions
+    set((s) => {
+      const next = new Map(s._abortControllers);
+      next.set(sessionId + "-compact", compactController);
+      return { _abortControllers: next };
+    });
     const messages = sessionMessages[sessionId];
     if (!messages || messages.length <= 6) return;
 
@@ -3938,13 +3976,6 @@ export const useChat = create<ChatState>((set, get) => ({
     // Compaction throttle: don't attempt more than once per 30 seconds
     const lastAttempt = _lastCompactionAttempt[sessionId] ?? 0;
     if (Date.now() - lastAttempt < COMPACTION_THROTTLE_MS) return;
-    // Clean up compaction AbortController
-    const compactCtrl = get()._abortControllers.get(sessionId + "-compact");
-    if (compactCtrl) {
-      const ctrls = new Map(get()._abortControllers);
-      ctrls.delete(sessionId + "-compact");
-      set({ _abortControllers: ctrls });
-    }
     _lastCompactionAttempt[sessionId] = Date.now();
 
     // Minimum message count gate
@@ -4065,7 +4096,12 @@ export const useChat = create<ChatState>((set, get) => ({
     } finally {
       const remaining = new Set(get()._compactingSessions);
       remaining.delete(sessionId);
-      set({ _compactingSessions: remaining });
+      // Clean up the AbortController now that compaction is done
+      set((s) => {
+        const next = new Map(s._abortControllers);
+        next.delete(sessionId + "-compact");
+        return { _compactingSessions: remaining, _abortControllers: next };
+      });
     }
   },
 
