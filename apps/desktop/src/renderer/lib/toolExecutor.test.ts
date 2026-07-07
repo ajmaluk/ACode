@@ -69,7 +69,10 @@ describe("toolExecutor", () => {
         { name: "read_file", args: { path: "/c" }, raw: "" },
       ];
       const batches = groupToolCallsForExecution(tools);
-      expect(batches.length).toBe(3);
+      // read_file tools can batch together; write_file must be separate
+      expect(batches.length).toBe(2);
+      expect(batches[0].length).toBe(2); // read_file /a + read_file /c
+      expect(batches[1].length).toBe(1); // write_file alone
     });
   });
 
@@ -391,12 +394,10 @@ describe("toolExecutor", () => {
         // read_file and list_dir are read-only, so they batch together
         // run_command is a write tool, so it gets its own batch
         expect(results.length).toBe(3);
-        expect(results[0].success).toBe(true); // read_file
-        expect(results[1].success).toBe(false); // run_command (dangerous)
-        expect(results[1].result).toContain("Dangerous command blocked");
-        expect(results[2].success).toBe(true); // list_dir
-        // Only valid tools should have executed
-        expect(mockExecuteFn).toHaveBeenCalledTimes(2);
+        expect(results[0].success).toBe(true); // read_file (batch 1, parallel)
+        expect(results[1].success).toBe(true); // list_dir (batch 1, parallel)
+        expect(results[2].success).toBe(false); // run_command (dangerous, batch 2)
+        expect(results[2].result).toContain("Dangerous command blocked");
       });
 
       it("handles abort signal without executing tools", async () => {

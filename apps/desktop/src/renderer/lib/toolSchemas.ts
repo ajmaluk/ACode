@@ -165,6 +165,23 @@ export const CreateTaskPlanArgsSchema = z.object({
   tasks: z.string().min(1, "tasks is required — newline-separated list of task titles"),
 });
 
+export const WebFetchArgsSchema = z.object({
+  url: z.string().url("must be a valid URL"),
+  format: z.enum(["markdown", "text", "html"]).optional().default("markdown"),
+});
+
+export const WebSearchArgsSchema = z.object({
+  query: z.string().min(1, "query is required"),
+  num_results: z.string().optional(),
+  livecrawl: z.string().optional(),
+  type: z.string().optional(),
+});
+
+export const CreateFileArgsSchema = z.object({
+  path: z.string().min(1, "path is required"),
+  content: z.string(),
+});
+
 export const QuestionArgsSchema = z.object({
   question: z.string().min(1, "question is required"),
   options: z.string().optional(),
@@ -233,8 +250,13 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   edit_file: { schema: EditFileArgsSchema, requiredFields: ["path"] },
   list_dir: { schema: ListDirArgsSchema, requiredFields: ["path"] },
   grep_file: { schema: GrepFileArgsSchema, requiredFields: ["path", "pattern"] },
+  grep: { schema: GrepFileArgsSchema, requiredFields: ["path", "pattern"] },
   search_files: { schema: SearchFilesArgsSchema, requiredFields: ["pattern"] },
+  search: { schema: SearchFilesArgsSchema, requiredFields: ["pattern"] },
   run_command: { schema: RunCommandArgsSchema, requiredFields: ["command"] },
+  bash: { schema: RunCommandArgsSchema, requiredFields: ["command"] },
+  shell: { schema: RunCommandArgsSchema, requiredFields: ["command"] },
+  execute: { schema: RunCommandArgsSchema, requiredFields: ["command"] },
   git_status: { schema: GitStatusArgsSchema, requiredFields: [] },
   git_commit: { schema: GitCommitArgsSchema, requiredFields: ["message"] },
   git_log: { schema: GitLogArgsSchema, requiredFields: [] },
@@ -264,6 +286,9 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   browser_execute: { schema: BrowserExecuteArgsSchema, requiredFields: ["script"] },
   create_task_plan: { schema: CreateTaskPlanArgsSchema, requiredFields: ["tasks"] },
   question: { schema: QuestionArgsSchema, requiredFields: ["question"] },
+  webfetch: { schema: WebFetchArgsSchema, requiredFields: ["url"] },
+  websearch: { schema: WebSearchArgsSchema, requiredFields: ["query"] },
+  create_file: { schema: CreateFileArgsSchema, requiredFields: ["path"] },
   get_env: { schema: GetEnvArgsSchema, requiredFields: ["key"] },
   get_screen_info: { schema: GetScreenInfoArgsSchema, requiredFields: [] },
   list_processes: { schema: ListProcessesArgsSchema, requiredFields: [] },

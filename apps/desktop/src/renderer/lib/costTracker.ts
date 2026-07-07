@@ -95,11 +95,7 @@ export function parseUsageFromChunk(chunk: unknown): TokenUsage | null {
         totalTokens: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
       };
     }
-  }
-
-  // Anthropic format: { usage: { input_tokens, output_tokens } }
-  if (obj.usage && typeof obj.usage === "object") {
-    const u = obj.usage as Record<string, number>;
+    // Anthropic format: { usage: { input_tokens, output_tokens } }
     if (u.input_tokens !== undefined) {
       return {
         inputTokens: u.input_tokens ?? 0,

@@ -60,8 +60,11 @@ const TAG_TO_TOOL: Record<string, string> = {
   read_file: "read_file",
   write_file: "write_file",
   edit_file: "edit_file",
+  grep_file: "grep_file",
+  search_files: "search_files",
   bash: "bash",
   shell: "bash",
+  execute: "bash",
   search: "file_search",
   grep: "grep",
   webfetch: "webfetch",
@@ -69,6 +72,49 @@ const TAG_TO_TOOL: Record<string, string> = {
   run_command: "bash",
   task: "task",
   create_file: "create_file",
+  git_status: "git_status",
+  git_commit: "git_commit",
+  git_log: "git_log",
+  git_branch: "git_branch",
+  git_checkout: "git_checkout",
+  git_diff_file: "git_diff_file",
+  clipboard_read: "clipboard_read",
+  clipboard_write: "clipboard_write",
+  notify: "notify",
+  system_info: "system_info",
+  open_url: "open_url",
+  launch_app: "launch_app",
+  reveal_in_finder: "reveal_in_finder",
+  kill_process: "kill_process",
+  get_env: "get_env",
+  get_screen_info: "get_screen_info",
+  list_processes: "list_processes",
+  get_disk_space: "get_disk_space",
+  memory_save: "memory_save",
+  memory_search: "memory_search",
+  memory_delete: "memory_delete",
+  memory_stats: "memory_stats",
+  memory_maintain: "memory_maintain",
+  memory_extract: "memory_extract",
+  memory_export: "memory_export",
+  memory_import: "memory_import",
+  open_panel: "open_panel",
+  screenshot: "screenshot",
+  browser_navigate: "browser_navigate",
+  browser_execute: "browser_execute",
+  run_preview: "run_preview",
+  create_task_plan: "create_task_plan",
+  question: "question",
+  set_theme: "set_theme",
+  toggle_theme: "toggle_theme",
+  set_view_mode: "set_view_mode",
+  toggle_view_mode: "toggle_view_mode",
+  toggle_right_panel: "toggle_right_panel",
+  toggle_bottom_panel: "toggle_bottom_panel",
+  set_right_panel_tab: "set_right_panel_tab",
+  set_bottom_panel_tab: "set_bottom_panel_tab",
+  new_terminal: "new_terminal",
+  terminal_write: "terminal_write",
 };
 
 // Comprehensive list of ALL tool names for display stripping (must match dalamAPI.ts KNOWN_TOOL_NAMES)
@@ -97,7 +143,14 @@ const XML_STRIP_RE = new RegExp(
   "gi"
 );
 const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi");
+// Strip complete opening tags that have no matching closing tag in the content.
+// During streaming, a complete opening tag like <read_file path="/foo"> ends with `>`
+// but has no `</read_file>` yet. Neither XML_STRIP_RE (needs pair) nor XML_INCOMPLETE_TAG_RE
+// (needs no `>`) catches it, leaving it visible in the typing animation.
+const XML_OPENING_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*>`, "gi");
 const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
+const XML_MCP_OPENING_TAG_RE = /<mcp_[a-zA-Z_][a-zA-Z0-9_-]*[^>]*>/gi;
+const XML_MCP_CLOSING_TAG_RE = /<\/mcp_[^>]*>/gi;
 const XML_INCOMPLETE_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi");
 // Strip model output tags WITH their content (e.g. <thinking>...</thinking>)
 const XML_MODEL_OUTPUT_CONTENT_RE = /<(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)[^>]*>[\s\S]*?<\/(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\s*>/gi;
@@ -115,17 +168,23 @@ const XML_STRUCTURED_ORPHAN_CLOSE_RE = /<\/(?:parameter|goal|subgoal|steps|step|
  */
 export function stripXmlToolCallTags(content: string): string {
   // Fast path: skip all regex if content has no angle brackets
-  if (!content.includes("<") && !content.match(/\bquestion\s+question=/)) return content;
+  if (!content.includes("<") && !content.match(/(?:^|[\s<])question\s+question=/)) return content;
   let result = content;
   // Strip opening+content+closing blocks: <tool ...>content</tool>
   // and self-closing tags: <tool .../>
   result = result.replace(XML_STRIP_RE, "");
+  // Strip complete opening tags that have no matching closing tag (streaming artifact).
+  // After XML_STRIP_RE, any remaining opening tag of a known tool is unpaired and must
+  // be removed to prevent it from appearing in the typing animation.
+  result = result.replace(XML_OPENING_TAG_RE, "");
   // Strip orphan closing tags that weren't paired above: </tool>
   result = result.replace(XML_CLOSING_TAG_RE, "");
-  // Strip MCP tags
+  // Strip MCP tags (pairs, self-closing, orphan closing, and unpaired opening during streaming)
   result = result.replace(XML_MCP_STRIP_RE, "");
+  result = result.replace(XML_MCP_OPENING_TAG_RE, "");
+  result = result.replace(XML_MCP_CLOSING_TAG_RE, "");
   // Strip malformed question tags without opening < (LLM output quirk)
-  result = result.replace(/\bquestion\s+question="[^"]*"\s+options="[^"]*"\s*\/?>/g, "");
+  result = result.replace(/(?:^|[\s<])question\s+question="[^"]*"\s+options="[^"]*"\s*\/?>/g, "");
   // Strip Anthropic antml:function_calls / <invoke> blocks
   result = result.replace(/(?:antml:function_calls\s*)?<invoke[\s\S]*?<\/(?:antml:)?function_calls\s*>/gi, "");
   // Strip generic <function_calls> blocks (Llama, Mistral, vLLM, OpenAI leaks)
@@ -177,7 +236,7 @@ export function stripXmlToolCallTags(content: string): string {
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
 const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_save"]);
 const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app", "kill_process", "new_terminal", "terminal_write", "browser_navigate", "browser_execute", "run_preview", "open_url", "reveal_in_finder"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "task", "question", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab"]);
+const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "memory_export", "memory_import", "task", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab", "webfetch", "websearch", "grep", "search"]);
 
 /**
  * Parse XML-style tool calls from assistant text content.
@@ -673,17 +732,37 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   async renamePath(path, newName) {
     try {
       const api = createDalamAPI();
-      const oldTabs = get().openTabs.filter((t) => t.path === path);
+      const posixPath = toPosix(path);
+      const dir = posixPath.substring(0, posixPath.lastIndexOf("/"));
+      const newPath = dir + "/" + newName;
+      const dirPrefix = posixPath + "/";
+      // Match exact path OR files inside renamed directory
+      const oldTabs = get().openTabs.filter((t) => {
+        const tp = toPosix(t.path);
+        return tp === posixPath || tp.startsWith(dirPrefix);
+      });
       await api.fs.renamePath(path, newName);
       if (oldTabs.length > 0) {
-        const posixPath = toPosix(path);
-        const dir = posixPath.substring(0, posixPath.lastIndexOf("/"));
-        const newPath = dir + "/" + newName;
         set((s) => ({
-          openTabs: s.openTabs.map((t) =>
-            t.path === path ? { ...t, path: newPath, name: newName, language: detectLanguage(newPath) } : t
-          ),
-          activeFilePath: s.activeFilePath === path ? newPath : s.activeFilePath,
+          openTabs: s.openTabs.map((t) => {
+            const tp = toPosix(t.path);
+            if (tp === posixPath) {
+              return { ...t, path: newPath, name: newName, language: detectLanguage(newPath) };
+            }
+            if (tp.startsWith(dirPrefix)) {
+              const relativePath = tp.slice(dirPrefix.length);
+              const updatedPath = joinPath(newPath, relativePath);
+              return { ...t, path: updatedPath, name: basename(updatedPath) || t.name, language: detectLanguage(updatedPath) };
+            }
+            return t;
+          }),
+          activeFilePath: s.activeFilePath
+            ? (toPosix(s.activeFilePath) === posixPath
+                ? newPath
+                : toPosix(s.activeFilePath).startsWith(dirPrefix)
+                  ? joinPath(newPath, toPosix(s.activeFilePath).slice(dirPrefix.length))
+                  : s.activeFilePath)
+            : s.activeFilePath,
         }));
       }
       await get().refreshFileTree();
@@ -1017,9 +1096,10 @@ function _createSafetyTimer(
     };
     // Clear any pending auto-remove timers to prevent orphaned callbacks
     get()._autoRemoveTimers.forEach((t) => clearTimeout(t));
-    const updatedSessions = state.session
+    const activeSessionId = state.session?.id;
+    const updatedSessions = activeSessionId
       ? state.chatSessions.map((cs) =>
-          cs.id === state.session!.id
+          cs.id === activeSessionId
             ? { ...cs, status: "completed" as const, lastActivityAt: Date.now(), lastVisitedAt: Date.now() }
             : cs
         )
@@ -2182,7 +2262,7 @@ export const useChat = create<ChatState>((set, get) => ({
       restoredVersionId: null,
       preRestoreMessages: null,
       chatSessions: s.chatSessions.map((cs) =>
-        cs.id === session!.id
+        cs.id === (session?.id ?? "")
           ? {
               ...cs,
               status: "running",
@@ -2198,7 +2278,7 @@ export const useChat = create<ChatState>((set, get) => ({
           }
           : cs
       ),
-      sessionMessages: { ...s.sessionMessages, [session!.id]: [...(s.sessionMessages[session!.id] ?? []), userMsg] },
+      sessionMessages: session?.id ? { ...s.sessionMessages, [session.id]: [...(s.sessionMessages[session.id] ?? []), userMsg] } : s.sessionMessages,
     }));
     // Record user message in trajectory
     recordUserMessage(session.id, content);
@@ -2233,8 +2313,15 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       // Standard error handling (non-overflow errors)
       const { isStreaming } = get();
-      // If appendStream already handled the error (streaming ended), don't add duplicate error message
-      if (!isStreaming) { set({ _sendInProgress: false }); return; }
+      // If appendStream already handled the error (streaming ended), skip duplicate error message
+      // but only if there's already an error message in the store (avoid silent failure)
+      if (!isStreaming) {
+        const lastMsg = get().messages[get().messages.length - 1];
+        if (lastMsg?.role === "assistant" || lastMsg?.role === "system") {
+          set({ _sendInProgress: false });
+          return;
+        }
+      }
       const errorMsg: ChatMessage = {
         id: "err-" + crypto.randomUUID(),
         role: "assistant",
@@ -2242,10 +2329,10 @@ export const useChat = create<ChatState>((set, get) => ({
         timestamp: Date.now(),
       };
       if (!sessionId) { set({ _sendInProgress: false }); return; }
-      const newSessionMessages = { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), errorMsg] };
       set((s) => {
         const timer = s._safetyTimer;
         if (timer) clearTimeout(timer);
+        const liveSessionMessages = { ...s.sessionMessages, [sessionId]: [...(s.sessionMessages[sessionId] ?? []), errorMsg] };
         return {
           isStreaming: false,
           streamingStartedAt: null,
@@ -2255,18 +2342,19 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingActivities: [],
           _safetyTimer: null,
           messages: [...s.messages, errorMsg],
-          sessionMessages: newSessionMessages,
+          sessionMessages: liveSessionMessages,
           chatSessions: s.session
             ? s.chatSessions.map((cs) =>
-                cs.id === s.session!.id
+                cs.id === (s.session?.id ?? "")
                   ? { ...cs, status: "error", lastActivityAt: Date.now() }
                   : cs
               )
             : s.chatSessions,
         };
       });
-      savePersistedMessages(newSessionMessages);
-      savePersistedSessionSummaries(get().chatSessions);
+      const liveState = get();
+      savePersistedMessages(liveState.sessionMessages);
+      savePersistedSessionSummaries(liveState.chatSessions);
     }
     // Clear safety timer and reset _sendInProgress
     clearTimeout(sendInProgressSafety);
@@ -2287,6 +2375,27 @@ export const useChat = create<ChatState>((set, get) => ({
     {
       const currentTimer = get()._safetyTimer;
       if (currentTimer) clearTimeout(currentTimer);
+      // Cumulative stream duration guard: if streaming has been active for >10 minutes,
+      // force-stop to prevent runaway streams that keep sending events.
+      const startedAt = get().streamingStartedAt;
+      if (startedAt && Date.now() - startedAt > 600_000) {
+        console.warn("[Chat] Cumulative stream timeout (10 min) reached — force stopping");
+        const api = createDalamAPI();
+        const sid = get().activeSessionId;
+        if (sid) api.agent.cleanupStream(sid);
+        set({
+          isStreaming: false,
+          streamingStartedAt: null,
+          streamingContent: "",
+          thinkingContent: "",
+          pendingToolCalls: [],
+          pendingActivities: [],
+          _pendingChanges: [],
+          _safetyTimer: null,
+          _sendInProgress: false,
+        });
+        return;
+      }
       const pending = get().pendingToolCalls;
       const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
       const newTimer = _createSafetyTimer(get, set, hasUnresolved ? "tool-approval" : "normal");
@@ -2343,6 +2452,11 @@ export const useChat = create<ChatState>((set, get) => ({
         // If the reducer returned the same reference (invalid transition), drop the event.
         if (newRuntimeState === oldState) {
           _log(`[AgentRuntime] phase enforcement: dropping ${event.type} — invalid transition from ${oldState.phase}`);
+          // If a message-end is dropped (e.g. duplicate or race), force-clear streaming
+          // state to prevent the UI from getting stuck in "streaming" mode permanently.
+          if (event.type === "message-end") {
+            set({ isStreaming: false, streamingContent: "", thinkingContent: "", _safetyTimer: null, _sendInProgress: false, pendingToolCalls: [], pendingActivities: [], _pendingChanges: [] });
+          }
           return; // Skip further processing for invalid events
         }
 
@@ -2383,8 +2497,28 @@ export const useChat = create<ChatState>((set, get) => ({
           // Trim very long streams to prevent memory issues (keep last 200K chars)
           if (newContent.length > 200000) {
             const trimmed = newContent.slice(-200000);
-            const spaceIdx = trimmed.indexOf(" ");
-            return { streamingContent: spaceIdx > 0 && spaceIdx < 200 ? trimmed.slice(spaceIdx + 1) : trimmed };
+            // Find a safe break point that preserves XML tag and word boundaries:
+            // 1. Prefer a double-newline boundary for clean paragraph breaks
+            let breakIdx = trimmed.indexOf("\n\n");
+            if (breakIdx < 0 || breakIdx > trimmed.length * 0.3) {
+              // 2. Fall back to the end of the last complete XML closing tag
+              const lastCloseTag = trimmed.lastIndexOf(">");
+              const lastOpenTag = trimmed.lastIndexOf("<");
+              // If we're inside a tag (open < after close >), break before the tag
+              if (lastOpenTag > lastCloseTag) {
+                // Inside an opening tag — trim to before the < to avoid splitting mid-tag
+                // But also check if this is a self-closing tag ending with />
+                breakIdx = lastOpenTag > 0 ? lastOpenTag - 1 : 0;
+              } else if (lastCloseTag >= 0 && lastCloseTag > trimmed.length * 0.3) {
+                breakIdx = lastCloseTag + 1;
+              } else {
+                // 3. Fall back to space boundary
+                const spaceIdx = trimmed.indexOf(" ", 1);
+                breakIdx = spaceIdx > 0 && spaceIdx < 200 ? spaceIdx + 1 : 0;
+              }
+            }
+            const safeTrimmed = breakIdx > 0 ? trimmed.slice(breakIdx).trimStart() : trimmed;
+            return { streamingContent: safeTrimmed };
           }
           return { streamingContent: newContent };
         });
@@ -2707,8 +2841,9 @@ export const useChat = create<ChatState>((set, get) => ({
         if (sessionId) {
           recordAssistantMessage(sessionId, finalContent, undefined, allToolCalls.length > 0 ? allToolCalls.map(tc => ({ name: tc.name, arguments: tc.args, result: tc.result })) : undefined);
         }
-        savePersistedMessages(newSessionMessages);
-        savePersistedSessionSummaries(get().chatSessions);
+      const liveState = get();
+      savePersistedMessages(liveState.sessionMessages);
+      savePersistedSessionSummaries(liveState.chatSessions);
         // Auto-verification: if build agent produced changes (pending changes or fileChanges in messages),
         // set _pendingVerification so verifyAfterPlanExecution will run the verification pipeline.
         if (sessionId && !get()._pendingVerification) {
@@ -2765,6 +2900,12 @@ export const useChat = create<ChatState>((set, get) => ({
         const commandStr = tool.args && typeof tool.args.command === "string" ? tool.args.command : "";
         const canonicalPattern = isBashTool && commandStr ? canonicaliseBashCommand(commandStr) : tool.name;
         // Map tool names to permission keys
+        // Question tools always auto-approved — they inherently require user interaction and show their own dialog
+        if (tool.name === "question") {
+          set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, tool] }));
+          get().resolveToolApproval(tool.id, "approved");
+          break;
+        }
         const permissionKey: PermissionKind = EDIT_TOOLS.has(tool.name)
           ? "edit"
           : BASH_TOOLS.has(tool.name)
@@ -2802,7 +2943,7 @@ export const useChat = create<ChatState>((set, get) => ({
         }
         const annotated: typeof tool = needsApproval
           ? { ...tool, status: "awaiting-approval" as const }
-          : tool;
+          : { ...tool };
         set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, annotated] }));
         if (needsApproval) {
           const description = `Dalam (${useAgents.getState().activeAgentName} agent) wants to use \`${tool.name}\`.`;
@@ -3181,7 +3322,7 @@ export const useChat = create<ChatState>((set, get) => ({
           session: s.session ? { ...s.session, status: event.status } : s.session,
           chatSessions: s.session
             ? s.chatSessions.map((cs) =>
-                cs.id === s.session!.id
+                cs.id === (s.session?.id ?? "")
                   ? { ...cs, status: event.status, lastActivityAt: Date.now() }
                   : cs
               )
@@ -3293,7 +3434,7 @@ export const useChat = create<ChatState>((set, get) => ({
             sessionMessages: newSessionMessages,
             chatSessions: s.session
               ? s.chatSessions.map((cs) =>
-                  cs.id === s.session!.id
+                  cs.id === (s.session?.id ?? "")
                     ? { ...cs, status: "error", lastActivityAt: Date.now() }
                     : cs
                 )
@@ -3541,7 +3682,7 @@ export const useChat = create<ChatState>((set, get) => ({
     });
   },
 
-  archiveSession(id: string) {
+  async archiveSession(id: string): Promise<void> {
     const s = get();
     const session = s.chatSessions.find(cs => cs.id === id);
     if (!session) return;
@@ -3551,19 +3692,20 @@ export const useChat = create<ChatState>((set, get) => ({
       cs.id === id ? { ...cs, archived: true, archivedAt: Date.now() } : cs
     );
 
-    // Move messages to archive storage
+    // Move messages to archive storage (await before removal to prevent data loss)
     const messages = s.sessionMessages[id];
     const ws = useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId);
     if (messages && ws) {
-      const archiveDir = joinPath(ws.path, ".dalam/archive");
-      void import("@tauri-apps/plugin-fs").then(async ({ exists, mkdir, writeFile }) => {
-        try {
-          if (!(await exists(archiveDir))) await mkdir(archiveDir, { recursive: true });
-          await writeFile(joinPath(archiveDir, `${id}.json`), new TextEncoder().encode(JSON.stringify(messages)));
-        } catch (err) {
-          console.warn("[Session] Failed to archive messages:", err);
-        }
-      });
+      try {
+        const { exists, mkdir, writeFile } = await import("@tauri-apps/plugin-fs");
+        const archiveDir = joinPath(ws.path, ".dalam/archive");
+        if (!(await exists(archiveDir))) await mkdir(archiveDir, { recursive: true });
+        await writeFile(joinPath(archiveDir, `${id}.json`), new TextEncoder().encode(JSON.stringify(messages)));
+      } catch (err) {
+        console.warn("[Session] Failed to archive messages, keeping messages in active storage:", err);
+        // Don't remove from active storage if archive fails
+        return;
+      }
     }
 
     // Remove from active storage

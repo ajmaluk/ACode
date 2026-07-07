@@ -380,11 +380,18 @@ async function* streamOpenAI(
   const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
   const body: Record<string, unknown> = { model, messages, stream: true };
   if (maxTokens !== undefined && maxTokens !== null) body.max_tokens = maxTokens;
-  const resp = await fetchWithRetry(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-  }, 2, 1000, signal);
+  _debugLog(`[streamOpenAI] POST ${url} model=${model} messages=${messages.length} maxTokens=${maxTokens}`);
+  let resp: Response;
+  try {
+    resp = await fetchWithRetry(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    }, 2, 1000, signal);
+  } catch (err) {
+    _debugLog(`[streamOpenAI] fetchWithRetry failed:`, err);
+    throw err;
+  }
   const reader = resp.body?.getReader();
   if (!reader) throw new ProviderError("No response body", "network");
   const decoder = new TextDecoder();
@@ -445,46 +452,44 @@ async function* streamOpenAI(
       buffer = remaining;
       for (const part of parsed) {
         try {
+          if (part.data === "[DONE]") continue;
           const json = JSON.parse(part.data);
           if (json.error) {
-            throw new ProviderError(json.error.message || JSON.stringify(json.error), "provider");
+            const errMsg = typeof json.error === "string" ? json.error : (json.error.message || JSON.stringify(json.error));
+            _debugLog(`[streamOpenAI] Provider error: ${errMsg}`);
+            throw new ProviderError(errMsg, "provider");
+          }
+          if (json.object === "error" || (json.code && json.message)) {
+            const errMsg = json.message || JSON.stringify(json);
+            _debugLog(`[streamOpenAI] API error: ${errMsg}`);
+            throw new ProviderError(errMsg, "provider");
           }
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
           if (delta?.reasoning_content) yield { type: "activity-think", content: delta.reasoning_content };
-          // OpenAI usage comes in the final chunk with choices[0].finish_reason
           if (json.usage) {
             const usage = parseUsageFromChunk(json);
             if (usage) yield { type: "usage" as const, usage };
           }
-          // Native function calling: accumulate delta.tool_calls into XML tags.
-          // Arguments arrive incrementally — we buffer partial JSON by index
-          // and only emit once parsing succeeds.
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
               const tcIdx = tc.index ?? 0;
               const fn = tc.function;
               if (fn?.name) {
-                // Record or update the buffer for this tool call index
                 const existing = _tcArgBuffers.get(tcIdx);
                 if (existing) {
-                  // Accumulate: new arguments are appended
                   existing.args += fn.arguments || "";
                 } else {
                   _tcArgBuffers.set(tcIdx, { name: fn.name, args: fn.arguments || "" });
                 }
-                // Try to parse the accumulated args — but only if braces are balanced
-                // to avoid emitting partial JSON that happens to be valid (CVE-style).
                 const buf = _tcArgBuffers.get(tcIdx)!;
                 if (jsonBracesBalanced(buf.args)) {
                   try {
                     const parsedArgs = JSON.parse(buf.args);
-                    // Success — emit XML and remove from buffer
                     _tcArgBuffers.delete(tcIdx);
                     const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
                     yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
                   } catch {
-                    // Incomplete JSON — keep buffering
                   }
                 }
               }
@@ -492,7 +497,7 @@ async function* streamOpenAI(
           }
         } catch (e) {
           if (e instanceof ProviderError) throw e;
-          console.warn("SSE parse error (OpenAI):", e);
+          _debugLog(`[streamOpenAI] SSE parse warning:`, e);
         }
       }
     }
@@ -501,9 +506,17 @@ async function* streamOpenAI(
       const { parsed } = parseSSEEvents(buffer + "\n\n");
       for (const part of parsed) {
         try {
+          if (part.data === "[DONE]") continue;
           const json = JSON.parse(part.data);
           if (json.error) {
-            throw new ProviderError(json.error.message || JSON.stringify(json.error), "provider");
+            const errMsg = typeof json.error === "string" ? json.error : (json.error.message || JSON.stringify(json.error));
+            _debugLog(`[streamOpenAI] Buffer flush provider error: ${errMsg}`);
+            throw new ProviderError(errMsg, "provider");
+          }
+          if (json.object === "error" || (json.code && json.message)) {
+            const errMsg = json.message || JSON.stringify(json);
+            _debugLog(`[streamOpenAI] Buffer flush API error: ${errMsg}`);
+            throw new ProviderError(errMsg, "provider");
           }
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
@@ -531,7 +544,6 @@ async function* streamOpenAI(
                     const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
                     yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
                   } catch {
-                    // Still incomplete
                   }
                 }
               }
@@ -539,7 +551,7 @@ async function* streamOpenAI(
           }
         } catch (e) {
           if (e instanceof ProviderError) throw e;
-          console.warn("SSE parse error (OpenAI):", e);
+          _debugLog(`[streamOpenAI] Buffer flush SSE parse warning:`, e);
         }
       }
     }
@@ -556,19 +568,6 @@ async function* streamOpenAI(
     }
     _tcArgBuffers.clear();
   } finally {
-    // Ensure buffers are flushed even on abort
-    if (_tcArgBuffers.size > 0) {
-      for (const [, buf] of _tcArgBuffers) {
-        try {
-          const parsedArgs = JSON.parse(buf.args || "{}");
-          const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
-          yield { type: "message-delta", messageId: "", content: "\n" + xmlTag + "\n" };
-        } catch {
-          yield { type: "message-delta", messageId: "", content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
-        }
-      }
-      _tcArgBuffers.clear();
-    }
     reader.releaseLock();
     if (abortHandlerOpenAI && signal) {
       signal.removeEventListener("abort", abortHandlerOpenAI);
@@ -719,6 +718,7 @@ async function* streamChat(
   baseUrl: string, apiKey: string, apiFormat: string, model: string,
   messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
+  _debugLog(`[streamChat] apiFormat=${apiFormat} model=${model} baseUrl=${baseUrl} messages=${messages.length} maxTokens=${maxTokens}`);
   if (apiFormat === "anthropic") {
     yield* streamAnthropic(baseUrl, apiKey, model, messages, signal, maxTokens);
   } else {
@@ -1013,16 +1013,21 @@ const dalamAPI: DalamAPI = {
         const mcpServers = skillsState.mcpServers.filter((m) => m.enabled && m.status === "connected");
         let mcpToolsDocumentation = "";
         if (mcpServers.length > 0) {
-          mcpToolsDocumentation = "\n\n=== CONNECTED MCP TOOLS ===\nYou have access to external tools provided by connected MCP servers. To call an MCP tool, output an XML tag of the form:\n<mcp_<server_name>_<tool_name> [args] />\nOr if the arguments are complex or contain newlines/nested tags:\n<mcp_<server_name>_<tool_name>>\n  <argName1>value1</argName1>\n  <argName2>value2</argName2>\n</mcp_<server_name>_<tool_name>>\n\nAvailable MCP Tools:\n";
-          mcpServers.forEach((server) => {
-            if (server.tools && server.tools.length > 0) {
+          const MCP_DOC_CHARS_MAX = 5000;
+          mcpToolsDocumentation = "\n\n=== CONNECTED MCP TOOLS ===\nYou have access to external tools provided by connected MCP servers. To call an MCP tool, output an XML tag of the form:\n<mcp_<server_name>_<tool_name> [args] />\n\nAvailable MCP Tools:\n";
+          for (const server of mcpServers) {
+            if (server.tools && server.tools.length > 0 && mcpToolsDocumentation.length < MCP_DOC_CHARS_MAX) {
               mcpToolsDocumentation += `\nFrom MCP Server "${server.name}":\n`;
-              server.tools.forEach((tool) => {
-                const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema) : "{}";
-                mcpToolsDocumentation += `- <mcp_${server.name}_${tool.name}/>: ${tool.description}\n  Arguments: ${schema}\n`;
-              });
+              for (const tool of server.tools) {
+                if (mcpToolsDocumentation.length >= MCP_DOC_CHARS_MAX) {
+                  mcpToolsDocumentation += `\n... and more (truncated at ${MCP_DOC_CHARS_MAX} chars)`;
+                  break;
+                }
+                const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema).slice(0, 300) : "{}";
+                mcpToolsDocumentation += `- <mcp_${server.name}_${tool.name}/>: ${tool.description?.slice(0, 150) || "No description"}\n`;
+              }
             }
-          });
+          }
           mcpToolsDocumentation += "\n==========================";
         }
 
@@ -1080,10 +1085,16 @@ const dalamAPI: DalamAPI = {
               const uniqueRelevant = relevant.filter((m) => !criticalIds.has(m.id));
               const allInjected = [...critical, ...uniqueRelevant];
               if (allInjected.length > 0) {
-                sqliteMemoriesBlock = `\n\n=== RETRIEVED WORKSPACE MEMORIES ===\nThese are relevant memories retrieved from the persistent workspace memory store. Keep them in mind during the session:\n`;
+                const MEMORIES_BLOCK_MAX = 3000;
+                sqliteMemoriesBlock = `\n\n=== RETRIEVED WORKSPACE MEMORIES ===\nRelevant memories from persistent store:\n`;
                 for (const mem of allInjected) {
+                  if (sqliteMemoriesBlock.length >= MEMORIES_BLOCK_MAX) {
+                    sqliteMemoriesBlock += `\n... and ${allInjected.length - allInjected.indexOf(mem)} more memories (truncated)`;
+                    break;
+                  }
                   const tierIcon = { critical: "🔴", high: "🟡", medium: "🔵", low: "⚪" }[mem.tier];
-                  sqliteMemoriesBlock += `\n- ${tierIcon} [${mem.category}] ${mem.summary} (tags: ${mem.tags.join(", ")})\n  ${mem.content.split("\n").join("\n  ")}\n`;
+                  const contentPreview = mem.content.length > 200 ? mem.content.slice(0, 200) + "..." : mem.content;
+                  sqliteMemoriesBlock += `\n- ${tierIcon} [${mem.category}] ${mem.summary}\n  ${contentPreview.split("\n").join("\n  ")}\n`;
                 }
                 sqliteMemoriesBlock += `====================================`;
               }
@@ -1101,13 +1112,19 @@ const dalamAPI: DalamAPI = {
               const contextContent = await dalamAPI.fs.readFile(contextPath);
               const contextObj = JSON.parse(contextContent);
               if (contextObj.pinnedFiles && contextObj.pinnedFiles.length > 0) {
+                const PINNED_MAX_CHARS = 8000;
                 let pinnedBlock = "\n\n=== PINNED FILES ===\nThe following files are pinned in your context. You should keep their contents in mind:\n";
                 for (const filePath of contextObj.pinnedFiles) {
+                  if (pinnedBlock.length >= PINNED_MAX_CHARS) {
+                    pinnedBlock += `\n... more pinned files truncated at ${PINNED_MAX_CHARS} chars`;
+                    break;
+                  }
                   try {
                     const fullPath = joinPathUtil(workspacePath, filePath);
                     if (await exists(fullPath)) {
                       const fileContent = await dalamAPI.fs.readFile(fullPath);
-                      pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${fileContent}\n`;
+                      const truncated = fileContent.length > 3000 ? fileContent.slice(0, 3000) + "\n... [truncated at 3000 chars]" : fileContent;
+                      pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${truncated}\n`;
                     }
                   } catch (e) { console.warn(`Failed to read pinned file ${filePath}:`, e); }
                 }
@@ -1135,237 +1152,28 @@ const dalamAPI: DalamAPI = {
           } catch (e) { console.warn("Failed to load workspace instructions:", e); }
         }
 
+        // Compact tool documentation — full version always included; if context is tight, use minimal
         const toolsDocumentation = `
-=== AGENTIC TOOLS HARNESS ===
-CRITICAL: You have tools available. To use them, you MUST output XML tags — not backtick-wrapped text like \`read_file\`. Output the ACTUAL XML tags shown below. The system will detect these tags, execute the tool, and give you the result.
+=== TOOLS ===
+Output XML tags to use tools. Multiple tools in one response execute in parallel.
 
-WHEN CREATING FILES — Use write_file, NOT markdown code blocks:
-WRONG: \`\`\`html\\n<!DOCTYPE html>...\\n\`\`\`  (this just shows code to the user)
-RIGHT: <write_file path="index.html"><!DOCTYPE html>...</write_file>  (this creates the file on disk)
-
-WHEN EDITING FILES — Use edit_file with search/replace (ONLY change the specific lines that need to change — do NOT rewrite the entire file):
-<edit_file path="file.ts"><search>old code</search><replace>new code</replace></edit_file>
-
-You can output multiple tool tags in one response. Tools execute automatically — no user confirmation needed.
-
---- File & Workspace Tools ---
-1. Read File:
-   <read_file path="absolute_path"/>
-   Reads the entire contents of a file.
-   For large files, read only the portion you need:
-   <read_file path="absolute_path" offset="100" limit="50"/>
-   offset = starting line number (1-indexed), limit = number of lines to read.
-   This returns lines with line numbers (e.g. "100: line content").
-
-2. Write File:
-   <write_file path="absolute_path">file content</write_file>
-   Overwrites or creates a file with the specified content.
-   IMPORTANT: For existing files, prefer edit_file to change only the specific lines that need to change. Use write_file only when creating new files or rewriting the entire file.
-
-3. Edit File (PREFERRED for modifying existing files):
-   <edit_file path="absolute_path">
-   <search>exact code to find</search>
-   <replace>new code to replace it with</replace>
-   </edit_file>
-   Performs a search-and-replace edit. The search block must match the file contents exactly (including whitespace/indentation).
-   IMPORTANT: Only include the few lines that need to change — do NOT include the entire file in search/replace.
-   If the search text appears multiple times, specify which occurrence (0-indexed):
-   <edit_file path="file.ts" occurrence="0"><search>first match</search><replace>new code</replace></edit_file>
-   occurrence="0" = first match, "1" = second match, etc. Defaults to first match if omitted.
-
-4. List Directory:
-   <list_dir path="absolute_path"/>
-   Lists files and folders inside the directory.
-
-5. Grep File:
-   <grep_file path="absolute_path" pattern="search text" regex="false" max_results="50"/>
-   Searches for a pattern within a single file. Returns matching lines with line numbers.
-   Set regex="true" to use regular expressions.
-
-6. Search Files:
-   <search_files path="workspace_path" pattern="search text" glob="*.ts" regex="false" max_results="100"/>
-   Searches for a pattern across multiple files in a directory tree. Returns matching lines with file paths.
-   Use glob to filter file types (e.g. "*.tsx", "*.py").
-
-7. Run Command:
-   <run_command command="shell command"/>
-   Executes a shell command in the workspace directory and returns its output.
-
---- Git Tools ---
-8. Git Status:
-   <git_status/>
-   Gets the git status of the project.
-
-9. Git Commit:
-   <git_commit message="message"/>
-   Commits all changes.
-
-10. Git Log:
-    <git_log/>
-    Gets the git commit history.
-
-11. Git Branch:
-    <git_branch/>
-    Lists all branches. Shows current branch with *.
-
-12. Git Checkout:
-    <git_checkout branch="branch-name"/>
-    Switches to the specified branch.
-
-13. Git Diff File:
-    <git_diff_file path="file_path"/>
-    Shows the diff for a specific file against HEAD.
-
---- Desktop / System Tools ---
-14. Clipboard Read:
-    <clipboard_read/>
-    Reads text from the system clipboard.
-
-15. Clipboard Write:
-    <clipboard_write>text to copy</clipboard_write>
-    Writes text to the system clipboard.
-
-16. Send Notification:
-    <notify title="Title" body="Notification body"/>
-    Sends a desktop notification.
-
-17. System Info:
-    <system_info/>
-    Gets OS, architecture, hostname, shell, and locale information.
-
-18. Open URL:
-    <open_url url="https://example.com"/>
-    Opens a URL in the system default browser.
-
-19. Launch Application:
-    <launch_app name="app_name" args="optional_args" cwd="optional_working_dir"/>
-    Launches a desktop application by name (e.g. "code", "firefox").
-    Supports optional arguments and working directory.
-
-20. Reveal in Finder:
-    <reveal_in_finder path="absolute_path"/>
-    Opens the file manager and reveals the file or directory.
-
---- Memory Tools ---
-21. Save Memory:
-    <memory_save category="user" tier="high" summary="short summary" tags="tag1,tag2">detailed content</memory_save>
-    Saves a memory entry for this workspace. Categories: user, feedback, project, reference, task, decision.
-    Tiers: critical, high, medium, low. Use this to remember rules, preferences, key facts, or decisions.
-
-22. Search Memory:
-    <memory_search query="search terms" category="project" limit="5"/>
-    Searches the workspace memory store using full-text search. Returns matching memories.
-    Optional filters: category (user|feedback|project|reference|task|decision), limit (default 10).
-
-23. Delete Memory:
-    <memory_delete id="memory-id"/>
-    Soft-deletes a memory entry by marking it stale. Stale entries are excluded from search
-    results and purged during maintenance. Use memory_search first to find the id to delete.
-
-24. Memory Stats:
-    <memory_stats/>
-    Shows memory store statistics: total count, breakdown by category and tier, and stale count.
-
-25. Memory Maintenance:
-    <memory_maintain/>
-    Runs self-improving maintenance: detects stale memories, enforces budget (500 max),
-    and purges old stale entries. Returns a summary of actions taken.
-
-26. Extract Memories (LLM):
-    <memory_extract/>
-    Uses LLM to analyze the current conversation and extract high-quality memories.
-    More sophisticated than heuristic extraction. Saves results automatically.
-
-27. Export Memories:
-    <memory_export/>
-    Exports all memories to markdown files in .dalam/memories/ for git sharing.
-    Teammates can import these files when they clone the repo.
-
-28. Import Memories:
-    <memory_import/>
-    Imports memories from markdown files in .dalam/memories/ into the SQLite cache.
-    Use after cloning a repo to restore shared memories.
-
---- Sub-Agent Tools (OpenCode Pattern) ---
-29. Task (Spawn Sub-Agent):
-    <task prompt="detailed task description" subagent_type="general" description="short label"/>
-    Spawns a sub-agent to handle a complex, multistep task autonomously.
-    Sub-agent types: general (default), explore (read-only codebase search).
-    The sub-agent runs with its own tool loop and returns its result when complete.
-
-    MULTIPLE TASKS: You can output MULTIPLE task tags in ONE response. They execute
-    sequentially but each returns its own result. Use separate tasks for independent
-    work so results can be composed:
-    Example: <task prompt="Research X..." description="Research X"/>
-             <task prompt="Research Y..." description="Research Y"/>
-
-    Use for: parallel exploration, isolated tasks, complex multi-step work,
-    research that can be done independently of other work.
-    Do NOT use for: simple single-file reads (use read_file), quick searches (use grep_file).
-
---- UI Control & Preview Tools ---
-30. Open Panel:
-    <open_panel panel="browser"/>
-    Opens a specific panel in the right sidebar. Panels: git, diff, review, browser, progress, terminal.
-    Use this to show the user specific information (e.g. git status, code diff, browser preview).
-
-31. Screenshot:
-    <screenshot/>
-    Captures what's currently visible in the browser preview or canvas.
-    Use after running a dev server to verify the output visually.
-
-32. Browser Navigate:
-    <browser_navigate url="http://localhost:3000"/>
-    Opens the browser panel and navigates to a URL. Creates a new browser tab if needed.
-    Use for previewing web apps, checking live deployments, or browsing documentation.
-
-33. Run Preview:
-    <run_preview command="npm run dev" port="3000"/>
-    Starts a dev server command in the terminal and opens the browser preview.
-    The agent can then use screenshot to verify the output.
-    Use when the user asks to "run and preview", "start the server", or "see it live".
-
-34. Browser Execute (Agentic Browsing):
-    <browser_execute script="document.title"/>
-    Executes JavaScript in the browser page context. Returns the result.
-    Use for: clicking elements, scrolling, reading page content, filling forms.
-    Examples:
-    <browser_execute script="document.querySelector('button').click()"/>
-    <browser_execute script="window.scrollTo(0, 500)"/>
-    <browser_execute script="document.querySelectorAll('a').length"/>
-    Note: Only works on same-origin pages. For cross-origin, use open_url.
-
-35. Create Task Plan:
-    <create_task_plan tasks="- Set up project structure&#10;- Create main component&#10;- Add styling&#10;- Write tests"/>
-    Creates a task plan and opens the progress panel. Tasks are shown as a checklist.
-    Use at the start of a complex task to show the user your plan.
-    The agent should mark tasks as done using the bash "completed" event as it works.
-
-36. Ask Question:
-    <question question="What framework should I use?" options="React,Vue,Svelte"/>
-    Asks the user a question with predefined options and a custom input field.
-    The user can select an option or type a custom answer.
-    Use when you need clarification, choices, or user input before proceeding.
-    Options are comma-separated. If no options, user gets a free-text input.
-
-Always use absolute paths for file operations. The workspace path is: ${workspacePath || "."}.
-
-=== EXAMPLE: How to invoke tools ===
-When the user asks you to read a file, do NOT write: "I'll use the \`read_file\` tool"
-Instead, output the XML tag directly:
-<read_file path="${workspacePath || "."}/README.md"/>
-
-When the user asks you to list files:
-<list_dir path="${workspacePath || "."}"/>
-
-When the user asks you to write a file:
-<write_file path="${workspacePath || "."}/README.md"># New README
-Content here
-</write_file>
-
-You can combine multiple tools in one response:
-<list_dir path="${workspacePath || "."}"/>
-<read_file path="${workspacePath || "."}/package.json"/>
+FILE OPS: <read_file path="..."/> | <write_file path="...">content</write_file> | <list_dir path="..."/>
+EDIT: <edit_file path="..."><search>old</search><replace>new</replace></edit_file> (occurrence="N" for Nth match)
+SEARCH: <grep_file path="..." pattern="..." regex="false"/> | <search_files pattern="..." glob="**/*.ts"/>
+SHELL: <run_command command="..."/> | <bash command="..."/>
+GIT: <git_status/> | <git_log/> | <git_branch/> | <git_commit message="..."/> | <git_checkout branch="..."/> | <git_diff_file path="..."/>
+MEMORY: <memory_save category="project" tier="medium" summary="...">content</memory_save> | <memory_search query="..."/> | <memory_delete id="..."/> | <memory_stats/> | <memory_maintain/> | <memory_extract/> | <memory_export/> | <memory_import/>
+BROWSER: <browser_navigate url="..."/> | <browser_execute script="..."/> | <screenshot/> | <run_preview command="..." port="..."/>
+SYSTEM: <clipboard_read/> | <clipboard_write>text</clipboard_write> | <notify title="..." body="..."/> | <system_info/> | <open_url url="..."/> | <launch_app name="..." args="..."/>
+UI: <open_panel panel="..."/> | <set_theme theme="light|dark|system"/> | <set_view_mode mode="editor|chat"/>
+SUB-AGENT: <task prompt="..." subagent_type="general" description="..."/>
+PLAN: <create_task_plan tasks="..."/>
+QUESTION: <question question="..." options="opt1,opt2,..."/>
+TASK: <todowrite>...</todowrite>
+PREVIEW: <run_preview command="..." port="..."/>
+NEW_TERMINAL: <new_terminal cwd="..." shell="bash"/>
+WRITE_TERMINAL: <terminal_write command="..."/>
+ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
 `;
 
         // Genes (SQLite-backed, per-workspace persistence)
@@ -1441,15 +1249,14 @@ You can combine multiple tools in one response:
         return systemPrompt;
       }
 
+      // Abort previous sendPrompt for the same session, if any
       const prev = activeControllers.get(sessionId);
       if (prev) prev.abort();
       const ac = new AbortController();
       activeControllers.set(sessionId, ac);
       const emit = (event: StreamEvent) => { streamCallbacks.get(sessionId)?.(event); };
-
       const sessionStartTime = Date.now();
 
-      // Hook: UserPromptSubmit
       await hookBus.emit("UserPromptSubmit", {
         sessionId,
         prompt,
@@ -1462,50 +1269,53 @@ You can combine multiple tools in one response:
       try {
         const { useChat } = await import("../store/useAppStore");
 
-        // Skill matching
-        const { useSkillsMcp } = await import("../store/useAppStore");
-        const skillsState = useSkillsMcp.getState();
-        const enabledSkills = skillsState.skills.filter((sk) => sk.enabled);
-        const skillInfos = enabledSkills.map((sk) => ({
-          name: sk.name,
-          description: sk.description,
-          content: sk.prompt,
-          location: sk.source === "bundled" ? `bundled://${sk.name}/SKILL.md` : `user://${sk.name}/SKILL.md`,
-          source: (sk.source === "bundled" ? "bundled" : sk.source === "project" ? "project" : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
-        }));
-        const matched = matchSkillInvocation(prompt, skillInfos);
-        let cleanPrompt = prompt;
-        if (matched) {
-          if (!matched.skill.content) {
-            matched.skill.content = await loadSkillContent(matched.skill, { readFile: dalamAPI.fs.readFile });
-          }
-          const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-          cleanPrompt = prompt.replace(regex, "").trim();
-          emit({ type: "activity-skill", name: matched.skill.name, content: matched.skill.description, args: matched.args });
+      // Skill matching
+      const { useSkillsMcp } = await import("../store/useAppStore");
+      const skillsState = useSkillsMcp.getState();
+      const enabledSkills = skillsState.skills.filter((sk) => sk.enabled);
+      const skillInfos = enabledSkills.map((sk) => ({
+        name: sk.name,
+        description: sk.description,
+        content: sk.prompt,
+        location: sk.source === "bundled" ? `bundled://${sk.name}/SKILL.md` : `user://${sk.name}/SKILL.md`,
+        source: (sk.source === "bundled" ? "bundled" : sk.source === "project" ? "project" : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
+      }));
+      const matched = matchSkillInvocation(prompt, skillInfos);
+      let cleanPrompt = prompt;
+      if (matched) {
+        if (!matched.skill.content) {
+          matched.skill.content = await loadSkillContent(matched.skill, { readFile: dalamAPI.fs.readFile });
         }
+        const regex = new RegExp(`\\$${matched.skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+        cleanPrompt = prompt.replace(regex, "").trim();
+        emit({ type: "activity-skill", name: matched.skill.name, content: matched.skill.description, args: matched.args });
+      }
 
-        // Assemble system prompt and context
-        const systemPrompt = await assembleContext(cleanPrompt);
+      // Assemble system prompt and context
+      const systemPrompt = await assembleContext(cleanPrompt);
 
-        // Loop state
-        const currentHistory: ChatMessage[] = conversationHistory ? [...conversationHistory] : [];
-        let totalFullContent = "";
-        let totalToolCalls = 0;
-        let loopCount = 0;
-        const MAX_LOOP_HARD = 30;
-        const loopStartTime = Date.now();
-        const MAX_LOOP_DURATION_MS = 5 * 60 * 1000;
+      // Workspace path for tool execution (doesn't change during session)
+      const workspacePath = useChat.getState().chatSessions.find((s) => s.id === sessionId)?.workspacePath
+        ?? useChat.getState().session?.workspacePath
+        ?? "";
 
-        const summaries = useChat.getState().compactionSummaries || {};
-        const compactionSummary = summaries[sessionId];
-        const liveSession = useChat.getState().chatSessions.find((s) => s.id === sessionId) || useChat.getState().session;
-        const workspacePath = liveSession?.workspacePath ?? "";
+      // Loop state
+      const currentHistory: ChatMessage[] = conversationHistory ? [...conversationHistory] : [];
+      let totalFullContent = "";
+      let totalToolCalls = 0;
+      let loopCount = 0;
+      const MAX_LOOP_HARD = 30;
+      const loopStartTime = Date.now();
+      const MAX_LOOP_DURATION_MS = 5 * 60 * 1000;
 
-        // Build messages from LIVE currentHistory (not pre-loop snapshot)
-        // Token-budget-aware: uses estimateTokens for accurate counting
-        async function buildMessages(): Promise<ApiMessage[]> {
+      // Build messages from LIVE currentHistory (not pre-loop snapshot)
+      // Token-budget-aware: uses estimateTokens for accurate counting
+      // compactionSummary is re-read fresh each call to reflect compaction results
+      async function buildMessages(): Promise<ApiMessage[]> {
           const { estimateTokens: estTokens, parseContextWindow } = await import("./contextManager");
-          const { useModelProviders, useSettings: settingsStore } = await import("../store/useAppStore");
+          const { useChat: ucBuild, useModelProviders, useSettings: settingsStore } = await import("../store/useAppStore");
+          const liveSummaries = ucBuild.getState().compactionSummaries || {};
+          const localCompactionSummary = liveSummaries[sessionId];
           // Use the model's actual context window, with 120K fallback
           const modelId = settingsStore.getState().settings.selectedModel || "";
           const allModels = useModelProviders.getState().getAllModels();
@@ -1515,7 +1325,7 @@ You can combine multiple tools in one response:
           const systemTokenEst = estTokens(systemPrompt);
           const OUTPUT_RESERVE = 8000;
           const allMsgs = currentHistory.filter((m) => m.role !== "system");
-          const COMPACT_RESERVE = compactionSummary && allMsgs.length > 10 ? estTokens(compactionSummary) + 100 : 0;
+          const COMPACT_RESERVE = localCompactionSummary && allMsgs.length > 10 ? estTokens(localCompactionSummary) + 100 : 0;
           const availableForHistory = MAX_TOKENS - systemTokenEst - OUTPUT_RESERVE - COMPACT_RESERVE;
           if (availableForHistory <= 0) {
             // System prompt alone exceeds budget — send minimal context
@@ -1550,8 +1360,8 @@ You can combine multiple tools in one response:
           }
 
           const result: ApiMessage[] = [{ role: "system", content: systemPrompt }];
-          if (compactionSummary && allMsgs.length > 10) {
-            result.push({ role: "system", content: `[COMPACTED HISTORY]\n${compactionSummary}\n` });
+          if (localCompactionSummary && allMsgs.length > 10) {
+            result.push({ role: "system", content: `[COMPACTED HISTORY]\n${localCompactionSummary}\n` });
           }
           for (const m of msgs) {
             // Map roles correctly: user→user, tool→user, everything else→assistant
@@ -1578,16 +1388,24 @@ You can combine multiple tools in one response:
             modelLower.includes("mixtral") ||
             modelLower.startsWith("gemma-");
 
+          const abortOnDelay = (delay: number) =>
+            new Promise<void>((resolve) => {
+              if (ac.signal.aborted) return resolve();
+              const timer = setTimeout(resolve, delay);
+              const onAbort = () => { clearTimeout(timer); resolve(); };
+              ac.signal.addEventListener("abort", onAbort, { once: true });
+            });
+
           const sessionErrors = sessionRateLimitErrors.get(sessionId) ?? 0;
           if (sessionErrors > 0) {
             // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 60s max
             const delay = Math.min(1000 * Math.pow(2, sessionErrors), 60000);
-            await new Promise((r) => setTimeout(r, delay));
+            await abortOnDelay(delay);
             return;
           }
           // Base delay between turns: generous for fast-RPM providers, minimal for others
           const baseDelay = isFastRpmProvider ? 2000 : 300;
-          await new Promise((r) => setTimeout(r, baseDelay));
+          await abortOnDelay(baseDelay);
         }
 
         let emittedEndInThisIteration = false;
@@ -1662,7 +1480,33 @@ You can combine multiple tools in one response:
           await rateLimitDelay();
 
           const maxTokens = settings.maxTokens ?? 4096;
-          _debugLog(`[sendPrompt] Turn ${loopCount}: starting stream, model=${activeModelId}, messages=${messages.length}`);
+
+          // Pre-flight context check: estimate total tokens and compact if needed
+          const { estimateTokens: estTk, parseContextWindow } = await import("./contextManager");
+          const modelInfo2 = (await import("../store/useAppStore")).useModelProviders.getState().getAllModels().find((m) => m.model.modelId === activeModelId);
+          const ctxWindow = parseContextWindow(modelInfo2?.model.contextWindow) || 120000;
+          const totalEstTokens = messages.reduce((sum, m) => {
+            const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+            return sum + estTk(content) + 4;
+          }, 0);
+          if (totalEstTokens + maxTokens > ctxWindow * 0.9) {
+            _debugLog(`[sendPrompt] Pre-flight: estimated ${totalEstTokens} tokens + ${maxTokens} output > ${ctxWindow} context. Triggering compaction.`);
+            try {
+              const { useChat: uc2 } = await import("../store/useAppStore");
+              await uc2.getState().compactSessionHistory(sessionId);
+              // Rebuild currentHistory from the live store so buildMessages()
+              // reflects the compaction result, preventing infinite compaction loops.
+              const liveMessages = uc2.getState().sessionMessages[sessionId] ?? [];
+              currentHistory.length = 0;
+              currentHistory.push(...liveMessages);
+              _debugLog(`[sendPrompt] Pre-flight compaction completed, rebuilding messages (${currentHistory.length} msgs).`);
+              emit({ type: "message-end", messageId: sessionId });
+              emittedEndInThisIteration = true;
+              continue;
+            } catch (e) { _debugLog(`[sendPrompt] Pre-flight compaction failed:`, e); }
+          }
+
+          _debugLog(`[sendPrompt] Turn ${loopCount}: starting stream, model=${activeModelId}, messages=${messages.length}, estTokens=${totalEstTokens}`);
           const llmStartTime = Date.now();
           const stream = streamChat(activeConfig.baseUrl, activeConfig.apiKey, activeConfig.apiFormat || "openai", activeModelId, messages, ac.signal, maxTokens);
           let fullContent = "";
@@ -1751,7 +1595,7 @@ You can combine multiple tools in one response:
               for (const tc of toolCallMetas) {
                 // Evaluate permission for this tool
                 const isBashTool = ["shell", "bash", "execute", "run_command", "launch_app"].includes(tc.name);
-                const isReadTool = ["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "task", "question", "open_panel", "screenshot"].includes(tc.name);
+                const isReadTool = ["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "memory_export", "memory_import", "task", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab", "webfetch", "websearch", "grep", "search", "question"].includes(tc.name);
                 const permissionKey = isBashTool ? "bash" : isReadTool ? "read" : "edit";
                 const canonicalPattern = tc.name;
                 const action = agentState.evaluatePermission(permissionKey, canonicalPattern);
@@ -1789,17 +1633,9 @@ You can combine multiple tools in one response:
                 // Single tool: execute sequentially (preserves existing approval flow)
                 const tc = batchMetas[0]!;
                 _debugLog(`[sendPrompt] Turn ${loopCount}: executing tool ${tc.id} (${tc.name})`);
-                if (ac.signal.aborted) {
-                  emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
-                  abortedMidBatch = true;
-                  break;
-                }
                 const decision = await waitForToolApproval(tc.id, ac.signal);
                 _debugLog(`[sendPrompt] Turn ${loopCount}: tool ${tc.id} approval decision: ${decision}`);
                 if (ac.signal.aborted) {
-                  emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                   abortedMidBatch = true;
                   break;
                 }
@@ -1845,13 +1681,8 @@ You can combine multiple tools in one response:
                 _debugLog(`[sendPrompt] Turn ${loopCount}: executing ${batch.length} read-only tools in parallel`);
                 const parallelResults = await Promise.allSettled(
                   batchMetas.map(async (tc) => {
-                    if (ac.signal.aborted) {
-                      emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                      return `[TOOL RESULT: ${tc.name}]\nAborted by user.`;
-                    }
                     const decision = await waitForToolApproval(tc.id, ac.signal);
                     if (ac.signal.aborted) {
-                      emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                       return `[TOOL RESULT: ${tc.name}]\nAborted by user.`;
                     }
                     if (decision !== "approved") {
@@ -1918,7 +1749,7 @@ You can combine multiple tools in one response:
             if (toolResults.length > 0) {
               const toolResultContent = toolResults.join("\n\n");
               currentHistory.push({ id: "tr-" + crypto.randomUUID(), role: "user" as const, content: toolResultContent, timestamp: Date.now() });
-              totalToolCalls += toolResults.length;
+              totalToolCalls += parsedTools.length;
 
               // Persist tool results to sessionMessages so the LLM sees them on the next turn
               // Mark as isToolResult so the chat UI can filter them out (they're internal context)
@@ -1990,7 +1821,11 @@ You can combine multiple tools in one response:
               { role: "system", content: "The iteration budget has been exhausted. Please provide a concise summary of what you have accomplished so far and what remains to be done. Do not call any tools." },
               ...await buildMessages(),
             ];
-            const finalizerStream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, finalizerMessages, ac.signal, 2048);
+            const finalConfig = getProviderConfig(providerId);
+            const finalBaseUrl = finalConfig?.baseUrl || activeConfig.baseUrl;
+            const finalApiKey = finalConfig?.apiKey || activeConfig.apiKey;
+            const finalApiFormat = finalConfig?.apiFormat || activeConfig.apiFormat || "openai";
+            const finalizerStream = streamChat(finalBaseUrl, finalApiKey, finalApiFormat, activeModelId, finalizerMessages, ac.signal, 2048);
             let finalizerContent = "";
             for await (const event of finalizerStream) {
               if (event.type === "message-delta") {
@@ -2075,7 +1910,7 @@ You can combine multiple tools in one response:
             });
           }
         } else {
-          emit({ type: "error", error: `Network error: ${(err as Error)?.message ?? "Unknown"}` });
+          emit({ type: "error", error: `${(err as Error)?.message ?? "Unknown error"}` });
           emit({ type: "message-end", messageId: sessionId });
           if (!emittedSessionEnds.has(sessionId)) {
             emittedSessionEnds.add(sessionId);
@@ -2211,6 +2046,11 @@ You can combine multiple tools in one response:
         pendingDiffProposals.delete(diffId);
         // Write the file now that the user approved the diff
         await dalamAPI.fs.writeFile(pending.filePath, pending.newContent);
+        // Record change for undo support
+        try {
+          const { recordChange: rc } = await import("./changeStack");
+          rc({ filePath: pending.filePath, beforeContent: pending.oldContent, afterContent: pending.newContent, toolCallId: "diff-" + diffId, messageId: sessionId });
+        } catch { /* changeStack not available */ }
         const cb = streamCallbacks.get(sessionId);
         if (cb) {
           cb({
@@ -2546,12 +2386,15 @@ const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*';
 
 // All tool regex patterns pre-compiled at module level (compiled once, reused per call)
 const REGEX_READ_FILE = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
-const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)<\/write_file>/gi;
-const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*)<\/edit_file>/gi;
+const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
+const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*?)<\/edit_file>/gi;
 const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
 const REGEX_GREP_FILE = new RegExp(`<grep_file\\s+${ATTRSelfClose}`, "gi");
 const REGEX_SEARCH_FILES = new RegExp(`<search_files\\s+${ATTRSelfClose}`, "gi");
 const REGEX_RUN_COMMAND = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
+const REGEX_BASH = /<bash\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
+const REGEX_SHELL = /<shell\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
+const REGEX_EXECUTE = /<execute\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
 const REGEX_GIT_STATUS = /<git_status\s*\/?>/gi;
 const REGEX_GIT_COMMIT = /<git_commit\s+message=["']([^"']+)["']\s*\/?>/gi;
 const REGEX_GIT_LOG = /<git_log\s*\/?>/gi;
@@ -2584,7 +2427,7 @@ const REGEX_CREATE_TASK_PLAN = /<create_task_plan\s+([^>]*)\/?>/gi;
 const REGEX_CREATE_TASK_PLAN_BLOCK = /<create_task_plan>([\s\S]*?)<\/create_task_plan>/gi;
 const REGEX_QUESTION = /<question\s+([^>]*)\/?>/gi;
 const REGEX_QUESTION_BLOCK = /<question>([\s\S]*?)<\/question>/gi;
-const REGEX_MALFORMED_QUESTION = /\bquestion\s+question="([^"]*)"\s+options="([^"]*)"\s*\/?/gi;
+const REGEX_MALFORMED_QUESTION = /(?:^|[\s<])question\s+question="([^"]*)"\s+options="([^"]*)"\s*\/?/gi;
 const REGEX_MCP_TAG = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
 const REGEX_ANTML_BLOCK = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
 const REGEX_INVOKE = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
@@ -2659,6 +2502,19 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   REGEX_RUN_COMMAND.lastIndex = 0;
   while ((match = REGEX_RUN_COMMAND.exec(text)) !== null) {
     toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+  }
+  // bash/shell/execute aliases for run_command
+  REGEX_BASH.lastIndex = 0;
+  while ((match = REGEX_BASH.exec(text)) !== null) {
+    toolCalls.push({ name: "bash", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+  }
+  REGEX_SHELL.lastIndex = 0;
+  while ((match = REGEX_SHELL.exec(text)) !== null) {
+    toolCalls.push({ name: "shell", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+  }
+  REGEX_EXECUTE.lastIndex = 0;
+  while ((match = REGEX_EXECUTE.exec(text)) !== null) {
+    toolCalls.push({ name: "execute", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
   }
 
   // 8. git_status
@@ -3135,7 +2991,7 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       finish("denied");
     });
 
-    // Listen for abort signal
+    // Listen for abort signal (must assign handler before addEventListener to avoid race)
     if (abortSignal) {
       abortHandler = () => finish("denied");
       if (abortSignal.aborted) {
@@ -3214,7 +3070,7 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   }
 
   const timeout = TOOL_TIMEOUTS[name] ?? TOOL_TIMEOUTS.default;
-  return executeWithTimeout(executeToolInner(name, args, workspacePath, emit, autoApprove), timeout, name);
+  return executeWithTimeout(executeToolInner(name, validation.args as Record<string, string>, workspacePath, emit, autoApprove), timeout, name);
 }
 
 async function executeToolInner(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
@@ -3294,6 +3150,11 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       await writeFile(args.path, new TextEncoder().encode(newContent));
+      // Record change for undo support
+      try {
+        const { recordChange: rc } = await import("./changeStack");
+        rc({ filePath: args.path, beforeContent: oldContent, afterContent: newContent, toolCallId: "write-" + crypto.randomUUID(), messageId: "auto" });
+      } catch { /* changeStack not available */ }
       // Emit file-changed event for UI tracking
       emit({
         type: "file-changed",
@@ -3381,6 +3242,11 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       await writeFile(args.path, new TextEncoder().encode(updated));
+      // Record change for undo support
+      try {
+        const { recordChange: rc } = await import("./changeStack");
+        rc({ filePath: args.path, beforeContent: original, afterContent: updated, toolCallId: "edit-" + crypto.randomUUID(), messageId: "auto" });
+      } catch { /* changeStack not available */ }
       // Emit file-changed event for UI tracking
       const searchLine = original.substring(0, searchIdx).split("\n").length;
       emit({
@@ -3521,6 +3387,10 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     await searchDir(searchPath, 0);
     if (results.length === 0) return `No matches found for "${pattern}" in ${searchPath}`;
     return results.map(r => `${r.file}:${r.line}: ${r.text}`).join("\n");
+  }
+
+  if (name === "bash" || name === "shell" || name === "execute") {
+    return executeToolInner("run_command", args, workspacePath, emit, autoApprove);
   }
 
   if (name === "run_command") {
@@ -4000,6 +3870,16 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       ? optionsStr.split(/[,;\n]/).filter((o: string) => o.trim()).map((o: string) => o.trim())
       : [];
 
+    // Extend safety timer to 10 minutes while waiting for user response
+    try {
+      const { extendSafetyTimerForApproval } = await import("./safetyTimer");
+      const { useChat } = await import("../store/useAppStore");
+      extendSafetyTimerForApproval(
+        () => useChat.getState() as any,
+        (update: Record<string, unknown>) => useChat.setState(update as any),
+      );
+    } catch { /* safety timer not available */ }
+
     // Emit ask-question event and wait for user response
     const { useQuestion } = await import("../store/useAppStore");
     const answer = await useQuestion.getState().ask({
@@ -4467,6 +4347,26 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     if (!command) return "Error: 'command' argument is required.";
     useTerminal.getState().writeToTerminal(terminalId, command);
     return `Command sent to terminal: ${command}`;
+  }
+
+  if (name === "webfetch") {
+    const url = args.url as string;
+    try {
+      const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+      const response = await tauriFetch(url);
+      const text = await response.text();
+      return text.slice(0, 100000);
+    } catch (err) {
+      return `Error fetching URL: ${err instanceof Error ? err.message : String(err)}. The URL may require authentication or the HTTP plugin may not be available.`;
+    }
+  }
+
+  if (name === "websearch") {
+    return `[websearch] Web search is not directly available. Use webfetch with a search engine URL like "https://www.google.com/search?q=QUERY".`;
+  }
+
+  if (name === "create_file") {
+    return executeToolInner("write_file", args, workspacePath, emit, autoApprove);
   }
 
   throw new Error(`Unknown tool: ${name}`);

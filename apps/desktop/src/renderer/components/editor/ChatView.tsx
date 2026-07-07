@@ -1449,7 +1449,7 @@ function StreamingMessageWrapper({
         const rawThinking = thinkingContentRef.current;
 
         // Only run expensive XML stripping when content likely contains tags
-        const cleaned = raw && (raw.includes("<") || raw.match(/\bquestion\s+question=/)) ? stripXmlToolCallTags(raw) : raw || "";
+        const cleaned = raw && (raw.includes("<") || raw.match(/(?:^|[\s<])question\s+question=/)) ? stripXmlToolCallTags(raw) : raw || "";
 
         if (prevCleanRef.current !== cleaned) {
           prevCleanRef.current = cleaned;

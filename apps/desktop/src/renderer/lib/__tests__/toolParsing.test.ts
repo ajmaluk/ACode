@@ -93,6 +93,53 @@ describe("stripXmlToolCallTags", () => {
     expect(result).toBe('Let me read the file.\n');
   });
 
+  it("strips complete opening tag without closing pair (streaming artifact)", () => {
+    const input = 'Let me read the file.\n<read_file path="/src/index.ts">';
+    const result = stripXmlToolCallTags(input);
+    expect(result).toBe('Let me read the file.\n');
+  });
+
+  it("strips opening tag in middle of streaming content (no closing tag yet)", () => {
+    const input = 'I will read the file.\n<read_file path="/src/index.ts">\nconst x = 1;\n';
+    const result = stripXmlToolCallTags(input);
+    expect(result).toBe('I will read the file.\n\nconst x = 1;\n');
+  });
+
+  it("preserves paired tags for XML_STRIP_RE (opening tag with matching closing)", () => {
+    // When both opening AND closing tags are present, the whole block should be stripped
+    const input = "Before\n<read_file path=\"/x.ts\">\ncontent\n</read_file>\nAfter";
+    const result = stripXmlToolCallTags(input);
+    expect(result).toContain("Before");
+    expect(result).toContain("After");
+    expect(result).not.toContain("content");
+    expect(result).not.toContain("<read_file");
+  });
+
+  it("strips opening tag mid-streaming when closing tag arrives in later delta", () => {
+    // Simulates: delta 1 has the opening tag, delta 2 appends the closing tag
+    // The opening tag should be stripped in both cases
+    const delta1 = 'First step.\n<bash command="npm test">\nrunning tests...\n';
+    const delta2 = delta1 + '</bash>\nDone.';
+    const cleaned1 = stripXmlToolCallTags(delta1);
+    const cleaned2 = stripXmlToolCallTags(delta2);
+    // In delta1, the opening tag should be stripped but content remains
+    expect(cleaned1).toBe('First step.\n\nrunning tests...\n');
+    // In delta2, the full block including content is stripped
+    expect(cleaned2).toBe('First step.\n\nDone.');
+  });
+
+  it("strips MCP opening tag without closing pair during streaming", () => {
+    const input = "Processing <mcp_fetch url=\"https://example.com\">";
+    const result = stripXmlToolCallTags(input);
+    expect(result).toBe("Processing ");
+  });
+
+  it("strips multiple unpaired opening tags (parallel tool calls streaming)", () => {
+    const input = '<read_file path="/a.ts">\ncontent a\n<read_file path="/b.ts">\ncontent b\n';
+    const result = stripXmlToolCallTags(input);
+    expect(result).toBe('\ncontent a\n\ncontent b\n');
+  });
+
   it("strips model output tags like <thinking>, <reasoning>, <plan>", () => {
     const input = "<thinking>Let me think about this</thinking>The answer is 42.";
     const result = stripXmlToolCallTags(input);

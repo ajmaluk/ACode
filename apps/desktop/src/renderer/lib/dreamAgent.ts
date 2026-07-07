@@ -105,6 +105,7 @@ export async function runDreamCycle(
           staleCount,
           { totalInCategory: totalActive + staleCount }
         );
+        purgedCount = staleCount;
         allProposals.push(purgeProposal);
       }
     } catch (err) {
@@ -142,6 +143,7 @@ export async function runDreamCycle(
         }
       }
     }
+    validatedCount = staleIds.length;
 
     // Create proposal for file validation marks
     if (staleIds.length > 0) {
@@ -175,6 +177,8 @@ export async function runDreamCycle(
       const totalCandidates = promoteCandidates.length + demoteCandidates.length;
 
       if (totalCandidates > 0) {
+        reScoredPromoted = promoteCandidates.length;
+        reScoredDemoted = demoteCandidates.length;
         const reScoreProposal = createProposal(
           "re-score",
           `Re-score ${totalCandidates} memor${totalCandidates === 1 ? "y" : "ies"} based on access patterns (${promoteCandidates.length} promote, ${demoteCandidates.length} demote)`,
@@ -512,7 +516,7 @@ export function triggerDreamCycleIfNeeded(
     // Run dream cycle in background with cancellation support
     const timeoutId = setTimeout(() => {
       activeDreamTimeouts.delete(workspacePath);
-      runDreamCycle(workspacePath, dreamNotifyFn)
+      void runDreamCycle(workspacePath, dreamNotifyFn)
         .then(() => {
           void setLastDreamTime(workspacePath, Date.now());
         })

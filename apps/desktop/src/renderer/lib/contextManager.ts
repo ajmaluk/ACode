@@ -433,10 +433,9 @@ export function _alignBoundaryPairs(
           aligned.add(j);
           break;
         }
-        // Stop if we hit another user message (not a tool result)
+        // Stop if we hit a real user message (not a tool result)
         if (prev.role === "user" && !_isToolResult(prev)) break;
-        // Stop if we hit a tool result (different tool call batch)
-        if (prev.role === "user" && _isToolResult(prev)) break;
+        // Skip through consecutive tool results to find originating assistant
       }
     }
   }
@@ -538,10 +537,13 @@ export function buildCompactionPrompt(
   messages: ChatMessage[],
   previousSummary?: string
 ): { role: string; content: string }[] {
-  const formatted = messages.map((m) => {
+  const formatted: { role: string; content: string }[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
     let content = m.content;
 
-    // Preserve tool call results
+    // Preserve tool call results embedded in assistant messages
     if (m.toolCalls?.length) {
       const toolSummary = m.toolCalls
         .filter(tc => tc.result)
@@ -549,6 +551,24 @@ export function buildCompactionPrompt(
         .join('\n');
       if (toolSummary) {
         content += `\n\nTool Results:\n${toolSummary}`;
+      }
+    }
+
+    // Preserve tool result user messages (the primary mechanism in ACode)
+    // Look ahead for tool result messages that follow this message
+    if (m.role === "assistant" && m.toolCalls?.length) {
+      const toolResultMsgs: string[] = [];
+      for (let j = i + 1; j < messages.length; j++) {
+        const next = messages[j];
+        if (next.role === "assistant") break;  // next assistant turn
+        if (next.role === "user" && !_isToolResult(next)) break;  // real user message
+        if (_isToolResult(next)) {
+          const truncated = next.content.length > 500 ? next.content.slice(0, 500) + "..." : next.content;
+          toolResultMsgs.push(truncated);
+        }
+      }
+      if (toolResultMsgs.length > 0) {
+        content += `\n\nTool Results:\n${toolResultMsgs.join('\n---\n')}`;
       }
     }
 
@@ -568,11 +588,11 @@ export function buildCompactionPrompt(
       content += `\n\nTodos:\n${todoSummary}`;
     }
 
-    return {
+    formatted.push({
       role: m.role === "user" ? "user" : "assistant",
       content,
-    };
-  });
+    });
+  }
 
   if (previousSummary) {
     return [
@@ -657,9 +677,11 @@ export function pruneToolOutputs(
   const pruned = messages.map((msg, idx) => {
     if (!toPrune.has(idx)) return msg;
 
-    // Extract tool name from prefix: [TOOL RESULT: toolName] or [TOOL ERROR: toolName]
-    const toolMatch = msg.content.match(/^\[TOOL (?:RESULT|ERROR):\s*(\S+)/);
-    const toolName = toolMatch?.[1] ?? "unknown";
+    // Extract tool name from either format:
+    // [TOOL RESULT: name] or [TOOL ERROR: name] (colon format)
+    // [Tool result for name] or [Tool error for name] (for-format)
+    const toolMatch = msg.content.match(/^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/);
+    const toolName = toolMatch?.[1] ?? toolMatch?.[2] ?? "unknown";
     const originalTokens = toolTokenEstimate(msg);
 
     return {
@@ -738,8 +760,8 @@ export function tier1PruneToolOutputs(
   // Truncate (don't remove) — keep the header, drop the body
   const pruned = messages.map((msg, idx) => {
     if (!toTruncate.has(idx)) return msg;
-    const toolMatch = msg.content.match(/^\[TOOL (?:RESULT|ERROR):\s*(\S+)/);
-    const toolName = toolMatch?.[1] ?? "unknown";
+    const toolMatch = msg.content.match(/^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/);
+    const toolName = toolMatch?.[1] ?? toolMatch?.[2] ?? "unknown";
     const originalTokens = toolTokenEstimate(msg);
     return {
       ...msg,

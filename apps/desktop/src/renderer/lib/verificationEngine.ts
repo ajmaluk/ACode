@@ -53,9 +53,9 @@ async function runShellCommand(command: string): Promise<{ exitCode: number; std
   // Real Tauri environment: use the system shell through dalamAPI
   try {
     // Wrap command in a shell invocation that captures exit code
-    // Use double-quoting for safer escaping that handles $'...' and backticks
+    // Use single quotes for the exit-code echo to avoid quote-escaping conflicts
     const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/\n/g, '\\n');
-    const wrapped = `bash -c "${escaped} 2>&1; echo "\\n__EXIT_CODE__=$?""`;
+    const wrapped = `bash -c "${escaped} 2>&1; printf '\\n__EXIT_CODE__=%d\\n' $?"`;
     // Use a system.exec-like approach — we'll use the agent's runCommand tool
     // which returns stdout/stderr. For now, return a promise that resolves
     // by running the command through the available system API.
@@ -65,7 +65,7 @@ async function runShellCommand(command: string): Promise<{ exitCode: number; std
     const exitCodeMatch = lines.pop()?.match(/__EXIT_CODE__=(\d+)/);
     const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1], 10) : -1;
     const stdout = exitCode === 0 ? output : "";
-    const stderr = exitCode !== 0 ? output : "";
+    const stderr = exitCode !== 0 ? lines.join("\n") : "";
     return { exitCode, stdout, stderr };
   } catch {
     // Fallback for environments where Tauri is unavailable (test, web)

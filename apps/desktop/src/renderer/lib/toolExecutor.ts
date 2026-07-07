@@ -64,6 +64,15 @@ const TOOL_DEPENDENCIES: Record<string, ToolDependency> = {
   memory_import: { tool: "memory_import", dependsOn: [], readOnly: true },
   question: { tool: "question", dependsOn: [], readOnly: true },
   get_env: { tool: "get_env", dependsOn: [], readOnly: true },
+  bash: { tool: "bash", dependsOn: [], readOnly: false },
+  shell: { tool: "shell", dependsOn: [], readOnly: false },
+  execute: { tool: "execute", dependsOn: [], readOnly: false },
+  grep: { tool: "grep", dependsOn: [], readOnly: true },
+  search: { tool: "search", dependsOn: [], readOnly: true },
+  webfetch: { tool: "webfetch", dependsOn: [], readOnly: true },
+  websearch: { tool: "websearch", dependsOn: [], readOnly: true },
+  create_file: { tool: "create_file", dependsOn: [], readOnly: false },
+  git_create_branch: { tool: "git_create_branch", dependsOn: [], readOnly: false },
   get_disk_space: { tool: "get_disk_space", dependsOn: [], readOnly: true },
   get_screen_info: { tool: "get_screen_info", dependsOn: [], readOnly: true },
   list_processes: { tool: "list_processes", dependsOn: [], readOnly: true },
@@ -169,20 +178,36 @@ function getToolTimeout(toolName: string): number {
 /**
  * Execute an async function with a timeout.
  * The promise is rejected if execution exceeds the specified timeout.
+ * If an abortSignal is provided, the timeout is also cancelled on abort.
  */
 async function executeWithTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  toolName: string
+  toolName: string,
+  abortSignal?: AbortSignal
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
+  const abortHandler = () => { clearTimeout(timeoutId); };
   const timeoutPromise = new Promise<T>((_, reject) => {
     timeoutId = setTimeout(
       () => reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`)),
       timeoutMs
     );
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        clearTimeout(timeoutId);
+        reject(new Error(`Tool "${toolName}" was aborted`));
+        return;
+      }
+      abortSignal.addEventListener("abort", abortHandler, { once: true });
+    }
   });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId!));
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId!);
+    if (abortSignal) {
+      try { abortSignal.removeEventListener("abort", abortHandler); } catch { /* ignore */ }
+    }
+  });
 }
 
 /**
@@ -271,22 +296,25 @@ export function groupToolCallsForExecution(toolCalls: ToolCall[]): ToolCall[][] 
   if (toolCalls.length === 0) return [];
   if (toolCalls.length === 1) return [[toolCalls[0]]];
 
-  const batches: ToolCall[][] = [];
-  let currentBatch: ToolCall[] = [toolCalls[0]];
+  // First-fit bin packing: try to add each tool to an existing compatible batch
+  // This handles patterns like [read(A), write(B), read(C)] → [[read(A), read(C)], [write(B)]]
+  const batches: ToolCall[][] = [[toolCalls[0]]];
 
   for (let i = 1; i < toolCalls.length; i++) {
     const current = toolCalls[i];
-    const canAddToBatch = currentBatch.every(tc => canRunInParallel(tc, current));
-
-    if (canAddToBatch) {
-      currentBatch.push(current);
-    } else {
-      batches.push(currentBatch);
-      currentBatch = [current];
+    let added = false;
+    for (const batch of batches) {
+      if (batch.every(tc => canRunInParallel(tc, current))) {
+        batch.push(current);
+        added = true;
+        break;
+      }
+    }
+    if (!added) {
+      batches.push([current]);
     }
   }
 
-  batches.push(currentBatch);
   return batches;
 }
 
@@ -297,6 +325,7 @@ export async function executeToolWithRetry(
   toolCall: ToolCall,
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: unknown) => void,
+  abortSignal?: AbortSignal,
   sessionId?: string
 ): Promise<ToolResult> {
   let lastError: string | null = null;
@@ -304,6 +333,16 @@ export async function executeToolWithRetry(
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const startTime = Date.now();
+    // Check abort before each attempt
+    if (abortSignal?.aborted) {
+      return {
+        toolName: toolCall.name,
+        result: "Aborted by user.",
+        success: false,
+        durationMs: Date.now() - startTime,
+        retries,
+      };
+    }
 
     try {
       // Validate args before execution
@@ -321,12 +360,13 @@ export async function executeToolWithRetry(
         }
       }
 
-      // Execute with per-tool timeout
+      // Execute with per-tool timeout and abort support
       const timeoutMs = getToolTimeout(toolCall.name);
       const result = await executeWithTimeout(
         executeFn(toolCall.name, validated.args),
         timeoutMs,
-        toolCall.name
+        toolCall.name,
+        abortSignal
       );
       const durationMs = Date.now() - startTime;
 
@@ -334,7 +374,7 @@ export async function executeToolWithRetry(
       if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
         const path = String(toolCall.args.path ?? "");
         if (path) {
-          const callId = `${toolCall.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const callId = `${toolCall.name}-${crypto.randomUUID().slice(0, 8)}`;
           const afterContent = toolCall.name === "write_file"
             ? String(toolCall.args.content ?? "")
             : result;
@@ -349,7 +389,7 @@ export async function executeToolWithRetry(
       }
 
       recordToolCost({
-        toolCallId: `${toolCall.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        toolCallId: `${toolCall.name}-${crypto.randomUUID().slice(0, 8)}`,
         sessionId: sessionId ?? "unknown",
         name: toolCall.name,
         durationMs,
@@ -379,7 +419,16 @@ export async function executeToolWithRetry(
           delay,
           error: lastError,
         });
-        await new Promise(resolve => setTimeout(resolve, delay));
+        // Race retry delay against abort signal to ensure timely cancellation
+        if (abortSignal) {
+          await new Promise<void>((resolve) => {
+            if (abortSignal.aborted) return resolve();
+            const timer = setTimeout(resolve, delay);
+            abortSignal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+          });
+        } else {
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
         continue;
       }
 
@@ -421,10 +470,11 @@ export async function executeToolBatch(
   batch: ToolCall[],
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: unknown) => void,
+  abortSignal?: AbortSignal,
   sessionId?: string
 ): Promise<ToolResult[]> {
   const results = await Promise.all(
-    batch.map(tc => executeToolWithRetry(tc, executeFn, emit, sessionId))
+    batch.map(tc => executeToolWithRetry(tc, executeFn, emit, abortSignal, sessionId))
   );
   return results;
 }
@@ -441,23 +491,35 @@ export async function executeToolCalls(
 ): Promise<ToolResult[]> {
   const batches = groupToolCallsForExecution(toolCalls);
   const allResults: ToolResult[] = [];
+  let abortedMidBatch = false;
 
-  for (const batch of batches) {
-    // Check abort signal before each batch
-    if (abortSignal?.aborted) {
-      for (const tc of batch) {
-        allResults.push({
-          toolName: tc.name,
-          result: "Aborted by user.",
-          success: false,
-          durationMs: 0,
-        });
+  // Register abort listener for mid-batch cancellation (complements per-batch polling)
+  const abortHandler = () => { abortedMidBatch = true; };
+  if (abortSignal && !abortSignal.aborted) {
+    abortSignal.addEventListener("abort", abortHandler, { once: true });
+  }
+
+  try {
+    for (const batch of batches) {
+      if (abortSignal?.aborted || abortedMidBatch) {
+        for (const tc of batch) {
+          allResults.push({
+            toolName: tc.name,
+            result: "Aborted by user.",
+            success: false,
+            durationMs: 0,
+          });
+        }
+        continue;
       }
-      continue;
-    }
 
-    const results = await executeToolBatch(batch, executeFn, emit, sessionId);
-    allResults.push(...results);
+      const results = await executeToolBatch(batch, executeFn, emit, abortSignal, sessionId);
+      allResults.push(...results);
+    }
+  } finally {
+    if (abortSignal && abortHandler) {
+      try { abortSignal.removeEventListener("abort", abortHandler); } catch { /* ignore */ }
+    }
   }
 
   return allResults;

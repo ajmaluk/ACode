@@ -251,7 +251,7 @@ async function searchMemoriesFallback(
   const db = getDb();
   const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
 
-  let sql = `SELECT * FROM memories WHERE (content LIKE ? OR summary LIKE ? OR tags LIKE ?)`;
+  let sql = `SELECT * FROM memories WHERE (content LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')`;
   const likePattern = `%${query.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
   const params: (string | number)[] = [likePattern, likePattern, likePattern];
 
@@ -402,7 +402,9 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
       entry.content,
     ].join("\n");
 
-    const filename = `${entry.category}-${entry.id.slice(0, 8)}.md`;
+    // Use last 12 chars of UUID (full random portion) to avoid collision
+    const shortId = entry.id.length > 12 ? entry.id.slice(-12) : entry.id;
+    const filename = `${entry.category}-${shortId}.md`;
     const filePath = joinPath(memDir, filename);
     await writeTextFile(filePath, frontmatter);
   } catch (e) {
@@ -457,7 +459,16 @@ export async function processPendingWrites(): Promise<void> {
     }
   }
 
-  _pendingWrites.length = 0;
+  // Atomically swap to avoid race with concurrent push failures
+  const oldQueue = _pendingWrites.splice(0, _pendingWrites.length);
+  // Merge still-pending with any entries pushed by concurrent failures during processing
+  const seenKeys = new Set(stillPending.map(w => w.entry.id));
+  for (const w of oldQueue) {
+    if (!seenKeys.has(w.entry.id)) {
+      stillPending.push(w);
+      seenKeys.add(w.entry.id);
+    }
+  }
   _pendingWrites.push(...stillPending);
 }
 
@@ -466,7 +477,6 @@ export async function processPendingWrites(): Promise<void> {
  * Called on startup or when project.db is lost.
  */
 export async function rebuildFromMarkdown(workspacePath: string): Promise<number> {
-  const db = getDb();
   const { exists, readTextFile, mkdir } = await import("@tauri-apps/plugin-fs");
   const memDir = joinPath(workspacePath, MEMORY_DIR);
 
@@ -497,7 +507,8 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
       const parsed = parseMarkdownMemory(content);
       if (!parsed) continue;
 
-      // Upsert into SQLite
+      // Upsert into SQLite (re-acquire db handle each iteration to avoid stale ref on workspace switch)
+      const db = getDb();
       const existing = await db.select(
         `SELECT id FROM memories WHERE id = ?`,
         [parsed.id]
@@ -576,10 +587,15 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
 
   if (!fields.id) return null;
 
+  const VALID_CATEGORIES: readonly MemoryCategory[] = ["user", "feedback", "project", "reference", "task", "decision"];
+  const VALID_TIERS: readonly MemoryTier[] = ["critical", "high", "medium", "low"];
+  const rawCategory = String(fields.category ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const rawTier = String(fields.tier ?? "").toLowerCase().replace(/[^a-z]/g, "");
+
   return {
     id: fields.id,
-    category: (fields.category as MemoryCategory) || "project",
-    tier: (fields.tier as MemoryTier) || "medium",
+    category: (VALID_CATEGORIES.includes(rawCategory as MemoryCategory) ? rawCategory : "project") as MemoryCategory,
+    tier: (VALID_TIERS.includes(rawTier as MemoryTier) ? rawTier : "medium") as MemoryTier,
     content: body.trim(),
     summary: fields.summary || body.trim().slice(0, 150),
     tags: (() => {
