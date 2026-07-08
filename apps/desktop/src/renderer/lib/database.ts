@@ -169,9 +169,12 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     await dbLoadingPromise;
     if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
   }
-  // If a different workspace is loading, wait for it to finish first
+  // If a different workspace is loading, wait for it to finish first,
+  // then re-check — the concurrent init may have already set dbInstance
   if (dbLoadingPromise && dbLoadingWorkspace !== workspacePath) {
     await dbLoadingPromise;
+    // Re-check: if the concurrent init opened our workspace, return it
+    if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
   }
   if (dbInstance) {
     await closeDatabase();

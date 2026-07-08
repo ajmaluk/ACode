@@ -883,7 +883,7 @@ function saveEnabledSkills(s: Set<string>) {
   try {
     window.localStorage.setItem(ENABLED_SKILLS_STORAGE, JSON.stringify(Array.from(s)));
   } catch (err) {
-    console.warn("[useChat] Failed to load persisted data:", err);
+    console.warn("[useChat] Failed to save enabled skills:", err);
   }
 }
 
@@ -1202,11 +1202,31 @@ function _clearDoomLoopState(sessionId: string) {
 }
 
 // ============================================================================
-// Context Overflow Detection (inspired by OpenCode's auto-retry pattern)
+// Context Overflow Detection (matches OpenCode's comprehensive patterns)
 // ============================================================================
 const CONTEXT_OVERFLOW_PATTERNS = [
+  // OpenCode's patterns (from provider-error.ts)
+  /prompt is too long/i,
+  /input is too long for requested model/i,
+  /exceeds the context window/i,
+  /input token count.*exceeds the maximum/i,
+  /tokens in request more than max tokens allowed/i,
+  /maximum prompt length is \d+/i,
+  /reduce the length of the messages/i,
+  /maximum context length is \d+ tokens/i,
+  /exceeds the limit of \d+/i,
+  /exceeds the available context size/i,
+  /greater than the context length/i,
+  /context window exceeds limit/i,
+  /exceeded model token limit/i,
   /context[_ ]length[_ ]exceeded/i,
-  /maximum[_ ]context[_ ]length/i,
+  /request entity too large/i,
+  /context length is only \d+ tokens/i,
+  /input length.*exceeds.*context length/i,
+  /prompt too long; exceeded (?:max )?context length/i,
+  /too large for model with \d+ maximum context length/i,
+  /model_context_window_exceeded/i,
+  // Additional patterns
   /context[_ ]window/i,
   /prompt[_ ]is[_ ]too[_ ]long/i,
   /request[_ ]too[_ ]large/i,
@@ -1217,6 +1237,8 @@ const CONTEXT_OVERFLOW_PATTERNS = [
   /max[_ ]context[_ ]tokens/i,
   /number[_ ]of[_ ]tokens.*exceed/i,
   /this[_ ]model.*maximum.*context/i,
+  // HTTP 400/413 with no body (OpenCode pattern)
+  /^4(00|13)\s*(status code)?\s*\(no body\)/i,
 ];
 
 function _isContextOverflowError(errorMsg: string): boolean {

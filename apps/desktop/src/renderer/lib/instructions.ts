@@ -111,6 +111,10 @@ export function parsePathScopedRules(
 // Layer loading
 // ---------------------------------------------------------------------------
 
+// Cache for loaded instructions per workspace path (avoids disk I/O on every LLM turn)
+const _instructionCache = new Map<string, { instructions: LoadedInstructions; timestamp: number }>();
+const INSTRUCTION_CACHE_TTL_MS = 30_000; // 30 seconds
+
 /**
  * Load instructions from the 4-layer hierarchy.
  *
@@ -119,11 +123,20 @@ export function parsePathScopedRules(
  *
  * Path-scoped rules from ALL layers are merged by glob pattern,
  * with higher-priority layers appending to the same glob.
+ *
+ * Results are cached for 30 seconds to avoid repeated disk I/O
+ * during multi-turn agent loops.
  */
 export async function loadInstructions(
   workspacePath: string,
   fsAdapter: InstructionFsAdapter
 ): Promise<LoadedInstructions> {
+  // Check cache first
+  const cached = _instructionCache.get(workspacePath);
+  if (cached && Date.now() - cached.timestamp < INSTRUCTION_CACHE_TTL_MS) {
+    return cached.instructions;
+  }
+
   const loadedPaths: string[] = [];
   const layers: Record<InstructionLayer, string> = {
     global: "",
@@ -201,7 +214,24 @@ export async function loadInstructions(
   }
 
   // --- Merge layers ---
-  return mergeLayers(layers, loadedPaths);
+  const result = mergeLayers(layers, loadedPaths);
+
+  // Cache the result
+  _instructionCache.set(workspacePath, { instructions: result, timestamp: Date.now() });
+
+  return result;
+}
+
+/**
+ * Clear the instruction cache for a workspace.
+ * Call when DALAM.md files are modified.
+ */
+export function clearInstructionCache(workspacePath?: string): void {
+  if (workspacePath) {
+    _instructionCache.delete(workspacePath);
+  } else {
+    _instructionCache.clear();
+  }
 }
 
 /**

@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   parsePathScopedRules,
   loadInstructions,
   formatInstructionsForPrompt,
   listPathScopedGlobs,
+  clearInstructionCache,
 } from "../instructions";
 import type { InstructionFsAdapter } from "../instructions";
 
@@ -106,6 +107,10 @@ Follow TypeScript strict mode`;
 // ── loadInstructions ─────────────────────────────────────────
 
 describe("loadInstructions", () => {
+  beforeEach(() => {
+    clearInstructionCache();
+  });
+
   it("returns empty instructions when no files exist", async () => {
     const adapter = createMockAdapter({});
     const result = await loadInstructions("/workspace", adapter);

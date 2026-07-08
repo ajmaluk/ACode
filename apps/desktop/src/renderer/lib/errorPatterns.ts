@@ -119,6 +119,61 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     pattern: /403.*forbidden/i,
     suggestion: "Access forbidden. Check permissions or API key scope.",
   },
+  // Context overflow (matches OpenCode patterns)
+  {
+    pattern: /context[_ ]length[_ ]exceeded/i,
+    suggestion: "Context window exceeded. The conversation is too long. Compaction will be triggered automatically.",
+  },
+  {
+    pattern: /prompt[_ ]is[_ ]too[_ ]long/i,
+    suggestion: "Prompt too long. Reduce the message size or start a new session.",
+  },
+  {
+    pattern: /input[_ ]is[_ ]too[_ ]long/i,
+    suggestion: "Input too long for the model. The conversation will be compacted.",
+  },
+  {
+    pattern: /maximum[_ ]context[_ ]length/i,
+    suggestion: "Maximum context length reached. Compaction will be triggered.",
+  },
+  {
+    pattern: /tokens[_ ]exceed/i,
+    suggestion: "Token limit exceeded. The conversation will be compacted.",
+  },
+  // Provider-specific errors
+  {
+    pattern: /model[_ ]not[_ ]found/i,
+    suggestion: "Model not found. Check the model name in settings.",
+  },
+  {
+    pattern: /invalid[_ ]model/i,
+    suggestion: "Invalid model specified. Check your provider settings.",
+  },
+  {
+    pattern: /quota[_ ]exceeded/i,
+    suggestion: "API quota exceeded. Check your billing or wait for quota reset.",
+  },
+  {
+    pattern: /content[_ ]policy/i,
+    suggestion: "Content policy violation. The request was blocked by the provider.",
+  },
+  {
+    pattern: /overloaded/i,
+    suggestion: "Provider is overloaded. Retry after a short delay.",
+  },
+  // Tool execution errors
+  {
+    pattern: /tool[_ ].*timed[_ ]out/i,
+    suggestion: "Tool execution timed out. The operation may be too slow or the server unresponsive.",
+  },
+  {
+    pattern: /permission[_ ]denied/i,
+    suggestion: "Permission denied. Check file/directory permissions.",
+  },
+  {
+    pattern: /command[_ ]not[_ ]found/i,
+    suggestion: "Command not found. Check if the required tool is installed.",
+  },
 
   // Disk / File system
   {

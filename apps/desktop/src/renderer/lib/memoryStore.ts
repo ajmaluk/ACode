@@ -153,9 +153,24 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
       if (wsPath) {
         const memDir = joinPath(wsPath, ".dalam", "memories");
         for (const entry of staleEntries) {
-          const mdFile = joinPath(memDir, `${entry.category}-${entry.id.slice(0, 8)}.md`);
+          // Try current category first, then scan for any file with this ID suffix
+          // (category may have changed since the file was written)
+          const idSuffix = entry.id.slice(-12);
+          const mdFile = joinPath(memDir, `${entry.category}-${idSuffix}.md`);
           if (await fsExists(mdFile)) {
             await remove(mdFile).catch(() => {});
+          } else {
+            // Scan for files with matching ID suffix (in case category changed)
+            try {
+              const { readDir } = await import("@tauri-apps/plugin-fs");
+              const files = await readDir(memDir).catch(() => []);
+              for (const f of files) {
+                if (f.name && f.name.endsWith(`-${idSuffix}.md`)) {
+                  await remove(joinPath(memDir, f.name)).catch(() => {});
+                  break;
+                }
+              }
+            } catch { /* best-effort scan */ }
           }
         }
       }

@@ -176,8 +176,8 @@ export async function searchCodeIndex(
   const db = getDb();
   const limit = options?.limit ?? 10;
 
-  // Escape FTS5 special characters
-  const safeQuery = query.replace(/['"*()^~]/g, " ").trim();
+  // Escape FTS5 special characters (including : which is a column filter)
+  const safeQuery = query.replace(/['"*()^~:\\|/]/g, " ").trim();
   if (!safeQuery) return [];
 
   try {

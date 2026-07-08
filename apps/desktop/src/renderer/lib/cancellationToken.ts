@@ -54,13 +54,26 @@ export class CancellationToken {
 
   /**
    * Create a child token that is cancelled when any of the parent tokens are cancelled.
+   * Cleanup: when the combined token is aborted, parent listeners are automatically removed.
    */
   static combine(...tokens: CancellationToken[]): CancellationToken {
     const combined = new CancellationToken();
+    const unsubscribes: Array<() => void> = [];
+
+    const cleanup = () => {
+      for (const unsub of unsubscribes) unsub();
+      unsubscribes.length = 0;
+    };
 
     for (const token of tokens) {
-      token.onAbort(() => combined.abort(token.reason));
+      unsubscribes.push(token.onAbort(() => {
+        cleanup();
+        combined.abort(token.reason);
+      }));
     }
+
+    // Also clean up if combined is aborted independently
+    combined.onAbort(cleanup);
 
     return combined;
   }

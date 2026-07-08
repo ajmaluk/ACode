@@ -438,6 +438,9 @@ export class CronConnector implements Connector {
 
       // Safety: ensure minimum 60s gap between firings to prevent rapid-fire
       const delayMs = Math.max(60_000, target.getTime() - Date.now());
+      // Clear previous timer before setting new one to prevent leaks
+      const prevTimer = this.timers.get(job.id);
+      if (prevTimer) clearTimeout(prevTimer);
       const timer = setTimeout(() => {
         if (!this.connected || !this.events) return;
         const message: ConnectorMessage = {

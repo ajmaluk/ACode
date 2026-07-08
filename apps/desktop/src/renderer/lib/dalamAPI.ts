@@ -234,20 +234,54 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3, baseDel
       return await fn();
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
+      // Don't retry non-retryable errors (auth, credit, validation, abort)
       if (err instanceof ProviderError && (err.code === "auth" || err.code === "credit" || err.code === "validation")) {
-        throw err; // Don't retry auth/credit/validation errors
+        throw err;
       }
-      // Don't retry abort signals — user deliberately cancelled
       if (lastError.name === "AbortError") {
         throw err;
       }
-      if (attempt < maxRetries) {
-        const delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 500;
-        await new Promise((r) => setTimeout(r, delay));
+      // Classify error for retry decision
+      const isRetryable = isRetryableError(lastError.message);
+      if (!isRetryable || attempt >= maxRetries) {
+        throw err;
       }
+      // Exponential backoff with jitter and retry-after support
+      const retryAfterMs = extractRetryAfter(lastError.message);
+      const delay = retryAfterMs ?? (baseDelayMs * Math.pow(2, attempt) + Math.random() * 500);
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
   throw lastError!;
+}
+
+/**
+ * Check if an error message indicates a retryable condition.
+ * Matches OpenCode's retryableStatus pattern (429, 503, 504, 529).
+ */
+function isRetryableError(message: string): boolean {
+  const retryablePatterns = [
+    /429/, /503/, /504/, /529/,           // HTTP status codes
+    /rate.?limit/i, /too.?many.?requests/i, // Rate limiting
+    /timeout/i, /timed.?out/i,              // Timeouts
+    /ECONNRESET/, /ETIMEDOUT/, /EPIPE/,    // Network errors
+    /network/i, /connection/i,              // Connection issues
+    /overloaded/i, /busy/i,                 // Server overloaded
+  ];
+  return retryablePatterns.some(p => p.test(message));
+}
+
+/**
+ * Extract retry-after duration from error message.
+ * Matches OpenCode's retryAfterMs pattern.
+ */
+function extractRetryAfter(message: string): number | null {
+  // Match "retry after X seconds" or "retry-after: X"
+  const secondsMatch = message.match(/retry[_\s-]?after[_\s:]*(\d+)\s*(?:sec|s)?/i);
+  if (secondsMatch) return parseInt(secondsMatch[1], 10) * 1000;
+  const msMatch = message.match(/retry[_\s-]?after[_\s:]*(\d+)\s*ms/i);
+  if (msMatch) return parseInt(msMatch[1], 10);
+  return null;
 }
 
 /**
@@ -498,7 +532,8 @@ async function* streamOpenAI(
                     _tcArgBuffers.delete(tcIdx);
                     const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
                     yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
-                  } catch {
+                  } catch (e) {
+                    _debugLog(`[streamOpenAI] Failed to parse tool call args for ${buf.name}:`, e);
                   }
                 }
               }
@@ -552,7 +587,8 @@ async function* streamOpenAI(
                     _tcArgBuffers.delete(tcIdx);
                     const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
                     yield { type: "message-delta", messageId: json.id || "", content: "\n" + xmlTag + "\n" };
-                  } catch {
+                  } catch (e) {
+                    _debugLog(`[streamOpenAI] Failed to parse tool call args for ${buf.name}:`, e);
                   }
                 }
               }
@@ -2394,12 +2430,13 @@ const ATTRSelfClose = ATTRCapture + '\\s*\\/?>';
 const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*';
 
 // All tool regex patterns pre-compiled at module level (compiled once, reused per call)
-const REGEX_READ_FILE = new RegExp(`<read_file\\s+${ATTRSelfClose}|<read_file\\s+${ATTRFull}`, "gi");
+// Fixed: Use proper key="value" attribute patterns instead of broken ATTRSelfClose
+const REGEX_READ_FILE = /<read_file\s+path=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
 const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*?)<\/edit_file>/gi;
 const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
-const REGEX_GREP_FILE = new RegExp(`<grep_file\\s+${ATTRSelfClose}`, "gi");
-const REGEX_SEARCH_FILES = new RegExp(`<search_files\\s+${ATTRSelfClose}`, "gi");
+const REGEX_GREP_FILE = /<grep_file\s+path=["']([^"']+)["']\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
+const REGEX_SEARCH_FILES = /<search_files\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_RUN_COMMAND = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
 const REGEX_BASH = /<bash\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
 const REGEX_SHELL = /<shell\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
@@ -2408,13 +2445,13 @@ const REGEX_GIT_STATUS = /<git_status\s*\/?>/gi;
 const REGEX_GIT_COMMIT = /<git_commit\s+message=["']([^"']+)["']\s*\/?>/gi;
 const REGEX_GIT_LOG = /<git_log\s*\/?>/gi;
 const REGEX_GIT_BRANCH = /<git_branch\s*\/?>/gi;
-const REGEX_GIT_CHECKOUT = new RegExp(`<git_checkout\\s+${ATTRSelfClose}`, "gi");
-const REGEX_GIT_DIFF_FILE = new RegExp(`<git_diff_file\\s+${ATTRSelfClose}`, "gi");
+const REGEX_GIT_CHECKOUT = /<git_checkout\s+branch=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
+const REGEX_GIT_DIFF_FILE = /<git_diff_file\s+path=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_CLIPBOARD_READ = /<clipboard_read\s*\/?>/gi;
 const REGEX_CLIPBOARD_WRITE = /<clipboard_write>([\s\S]*?)<\/clipboard_write>/gi;
-const REGEX_NOTIFY = new RegExp(`<notify\\s+${ATTRSelfClose}`, "gi");
+const REGEX_NOTIFY = /<notify\s+title=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_SYSTEM_INFO = /<system_info\s*\/?>/gi;
-const REGEX_OPEN_URL = new RegExp(`<open_url\\s+${ATTRSelfClose}`, "gi");
+const REGEX_OPEN_URL = /<open_url\s+url=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_LAUNCH_APP = /<launch_app\s+([^>]*)\/?>/gi;
 const REGEX_REVEAL_IN_FINDER = /<reveal_in_finder\s+([^>]*)\/?>/gi;
 const REGEX_MEMORY_SAVE = /<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi;
@@ -2449,9 +2486,9 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 1. read_file
   REGEX_READ_FILE.lastIndex = 0;
   while ((match = REGEX_READ_FILE.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    if (attrs.path) {
-      toolCalls.push({ name: "read_file", args: attrs, raw: match[0] });
+    // New regex directly captures path in match[1]
+    if (match[1]) {
+      toolCalls.push({ name: "read_file", args: { path: match[1] }, raw: match[0] });
     }
   }
 
@@ -2489,21 +2526,23 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
   }
 
-  // 5. grep_file
+  // 5. grep_file — new regex directly captures path and pattern
   REGEX_GREP_FILE.lastIndex = 0;
   while ((match = REGEX_GREP_FILE.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    if (attrs.path && attrs.pattern) {
-      toolCalls.push({ name: "grep_file", args: { path: attrs.path, pattern: attrs.pattern, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
+    if (match[1] && match[2]) {
+      // Extract optional regex and max_results from remaining attributes
+      const extraAttrs = parseAttributes(match[0].slice(match[0].indexOf(match[2]) + match[2].length));
+      toolCalls.push({ name: "grep_file", args: { path: match[1], pattern: match[2], regex: extraAttrs.regex, max_results: extraAttrs.max_results }, raw: match[0] });
     }
   }
 
-  // 6. search_files
+  // 6. search_files — new regex directly captures pattern
   REGEX_SEARCH_FILES.lastIndex = 0;
   while ((match = REGEX_SEARCH_FILES.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    if (attrs.pattern) {
-      toolCalls.push({ name: "search_files", args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results }, raw: match[0] });
+    if (match[1]) {
+      // Extract optional path, glob, regex, max_results from remaining attributes
+      const extraAttrs = parseAttributes(match[0].slice(match[0].indexOf(match[1]) + match[1].length));
+      toolCalls.push({ name: "search_files", args: { path: extraAttrs.path, pattern: match[1], glob: extraAttrs.glob, regex: extraAttrs.regex, max_results: extraAttrs.max_results }, raw: match[0] });
     }
   }
 
@@ -2550,21 +2589,19 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "git_branch", args: {}, raw: match[0] });
   }
 
-  // 12. git_checkout
+  // 12. git_checkout — new regex directly captures branch
   REGEX_GIT_CHECKOUT.lastIndex = 0;
   while ((match = REGEX_GIT_CHECKOUT.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    if (attrs.branch) {
-      toolCalls.push({ name: "git_checkout", args: attrs, raw: match[0] });
+    if (match[1]) {
+      toolCalls.push({ name: "git_checkout", args: { branch: match[1] }, raw: match[0] });
     }
   }
 
-  // 13. git_diff_file
+  // 13. git_diff_file — new regex directly captures path
   REGEX_GIT_DIFF_FILE.lastIndex = 0;
   while ((match = REGEX_GIT_DIFF_FILE.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    if (attrs.path) {
-      toolCalls.push({ name: "git_diff_file", args: attrs, raw: match[0] });
+    if (match[1]) {
+      toolCalls.push({ name: "git_diff_file", args: { path: match[1] }, raw: match[0] });
     }
   }
 
@@ -2580,12 +2617,13 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "clipboard_write", args: { text: match[1] }, raw: match[0] });
   }
 
-  // 16. notify
+  // 16. notify — new regex directly captures title
   REGEX_NOTIFY.lastIndex = 0;
   while ((match = REGEX_NOTIFY.exec(text)) !== null) {
-    const attrs = parseAttributes(match[1]);
-    if (attrs.title) {
-      toolCalls.push({ name: "notify", args: { title: attrs.title, body: attrs.body ?? "" }, raw: match[0] });
+    if (match[1]) {
+      // Extract optional body from remaining attributes
+      const extraAttrs = parseAttributes(match[0].slice(match[0].indexOf(match[1]) + match[1].length));
+      toolCalls.push({ name: "notify", args: { title: match[1], body: extraAttrs.body ?? "" }, raw: match[0] });
     }
   }
 
@@ -2595,9 +2633,12 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: "system_info", args: {}, raw: match[0] });
   }
 
-  // 18. open_url
+  // 18. open_url — new regex directly captures url
   REGEX_OPEN_URL.lastIndex = 0;
   while ((match = REGEX_OPEN_URL.exec(text)) !== null) {
+    if (match[1]) {
+      toolCalls.push({ name: "open_url", args: { url: match[1] }, raw: match[0] });
+    }
     const attrs = parseAttributes(match[1]);
     if (attrs.url) {
       toolCalls.push({ name: "open_url", args: { url: attrs.url }, raw: match[0] });

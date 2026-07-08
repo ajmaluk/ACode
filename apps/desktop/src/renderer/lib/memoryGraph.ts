@@ -765,5 +765,10 @@ export function serializeGraph(graph: GraphData): string {
  * Deserialize graph from a JSON string.
  */
 export function deserializeGraph(json: string): GraphData {
-  return importGraph(JSON.parse(json));
+  try {
+    return importGraph(JSON.parse(json));
+  } catch (e) {
+    console.warn("[MemoryGraph] Failed to deserialize graph:", e);
+    return { nodes: [], edges: [], centerNode: null };
+  }
 }

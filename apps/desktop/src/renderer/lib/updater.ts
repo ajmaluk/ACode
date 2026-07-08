@@ -56,10 +56,17 @@ export async function installUpdate(
       return;
     }
 
+    let totalBytes = 0;
+    let downloadedBytes = 0;
+
     await update.downloadAndInstall((event) => {
       if (event.data && event.data.event === "Progress") {
+        const contentLength = event.data.contentLength ?? 0;
         const chunkLength = event.data.data?.chunkLength ?? 0;
-        onProgress?.(chunkLength);
+        if (contentLength > 0) totalBytes = contentLength;
+        downloadedBytes += chunkLength;
+        const percent = totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
+        onProgress?.(percent);
       } else if (event.data && event.data.event === "Finished") {
         onProgress?.(100);
       }

@@ -259,7 +259,8 @@ async function runMemoryMaintenanceIfNeeded(): Promise<void> {
     maintenanceCounter = 0;
     maintenanceRunning = true;
     try {
-      const { runMaintenance } = await import("./memoryStore");
+      const { runMaintenance, processPendingWrites } = await import("./memoryStore");
+      await processPendingWrites(); // Retry failed markdown writes
       await runMaintenance();
     } catch (e) {
       console.warn("[HookListener] Memory maintenance failed:", e);

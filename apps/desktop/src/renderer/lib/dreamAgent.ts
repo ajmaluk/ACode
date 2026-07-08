@@ -86,26 +86,25 @@ export async function runDreamCycle(
 
     // 1. Purge already-flagged stale memories from SQLite & update MEMORY.md
     // Count stale entries first to decide if a proposal is warranted
-    let purgedCount = 0;
+    let staleCountForProposal = 0;
     try {
       const db = getDb();
       const staleRows = await db.select(
         `SELECT COUNT(*) as count FROM memories WHERE stale=1`
       ) as { count: number }[];
-      const staleCount = staleRows[0]?.count ?? 0;
-      if (staleCount > 0) {
+      staleCountForProposal = staleRows[0]?.count ?? 0;
+      if (staleCountForProposal > 0) {
         const totalRows = await db.select(
           `SELECT COUNT(*) as count FROM memories WHERE stale=0`
         ) as { count: number }[];
         const totalActive = totalRows[0]?.count ?? 0;
         const purgeProposal = createProposal(
           "purge-stale",
-          `Purge ${staleCount} stale memory entr${staleCount === 1 ? "y" : "ies"}`,
-          { staleCount, totalActive },
-          staleCount,
-          { totalInCategory: totalActive + staleCount }
+          `Purge ${staleCountForProposal} stale memory entr${staleCountForProposal === 1 ? "y" : "ies"}`,
+          { staleCount: staleCountForProposal, totalActive },
+          staleCountForProposal,
+          { totalInCategory: totalActive + staleCountForProposal }
         );
-        purgedCount = staleCount;
         allProposals.push(purgeProposal);
       }
     } catch (err) {
@@ -411,8 +410,12 @@ export async function runDreamCycle(
     if (dedupProposal !== null) allProposals.push(dedupProposal);
 
     // Purge any newly marked stale memories
+    let purgedCount = 0;
     if (validatedCount > 0 || deduplicatedCount > 0) {
-      await purgeStale(workspacePath);
+      purgedCount = await purgeStale(workspacePath);
+    } else if (staleCountForProposal > 0) {
+      // Also purge pre-existing stale entries
+      purgedCount = await purgeStale(workspacePath);
     }
 
     // Run skill consolidation optimization (Refactoring redundant workspace skills)
@@ -602,7 +605,8 @@ export async function executeWorkspaceDreamOptimization(
         const skillB = discoveredSkills[j]!;
         
         // Use jaccardSimilarity directly (no thin wrapper)
-        if (jaccardSimilarity(skillA.rawContent, skillB.rawContent) <= 0.65) continue;
+        const similarityScore = jaccardSimilarity(skillA.rawContent, skillB.rawContent);
+        if (similarityScore <= 0.65) continue;
         
         const consolidationPrompt = `You are a background compilation refactoring process.
 We found two highly similar, overlapping procedural instructions files inside our local project workspace configuration.
@@ -675,9 +679,9 @@ Generate an elegant unified version. Output the result in clean markdown with ap
         const skillConsolidateProposal = createProposal(
           "consolidate-skill",
           `Merged skill "${skillA.name}" with overlapping "${skillB.name}"`,
-          { keptName: skillA.name, removedName: skillB.name, similarity: jaccardSimilarity(skillA.rawContent, skillB.rawContent) },
+          { keptName: skillA.name, removedName: skillB.name, similarity: similarityScore },
           2,
-          { similarity: jaccardSimilarity(skillA.rawContent, skillB.rawContent) }
+          { similarity: similarityScore }
         );
         if (skillConsolidateProposal.status === "auto-accept") {
           skillConsolidateProposal.status = "applied";

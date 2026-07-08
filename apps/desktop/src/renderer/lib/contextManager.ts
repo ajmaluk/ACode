@@ -787,4 +787,246 @@ export function tier1PruneToolOutputs(
   return { pruned, tokensReclaimed };
 }
 
+// ─── Unlimited Context Management ─────────────────────────────
+// Inspired by OpenCode's compaction pattern and MiMo's budgeted injection.
+// These functions enable unlimited context by:
+// 1. Token-aware message selection (select by budget, not count)
+// 2. Rolling summaries that preserve full context across compactions
+// 3. Multi-tier compression (prune → summarize → deep compact)
+
+/**
+ * Select messages to compact based on token budget, not just count.
+ * This is more accurate than selectMessagesForCompaction which uses message count.
+ *
+ * Algorithm (matches OpenCode's select function):
+ * 1. Protect the first user message (original task context)
+ * 2. Protect recent messages within the keep budget
+ * 3. Protect messages with file changes or todos
+ * 4. Compact everything else, starting with largest tool outputs
+ *
+ * @param messages - All conversation messages
+ * @param keepTokenBudget - Maximum tokens to keep (not compact)
+ * @param estimateFn - Token estimation function
+ * @returns Messages to compact and messages to keep
+ */
+export function selectMessagesByTokenBudget(
+  messages: ChatMessage[],
+  keepTokenBudget: number,
+  estimateFn: (msg: ChatMessage) => number = estimateMessageTokens
+): { toCompact: ChatMessage[]; toKeep: ChatMessage[] } {
+  if (messages.length <= 2) {
+    return { toCompact: [], toKeep: messages };
+  }
+
+  // Build token costs for each message
+  const tokenCosts = messages.map((m, i) => ({
+    idx: i,
+    tokens: estimateFn(m),
+    role: m.role,
+    isToolResult: _isToolResult(m),
+    hasFileChanges: (m.fileChanges?.length ?? 0) > 0,
+    hasTodos: (m.todos?.length ?? 0) > 0,
+  }));
+
+  // Protect first user message (original task context)
+  const protectedIndices = new Set<number>();
+  const firstUserIdx = tokenCosts.findIndex(c => c.role === "user");
+  if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
+
+  // Protect messages with file changes or todos (important for diffs/task tracking)
+  for (const tc of tokenCosts) {
+    if (tc.hasFileChanges || tc.hasTodos) {
+      protectedIndices.add(tc.idx);
+    }
+  }
+
+  // Protect recent messages within the keep budget (backward scan)
+  let keepTokens = 0;
+  for (let i = tokenCosts.length - 1; i >= 0; i--) {
+    if (keepTokens + tokenCosts[i].tokens > keepTokenBudget) break;
+    // Don't protect tool results in the keep set unless they're very recent
+    if (tokenCosts[i].isToolResult && i < tokenCosts.length - 2) continue;
+    protectedIndices.add(tokenCosts[i].idx);
+    keepTokens += tokenCosts[i].tokens;
+  }
+
+  // Align boundaries: prevent splitting tool_call/tool_result pairs
+  const alignedIndices = _alignBoundaryPairs(messages, protectedIndices);
+
+  // Split into compact and keep
+  const toCompact: ChatMessage[] = [];
+  const toKeep: ChatMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    if (alignedIndices.has(i)) {
+      toKeep.push(messages[i]);
+    } else {
+      toCompact.push(messages[i]);
+    }
+  }
+
+  return { toCompact, toKeep };
+}
+
+/**
+ * Build a rolling summary from compacted messages.
+ * This creates a concise summary that can be injected as context
+ * when the conversation exceeds the context window.
+ *
+ * The rolling summary preserves:
+ * - Original task/goal
+ * - Key decisions and constraints
+ * - Completed work
+ * - Active work and blockers
+ * - Relevant file paths
+ *
+ * @param messages - Messages to summarize
+ * @param previousSummary - Previous rolling summary (if any)
+ * @returns Structured summary string
+ */
+export function buildRollingSummary(
+  messages: ChatMessage[],
+  previousSummary?: string
+): string {
+  if (messages.length === 0) return previousSummary ?? "";
+
+  // Extract key information from messages
+  const goals: string[] = [];
+  const completed: string[] = [];
+  const active: string[] = [];
+  const files: Set<string> = new Set();
+  const errors: string[] = [];
+
+  for (const msg of messages) {
+    // Extract goals from first user messages
+    if (msg.role === "user" && !_isToolResult(msg) && goals.length < 2) {
+      const goal = msg.content.slice(0, 200).replace(/\n/g, " ");
+      if (goal.length > 10) goals.push(goal);
+    }
+
+    // Extract file changes
+    if (msg.fileChanges?.length) {
+      for (const fc of msg.fileChanges) {
+        files.add(`${fc.action}: ${fc.path}`);
+      }
+    }
+
+    // Extract tool results (completed work)
+    if (msg.role === "user" && _isToolResult(msg)) {
+      const toolMatch = msg.content.match(/^\[(?:TOOL RESULT|Tool result) for (\S+)\]/);
+      if (toolMatch) {
+        const toolName = toolMatch[1];
+        const preview = msg.content.slice(0, 100).replace(/\n/g, " ");
+        if (preview.length > 20) completed.push(`[${toolName}] ${preview}`);
+      }
+    }
+
+    // Extract errors
+    if (msg.role === "user" && _isToolResult(msg) && msg.content.includes("[Tool error")) {
+      const errorPreview = msg.content.slice(0, 100).replace(/\n/g, " ");
+      errors.push(errorPreview);
+    }
+
+    // Extract active work from assistant messages
+    if (msg.role === "assistant" && !_isToolResult(msg) && active.length < 3) {
+      const content = msg.content.slice(0, 200).replace(/\n/g, " ");
+      if (content.length > 20 && !content.startsWith("[")) {
+        active.push(content);
+      }
+    }
+  }
+
+  // Build structured summary
+  const parts: string[] = [];
+
+  if (previousSummary) {
+    parts.push(`## Previous Context\n${previousSummary}`);
+  }
+
+  if (goals.length > 0) {
+    parts.push(`## Goal\n${goals.map(g => `- ${g}`).join("\n")}`);
+  }
+
+  if (completed.length > 0) {
+    parts.push(`## Completed\n${completed.slice(-5).map(c => `- ${c}`).join("\n")}`);
+  }
+
+  if (active.length > 0) {
+    parts.push(`## Active\n${active.map(a => `- ${a}`).join("\n")}`);
+  }
+
+  if (errors.length > 0) {
+    parts.push(`## Errors\n${errors.slice(-3).map(e => `- ${e}`).join("\n")}`);
+  }
+
+  if (files.size > 0) {
+    parts.push(`## Files\n${[...files].slice(-10).map(f => `- ${f}`).join("\n")}`);
+  }
+
+  return parts.join("\n\n") || "(No context available)";
+}
+
+/**
+ * Compute the optimal token budget for keeping messages.
+ * This balances between keeping enough context and leaving room for:
+ * - System prompt (~2-5K tokens)
+ * - Model output (~4-8K tokens)
+ * - Rolling summary (~1-2K tokens)
+ *
+ * @param modelContextWindow - Model's total context window
+ * @param systemPromptTokens - Estimated tokens in system prompt
+ * @param outputReserve - Tokens to reserve for model output
+ * @returns Token budget for keeping messages
+ */
+export function computeKeepBudget(
+  modelContextWindow: number,
+  systemPromptTokens: number = 4000,
+  outputReserve: number = 8000
+): number {
+  // Reserve: system prompt + output + rolling summary buffer
+  const reserved = systemPromptTokens + outputReserve + 2000;
+  // Keep 60% of remaining for messages, compact 40%
+  const available = Math.max(0, modelContextWindow - reserved);
+  return Math.floor(available * 0.6);
+}
+
+/**
+ * Check if context needs compaction based on token estimates.
+ * This is the proactive check that should run before each LLM call.
+ *
+ * @param messages - Current conversation messages
+ * @param modelContextWindow - Model's context window
+ * @param systemPromptTokens - Estimated system prompt tokens
+ * @returns Whether compaction is needed and recommended actions
+ */
+export function checkContextBudget(
+  messages: ChatMessage[],
+  modelContextWindow: number = 128000,
+  systemPromptTokens: number = 4000
+): {
+  needsCompaction: boolean;
+  pressureRatio: number;
+  recommendedAction: "none" | "prune" | "compact" | "deep-compact";
+  keepBudget: number;
+} {
+  const totalTokens = messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
+  const available = modelContextWindow - systemPromptTokens - 8000; // reserve for output
+  const pressureRatio = totalTokens / available;
+  const keepBudget = computeKeepBudget(modelContextWindow, systemPromptTokens);
+
+  if (pressureRatio < 0.5) {
+    return { needsCompaction: false, pressureRatio, recommendedAction: "none", keepBudget };
+  }
+
+  if (pressureRatio < 0.7) {
+    return { needsCompaction: true, pressureRatio, recommendedAction: "prune", keepBudget };
+  }
+
+  if (pressureRatio < 0.9) {
+    return { needsCompaction: true, pressureRatio, recommendedAction: "compact", keepBudget };
+  }
+
+  return { needsCompaction: true, pressureRatio, recommendedAction: "deep-compact", keepBudget };
+}
+
 
