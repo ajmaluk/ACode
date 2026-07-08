@@ -203,6 +203,7 @@ class HookEventBus {
             ]);
           } finally {
             clearTimeout(timeoutId);
+            timeoutController.abort(); // Clean up signal listeners
           }
         }
         this.pushLog({

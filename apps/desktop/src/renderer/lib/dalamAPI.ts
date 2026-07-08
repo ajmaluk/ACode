@@ -196,6 +196,8 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
   const parsed: { data: string }[] = [];
   let currentData = "";
   let lastCompleteIdx = 0;
+  // Track start of incomplete data lines (for cross-buffer preservation)
+  let incompleteDataStart = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line === "") {
@@ -205,16 +207,23 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
         currentData = "";
       }
       lastCompleteIdx = i + 1;
+      incompleteDataStart = -1;
     } else if (line.startsWith(":")) {
       // SSE comment line — skip (e.g. heartbeat)
       lastCompleteIdx = i + 1;
+      incompleteDataStart = -1;
     } else if (line.startsWith("data:")) {
+      if (incompleteDataStart === -1) incompleteDataStart = i;
       const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
       currentData += (currentData ? "\n" : "") + dataContent;
     }
     // Other fields (event:, id:, retry:) are silently ignored per SSE spec
   }
-  const remaining = lines.slice(lastCompleteIdx).join("\n");
+  // Preserve incomplete data lines (no trailing empty line) across buffer boundaries.
+  // Without this, data arriving mid-event is lost when the buffer splits mid-event.
+  const remaining = incompleteDataStart >= 0
+    ? lines.slice(incompleteDataStart).join("\n")
+    : lines.slice(lastCompleteIdx).join("\n");
   return { parsed, remaining };
 }
 
@@ -3397,7 +3406,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     const { Command } = await import("@tauri-apps/plugin-shell");
     const program = isWindows() ? "powershell" : "bash";
     const commandArgs = isWindows() ? ["-NoProfile", "-NonInteractive", "-Command", args.command] : ["-c", args.command];
-    const cmd = Command.create(program, commandArgs, { cwd: workspacePath });
+    const cmd = Command.create(program, commandArgs, { cwd: workspacePath || "." });
     const child = await cmd.spawn();
     let killed = false;
     const timeoutMs = 60_000;

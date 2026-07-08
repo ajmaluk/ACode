@@ -695,7 +695,8 @@ describe("buildCompactionPrompt", () => {
     const userContent = prompt.find(p => p.role === "user")?.content || "";
     expect(userContent).toContain("structured summary");
     expect(userContent).toContain("Goal");
-    expect(userContent).toContain("Pending");
+    expect(userContent).toContain("Blocked");
+    expect(userContent).toContain("Next Move");
   });
 
   it("prepends previous summary when provided", () => {
@@ -704,7 +705,7 @@ describe("buildCompactionPrompt", () => {
     const userMessages = prompt.filter(p => p.role === "user");
     // Should start with update instruction referencing previous summary
     const firstUserContent = userMessages[0]?.content || "";
-    expect(firstUserContent).toContain("[PREVIOUS CONVERSATION SUMMARY]");
+    expect(firstUserContent).toContain("Update the anchored summary");
     expect(firstUserContent).toContain("Previous summary content");
   });
 

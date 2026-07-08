@@ -27,10 +27,14 @@ export function closeIncompleteMarkdown(text: string): string {
   if (singleStars.length % 2 !== 0) result += "*";
 
   // Close unclosed inline code markers (`)
-  // Track open/close state rather than counting total backticks,
-  // which breaks when multiple inline code spans exist.
+  // Handle code fences (```) separately from inline backticks to avoid
+  // miscounting. Code fences need 3 backticks to close, not 1.
+  const fenceCount = (result.match(/```/g) || []).length;
+  if (fenceCount % 2 !== 0) result += "```";
+  // After removing code fences, count remaining single backticks for inline code
+  const inlineResult = result.replace(/```/g, "");
   let inCode = false;
-  for (const ch of result) { if (ch === '`') inCode = !inCode; }
+  for (const ch of inlineResult) { if (ch === '`') inCode = !inCode; }
   if (inCode) result += "`";
 
   // Close unclosed link text brackets ([text])

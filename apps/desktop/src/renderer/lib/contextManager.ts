@@ -50,6 +50,9 @@ function getCachedTokenCount(text: string): number | null {
 }
 
 function setCachedTokenCount(text: string, tokens: number): void {
+  // Skip caching for very large texts to prevent memory pressure
+  // (large tool outputs are unlikely to be re-estimated)
+  if (text.length > 10_000) return;
   // Evict oldest entry if cache is full
   if (_tokenCache.size >= TOKEN_CACHE_MAX) {
     const firstKey = _tokenCache.keys().next().value;
@@ -517,21 +520,33 @@ export const SUMMARY_TEMPLATE = `You are a conversation compaction assistant. Pr
 Format your summary as:
 
 ## Goal
-[What the user asked for / what we're trying to accomplish]
+- [one or two brief sentences describing what the user is trying to accomplish]
 
-## Key Instructions
-[Any specific constraints, preferences, or rules the user specified]
+## Important Details
+- [constraints/preferences, decisions and why, important facts/assumptions, exact context needed to continue, or "(none)"]
 
-## Discoveries
-[Important findings about the codebase, bugs found, architecture decisions]
+## Work State
+### Completed
+- [finished work, verified facts, or changes made; otherwise "(none)"]
 
-## Accomplished
-[What has been completed so far — file changes, features implemented, etc.]
+### Active
+- [current work, partial changes, or investigation state; otherwise "(none)"]
 
-## Pending
-[What still needs to be done]
+### Blocked
+- [blockers, failing commands, or unknowns; otherwise "(none)"]
 
-Keep the summary concise (under 300 words). Focus on actionable facts. Do not include any meta-commentary or intros.`;
+## Next Move
+1. [immediate concrete action, or "(none)"]
+2. [next action if known, or "(none)"]
+
+## Relevant Files
+- [file or directory path: why it matters, or "(none)"]
+
+Rules:
+- Keep every section, even when empty.
+- Use terse bullets, not prose paragraphs.
+- Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers when known.
+- Do not mention the summary process or that context was compacted.`;
 
 export function buildCompactionPrompt(
   messages: ChatMessage[],
@@ -598,7 +613,7 @@ export function buildCompactionPrompt(
     return [
       {
         role: "user",
-        content: `[PREVIOUS CONVERSATION SUMMARY]\n${previousSummary}\n\nUpdate this summary by incorporating the new messages below. Use the structured format: Goal, Key Instructions, Discoveries, Accomplished, Pending.`,
+        content: `Update the anchored summary below using the conversation history above.\nPreserve still-true details, remove stale details, and merge in the new facts.\n<previous-summary>\n${previousSummary}\n</previous-summary>\n\n${SUMMARY_TEMPLATE}`,
       },
       {
         role: "assistant",

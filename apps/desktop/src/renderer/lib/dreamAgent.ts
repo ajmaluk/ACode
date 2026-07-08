@@ -163,34 +163,54 @@ export async function runDreamCycle(
     let reScoredPromoted = 0;
     let reScoredDemoted = 0;
     try {
-      const { scoreMemory } = await import("./memoryStore");
       const db = getDb();
       const allMemories = await getAllMemories({ excludeStale: true });
 
-      // First, count candidates for the proposal
+      const tierUpgrade: Record<string, string> = { low: "medium", medium: "high", high: "critical" };
+      const tierDowngrade: Record<string, string> = { critical: "high", high: "medium", medium: "low" };
+
+      // Promote frequently accessed low/medium tier memories
       const promoteCandidates = allMemories.filter(
         m => m.tier !== "critical" && m.accessCount >= 5
       );
+      for (const mem of promoteCandidates) {
+        const newTier = tierUpgrade[mem.tier];
+        if (newTier) {
+          await db.execute(
+            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
+            [newTier, Date.now(), mem.id]
+          ).catch(() => {});
+          reScoredPromoted++;
+        }
+      }
+
+      // Demote rarely accessed high-tier memories older than 30 days
       const demoteCandidates = allMemories.filter(
         m => m.tier === "high" && m.accessCount <= 1 && (Date.now() - m.createdAt) > 30 * 86400000
       );
-      const totalCandidates = promoteCandidates.length + demoteCandidates.length;
+      for (const mem of demoteCandidates) {
+        const newTier = tierDowngrade[mem.tier];
+        if (newTier) {
+          await db.execute(
+            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
+            [newTier, Date.now(), mem.id]
+          ).catch(() => {});
+          reScoredDemoted++;
+        }
+      }
 
+      const totalCandidates = reScoredPromoted + reScoredDemoted;
       if (totalCandidates > 0) {
-        reScoredPromoted = promoteCandidates.length;
-        reScoredDemoted = demoteCandidates.length;
         const reScoreProposal = createProposal(
           "re-score",
-          `Re-score ${totalCandidates} memor${totalCandidates === 1 ? "y" : "ies"} based on access patterns (${promoteCandidates.length} promote, ${demoteCandidates.length} demote)`,
-          { promoteCount: promoteCandidates.length, demoteCount: demoteCandidates.length, totalMemories: allMemories.length },
+          `Re-scored ${totalCandidates} memor${totalCandidates === 1 ? "y" : "ies"} based on access patterns (${reScoredPromoted} promote, ${reScoredDemoted} demote)`,
+          { promoteCount: reScoredPromoted, demoteCount: reScoredDemoted, totalMemories: allMemories.length },
           totalCandidates,
           { avgAccessCount: 5 }
         );
-
+        reScoreProposal.status = "applied";
+        reScoreProposal.appliedAt = Date.now();
         allProposals.push(reScoreProposal);
-      }
-
-      if (reScoredPromoted > 0 || reScoredDemoted > 0) {
         if (import.meta.env.DEV) console.log(`[DreamAgent] Re-scored memories: ${reScoredPromoted} promoted, ${reScoredDemoted} demoted`);
       }
     } catch (err) {
@@ -392,7 +412,7 @@ export async function runDreamCycle(
 
     // Purge any newly marked stale memories
     if (validatedCount > 0 || deduplicatedCount > 0) {
-      await purgeStale();
+      await purgeStale(workspacePath);
     }
 
     // Run skill consolidation optimization (Refactoring redundant workspace skills)
