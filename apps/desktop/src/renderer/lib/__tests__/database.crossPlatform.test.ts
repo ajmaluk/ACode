@@ -136,7 +136,7 @@ describe("Cross-platform SQLite database initialization", () => {
   describe("Edge cases", () => {
     it("empty string → minimal valid URI", () => {
       const uri = normalizeDbPath("");
-      expect(uri).toBe("sqlite:/.dalam/project.db");
+      expect(uri).toBe("sqlite:.dalam/project.db");
       expect(uri).toMatch(/^sqlite:/);
     });
 

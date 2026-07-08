@@ -21,6 +21,7 @@ import {
   type VerificationResult,
   type UnmetCriteria,
 } from "./doneCriteria";
+import { getCachedRegex } from "./regexCache";
 
 // ─── Terminal Execution ──────────────────────────────────────
 // Simple shell executor that works in both Tauri and test environments.
@@ -100,7 +101,6 @@ export async function runVerificationCommand(
     if (vc.checkType === "exit-code") {
       passed = exitCode === 0;
     } else if (vc.checkType === "output-pattern" && vc.expectedPattern) {
-      const { getCachedRegex } = await import("./regexCache");
       const regex = getCachedRegex(vc.expectedPattern);
       passed = regex ? regex.test(stdout) : false;
     }
@@ -121,6 +121,7 @@ export async function runVerificationCommand(
       label: vc.label,
       required: vc.required,
       passed: false,
+      stdout: "",
       stderr: (err as Error)?.message ?? String(err),
       exitCode: -1,
       durationMs: Date.now() - startTime,
@@ -204,17 +205,30 @@ export async function runVerificationPipeline(
     ? "✅ All expected file changes found"
     : `⚠️ ${unmetFileChanges.length} file change(s) missing or insufficient`;
 
-  // Step 4: Summarize results
+  // Step 4: Summarize results — only required failures affect pipeline status
   const cmdSummary = summarizeVerification(commandResults);
-  const allFailed = cmdSummary.failed > 0 || unmetFileChanges.length > 0;
+  const requiredFailures = commandResults.filter(r => r.required && !r.passed).length;
+  const requiredPassed = commandResults.filter(r => r.required && r.passed).length;
+  const totalRequired = commandResults.filter(r => r.required).length;
+  const allFailed = requiredFailures > 0 || unmetFileChanges.length > 0;
 
   let status: "passed" | "failed" | "partial";
-  if (cmdSummary.passed > 0 && allFailed) {
-    status = "partial";
-  } else if (allFailed) {
-    status = "failed";
+  if (totalRequired > 0) {
+    // Partial: some required passed but some failed
+    if (requiredPassed > 0 && requiredFailures > 0) {
+      status = "partial";
+    } else if (requiredFailures > 0 || unmetFileChanges.length > 0) {
+      status = "failed";
+    } else {
+      status = "passed";
+    }
   } else {
-    status = "passed";
+    // No required commands — base status on failures
+    if (unmetFileChanges.length > 0) {
+      status = "failed";
+    } else {
+      status = "passed";
+    }
   }
 
   const summary = [
@@ -283,21 +297,22 @@ async function detectProjectTypes(workspacePath: string): Promise<Set<string>> {
   try {
     const { readDir } = await import("@tauri-apps/plugin-fs");
     const entries = await readDir(workspacePath);
-    for (const entry of entries.slice(0, 200)) {
+    // First pass: check config files directly (not limited by slice)
+    for (const entry of entries) {
       const name = entry.name || "";
-      if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js") || name.endsWith(".jsx") || name.endsWith(".mjs") || name.endsWith(".cjs")) {
-        types.add("js-ts");
-      } else if (name.endsWith(".py") || name.endsWith(".pyi")) {
-        types.add("python");
-      } else if (name.endsWith(".rs")) {
-        types.add("rust");
-      } else if (name.endsWith(".go")) {
-        types.add("go");
-      }
       if (name === "package.json" || name === "tsconfig.json" || name === "jsconfig.json") types.add("js-ts");
       if (name === "pyproject.toml" || name === "setup.py" || name === "requirements.txt" || name === "Pipfile") types.add("python");
       if (name === "Cargo.toml") types.add("rust");
       if (name === "go.mod") types.add("go");
+    }
+    // Second pass: check file extensions (up to 200 entries)
+    for (const entry of entries.slice(0, 200)) {
+      const name = entry.name || "";
+      if (types.has("js-ts") && types.has("python") && types.has("rust") && types.has("go")) break;
+      if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js") || name.endsWith(".jsx") || name.endsWith(".mjs") || name.endsWith(".cjs")) types.add("js-ts");
+      else if (name.endsWith(".py") || name.endsWith(".pyi")) types.add("python");
+      else if (name.endsWith(".rs")) types.add("rust");
+      else if (name.endsWith(".go")) types.add("go");
     }
   } catch { /* ignore read errors */ }
   return types;
@@ -362,17 +377,15 @@ export async function detectCommandsFromWorkspace(
     } catch { /* not a Go project */ }
   }
 
-  // Monorepo (turbo.json) — only if no language-specific commands found
-  if (allCommands.length === 0) {
-    try {
-      await api.fs.readFile(`${workspacePath}/turbo.json`);
-      allCommands.push(
-        { command: "turbo build", label: "Monorepo build", required: true, checkType: "exit-code" },
-        { command: "turbo lint", label: "Monorepo lint", required: false, checkType: "exit-code" },
-        { command: "turbo test", label: "Monorepo tests", required: false, checkType: "exit-code" },
-      );
-    } catch { /* not a monorepo */ }
-  }
+  // Monorepo (turbo.json) — add to any language-specific commands
+  try {
+    await api.fs.readFile(`${workspacePath}/turbo.json`);
+    allCommands.push(
+      { command: "turbo build", label: "Monorepo build", required: true, checkType: "exit-code" },
+      { command: "turbo lint", label: "Monorepo lint", required: false, checkType: "exit-code" },
+      { command: "turbo test", label: "Monorepo tests", required: false, checkType: "exit-code" },
+    );
+  } catch { /* not a monorepo */ }
 
   return allCommands;
 }

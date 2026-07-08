@@ -513,3 +513,116 @@ export function validateToolArgs(
 
   return { valid: true, args: result.data as Record<string, unknown> };
 }
+
+// ─── Unified Tool Registry (single source of truth) ────────────
+// Central registry mapping XML tag names to canonical tool names,
+// used by TAG_TO_TOOL, ALL_TOOL_NAMES, and permission categories.
+// Every tool should be registered here exactly once.
+
+export type ToolCategory = "edit" | "bash" | "read" | "other";
+
+export type ToolRegistryEntry = {
+  tag: string;                  // XML tag name (e.g., "bash", "shell")
+  tool: string;                 // canonical internal name (e.g., "bash")
+  category: ToolCategory;
+};
+
+export const TOOL_REGISTRY: ToolRegistryEntry[] = [
+  // File operations
+  { tag: "read_file", tool: "read_file", category: "read" },
+  { tag: "write_file", tool: "write_file", category: "edit" },
+  { tag: "edit_file", tool: "edit_file", category: "edit" },
+  { tag: "list_dir", tool: "list_dir", category: "read" },
+  { tag: "grep_file", tool: "grep_file", category: "read" },
+  { tag: "grep", tool: "grep", category: "read" },
+  { tag: "search_files", tool: "search_files", category: "read" },
+  { tag: "search", tool: "search", category: "read" },
+  { tag: "create_file", tool: "create_file", category: "edit" },
+
+  // Shell execution
+  { tag: "bash", tool: "bash", category: "bash" },
+  { tag: "shell", tool: "bash", category: "bash" },
+  { tag: "execute", tool: "bash", category: "bash" },
+  { tag: "run_command", tool: "bash", category: "bash" },
+
+  // Git operations
+  { tag: "git_status", tool: "git_status", category: "read" },
+  { tag: "git_commit", tool: "git_commit", category: "edit" },
+  { tag: "git_log", tool: "git_log", category: "read" },
+  { tag: "git_branch", tool: "git_branch", category: "read" },
+  { tag: "git_checkout", tool: "git_checkout", category: "read" },
+  { tag: "git_diff_file", tool: "git_diff_file", category: "read" },
+
+  // Clipboard & system
+  { tag: "clipboard_read", tool: "clipboard_read", category: "read" },
+  { tag: "clipboard_write", tool: "clipboard_write", category: "other" },
+  { tag: "notify", tool: "notify", category: "read" },
+  { tag: "system_info", tool: "system_info", category: "read" },
+  { tag: "open_url", tool: "open_url", category: "bash" },
+  { tag: "launch_app", tool: "launch_app", category: "bash" },
+  { tag: "reveal_in_finder", tool: "reveal_in_finder", category: "bash" },
+  { tag: "get_env", tool: "get_env", category: "read" },
+  { tag: "get_screen_info", tool: "get_screen_info", category: "read" },
+  { tag: "list_processes", tool: "list_processes", category: "read" },
+  { tag: "kill_process", tool: "kill_process", category: "bash" },
+  { tag: "get_disk_space", tool: "get_disk_space", category: "read" },
+
+  // Memory
+  { tag: "memory_save", tool: "memory_save", category: "edit" },
+  { tag: "memory_search", tool: "memory_search", category: "read" },
+  { tag: "memory_delete", tool: "memory_delete", category: "edit" },
+  { tag: "memory_stats", tool: "memory_stats", category: "read" },
+  { tag: "memory_maintain", tool: "memory_maintain", category: "edit" },
+  { tag: "memory_extract", tool: "memory_extract", category: "read" },
+  { tag: "memory_export", tool: "memory_export", category: "edit" },
+  { tag: "memory_import", tool: "memory_import", category: "edit" },
+
+  // Agent & UI
+  { tag: "task", tool: "task", category: "read" },
+  { tag: "create_task_plan", tool: "create_task_plan", category: "other" },
+  { tag: "open_panel", tool: "open_panel", category: "read" },
+  { tag: "screenshot", tool: "screenshot", category: "read" },
+  { tag: "question", tool: "question", category: "other" },
+
+  // Browser & preview
+  { tag: "browser_navigate", tool: "browser_navigate", category: "bash" },
+  { tag: "browser_execute", tool: "browser_execute", category: "bash" },
+  { tag: "run_preview", tool: "run_preview", category: "bash" },
+
+  // Web
+  { tag: "webfetch", tool: "webfetch", category: "read" },
+  { tag: "websearch", tool: "websearch", category: "read" },
+
+  // UI control
+  { tag: "set_theme", tool: "set_theme", category: "read" },
+  { tag: "toggle_theme", tool: "toggle_theme", category: "read" },
+  { tag: "set_view_mode", tool: "set_view_mode", category: "read" },
+  { tag: "toggle_view_mode", tool: "toggle_view_mode", category: "read" },
+  { tag: "toggle_right_panel", tool: "toggle_right_panel", category: "read" },
+  { tag: "toggle_bottom_panel", tool: "toggle_bottom_panel", category: "read" },
+  { tag: "set_right_panel_tab", tool: "set_right_panel_tab", category: "read" },
+  { tag: "set_bottom_panel_tab", tool: "set_bottom_panel_tab", category: "read" },
+
+  // Terminal
+  { tag: "new_terminal", tool: "new_terminal", category: "bash" },
+  { tag: "terminal_write", tool: "terminal_write", category: "bash" },
+];
+
+// Derived registries from the single source of truth
+export const TAG_TO_TOOL: Record<string, string> = {};
+export const ALL_TOOL_NAMES: string[] = [];
+export const CANONICAL_TOOL_NAMES: string[] = [];
+
+for (const entry of TOOL_REGISTRY) {
+  TAG_TO_TOOL[entry.tag] = entry.tool;
+  ALL_TOOL_NAMES.push(entry.tag);
+  if (!CANONICAL_TOOL_NAMES.includes(entry.tool)) {
+    CANONICAL_TOOL_NAMES.push(entry.tool);
+  }
+}
+
+export const TOOL_CATEGORIES = {
+  edit: new Set(TOOL_REGISTRY.filter(e => e.category === "edit").map(e => e.tool)),
+  bash: new Set(TOOL_REGISTRY.filter(e => e.category === "bash").map(e => e.tool)),
+  read: new Set(TOOL_REGISTRY.filter(e => e.category === "read").map(e => e.tool)),
+};

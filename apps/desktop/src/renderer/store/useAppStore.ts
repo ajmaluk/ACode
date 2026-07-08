@@ -51,90 +51,18 @@ export { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder
 // using the proper tool-call protocol. This parser extracts those XML tags and
 // converts them to ToolCall objects so they can be executed and displayed properly.
 
-const XML_TOOL_CALL_RE = /<([a-zA-Z_][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z_][a-zA-Z0-9_-]*="[^"]*")*)\s*\/?>/g;
+// Build regex inside function calls to avoid lastIndex mutation issues with global flag
+function createToolCallRegex(): RegExp {
+  return /<([a-zA-Z_][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z_][a-zA-Z0-9_-]*="[^"]*")*)\s*\/?>/g;
+}
 const XML_ATTR_RE = /([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]*)"/g;
 
-// Known tool name mappings from XML tags to internal tool names
-const TAG_TO_TOOL: Record<string, string> = {
-  list_dir: "list_dir",
-  read_file: "read_file",
-  write_file: "write_file",
-  edit_file: "edit_file",
-  grep_file: "grep_file",
-  search_files: "search_files",
-  bash: "bash",
-  shell: "bash",
-  execute: "bash",
-  search: "file_search",
-  grep: "grep",
-  webfetch: "webfetch",
-  websearch: "websearch",
-  run_command: "bash",
-  task: "task",
-  create_file: "create_file",
-  git_status: "git_status",
-  git_commit: "git_commit",
-  git_log: "git_log",
-  git_branch: "git_branch",
-  git_checkout: "git_checkout",
-  git_diff_file: "git_diff_file",
-  clipboard_read: "clipboard_read",
-  clipboard_write: "clipboard_write",
-  notify: "notify",
-  system_info: "system_info",
-  open_url: "open_url",
-  launch_app: "launch_app",
-  reveal_in_finder: "reveal_in_finder",
-  kill_process: "kill_process",
-  get_env: "get_env",
-  get_screen_info: "get_screen_info",
-  list_processes: "list_processes",
-  get_disk_space: "get_disk_space",
-  memory_save: "memory_save",
-  memory_search: "memory_search",
-  memory_delete: "memory_delete",
-  memory_stats: "memory_stats",
-  memory_maintain: "memory_maintain",
-  memory_extract: "memory_extract",
-  memory_export: "memory_export",
-  memory_import: "memory_import",
-  open_panel: "open_panel",
-  screenshot: "screenshot",
-  browser_navigate: "browser_navigate",
-  browser_execute: "browser_execute",
-  run_preview: "run_preview",
-  create_task_plan: "create_task_plan",
-  question: "question",
-  set_theme: "set_theme",
-  toggle_theme: "toggle_theme",
-  set_view_mode: "set_view_mode",
-  toggle_view_mode: "toggle_view_mode",
-  toggle_right_panel: "toggle_right_panel",
-  toggle_bottom_panel: "toggle_bottom_panel",
-  set_right_panel_tab: "set_right_panel_tab",
-  set_bottom_panel_tab: "set_bottom_panel_tab",
-  new_terminal: "new_terminal",
-  terminal_write: "terminal_write",
-};
-
-// Comprehensive list of ALL tool names for display stripping (must match dalamAPI.ts KNOWN_TOOL_NAMES)
-const ALL_TOOL_NAMES = [
-  "read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files",
-  "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_diff_file",
-  "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
-  "launch_app", "reveal_in_finder",
-  "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
-  "memory_save", "memory_search", "memory_delete", "memory_stats",
-  "memory_maintain", "memory_extract", "memory_export", "memory_import",
-  "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan", "question",
-  // UI control tools
-  "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode",
-  "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab",
-  "new_terminal", "terminal_write", "create_file", "execute",
-  // Legacy aliases used by TAG_TO_TOOL
-  "bash", "shell", "search", "grep", "webfetch", "websearch",
-];
-const KNOWN_TAG_NAMES = [...new Set(ALL_TOOL_NAMES)];
+import {
+  TAG_TO_TOOL,
+  ALL_TOOL_NAMES,
+  TOOL_CATEGORIES,
+} from "@/lib/toolSchemas";
+const KNOWN_TAG_NAMES = ALL_TOOL_NAMES;
 
 // Regex to strip ALL XML tool call tags (opening, closing, and self-closing) from content.
 // Uses [^>]* to handle malformed attributes (e.g. unescaped quotes inside command values).
@@ -234,9 +162,9 @@ export function stripXmlToolCallTags(content: string): string {
 }
 
 // Tool name → permission kind mappings (module-level to avoid recreation per event)
-const EDIT_TOOLS = new Set(["edit_file", "edit", "write_file", "write", "create_file", "git_commit", "memory_delete", "memory_maintain", "memory_export", "memory_import", "memory_save"]);
-const BASH_TOOLS = new Set(["shell", "bash", "execute", "run_command", "launch_app", "kill_process", "new_terminal", "terminal_write", "browser_navigate", "browser_execute", "run_preview", "open_url", "reveal_in_finder"]);
-const READ_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "memory_export", "memory_import", "task", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab", "webfetch", "websearch", "grep", "search"]);
+const EDIT_TOOLS = TOOL_CATEGORIES.edit;
+const BASH_TOOLS = TOOL_CATEGORIES.bash;
+const READ_TOOLS = TOOL_CATEGORIES.read;
 
 /**
  * Parse XML-style tool calls from assistant text content.
@@ -247,13 +175,19 @@ export function parseXmlToolCalls(content: string): {
   cleanedContent: string;
 } {
   const toolCalls: import("@dalam/shared-types").ToolCall[] = [];
+  const TOOL_CALL_RE = createToolCallRegex();
   let match: RegExpExecArray | null;
 
-  // Reset regex state
-  XML_TOOL_CALL_RE.lastIndex = 0;
+  // Track content ranges that are inside edit_file/skill blocks to skip child tags
+  const skipRanges: Array<{ start: number; end: number }> = [];
 
-  while ((match = XML_TOOL_CALL_RE.exec(content)) !== null) {
+  while ((match = TOOL_CALL_RE.exec(content)) !== null) {
     const [fullMatch, tagName, attrString] = match;
+    const matchIndex = match.index;
+
+    // Skip tags inside content blocks of edit_file or similar container tools
+    if (skipRanges.some(r => matchIndex >= r.start && matchIndex < r.end)) continue;
+
     const toolName = TAG_TO_TOOL[tagName] ?? tagName;
 
     // Skip if it's not a recognized tool and doesn't look like a tool call
@@ -278,8 +212,14 @@ export function parseXmlToolCalls(content: string): {
       const closeIdx = content.indexOf(closingTag, match.index + fullMatch.length);
       if (closeIdx !== -1) {
         tagContent = content.slice(match.index + fullMatch.length, closeIdx);
+        // Register the content range so child tags are skipped
+        skipRanges.push({ start: match.index + fullMatch.length, end: closeIdx });
       }
     }
+
+    // Skip tool calls that have no meaningful arguments
+    // (e.g., <read_file/> without path, <write_file/> without content)
+    if (!tagContent.trim() && Object.keys(args).length === 0 && !isSelfClosing) continue;
 
     // If there's tag content, add it as "content" arg
     if (tagContent.trim()) {

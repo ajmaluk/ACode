@@ -64,13 +64,16 @@ export interface DiffRequirement {
  * Build a DoneCriteria from common task patterns.
  */
 export function buildDoneCriteria(config: Partial<DoneCriteria>): DoneCriteria {
+  const cleaned = Object.fromEntries(
+    Object.entries(config).filter(([_, v]) => v !== undefined)
+  ) as Partial<DoneCriteria>;
   return {
     expectedFiles: [],
     verificationCommands: [],
     requiredDiffProperties: [],
     checklist: [],
     conditions: [],
-    ...config,
+    ...cleaned,
   };
 }
 
@@ -187,6 +190,8 @@ export async function checkExpectedFiles(
 
     // Check contentPattern if provided and a file reader is available
     if (expected.contentPattern && readFileFn && (expected.action === "modified" || expected.action === "created" || expected.action === "any")) {
+      // Skip content check for deleted files (even with action: "any")
+      if (match.action === "deleted") continue;
       try {
         const content = await readFileFn(expected.path);
         const regex = new RegExp(expected.contentPattern);

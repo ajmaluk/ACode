@@ -65,7 +65,7 @@ describe("normalizeDbPath", () => {
   // ─── Edge cases ─────────────────────────────────────────────
 
   it("handles empty string", () => {
-    expect(normalizeDbPath("")).toBe("sqlite:/.dalam/project.db");
+    expect(normalizeDbPath("")).toBe("sqlite:.dalam/project.db");
   });
 
   it("handles relative path (no leading slash)", () => {

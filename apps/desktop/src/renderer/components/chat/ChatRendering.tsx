@@ -23,11 +23,11 @@ function sanitizeHighlightedHtml(html: string): string {
     // Remove event handler attributes (onclick, onerror, onload, etc.)
     .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     // Remove javascript: protocol in href/src attributes
-    .replace(/((?:href|src|action)\s*=\s*)(["'])javascript:[^"']*["']/gi, "$1$2#$3")
+    .replace(/((?:href|src|action)\s*=\s*)(["'])javascript:[^"']*\2/gi, "$1$2#")
     // Remove data: protocol in img src (except for small data URIs which are safe)
     .replace(/(<img[^>]*?\ssrc\s*=\s*)(["'])data:text\/html/gi, "$1$2data:text/plain")
-    // Remove <script>, <iframe>, <object>, <embed>, <form> tags (keep content for script tags)
-    .replace(/<script\b[^>]*>/gi, "<!-- ").replace(/<\/script>/gi, " -->")
+    // Remove <script>, <iframe>, <object>, <embed>, <form> tags
+    .replace(/<script\b[^>]*>/gi, "<!-- ").replace(/<\/script\b[^>]*>/gi, " -->")
     .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "")
     .replace(/<object\b[^>]*>[\s\S]*?<\/object>/gi, "")
     .replace(/<embed\b[^>]*>/gi, "")
@@ -173,7 +173,7 @@ export const CodeBlock = React.memo(function CodeBlock({ language, content }: { 
     }
   }, [content, language]);
 
-  const handleApply = useCallback(() => {
+  const handleApply = useCallback(async () => {
     if (!activeFilePath) {
       toast.info("No active file open in the editor");
       return;
@@ -182,7 +182,21 @@ export const CodeBlock = React.memo(function CodeBlock({ language, content }: { 
     const currentTab = openTabs.find((t) => t.path === activeFilePath);
     const hasExistingContent = currentTab && currentTab.content.trim().length > 0;
     if (hasExistingContent) {
-      if (!window.confirm(`Overwrite entire content of ${basename(activeFilePath)}? This cannot be undone.`)) return;
+      let shouldOverwrite = true;
+      try {
+        const { confirm } = await import("@tauri-apps/plugin-dialog");
+        shouldOverwrite = await confirm(
+          `Overwrite entire content of ${basename(activeFilePath)}? This cannot be undone.`,
+          { title: "Overwrite file?", kind: "warning" }
+        );
+      } catch {
+        try {
+          shouldOverwrite = window.confirm(`Overwrite entire content of ${basename(activeFilePath)}? This cannot be undone.`);
+        } catch {
+          shouldOverwrite = true;
+        }
+      }
+      if (!shouldOverwrite) return;
     }
     updateTabContent(activeFilePath, content);
     toast.success("Applied to editor");

@@ -442,7 +442,10 @@ export const ToolCallsList = React.memo(function ToolCallsList({ toolCalls }: { 
 
 function ArgsDisplay({ toolName, args }: { toolName: string; args: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false);
-  const entries = Object.entries(args).filter(([k]) => k !== "api_key" && k !== "token");
+  const entries = Object.entries(args).filter(([k]) => {
+    const lower = k.toLowerCase();
+    return !lower.includes("api_key") && !lower.includes("token") && !lower.includes("password") && !lower.includes("secret") && !lower.includes("authorization") && !lower.includes("privatekey") && !lower.includes("accesskey");
+  });
 
   if (entries.length === 0) {
     return <span className="text-dalam-text-muted text-[10px] italic">No arguments</span>;

@@ -133,13 +133,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  * Returns the full sqlite: URI string.
  */
 export function normalizeDbPath(workspacePath: string): string {
+  // Guard against empty paths
+  if (!workspacePath || workspacePath.trim() === "") {
+    return "sqlite:.dalam/project.db";
+  }
   // Convert backslashes to forward slashes (Windows compatibility)
   let normalized = workspacePath.replace(/\\/g, "/");
-
-  // Empty string → minimal relative path
-  if (normalized === "") {
-    return "sqlite:/.dalam/project.db";
-  }
 
   // Strip trailing slashes (except root path "/" which stays as-is)
   if (normalized.length > 1) {

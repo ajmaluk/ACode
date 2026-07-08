@@ -77,7 +77,7 @@ interface StoredProvider {
 }
 
 /** API message format for LLM providers (content can be string or multimodal parts) */
-interface ApiMessage {
+export interface ApiMessage {
   role: string;
   content: string | ApiContentPart[];
 }
@@ -762,7 +762,7 @@ async function* streamAnthropic(
   }
 }
 
-async function* streamChat(
+export async function* streamChat(
   baseUrl: string, apiKey: string, apiFormat: string, model: string,
   messages: ApiMessage[], signal?: AbortSignal, maxTokens?: number
 ): AsyncGenerator<StreamEvent> {
@@ -781,7 +781,7 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
   if (_visited.has(dirPath)) return [];
   _visited.add(dirPath);
   if (_count.n >= maxFiles) return [];
-  const { readDir } = await import("@tauri-apps/plugin-fs");
+  const { readDir, stat } = await import("@tauri-apps/plugin-fs");
   let entries;
   try {
     entries = await readDir(dirPath);
@@ -796,6 +796,18 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
     if (entry.isDirectory && JUNK_DIRS.has(entry.name)) continue;
     const fullPath = joinPathUtil(dirPath, entry.name!);
     if (entry.isDirectory) {
+      // Check for symlinks by comparing real path
+      // Skip if the resolved real path differs from the logical path
+      try {
+        const fileInfo = await stat(fullPath);
+        const info = fileInfo as { isSymlink?: boolean; realpath?: string };
+        if (info.isSymlink || (info.realpath && info.realpath !== fullPath)) {
+          continue;
+        }
+      } catch {
+        // if stat fails, skip to be safe
+        continue;
+      }
       const children = maxDepth > 1 ? await readDirRecursive(fullPath, maxDepth - 1, maxFiles, _count, _visited) : [];
       nodes.push({ name: entry.name!, path: fullPath, type: "directory", gitStatus: null, children });
     } else {

@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useGit, useChat, useWorkspace, useDiffView, useUI } from "@/store/useAppStore";
 import type { GitStatus } from "@dalam/shared-types";
@@ -27,7 +28,7 @@ export function RightPanel() {
   const { activeWorkspaceId } = useWorkspace();
   const { open: diffOpen, current: diffCurrent } = useDiffView();
   const { browserTabs, activeBrowserTabId, rightPanelTab: tab, setRightPanelTab: setTab } = useUI();
-  const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0);
+  const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0) + (status?.untracked?.length ?? 0);
 
   useEffect(() => { void refresh(); }, [refresh, activeWorkspaceId]);
 
@@ -114,12 +115,12 @@ export function RightPanel() {
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === "git" && <GitTab status={status} error={error} onRefresh={() => void refresh()} />}
-          {tab === "diff" && <DiffTab />}
-          {tab === "review" && <ReviewTab />}
-          {tab === "browser" && <BrowserTab />}
-          {tab === "progress" && <ProgressTab />}
-        </div>
+            {tab === "git" && <ErrorBoundary><GitTab status={status} error={error} onRefresh={() => void refresh()} /></ErrorBoundary>}
+            {tab === "diff" && <ErrorBoundary><DiffTab /></ErrorBoundary>}
+            {tab === "review" && <ErrorBoundary><ReviewTab /></ErrorBoundary>}
+            {tab === "browser" && <ErrorBoundary><BrowserTab /></ErrorBoundary>}
+            {tab === "progress" && <ErrorBoundary><ProgressTab /></ErrorBoundary>}
+          </div>
       </div>
     </aside>
   );
@@ -669,7 +670,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
         (w) => w.id === useWorkspace.getState().activeWorkspaceId
       )?.path ?? ".";
       const { Command } = await import("@tauri-apps/plugin-shell");
-      await Command.create("git", ["add", "-u"], { cwd: wsPath }).execute();
+      await Command.create("git", ["add", "-A"], { cwd: wsPath }).execute();
       await api.git.commit(wsPath, commitMsg.trim());
       toast.success("Committed", commitMsg.trim().slice(0, 50));
       setCommitMsg("");
@@ -702,7 +703,14 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           {ws && (
             <button
               onClick={async () => {
-                if (!confirm("Initialize a new Git repository in this folder?")) return;
+                let confirmed = false;
+                try {
+                  const { confirm } = await import("@tauri-apps/plugin-dialog");
+                  confirmed = await confirm("Initialize a new Git repository in this folder?", { title: "Initialize Git?", kind: "warning" });
+                } catch {
+                  confirmed = window.confirm("Initialize a new Git repository in this folder?");
+                }
+                if (!confirmed) return;
                 try {
                   const { Command } = await import("@tauri-apps/plugin-shell");
                   await Command.create("git", ["init"], { cwd: ws.path }).execute();
@@ -746,7 +754,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           <div className="p-3 border-b border-dalam-border-primary bg-dalam-bg-secondary/20">
             <textarea
               className="w-full bg-dalam-bg-tertiary border border-dalam-border-primary rounded-lg px-3 py-2 text-xs font-mono text-dalam-text-primary placeholder:text-dalam-text-muted resize-none outline-none focus:border-dalam-accent-primary transition-colors min-h-[56px]"
-              placeholder="Commit message (Ctrl+Enter to commit)"
+              placeholder={`Commit message (${navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to commit)`}
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); handleCommit(); } }}
