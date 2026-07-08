@@ -428,7 +428,10 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
       console.debug("[MemoryStore] Workspace inaccessible, skipping markdown write");
     } else {
       console.warn("[MemoryStore] Failed to write markdown, queuing retry:", e);
-      _pendingWrites.push({ entry, workspacePath, retries: 0, timestamp: Date.now() });
+      // Cap pending writes to prevent unbounded growth if filesystem is persistently unavailable
+      if (_pendingWrites.length < 50) {
+        _pendingWrites.push({ entry, workspacePath, retries: 0, timestamp: Date.now() });
+      }
     }
   }
 }
@@ -589,7 +592,11 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
         .replace(/\\r/g, '\r')
         .replace(/\\t/g, '\t')
         .replace(/\\:/g, ':')
-        .replace(/\\#/g, '#');
+        .replace(/\\#/g, '#')
+        .replace(/\\\|/g, '|')
+        .replace(/\\!/g, '!')
+        .replace(/\\&/g, '&')
+        .replace(/\\\*/g, '*');
       // Parse arrays
       if (value.startsWith("[") && value.endsWith("]")) {
         value = value.slice(1, -1);

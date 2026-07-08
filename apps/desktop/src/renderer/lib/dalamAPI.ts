@@ -196,8 +196,8 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
   const parsed: { data: string }[] = [];
   let currentData = "";
   let lastCompleteIdx = 0;
-  // Track start of incomplete data lines (for cross-buffer preservation)
-  let incompleteDataStart = -1;
+  // Track start of the ENTIRE incomplete event (first data line before any comment/space)
+  let incompleteEventStart = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line === "") {
@@ -207,13 +207,13 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
         currentData = "";
       }
       lastCompleteIdx = i + 1;
-      incompleteDataStart = -1;
+      incompleteEventStart = -1;
     } else if (line.startsWith(":")) {
-      // SSE comment line — skip (e.g. heartbeat)
+      // SSE comment line — skip (e.g. heartbeat), but don't reset event start
+      // Comments between data lines are part of the same event
       lastCompleteIdx = i + 1;
-      incompleteDataStart = -1;
     } else if (line.startsWith("data:")) {
-      if (incompleteDataStart === -1) incompleteDataStart = i;
+      if (incompleteEventStart === -1) incompleteEventStart = i;
       const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
       currentData += (currentData ? "\n" : "") + dataContent;
     }
@@ -221,8 +221,8 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
   }
   // Preserve incomplete data lines (no trailing empty line) across buffer boundaries.
   // Without this, data arriving mid-event is lost when the buffer splits mid-event.
-  const remaining = incompleteDataStart >= 0
-    ? lines.slice(incompleteDataStart).join("\n")
+  const remaining = incompleteEventStart >= 0
+    ? lines.slice(incompleteEventStart).join("\n")
     : lines.slice(lastCompleteIdx).join("\n");
   return { parsed, remaining };
 }
@@ -276,11 +276,12 @@ function isRetryableError(message: string): boolean {
  * Matches OpenCode's retryAfterMs pattern.
  */
 function extractRetryAfter(message: string): number | null {
-  // Match "retry after X seconds" or "retry-after: X"
-  const secondsMatch = message.match(/retry[_\s-]?after[_\s:]*(\d+)\s*(?:sec|s)?/i);
-  if (secondsMatch) return parseInt(secondsMatch[1], 10) * 1000;
+  // Check milliseconds FIRST to avoid matching 's' in 'ms' as seconds
   const msMatch = message.match(/retry[_\s-]?after[_\s:]*(\d+)\s*ms/i);
   if (msMatch) return parseInt(msMatch[1], 10);
+  // Then check seconds — use negative lookahead to reject 'ms'
+  const secondsMatch = message.match(/retry[_\s-]?after[_\s:]*(\d+)\s*(?:sec(ond)?|s(?!ec))\b/i);
+  if (secondsMatch) return parseInt(secondsMatch[1], 10) * 1000;
   return null;
 }
 
@@ -344,7 +345,8 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
 /**
  * Wraps a fetch call with retry-with-backoff for transient network/5xx errors.
  * Classifies the response into a ProviderError and retries on transient failures.
- * Non-transient errors (auth 401, credit 402/429) are thrown immediately.
+ * Non-transient errors (auth 401, credit 402) are thrown immediately.
+ * Rate limits (429) are retried with backoff.
  */
 async function fetchWithRetry(
   url: string,
@@ -359,7 +361,8 @@ async function fetchWithRetry(
       const text = await resp.text().catch(() => "");
       if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
       if (resp.status === 403) throw new ProviderError("Access forbidden. Check your API key and permissions.", "auth");
-      if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
+      if (resp.status === 402) throw new ProviderError("Insufficient credits.", "credit");
+      if (resp.status === 429) throw new ProviderError(`Rate limited. ${text.slice(0, 200)}`, "network");
       if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
       // Client errors (400, 404, etc.) are permanent — don't retry them
       throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "validation");
@@ -1203,7 +1206,7 @@ const dalamAPI: DalamAPI = {
 Output XML tags to use tools. Multiple tools in one response execute in parallel.
 
 FILE OPS: <read_file path="..."/> | <write_file path="...">content</write_file> | <list_dir path="..."/>
-EDIT: <edit_file path="..."><search>old</search><replace>new</replace></edit_file> (occurrence="N" for Nth match)
+EDIT: <edit_file path="..."><search>old</search><replace>new</replace></edit_file> (occurrence="N" for Nth match, 0-indexed: 0=first, 1=second)
 SEARCH: <grep_file path="..." pattern="..." regex="false"/> | <search_files pattern="..." glob="**/*.ts"/>
 SHELL: <run_command command="..."/> | <bash command="..."/>
 GIT: <git_status/> | <git_log/> | <git_branch/> | <git_commit message="..."/> | <git_checkout branch="..."/> | <git_diff_file path="..."/>
@@ -1443,13 +1446,17 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
 
           const sessionErrors = sessionRateLimitErrors.get(sessionId) ?? 0;
           if (sessionErrors > 0) {
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 60s max
-            const delay = Math.min(1000 * Math.pow(2, sessionErrors), 60000);
+            // Exponential backoff: 2s, 4s, 8s, 16s, 60s max
+            // For fast providers, start with higher base to avoid hitting limits again
+            const baseBackoff = isFastRpmProvider ? 2000 : 1000;
+            const delay = Math.min(baseBackoff * Math.pow(2, sessionErrors), 60000);
             await abortOnDelay(delay);
             return;
           }
           // Base delay between turns: generous for fast-RPM providers, minimal for others
-          const baseDelay = isFastRpmProvider ? 2000 : 300;
+          // Groq: 30 requests/min on free tier, so ~2s between turns is safe
+          // Together/Fireworks: similar limits
+          const baseDelay = isFastRpmProvider ? 2500 : 300;
           await abortOnDelay(baseDelay);
         }
 
@@ -2360,7 +2367,7 @@ function parseAttributes(tagStr: string): Record<string, string> {
  * before they could be parsed, causing the agent to get stuck.
  */
 const KNOWN_TOOL_NAMES = new Set([
-  "read_file", "write_file", "edit_file", "list_dir", "grep_file", "search_files",
+  "read_file", "write_file", "edit_file", "create_file", "list_dir", "grep_file", "search_files",
   "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_diff_file",
   "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
   "launch_app", "reveal_in_finder",
@@ -2433,7 +2440,8 @@ const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*';
 // Fixed: Use proper key="value" attribute patterns instead of broken ATTRSelfClose
 const REGEX_READ_FILE = /<read_file\s+path=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
-const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*?)<\/edit_file>/gi;
+// Use greedy match for edit_file content to handle replacement text containing </edit_file>
+const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*)<\/edit_file>/gi;
 const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
 const REGEX_GREP_FILE = /<grep_file\s+path=["']([^"']+)["']\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_SEARCH_FILES = /<search_files\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
@@ -2638,10 +2646,6 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   while ((match = REGEX_OPEN_URL.exec(text)) !== null) {
     if (match[1]) {
       toolCalls.push({ name: "open_url", args: { url: match[1] }, raw: match[0] });
-    }
-    const attrs = parseAttributes(match[1]);
-    if (attrs.url) {
-      toolCalls.push({ name: "open_url", args: { url: attrs.url }, raw: match[0] });
     }
   }
 
@@ -4101,7 +4105,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           const retryResp = await corsFetch(url, {
             method: "POST",
             headers: freshHeaders,
-            body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", params: { name: toolName, arguments: args }, id: Date.now() }),
+            body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", params: { name: toolName, arguments: mcpArgs }, id: Date.now() }),
           });
           if (!retryResp.ok) throw new Error(`HTTP ${retryResp.status} calling MCP tool (after session reset)`);
           const retryJson = await retryResp.json();

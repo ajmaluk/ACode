@@ -95,6 +95,22 @@ export async function indexWorkspace(
   let errors = 0;
   const now = Date.now();
 
+  // Clean up stale entries for files that no longer exist
+  try {
+    const existingPaths = await db.select(
+      `SELECT file_path FROM code_index`
+    ) as { file_path: string }[];
+    const { exists } = await import("@tauri-apps/plugin-fs");
+    for (const row of existingPaths) {
+      const fullPath = joinPath(workspacePath, row.file_path);
+      try {
+        if (!(await exists(fullPath))) {
+          await db.execute(`DELETE FROM code_index WHERE file_path = ?`, [row.file_path]);
+        }
+      } catch { /* ignore */ }
+    }
+  } catch { /* best-effort cleanup */ }
+
   async function walkDir(dir: string, depth = 0): Promise<void> {
     if (depth > 20 || indexed + skipped >= MAX_INDEX_FILES) return;
 

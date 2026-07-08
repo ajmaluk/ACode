@@ -381,6 +381,7 @@ export function agentReducer(
       newState.pendingToolCallIds.clear();
       newState.resolvedToolCallIds.clear();
       newState.toolCallStatuses.clear();
+      newState.diffToToolCall.clear();
       newState.pendingDiffToolCalls = [];
       break;
 

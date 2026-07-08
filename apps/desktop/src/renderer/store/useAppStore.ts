@@ -937,38 +937,15 @@ function _idbWriteThrough(storeName: "sessions" | "messages" | "versions" | "com
 }
 
 function _doSavePersistedMessages(messages: MessagesMap) {
+  // Primary storage: IndexedDB (no quota limit)
+  _idbWriteThrough("messages", { id: "all", data: messages });
+  // Secondary: localStorage for quick reads (may fail on quota)
   try {
     localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages));
-    _idbWriteThrough("messages", { id: "all", data: messages });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-      console.warn("[Storage] Quota exceeded - truncating tool results");
-      const pruned = truncateToolResults(messages);
-      let recovered = false;
-      try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned)); recovered = true; } catch {
-        console.warn("[Storage] Quota exceeded - trimming old message content");
-        const pruned2 = trimOldMessages(pruned);
-        try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned2)); recovered = true; } catch {
-          console.warn("[Storage] Quota exceeded - dropping oldest sessions");
-          const pruned3 = dropOldestSessions(pruned2, 3);
-          try { localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(pruned3)); recovered = true; } catch {
-            if (import.meta.env.DEV) console.error("[Storage] Failed to save messages even after aggressive pruning");
-          }
-        }
-      }
-      // Notify user about storage pruning
-      void import("../components/ui/toastStore").then(({ useToasts }) => {
-        useToasts.getState().push({
-          kind: "warning",
-          title: "Storage space low",
-          description: recovered
-            ? "Recovered space by pruning old data. Consider exporting sessions."
-            : "Could not save data. Please export and clear old sessions.",
-          durationMs: 10000,
-        });
-      });
-    } else {
-      console.warn("Failed to save messages:", e);
+      console.warn("[Storage] localStorage quota exceeded — IndexedDB is primary, this is expected");
+      // Don't prune — IndexedDB is the source of truth now
     }
   }
 }
@@ -2464,22 +2441,29 @@ export const useChat = create<ChatState>((set, get) => ({
       // force-stop to prevent runaway streams that keep sending events.
       const startedAt = get().streamingStartedAt;
       if (startedAt && Date.now() - startedAt > 600_000) {
-        console.warn("[Chat] Cumulative stream timeout (10 min) reached — force stopping");
-        const api = createDalamAPI();
-        const sid = get().activeSessionId;
-        if (sid) api.agent.cleanupStream(sid);
-        set({
-          isStreaming: false,
-          streamingStartedAt: null,
-          streamingContent: "",
-          thinkingContent: "",
-          pendingToolCalls: [],
-          pendingActivities: [],
-          _pendingChanges: [],
-          _safetyTimer: null,
-          _sendInProgress: false,
-        });
-        return;
+        // Don't force-stop during tool approval — user may be reviewing
+        const pending = get().pendingToolCalls;
+        const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
+        if (hasUnresolved) {
+          // Skip cumulative timeout — tool approval is pending
+        } else {
+          console.warn("[Chat] Cumulative stream timeout (10 min) reached — force stopping");
+          const api = createDalamAPI();
+          const sid = get().activeSessionId;
+          if (sid) api.agent.cleanupStream(sid);
+          set({
+            isStreaming: false,
+            streamingStartedAt: null,
+            streamingContent: "",
+            thinkingContent: "",
+            pendingToolCalls: [],
+            pendingActivities: [],
+            _pendingChanges: [],
+            _safetyTimer: null,
+            _sendInProgress: false,
+          });
+          return;
+        }
       }
       const pending = get().pendingToolCalls;
       const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
@@ -3719,6 +3703,11 @@ export const useChat = create<ChatState>((set, get) => ({
     delete _compactionTier[id];
     delete _antiThrashTimestamps[id];
     _terminalStateCache.delete(id);
+    // Clean up tool cost records to prevent memory leaks
+    try {
+      const { clearSessionToolCosts } = await import("../lib/toolExecutor");
+      clearSessionToolCosts(id);
+    } catch { /* ignore */ }
     // Abort any in-progress compaction
     const nextCompacting = new Set(get()._compactingSessions);
     nextCompacting.delete(id);
@@ -4267,7 +4256,8 @@ export const useChat = create<ChatState>((set, get) => ({
           // Build index set for efficient lookup against live messages
           const toCompactIndices = new Set(toCompact.map(m => liveMessages.indexOf(m)));
           // Only prune tool outputs in the messages being compacted (preserve full outputs in kept messages)
-          const prunedToCompact = stats.shouldPrune
+          // Use freshStats (post Tier 1) instead of stale stats for accurate pruning decision
+          const prunedToCompact = freshStats.shouldPrune
             ? pruneToolOutputs(toCompact).pruned
             : toCompact;
 
@@ -5086,6 +5076,21 @@ const DEFAULT_PROVIDERS: ModelProvider[] = [
       { name: "Claude Sonnet 4", modelId: "claude-sonnet-4-20250514", contextWindow: "200k" },
       { name: "Claude Opus 4", modelId: "claude-opus-4-20250514", contextWindow: "200k" },
       { name: "Claude 3.5 Haiku", modelId: "claude-3-5-haiku-20241022", contextWindow: "200k" },
+    ],
+  },
+  {
+    id: "groq",
+    name: "Groq",
+    type: "built-in",
+    enabled: false,
+    baseUrl: "https://api.groq.com/openai/v1",
+    apiKey: "",
+    apiFormat: "openai",
+    models: [
+      { name: "Llama 3.3 70B", modelId: "llama-3.3-70b-versatile", contextWindow: "128k" },
+      { name: "Llama 3.1 8B", modelId: "llama-3.1-8b-instant", contextWindow: "128k" },
+      { name: "Mixtral 8x7B", modelId: "mixtral-8x7b-32768", contextWindow: "32k" },
+      { name: "Gemma 2 9B", modelId: "gemma2-9b-it", contextWindow: "8k" },
     ],
   },
   {

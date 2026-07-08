@@ -36,7 +36,6 @@ const CTX_LOCAL = {
 // Key: text content, Value: token count. Limited to 1000 entries.
 
 interface TokenCacheEntry {
-  text: string;
   tokens: number;
 }
 
@@ -58,7 +57,7 @@ function setCachedTokenCount(text: string, tokens: number): void {
     const firstKey = _tokenCache.keys().next().value;
     if (firstKey !== undefined) _tokenCache.delete(firstKey);
   }
-  _tokenCache.set(text, { text, tokens });
+  _tokenCache.set(text, { tokens });
 }
 
 /**
@@ -411,8 +410,8 @@ export function _alignBoundaryPairs(
     const msg = messages[idx];
     if (!msg) continue;
 
-    // Case 1: Assistant message with toolCalls is being compacted
-    // → also compact the following tool result messages
+    // Case 1: Assistant message with toolCalls is being KEPT
+    // → also keep the following tool result messages to prevent orphaned calls
     if (msg.role === "assistant" && msg.toolCalls?.length) {
       // Walk forward to capture all consecutive tool result messages
       // that follow this assistant's tool calls
@@ -426,8 +425,8 @@ export function _alignBoundaryPairs(
       }
     }
 
-    // Case 2: Tool result message is being compacted
-    // → also compact the preceding assistant message with toolCalls
+    // Case 2: Tool result message is being KEPT
+    // → also keep the preceding assistant message with toolCalls
     if (msg.role === "user" && _isToolResult(msg)) {
       // Walk backward to find the assistant message with toolCalls
       for (let j = idx - 1; j >= 0; j--) {
@@ -557,17 +556,6 @@ export function buildCompactionPrompt(
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     let content = m.content;
-
-    // Preserve tool call results embedded in assistant messages
-    if (m.toolCalls?.length) {
-      const toolSummary = m.toolCalls
-        .filter(tc => tc.result)
-        .map(tc => `[${tc.name}] ${tc.result?.slice(0, 500)}`)
-        .join('\n');
-      if (toolSummary) {
-        content += `\n\nTool Results:\n${toolSummary}`;
-      }
-    }
 
     // Preserve tool result user messages (the primary mechanism in ACode)
     // Look ahead for tool result messages that follow this message

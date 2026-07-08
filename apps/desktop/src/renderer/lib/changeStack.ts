@@ -80,15 +80,14 @@ export async function applyUndo(): Promise<{ filePath: string; restoredContent: 
     };
   } catch (err) {
     // If the file write fails, push the change back so it isn't lost
+    // Use push directly to preserve the original timestamp and ordering
     const msg = (err as Error)?.message ?? String(err);
     console.warn(`[ChangeStack] Failed to undo ${change.filePath}: ${msg}`);
-    recordChange({
-      filePath: change.filePath,
-      beforeContent: change.beforeContent,
-      afterContent: change.afterContent,
-      toolCallId: change.toolCallId,
-      messageId: change.messageId,
-    });
+    changeStack.push(change);
+    // Cap stack size
+    if (changeStack.length > MAX_CHANGES) {
+      changeStack.shift();
+    }
     return null;
   }
 }

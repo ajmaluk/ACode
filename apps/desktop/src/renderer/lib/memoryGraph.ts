@@ -64,7 +64,7 @@ export interface SerializedGraph {
 
 // ──────────────────────────── Constants ────────────────────────
 
-const NODE_COLORS: Record<GraphNode["type"], string> = {
+export const NODE_COLORS: Record<GraphNode["type"], string> = {
   memory: "#4fc3f7",
   agent: "#ff8a65",
   skill: "#81c784",
@@ -313,12 +313,21 @@ export function buildMemoryGraph(
     }
   }
 
+  // ── Pre-compute session memories map (avoids O(G*S*M) filtering) ──
+  const sessionMemoriesMap = new Map<string, typeof memories>();
+  for (const mem of memories) {
+    if (mem.sourceSession) {
+      const group = sessionMemoriesMap.get(mem.sourceSession) || [];
+      group.push(mem);
+      sessionMemoriesMap.set(mem.sourceSession, group);
+    }
+  }
+
   // ── Gene ↔ Agent edges (only when gene was triggered during a session) ──
   for (const gene of genes) {
     const geneId = `gene-${gene.id}`;
     for (const session of agentSessions) {
-      // Connect gene to agent if the gene's trigger matches any memory tag from that session
-      const sessionMemories = memories.filter(m => m.sourceSession === session.id);
+      const sessionMemories = sessionMemoriesMap.get(session.id) || [];
       const hasOverlap = sessionMemories.some(m =>
         m.tags.some(t => gene.trigger.includes(t) || gene.name.includes(t))
       );
@@ -326,6 +335,63 @@ export function buildMemoryGraph(
         const agentId = `agent-${session.agentName}`;
         addEdgeDeduped(edges, seen, geneId, agentId, "uses", 0.3);
       }
+    }
+  }
+
+  // ── Nearest-neighbor edges (tag similarity) ──
+  // Connect each memory to its top-3 most similar memories by tag overlap
+  for (let i = 0; i < memories.length; i++) {
+    const a = memories[i];
+    const aId = `mem-${a.id}`;
+    const similarities: { idx: number; score: number }[] = [];
+    for (let j = 0; j < memories.length; j++) {
+      if (i === j) continue;
+      const b = memories[j];
+      const overlap = a.tags.filter(t => b.tags.includes(t)).length;
+      const summaryOverlap = a.summary.slice(0, 10) === b.summary.slice(0, 10) ? 1 : 0;
+      const score = overlap + summaryOverlap;
+      if (score > 0) similarities.push({ idx: j, score });
+    }
+    similarities.sort((a, b) => b.score - a.score);
+    for (const { idx, score } of similarities.slice(0, 3)) {
+      const bId = `mem-${memories[idx].id}`;
+      const weight = Math.min(1, 0.1 + score * 0.1);
+      addEdgeDeduped(edges, seen, aId, bId, "related_to", weight);
+    }
+  }
+
+  // ── Category clustering edges ──
+  // Connect nodes within the same category to form clusters
+  const categoryGroups = new Map<string, string[]>();
+  for (const node of nodes) {
+    const cat = node.metadata?.category as string || node.type;
+    const group = categoryGroups.get(cat) || [];
+    group.push(node.id);
+    categoryGroups.set(cat, group);
+  }
+  for (const [, group] of categoryGroups) {
+    // Connect each node to 2 others in same category
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < Math.min(group.length, i + 3); j++) {
+        addEdgeDeduped(edges, seen, group[i], group[j], "related_to", 0.2);
+      }
+    }
+  }
+
+  // ── Hub nodes: connect high-degree nodes to each other ──
+  // This creates a backbone network structure
+  const nodeDegrees = new Map<string, number>();
+  for (const e of edges) {
+    nodeDegrees.set(e.source, (nodeDegrees.get(e.source) || 0) + 1);
+    nodeDegrees.set(e.target, (nodeDegrees.get(e.target) || 0) + 1);
+  }
+  const hubs = nodes
+    .filter(n => (nodeDegrees.get(n.id) || 0) >= 2)
+    .sort((a, b) => (nodeDegrees.get(b.id) || 0) - (nodeDegrees.get(a.id) || 0))
+    .slice(0, 15);
+  for (let i = 0; i < hubs.length; i++) {
+    for (let j = i + 1; j < Math.min(hubs.length, i + 4); j++) {
+      addEdgeDeduped(edges, seen, hubs[i].id, hubs[j].id, "related_to", 0.15);
     }
   }
 
@@ -360,22 +426,35 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
   const nodeMap = new Map<string, GraphNode>();
   for (const node of nodes) nodeMap.set(node.id, node);
 
-  // Seed positions in a spiral for better convergence
-  const spread = Math.min(400, Math.sqrt(n) * 30);
-  for (let i = 0; i < n; i++) {
-    const angle = i * 2.399; // golden angle
-    const r = spread * Math.sqrt(i / n);
-    nodes[i].x = 300 + r * Math.cos(angle);
-    nodes[i].y = 250 + r * Math.sin(angle);
-    nodes[i].vx = 0;
-    nodes[i].vy = 0;
+  // Seed positions in concentric rings by type for natural clustering
+  const typeGroups = new Map<string, GraphNode[]>();
+  for (const node of nodes) {
+    const group = typeGroups.get(node.type) || [];
+    group.push(node);
+    typeGroups.set(node.type, group);
+  }
+  const typeList = [...typeGroups.keys()];
+  const baseSpread = Math.min(350, Math.sqrt(n) * 25);
+
+  for (let t = 0; t < typeList.length; t++) {
+    const group = typeGroups.get(typeList[t])!;
+    const ringRadius = baseSpread * (0.3 + t * 0.25);
+    const typeAngleOffset = (t / typeList.length) * Math.PI * 2;
+    for (let i = 0; i < group.length; i++) {
+      const angle = typeAngleOffset + (i / group.length) * Math.PI * 2;
+      const r = ringRadius * (0.5 + 0.5 * Math.sqrt(i / group.length));
+      group[i].x = 300 + r * Math.cos(angle);
+      group[i].y = 250 + r * Math.sin(angle);
+      group[i].vx = 0;
+      group[i].vy = 0;
+    }
   }
 
-  const iterations = Math.max(MIN_ITERATIONS, Math.min(MAX_ITERATIONS_BASE, Math.round(40 * Math.sqrt(n / 100))));
-  const repulsion = 800;
-  const attraction = 0.01;
-  const damping = 0.85;
-  const theta = 0.8; // Barnes-Hut accuracy
+  const iterations = Math.max(MIN_ITERATIONS, Math.min(MAX_ITERATIONS_BASE, Math.round(50 * Math.sqrt(n / 100))));
+  const repulsion = 600;
+  const attraction = 0.015;
+  const damping = 0.82;
+  const theta = 0.7; // Barnes-Hut accuracy
 
   // Pre-compute edge endpoints for O(1) attraction lookups
   const edgeEndpoints: { source: GraphNode; target: GraphNode; weight: number }[] = [];
@@ -385,7 +464,7 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
     if (s && t) edgeEndpoints.push({ source: s, target: t, weight: edge.weight });
   }
 
-  const CONVERGENCE_THRESHOLD = 0.5;
+  const CONVERGENCE_THRESHOLD = 0.3;
   for (let iter = 0; iter < iterations; iter++) {
     const cooling = 1 - iter / iterations;
     const alpha = cooling * cooling; // quadratic cooling
@@ -413,12 +492,13 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
       node.vy += f.fy * alpha;
     }
 
-    // Attraction along edges
+    // Attraction along edges (stronger for higher weight)
     for (const { source: s, target: t, weight } of edgeEndpoints) {
       const dx = t.x - s.x;
       const dy = t.y - s.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const force = (dist - 80) * attraction * weight * alpha;
+      const idealDist = 60 + (1 - weight) * 40; // stronger edges = closer
+      const force = (dist - idealDist) * attraction * weight * alpha;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       s.vx += fx;
@@ -427,11 +507,27 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
       t.vy -= fy;
     }
 
+    // Type clustering: same-type nodes attract each other gently
+    for (const [, group] of typeGroups) {
+      for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          const dx = group[j].x - group[i].x;
+          const dy = group[j].y - group[i].y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const force = 0.003 * alpha;
+          group[i].vx += (dx / dist) * force;
+          group[i].vy += (dy / dist) * force;
+          group[j].vx -= (dx / dist) * force;
+          group[j].vy -= (dy / dist) * force;
+        }
+      }
+    }
+
     // Center gravity + velocity integration
     let totalDisplacement = 0;
     for (const node of nodes) {
-      node.vx += (300 - node.x) * 0.005 * alpha;
-      node.vy += (250 - node.y) * 0.005 * alpha;
+      node.vx += (300 - node.x) * 0.008 * alpha;
+      node.vy += (250 - node.y) * 0.008 * alpha;
       node.vx *= damping;
       node.vy *= damping;
       node.x += node.vx;
