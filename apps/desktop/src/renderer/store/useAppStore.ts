@@ -2200,13 +2200,21 @@ export const useChat = create<ChatState>((set, get) => ({
    * Aborts streaming, tool execution, dream cycle, and compaction.
    */
   cancelSessionOperations(sessionId: string) {
-    const controllers = get()._abortControllers;
-    const controller = controllers.get(sessionId);
+    // Abort first (idempotent, safe to call even if entry is later removed by
+    // another in-flight update), then remove the entry via a functional set()
+    // updater so we never mutate the live Map that other closures may still
+    // hold a reference to — consistent with the pattern used for compaction's
+    // AbortController lifecycle below.
+    const controller = get()._abortControllers.get(sessionId);
     if (controller) {
       controller.abort();
-      controllers.delete(sessionId);
-      set({ _abortControllers: new Map(controllers) });
     }
+    set((s) => {
+      if (!s._abortControllers.has(sessionId)) return {};
+      const next = new Map(s._abortControllers);
+      next.delete(sessionId);
+      return { _abortControllers: next };
+    });
   },
 
   async sendMessage(content) {
@@ -4182,7 +4190,7 @@ export const useChat = create<ChatState>((set, get) => ({
             };
           });
           savePersistedMessages(get().sessionMessages);
-          console.log(`[Compaction] Tier 1: pruned ~${tokensReclaimed} tokens from old tool outputs at ${(stats.pressureRatio * 100).toFixed(0)}% context usage.`);
+          if (import.meta.env.DEV) console.log(`[Compaction] Tier 1: pruned ~${tokensReclaimed} tokens from old tool outputs at ${(stats.pressureRatio * 100).toFixed(0)}% context usage.`);
         }
       }
 

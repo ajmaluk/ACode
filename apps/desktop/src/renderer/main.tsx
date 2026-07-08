@@ -30,9 +30,12 @@ try {
   if (import.meta.env.DEV) console.error("Failed to initialize Dalam API:", err);
 }
 
-// Enable debug logging — type __DALAM_DEBUG=true in console for verbose logs
-// or set it here before starting a session to capture all API/tool activity.
-if (typeof window !== "undefined") {
+// Enable debug logging in development only — type __DALAM_DEBUG=true in console
+// for verbose logs, or set it here before starting a session to capture all
+// API/tool activity. Never force this on in production builds: it leaves a
+// window.__DALAM_DEBUG flag flipped on for every user and keeps _debugLog /
+// _log call sites in dalamAPI.ts and useAppStore.ts emitting verbose output.
+if (typeof window !== "undefined" && import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__DALAM_DEBUG = true;
   console.log("[Inspect] Debug logging enabled. Set __DALAM_DEBUG=false to disable.");
 }
