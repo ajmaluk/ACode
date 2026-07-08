@@ -896,6 +896,7 @@ function loadPersistedVersions(): Record<string, import("@dalam/shared-types").C
 
 function savePersistedVersions(versions: Record<string, import("@dalam/shared-types").ChatVersion[]>) {
   try { localStorage.setItem(SESSION_VERSIONS_KEY, JSON.stringify(versions)); } catch (e) { console.warn("Failed to save versions:", e); }
+  _idbWriteThrough("versions", { id: "all", data: versions });
   void saveWorkspaceData();
 }
 
@@ -917,9 +918,28 @@ if (typeof window !== "undefined") {
   });
 }
 type MessagesMap = Record<string, import("@dalam/shared-types").ChatMessage[]>;
+
+/**
+ * Best-effort write-through to IndexedDB, mirroring whatever we just wrote to
+ * localStorage. IndexedDB has a much larger quota than localStorage's ~5-10MB
+ * cap, so this keeps a durable copy available even after localStorage starts
+ * refusing writes. Failures are non-fatal — localStorage remains the source
+ * of truth read on next `load()`, and idbGet() in `load()` will just fall
+ * back to whatever was migrated/synced last time. Never throws.
+ */
+function _idbWriteThrough(storeName: "sessions" | "messages" | "versions" | "compaction", value: unknown): void {
+  void import("@/lib/storage").then(({ idbPut, isIndexedDBAvailable }) => {
+    if (!isIndexedDBAvailable()) return;
+    return idbPut(storeName, value);
+  }).catch((e) => {
+    console.warn(`[Storage] IndexedDB write-through failed for ${storeName}:`, e);
+  });
+}
+
 function _doSavePersistedMessages(messages: MessagesMap) {
   try {
     localStorage.setItem(SESSION_MESSAGES_KEY, JSON.stringify(messages));
+    _idbWriteThrough("messages", { id: "all", data: messages });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'QuotaExceededError') {
       console.warn("[Storage] Quota exceeded - truncating tool results");
@@ -963,6 +983,21 @@ export function savePersistedMessages(messages: MessagesMap) {
 function flushSavePersistedMessages() {
   if (_saveMessagesTimer) { clearTimeout(_saveMessagesTimer); _saveMessagesTimer = null; }
   if (_pendingMessagesRef) { const latest = _pendingMessagesRef; _pendingMessagesRef = null; _doSavePersistedMessages(latest); void saveWorkspaceData(); }
+}
+/**
+ * Save messages immediately (bypassing the debounce buffer), and cancel any
+ * pending throttled save so it can't fire afterwards with stale data and
+ * clobber this write. Use this for call sites that must write synchronously
+ * relative to other state changes (e.g. deleting/archiving/restoring a
+ * session) instead of calling `_doSavePersistedMessages` directly — a bare
+ * direct call left `_pendingMessagesRef`/`_saveMessagesTimer` untouched, so a
+ * throttled save already in flight from a *different* code path could fire
+ * later with an older snapshot and silently undo the direct write.
+ */
+function savePersistedMessagesImmediate(messages: MessagesMap) {
+  if (_saveMessagesTimer) { clearTimeout(_saveMessagesTimer); _saveMessagesTimer = null; }
+  _pendingMessagesRef = null;
+  _doSavePersistedMessages(messages);
 }
 
 function truncateToolResults(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>): Record<string, import("@dalam/shared-types").ChatMessage[]> {
@@ -1031,6 +1066,7 @@ function loadPersistedSessionSummaries(): ChatSessionSummary[] {
 
 export function savePersistedSessionSummaries(sessions: ChatSessionSummary[]) {
   try { localStorage.setItem(SESSION_SUMMARIES_KEY, JSON.stringify(sessions)); } catch (e) { console.warn("Failed to save session summaries:", e); }
+  _idbWriteThrough("sessions", { id: "all", data: sessions });
   void saveWorkspaceData();
 }
 
@@ -1045,6 +1081,7 @@ function loadPersistedCompactionSummaries(): Record<string, string> {
 
 function savePersistedCompactionSummaries(summaries: Record<string, string>) {
   try { localStorage.setItem(COMPACTION_SUMMARIES_KEY, JSON.stringify(summaries)); } catch (e) { console.warn("Failed to save compaction summaries:", e); }
+  _idbWriteThrough("compaction", { sessionId: "all", data: summaries });
   void saveWorkspaceData();
 }
 
@@ -1158,7 +1195,12 @@ function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<st
 }
 
 function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
-  // Periodically prune stale sessions to prevent unbounded memory growth
+  // Touch this session's recency slot BEFORE pruning, so an actively-used
+  // session is never the eviction candidate (previously, Object.keys()
+  // insertion order meant a long-lived active session could be treated as
+  // the "oldest" key and pruned out from under itself while a truly dormant
+  // session that happened to be added later survived).
+  _touchDoomLoopSession(sessionId);
   _pruneDoomLoopMaps();
   const history = [...(_toolCallHistory[sessionId] ?? [])];
   history.push({ name: toolName, args: JSON.stringify(toolArgs, Object.keys(toolArgs).sort()) });
@@ -1174,16 +1216,28 @@ function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Recor
   }
 }
 
-// Global cap: if too many sessions accumulate, prune the oldest ones
+// Global cap: if too many sessions accumulate, prune the oldest ones.
+// _sessionRecency tracks true last-touched order via re-insertion (delete +
+// re-add moves a key to the end), independent of _toolCallHistory's own key
+// order, so pruning always evicts genuinely idle sessions instead of ones
+// that are merely old-but-still-active.
 const MAX_SESSIONS_IN_DOOM_MAPS = 20;
+const _sessionRecency = new Map<string, true>();
+function _touchDoomLoopSession(sessionId: string) {
+  _sessionRecency.delete(sessionId);
+  _sessionRecency.set(sessionId, true);
+}
 function _pruneDoomLoopMaps() {
-  const sessionIds = Object.keys(_toolCallHistory);
-  if (sessionIds.length > MAX_SESSIONS_IN_DOOM_MAPS) {
-    const toRemove = sessionIds.slice(0, sessionIds.length - MAX_SESSIONS_IN_DOOM_MAPS);
-    for (const id of toRemove) {
-      delete _toolCallHistory[id];
-      delete _toolFailureCounts[id];
-    }
+  if (_sessionRecency.size <= MAX_SESSIONS_IN_DOOM_MAPS) return;
+  const toRemove = _sessionRecency.size - MAX_SESSIONS_IN_DOOM_MAPS;
+  const it = _sessionRecency.keys();
+  for (let i = 0; i < toRemove; i++) {
+    const next = it.next();
+    if (next.done) break;
+    const id = next.value;
+    _sessionRecency.delete(id);
+    delete _toolCallHistory[id];
+    delete _toolFailureCounts[id];
   }
 }
 
@@ -1197,6 +1251,7 @@ function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record
 function _clearDoomLoopState(sessionId: string) {
   delete _toolCallHistory[sessionId];
   delete _toolFailureCounts[sessionId];
+  _sessionRecency.delete(sessionId);
   delete _contextOverflowRetries[sessionId];
   delete _contextBudgetFactor[sessionId];
 }
@@ -3682,7 +3737,7 @@ export const useChat = create<ChatState>((set, get) => ({
       : s.activeSessionId;
     // Persist to disk (outside set updater to avoid side effects during render)
     savePersistedVersions(restVersions);
-    _doSavePersistedMessages(restMessages);
+    savePersistedMessagesImmediate(restMessages);
     void saveWorkspaceData();
     savePersistedAgents(restAgents);
     savePersistedSessionSummaries(newSessions);
@@ -3748,7 +3803,7 @@ export const useChat = create<ChatState>((set, get) => ({
       sessionVersions: restVersions,
     });
     savePersistedSessionSummaries(updatedSessions);
-    _doSavePersistedMessages(restMessages);
+    savePersistedMessagesImmediate(restMessages);
     savePersistedVersions(restVersions);
   },
 
@@ -3778,7 +3833,7 @@ export const useChat = create<ChatState>((set, get) => ({
             sessionMessages: { ...get().sessionMessages, [id]: messages },
           });
           savePersistedSessionSummaries(updatedSessions);
-          _doSavePersistedMessages({ ...get().sessionMessages, [id]: messages });
+          savePersistedMessagesImmediate({ ...get().sessionMessages, [id]: messages });
           await remove(archivePath);
         }
       } catch (err) {
