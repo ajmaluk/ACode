@@ -426,7 +426,7 @@ export function agentReducer(
   }
   newState.transitionLog = newLog;
 
-  if (debug) {
+  if (debug && import.meta.env.DEV) {
     console.log(
       `[AgentRuntime] ${state.sessionId?.slice(0, 8) ?? "?"} phase: ${state.phase} → ${nextPhase} (event: ${event.type})`
     );
