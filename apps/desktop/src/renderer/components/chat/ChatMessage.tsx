@@ -15,6 +15,10 @@ import {
   TaskPlanBlock,
   QuestionAccordion,
   ChangesCard,
+  ContextGatheringGroup,
+  SkillBlock,
+  BashActivityBlock,
+  PlanBlock,
 } from "./ActivityBlocks";
 
 export const EMPTY_ACTIVITIES: never[] = [];
@@ -256,10 +260,3 @@ export const ChatMessage = React.memo(function ChatMessage({ message, pending, o
     !tcChanged && !fcChanged && !actChanged
   );
 });
-
-import {
-  ContextGatheringGroup,
-  SkillBlock,
-  BashActivityBlock,
-  PlanBlock,
-} from "./ActivityBlocks";

@@ -80,9 +80,15 @@ export function mergeRulesets(...rulesets: PermissionRuleset[]): PermissionRules
 }
 
 const _globRegexCache = new Map<string, RegExp>();
+const MAX_GLOB_CACHE = 500;
 function globToRegex(pattern: string): RegExp {
   const cached = _globRegexCache.get(pattern);
   if (cached) return cached;
+  // Evict oldest entries if at cap
+  if (_globRegexCache.size >= MAX_GLOB_CACHE) {
+    const firstKey = _globRegexCache.keys().next().value;
+    if (firstKey !== undefined) _globRegexCache.delete(firstKey);
+  }
   // Step 1: Extract brace groups and replace with placeholders to avoid double-escaping
   const braceGroups: string[] = [];
   // Use sentinel strings (not control characters) to avoid eslint no-control-regex

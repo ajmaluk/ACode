@@ -395,10 +395,28 @@ type WorkspaceState = {
 
 async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
   try {
-    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { mkdir } = await import("@tauri-apps/plugin-fs");
     const dotDalam = joinPath(workspacePath, ".dalam");
-    if (!(await exists(dotDalam))) {
-      await mkdir(dotDalam, { recursive: true });
+    // Scope-safe check: catch "forbidden path" errors from Tauri's scope system
+    let dotDalamExists = false;
+    try {
+      const { exists } = await import("@tauri-apps/plugin-fs");
+      dotDalamExists = await exists(dotDalam);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!msg.includes("forbidden") && !msg.includes("scope")) throw e;
+    }
+    if (!dotDalamExists) {
+      try {
+        await mkdir(dotDalam, { recursive: true });
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        if (msg.includes("forbidden") || msg.includes("scope")) {
+          console.warn("Cannot create .dalam directory — workspace path may not have filesystem scope:", workspacePath);
+          return;
+        }
+        throw e;
+      }
     }
 
     // Initialize SQLite database for memory FTS5 search
@@ -412,15 +430,21 @@ async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
       // Trigger background memory dream consolidation cycle if needed
       const { triggerDreamCycleIfNeeded } = await import("@/lib/dreamAgent");
       triggerDreamCycleIfNeeded(workspacePath);
-            // Store cancel function keyed by workspace for cancellation propagation
-            // This is called via abort() which routes through cancelSessionOperations
     } catch (e) {
       console.warn("Failed to initialize memory database:", e);
     }
 
     // Backward compatibility: ensure old memory.json exists if it was already in use
     const memoryPath = joinPath(dotDalam, "memory.json");
-    if (!(await exists(memoryPath))) {
+    let memoryExists = false;
+    try {
+      const { exists } = await import("@tauri-apps/plugin-fs");
+      memoryExists = await exists(memoryPath);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!msg.includes("forbidden") && !msg.includes("scope")) throw e;
+    }
+    if (!memoryExists) {
       const defaultMemory = {
         projectOverview: "An AI-native developer desktop environment.",
         keyFiles: [],
@@ -430,10 +454,45 @@ async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
           "Maintain typescript type safety.",
         ],
       };
-      await api.fs.writeFile(memoryPath, JSON.stringify(defaultMemory, null, 2));
+      try {
+        await api.fs.writeFile(memoryPath, JSON.stringify(defaultMemory, null, 2));
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        if (!msg.includes("forbidden") && !msg.includes("scope")) {
+          console.warn("Failed to create workspace memory.json:", e);
+        }
+      }
+    }
+
+    // Ensure context.json exists with defaults
+    const contextPath = joinPath(dotDalam, "context.json");
+    let contextExists = false;
+    try {
+      const { exists } = await import("@tauri-apps/plugin-fs");
+      contextExists = await exists(contextPath);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!msg.includes("forbidden") && !msg.includes("scope")) throw e;
+    }
+    if (!contextExists) {
+      const defaultContext = {
+        pinnedFiles: [],
+        ignorePatterns: ["node_modules", "dist", ".git", ".dalam"],
+      };
+      try {
+        await api.fs.writeFile(contextPath, JSON.stringify(defaultContext, null, 2));
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        if (!msg.includes("forbidden") && !msg.includes("scope")) {
+          console.warn("Failed to create workspace context.json:", e);
+        }
+      }
     }
   } catch (err) {
-    console.warn("Failed to initialize workspace memory:", err);
+    const msg = (err as Error)?.message ?? String(err);
+    if (!msg.includes("forbidden") && !msg.includes("scope")) {
+      console.warn("Failed to initialize workspace memory:", err);
+    }
   }
 }
 
@@ -3302,11 +3361,13 @@ export const useChat = create<ChatState>((set, get) => ({
       case "ask-permission": {
         const VALID_KINDS = ["bash", "edit", "mcp", "read"] as const;
         const permKind = (VALID_KINDS as readonly string[]).includes(event.kind) ? (event.kind as typeof VALID_KINDS[number]) : "bash";
+        const activeSession = get().session;
         usePermission.getState().ask({
           kind: permKind,
           title: "Permission required",
           description: event.description ?? `Dalam wants to run: ${event.kind}`,
           ...(event.command ? { command: event.command } : {}),
+          ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
         }).then((decision) => {
           if (event.toolCallId) {
             get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied");
@@ -3320,6 +3381,7 @@ export const useChat = create<ChatState>((set, get) => ({
               title: "Permission required",
               description: event.description ?? `Dalam wants to run: ${event.kind}`,
               ...(event.command ? { command: event.command } : {}),
+              ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
             });
           }
         }).catch((err) => {
@@ -3430,6 +3492,14 @@ export const useChat = create<ChatState>((set, get) => ({
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
     _toolCallResolvers.clear();
+    // Abort all in-flight operations to prevent stale writes
+    const controllers = get()._abortControllers;
+    for (const [, controller] of controllers) {
+      try { controller.abort(); } catch { /* ignore */ }
+    }
+    // Clear compaction state
+    const nextCompacting = new Set(get()._compactingSessions);
+    nextCompacting.clear();
     set({
       session: null,
       messages: [],
@@ -3450,6 +3520,8 @@ export const useChat = create<ChatState>((set, get) => ({
       _safetyTimer: null,
       _sendInProgress: false,
       subAgents: [],
+      _abortControllers: new Map(),
+      _compactingSessions: nextCompacting,
     });
   },
 
@@ -5557,23 +5629,35 @@ type PermissionState = {
 };
 
 export const usePermission = create<PermissionState>((set, get) => {
-  let pendingResolve: ((d: "allow" | "always" | "deny") => void) | null = null;
+  // Queue-based: multiple pending requests are queued and resolved one at a time
+  // instead of the previous behavior where new requests auto-denied old ones.
+  const pendingQueue: Array<{ resolve: (d: "allow" | "always" | "deny") => void; req: PermissionRequest }> = [];
+
+  const showNextInQueue = () => {
+    if (pendingQueue.length > 0) {
+      const next = pendingQueue[0];
+      set({ request: next.req });
+    } else {
+      set({ request: null });
+    }
+  };
 
   const ask: PermissionState["ask"] = (req) => {
     const key = `${req.workspacePath ?? ""}::${req.kind}::${req.command ?? ""}`;
     if (get().alwaysAllowed[key]) {
       return Promise.resolve("allow" as const);
     }
-    // Reject any previous pending request to avoid promise leaks
-    if (pendingResolve) { pendingResolve("deny"); pendingResolve = null; }
     const full: PermissionRequest = {
       ...req,
       id: "perm-" + crypto.randomUUID(),
       createdAt: Date.now(),
     };
-    set({ request: full });
     return new Promise<"allow" | "always" | "deny">((resolve) => {
-      pendingResolve = resolve;
+      pendingQueue.push({ resolve, req: full });
+      // Only show dialog if nothing is currently showing
+      if (pendingQueue.length === 1) {
+        set({ request: full });
+      }
     });
   };
 
@@ -5588,22 +5672,24 @@ export const usePermission = create<PermissionState>((set, get) => {
       saveAlwaysAllowed(next);
     },
     resolve(decision) {
-      const r = pendingResolve;
-      pendingResolve = null;
-      r?.(decision);
-      set({ request: null });
+      const first = pendingQueue.shift();
+      if (first) {
+        first.resolve(decision);
+      }
+      showNextInQueue();
     },
     cancel() {
-      const r = pendingResolve;
-      pendingResolve = null;
-      r?.("deny");
+      // Deny all pending requests
+      while (pendingQueue.length > 0) {
+        const item = pendingQueue.shift()!;
+        item.resolve("deny");
+      }
       set({ request: null });
     },
     async loadFromDisk() {
       try {
         const diskData = await loadAlwaysAllowedFromDisk();
         const localData = loadAlwaysAllowed();
-        // Merge disk + localStorage (localStorage overrides disk for same key)
         const merged: Record<string, true> = { ...diskData, ...localData };
         set({ alwaysAllowed: merged });
       } catch (e) {

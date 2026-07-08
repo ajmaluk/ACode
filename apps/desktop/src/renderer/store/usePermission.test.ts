@@ -129,7 +129,7 @@ describe("usePermission — ask / resolve / cancel flow", () => {
     expect(usePermission.getState().request).toBeNull();
   });
 
-  it("second ask() rejects the first pending request", async () => {
+  it("second ask() queues behind the first pending request", async () => {
     const req1 = {
       kind: "bash" as const,
       title: "Request 1",
@@ -146,17 +146,21 @@ describe("usePermission — ask / resolve / cancel flow", () => {
     const promise1 = usePermission.getState().ask(req1);
     const promise2 = usePermission.getState().ask(req2);
 
-    // The first request should be rejected (denied)
+    // The first request should be shown (active dialog)
+    expect(usePermission.getState().request!.command).toBe("ls");
+
+    // Resolve the first — second should appear
+    usePermission.getState().resolve("allow");
     const decision1 = await promise1;
-    expect(decision1).toBe("deny");
+    expect(decision1).toBe("allow");
 
     // The second request is now active
     expect(usePermission.getState().request!.command).toBe("pwd");
 
     // Resolve the second
-    usePermission.getState().resolve("allow");
+    usePermission.getState().resolve("always");
     const decision2 = await promise2;
-    expect(decision2).toBe("allow");
+    expect(decision2).toBe("always");
   });
 
   it("sequential ask → resolve → ask → resolve works correctly", async () => {

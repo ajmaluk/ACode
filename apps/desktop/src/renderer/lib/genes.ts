@@ -300,6 +300,7 @@ async function processGeneSaveQueue(): Promise<void> {
 
 // Cache compiled regexes for gene triggers to avoid recompilation per prompt
 const _geneTriggerCache = new Map<string, RegExp | null>();
+const MAX_GENE_TRIGGER_CACHE = 200;
 
 const MAX_TRIGGER_LENGTH = 200;
 const DANGEROUS_REGEX_PATTERNS = [
@@ -310,6 +311,12 @@ const DANGEROUS_REGEX_PATTERNS = [
 function getGeneTriggerRegex(trigger: string): RegExp | null {
   const cached = _geneTriggerCache.get(trigger);
   if (cached !== undefined) return cached;
+
+  // Evict oldest entries if at cap
+  if (_geneTriggerCache.size >= MAX_GENE_TRIGGER_CACHE) {
+    const firstKey = _geneTriggerCache.keys().next().value;
+    if (firstKey !== undefined) _geneTriggerCache.delete(firstKey);
+  }
 
   if (trigger.length > MAX_TRIGGER_LENGTH) {
     console.warn(`[Genes] Trigger too long (${trigger.length} chars), skipping: ${trigger.slice(0, 50)}...`);
@@ -605,7 +612,15 @@ export async function solidifyGene(
   pool: GenePool,
   candidate: Omit<Gene, "id" | "createdAt" | "lastActivatedAt">
 ): Promise<{ success: boolean; gene?: Gene; error?: string }> {
-  // Validate trigger is a valid regex
+  // Validate name is not empty
+  if (!candidate.name || candidate.name.trim().length === 0) {
+    return { success: false, error: "Gene name cannot be empty" };
+  }
+
+  // Validate trigger is not empty and is a valid regex
+  if (!candidate.trigger || candidate.trigger.trim().length === 0) {
+    return { success: false, error: "Gene trigger cannot be empty" };
+  }
   try {
     new RegExp(candidate.trigger, "i");
   } catch {

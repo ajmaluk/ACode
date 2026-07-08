@@ -87,7 +87,6 @@ export interface Connector {
 // ─── Connector Registry ────────────────────────────────────
 
 const connectors: Map<string, Connector> = new Map();
-const connectorConfigs: Map<string, ConnectorConfig> = new Map();
 
 /**
  * Register a connector plugin.
@@ -803,7 +802,6 @@ export async function shutdownConnectors(): Promise<void> {
   }
   await Promise.allSettled(promises);
   connectors.clear();
-  connectorConfigs.clear();
 }
 
 /**

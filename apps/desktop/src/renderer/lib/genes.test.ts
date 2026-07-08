@@ -471,7 +471,8 @@ describe("genes", () => {
         source: "session",
         tags: [],
       });
-      expect(result.success).toBe(true); // name is accepted as-is
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("name");
     });
 
     it("rejects empty trigger", async () => {
@@ -488,8 +489,8 @@ describe("genes", () => {
         source: "session",
         tags: [],
       });
-      // Empty string is a valid regex (matches everything)
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("trigger");
     });
   });
 

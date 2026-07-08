@@ -109,6 +109,26 @@ interface AnthropicContentBlock {
 //   return parts.join("/").replace(/\\/g, "/").replace(/\/+/g, "/");
 // }
 
+/**
+ * Scope-safe wrapper for Tauri's `exists()` function.
+ * Catches "forbidden path" errors from Tauri's scope system and returns false
+ * instead of throwing. This allows the app to gracefully handle workspaces
+ * that haven't been granted filesystem scope yet.
+ */
+async function scopeSafeExists(path: string): Promise<boolean> {
+  try {
+    const { exists } = await import("@tauri-apps/plugin-fs");
+    return await exists(path);
+  } catch (e) {
+    // Tauri throws "forbidden path" when the path is not in the allowed scope
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      return false;
+    }
+    throw e;
+  }
+}
+
 function dirname(p: string): string {
   if (!p) return "";
   const posix = p.replace(/\\/g, "/");
@@ -1123,14 +1143,19 @@ const dalamAPI: DalamAPI = {
         let workspaceMemoryBlock = "";
         if (workspacePath) {
           try {
-            const { exists } = await import("@tauri-apps/plugin-fs");
             const memoryPath = joinPathUtil(workspacePath, ".dalam/memory.json");
-            if (await exists(memoryPath)) {
+            if (await scopeSafeExists(memoryPath)) {
               const memoryContent = await dalamAPI.fs.readFile(memoryPath);
               const memoryObj = JSON.parse(memoryContent);
               workspaceMemoryBlock = `\n\n=== PERSISTENT WORKSPACE MEMORY ===\nDalam maintains a persistent memory file for this workspace at \`.dalam/memory.json\`. You can modify this file using your edit/write file tools to remember key rules, paths, build commands, or context for future turns.\n\nCurrent Contents:\n- Project Overview: ${memoryObj.projectOverview || "Not specified."}\n- Key Files/Directories: ${JSON.stringify(memoryObj.keyFiles || [])}\n- Build/Test Commands: ${JSON.stringify(memoryObj.buildCommands || [])}\n- Learned Rules:\n${(memoryObj.learnedRules || []).map((r: string) => `  * ${r}`).join("\n")}\n===================================`;
             }
-          } catch (e) { console.warn("Failed to load workspace memory:", e); }
+          } catch (e) {
+            // Only log if it's not a scope error (scope errors are expected for new workspaces)
+            const msg = (e as Error)?.message ?? String(e);
+            if (!msg.includes("forbidden") && !msg.includes("scope")) {
+              console.warn("Failed to load workspace memory:", e);
+            }
+          }
         }
 
         // SQLite memories
@@ -1168,9 +1193,8 @@ const dalamAPI: DalamAPI = {
         let workspacePinnedBlock = "";
         if (workspacePath) {
           try {
-            const { exists } = await import("@tauri-apps/plugin-fs");
             const contextPath = joinPathUtil(workspacePath, ".dalam/context.json");
-            if (await exists(contextPath)) {
+            if (await scopeSafeExists(contextPath)) {
               const contextContent = await dalamAPI.fs.readFile(contextPath);
               const contextObj = JSON.parse(contextContent);
               if (contextObj.pinnedFiles && contextObj.pinnedFiles.length > 0) {
@@ -1183,7 +1207,7 @@ const dalamAPI: DalamAPI = {
                   }
                   try {
                     const fullPath = joinPathUtil(workspacePath, filePath);
-                    if (await exists(fullPath)) {
+                    if (await scopeSafeExists(fullPath)) {
                       const fileContent = await dalamAPI.fs.readFile(fullPath);
                       const truncated = fileContent.length > 3000 ? fileContent.slice(0, 3000) + "\n... [truncated at 3000 chars]" : fileContent;
                       pinnedBlock += `\n--- Pinned File: ${filePath} ---\n${truncated}\n`;
@@ -1194,24 +1218,33 @@ const dalamAPI: DalamAPI = {
                 workspacePinnedBlock = pinnedBlock;
               }
             }
-          } catch (e) { console.warn("Failed to load workspace context:", e); }
+          } catch (e) {
+            const msg = (e as Error)?.message ?? String(e);
+            if (!msg.includes("forbidden") && !msg.includes("scope")) {
+              console.warn("Failed to load workspace context:", e);
+            }
+          }
         }
 
         // 4-layer instructions hierarchy
         let workspaceRulesBlock = "";
         if (workspacePath) {
           try {
-            const { exists } = await import("@tauri-apps/plugin-fs");
             const instructions = await loadInstructions(workspacePath, {
               readFile: dalamAPI.fs.readFile,
-              exists: async (p: string) => exists(p),
+              exists: scopeSafeExists,
               getHomeDir: async () => {
                 const { homeDir } = await import("@tauri-apps/api/path");
                 return homeDir();
               },
             });
             workspaceRulesBlock = formatInstructionsForPrompt(instructions, activeFile ?? undefined);
-          } catch (e) { console.warn("Failed to load workspace instructions:", e); }
+          } catch (e) {
+            const msg = (e as Error)?.message ?? String(e);
+            if (!msg.includes("forbidden") && !msg.includes("scope")) {
+              console.warn("Failed to load workspace instructions:", e);
+            }
+          }
         }
 
         // Compact tool documentation — full version always included; if context is tight, use minimal

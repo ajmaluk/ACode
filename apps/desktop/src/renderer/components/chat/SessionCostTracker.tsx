@@ -107,7 +107,7 @@ export function SessionCostTracker({
   if (costData.totalTokens === 0) return null;
 
   return (
-    <div className={`flex items-center gap-3 text-[11px] text-dalam-text-muted ${className}`}>
+    <div className={`group relative flex items-center gap-3 text-[11px] text-dalam-text-muted ${className}`}>
       {/* Total cost */}
       <div className="flex items-center gap-1" title="Estimated total cost">
         <DollarSign className="w-3 h-3" />
