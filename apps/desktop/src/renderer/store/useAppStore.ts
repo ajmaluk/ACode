@@ -2323,6 +2323,12 @@ export const useChat = create<ChatState>((set, get) => ({
       pendingAttachments: [],
       restoredVersionId: null,
       preRestoreMessages: null,
+      // Mark first pending task as "running" when agent starts working
+      taskPlan: s.taskPlan?.map((t, i) =>
+        t.status === "pending" && i === s.taskPlan!.findIndex(t => t.status === "pending")
+          ? { ...t, status: "running" as const }
+          : t
+      ) ?? s.taskPlan,
       chatSessions: s.chatSessions.map((cs) =>
         cs.id === (session?.id ?? "")
           ? {
@@ -2913,12 +2919,12 @@ export const useChat = create<ChatState>((set, get) => ({
       const liveState = get();
       savePersistedMessages(liveState.sessionMessages);
       savePersistedSessionSummaries(liveState.chatSessions);
-        // Auto-verification: if build agent produced changes (pending changes or fileChanges in messages),
+        // Auto-verification: if build agent produced changes in this turn,
         // set _pendingVerification so verifyAfterPlanExecution will run the verification pipeline.
+        // Only check current turn's pending changes, not all historical messages.
         if (sessionId && !get()._pendingVerification) {
           const pendingChanges = get()._pendingChanges;
-          const hasFileChanges = get().messages.some(m => m.fileChanges && m.fileChanges.length > 0);
-          if ((pendingChanges && pendingChanges.length > 0) || hasFileChanges) {
+          if (pendingChanges && pendingChanges.length > 0) {
             const liveSess = get().session;
             if (liveSess?.workspacePath) {
               set({ _pendingVerification: { workspacePath: liveSess.workspacePath, planContent: "" } });
@@ -3309,7 +3315,7 @@ export const useChat = create<ChatState>((set, get) => ({
         } else if (event.command === "completed") {
           set((s) => ({
             taskPlan: s.taskPlan
-              ? s.taskPlan.map((t) => t.status !== "completed" ? { ...t, status: "completed" as const } : t)
+              ? s.taskPlan.map((t) => t.status === "running" ? { ...t, status: "completed" as const } : t)
               : s.taskPlan,
             taskPlanSummary: event.result || "Task completed",
           }));
@@ -3609,6 +3615,17 @@ export const useChat = create<ChatState>((set, get) => ({
     const messages = sessionMessages[id] ?? [];
       const agent = sessionAgentName[id] ?? "build";
     useAgents.getState().setActiveAgent(agent);
+    // Restore task plan from the last assistant message that had one
+    let restoredTaskPlan: TaskPlanItem[] | null = null;
+    let restoredTaskPlanSummary: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === "assistant" && msg.taskPlan && msg.taskPlan.length > 0) {
+        restoredTaskPlan = msg.taskPlan;
+        restoredTaskPlanSummary = msg.taskPlanSummary ?? null;
+        break;
+      }
+    }
     // Reconstruct the AgentSession object from stored data
     const chatSession = get().chatSessions.find((cs) => cs.id === id);
     if (!chatSession || !chatSession.workspacePath) {
@@ -3650,12 +3667,13 @@ export const useChat = create<ChatState>((set, get) => ({
       restoredVersionId: null,
       planApproval: null,
       preRestoreMessages: null,
-      taskPlan: null,
-      taskPlanSummary: null,
+      taskPlan: restoredTaskPlan,
+      taskPlanSummary: restoredTaskPlanSummary,
       _sendInProgress: false,
       messageQueue: [],
       todos: [],
       _pendingChanges: [],
+      _pendingVerification: null,
       subAgents: [],
       _suppressSessionRestore: false,
       chatHistory: [],
@@ -3835,11 +3853,11 @@ export const useChat = create<ChatState>((set, get) => ({
     const { agentMode, planApproval, session } = get();
     const planContent = planApproval?.planContent ?? null;
     set({ planApproval: null });
-    // Set _pendingVerification so verification runs after plan execution
-    if (planContent && session?.workspacePath) {
-      set({ _pendingVerification: { workspacePath: session.workspacePath, planContent } });
-    }
     if (agentMode === "plan" && planContent) {
+      // Set _pendingVerification so verification runs after plan execution
+      if (session?.workspacePath) {
+        set({ _pendingVerification: { workspacePath: session.workspacePath, planContent } });
+      }
       const buildMode = "build" as import("@dalam/shared-types").AgentSessionMode;
       set({ agentMode: buildMode });
       useAgents.getState().setActiveAgent(buildMode);
@@ -3861,13 +3879,16 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   rejectPlan() {
-    const { planApproval, activeSessionId } = get();
+    const { planApproval, activeSessionId, agentMode } = get();
     if (planApproval && activeSessionId) {
       // Save the rejected plan as a version so user can go back
       get().saveVersion(activeSessionId, "Plan rejected — replan");
     }
     set({ planApproval: null });
-    // Keep user in plan mode so they can provide feedback and the AI can replan
+    // Switch back to plan mode so user can provide feedback and the AI can replan
+    if (agentMode === "build") {
+      get().setAgentMode("plan" as import("@dalam/shared-types").AgentSessionMode);
+    }
   },
 
   addPendingAttachment(file) {
@@ -3986,7 +4007,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const changeList = state._pendingChanges.length > 0
         ? state._pendingChanges
         : state.messages.flatMap(m => m.fileChanges ?? []);
-      const result = await runVerificationPipeline(criteria, changeList);
+      const result = await runVerificationPipeline(criteria, changeList, workspacePath);
       const content = [
         `## Verification Results ${result.status === "passed" ? "✅" : "❌"}`,
         `**Duration:** ${result.durationMs}ms`,
@@ -4008,9 +4029,10 @@ export const useChat = create<ChatState>((set, get) => ({
         });
         savePersistedMessages(updatedSessionsMsg);
       }
-      // If verification failed, switch back to plan mode for self-correction
-      if (result.status !== "passed") {
-        const requiredFailed = result.commandResults.some(r => !r.passed);
+      // If verification failed with required checks, switch back to plan mode for self-correction
+      // Only switch if currently in build mode and there are actual required check failures
+      if (result.status !== "passed" && get().agentMode === "build") {
+        const requiredFailed = result.commandResults.some(r => r.required && !r.passed);
         if (requiredFailed) {
           get().setAgentMode("plan" as import("@dalam/shared-types").AgentSessionMode);
           set({ planApproval: { planContent: `The previous plan needs corrections.\n\n${result.summary}\n\nPlease revise the plan and propose fixes.`, status: "pending" } });

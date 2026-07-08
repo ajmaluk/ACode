@@ -239,6 +239,7 @@ export function summarizeVerification(
 export interface VerificationResult {
   command: string;
   label: string;
+  required: boolean;
   passed: boolean;
   stdout?: string;
   stderr?: string;

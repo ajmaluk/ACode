@@ -25,54 +25,50 @@ import {
 // ─── Terminal Execution ──────────────────────────────────────
 // Simple shell executor that works in both Tauri and test environments.
 
-let _terminalCommandRunner: ((command: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>) | null = null;
+let _terminalCommandRunner: ((command: string, cwd?: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>) | null = null;
 
 /**
  * Set a custom command runner for testing environments.
- * Falls back to `runBashCommand` when in a real Tauri context.
+ * Falls back to the Tauri shell plugin when in a real Tauri context.
  */
 export function setCommandRunner(
-  runner: (command: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+  runner: (command: string, cwd?: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 ): void {
   _terminalCommandRunner = runner;
 }
 
 /**
- * Reset command runner to default (falls back to Tauri API or creates a runtime
- * executor that uses the dalamAPI system shell).
+ * Reset command runner to default (falls back to Tauri shell plugin).
  */
 export function resetCommandRunner(): void {
   _terminalCommandRunner = null;
 }
 
-async function runShellCommand(command: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+/**
+ * Run a shell command with proper working directory support.
+ * Uses @tauri-apps/plugin-shell for the real Tauri environment,
+ * falls back to child_process for test/Node.js environments.
+ */
+async function runShellCommand(command: string, cwd?: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   if (_terminalCommandRunner) {
-    return _terminalCommandRunner(command);
+    return _terminalCommandRunner(command, cwd);
   }
 
-  // Real Tauri environment: use the system shell through dalamAPI
+  // Real Tauri environment: use the shell plugin with working directory
   try {
-    // Wrap command in a shell invocation that captures exit code
-    // Use single quotes for the exit-code echo to avoid quote-escaping conflicts
-    const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`').replace(/\n/g, '\\n');
-    const wrapped = `bash -c "${escaped} 2>&1; printf '\\n__EXIT_CODE__=%d\\n' $?"`;
-    // Use a system.exec-like approach — we'll use the agent's runCommand tool
-    // which returns stdout/stderr. For now, return a promise that resolves
-    // by running the command through the available system API.
-    const { invoke } = await import("@tauri-apps/api/core");
-    const output = await invoke<string>("execute_command", { command: wrapped });
-    const lines = output.split("\n");
-    const exitCodeMatch = lines.pop()?.match(/__EXIT_CODE__=(\d+)/);
-    const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1], 10) : -1;
-    const stdout = exitCode === 0 ? output : "";
-    const stderr = exitCode !== 0 ? lines.join("\n") : "";
-    return { exitCode, stdout, stderr };
+    const { Command } = await import("@tauri-apps/plugin-shell");
+    const cmd = Command.create("bash", ["-c", command], { cwd: cwd ?? undefined });
+    const output = await cmd.execute();
+    return {
+      exitCode: output.code ?? -1,
+      stdout: output.stdout,
+      stderr: output.stderr,
+    };
   } catch {
     // Fallback for environments where Tauri is unavailable (test, web)
-    // Use raw exec if available (Node.js test environment)
     try {
       const { execSync } = await import("child_process");
-      const output = execSync(command, { encoding: "utf8", timeout: 30_000 });
+      const output = execSync(command, { encoding: "utf8", timeout: 30_000, cwd });
       return { exitCode: 0, stdout: output, stderr: "" };
     } catch (execErr: unknown) {
       const errorOutput = (execErr as { stdout?: string; stderr?: string; status?: number })?.stderr
@@ -93,11 +89,12 @@ async function runShellCommand(command: string): Promise<{ exitCode: number; std
  * Run a single verification command.
  */
 export async function runVerificationCommand(
-  vc: VerificationCommand
+  vc: VerificationCommand,
+  cwd?: string
 ): Promise<VerificationResult> {
   const startTime = Date.now();
   try {
-    const { exitCode, stdout, stderr } = await runShellCommand(vc.command);
+    const { exitCode, stdout, stderr } = await runShellCommand(vc.command, cwd);
 
     let passed = false;
     if (vc.checkType === "exit-code") {
@@ -111,6 +108,7 @@ export async function runVerificationCommand(
     return {
       command: vc.command,
       label: vc.label,
+      required: vc.required,
       passed,
       stdout,
       stderr,
@@ -121,6 +119,7 @@ export async function runVerificationCommand(
     return {
       command: vc.command,
       label: vc.label,
+      required: vc.required,
       passed: false,
       stderr: (err as Error)?.message ?? String(err),
       exitCode: -1,
@@ -185,16 +184,16 @@ export interface VerificationPipelineResult {
 export async function runVerificationPipeline(
   criteria: DoneCriteria,
   actualChanges: FileChange[],
-  _workspacePath?: string,
+  workspacePath?: string,
   readFileFn?: (path: string) => Promise<string>
 ): Promise<VerificationPipelineResult> {
   const startTime = Date.now();
 
-  // Step 2: Run verification commands
+  // Step 2: Run verification commands in the workspace directory
   const commandResults: VerificationResult[] = [];
   if (criteria.verificationCommands.length > 0) {
     const results = await Promise.all(
-      criteria.verificationCommands.map((vc) => runVerificationCommand(vc))
+      criteria.verificationCommands.map((vc) => runVerificationCommand(vc, workspacePath))
     );
     commandResults.push(...results);
   }
@@ -276,8 +275,37 @@ export async function runVerificationPipeline(
 // ─── Auto-Detection Helpers ──────────────────────────────────
 
 /**
+ * Detect project type from file extensions in the workspace.
+ * Returns a set of detected project types: "js-ts", "python", "rust", "go".
+ */
+async function detectProjectTypes(workspacePath: string): Promise<Set<string>> {
+  const types = new Set<string>();
+  try {
+    const { readDir } = await import("@tauri-apps/plugin-fs");
+    const entries = await readDir(workspacePath);
+    for (const entry of entries.slice(0, 200)) {
+      const name = entry.name || "";
+      if (name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js") || name.endsWith(".jsx") || name.endsWith(".mjs") || name.endsWith(".cjs")) {
+        types.add("js-ts");
+      } else if (name.endsWith(".py") || name.endsWith(".pyi")) {
+        types.add("python");
+      } else if (name.endsWith(".rs")) {
+        types.add("rust");
+      } else if (name.endsWith(".go")) {
+        types.add("go");
+      }
+      if (name === "package.json" || name === "tsconfig.json" || name === "jsconfig.json") types.add("js-ts");
+      if (name === "pyproject.toml" || name === "setup.py" || name === "requirements.txt" || name === "Pipfile") types.add("python");
+      if (name === "Cargo.toml") types.add("rust");
+      if (name === "go.mod") types.add("go");
+    }
+  } catch { /* ignore read errors */ }
+  return types;
+}
+
+/**
  * Auto-detect verification commands from a project config.
- * Parses package.json scripts to find typecheck, lint, test, build.
+ * Detects project type from both config files and source file extensions.
  */
 export async function detectCommandsFromWorkspace(
   workspacePath?: string
@@ -286,68 +314,65 @@ export async function detectCommandsFromWorkspace(
 
   const api = await import("@/lib/dalamAPI").then(m => m.createDalamAPI());
   const allCommands: VerificationCommand[] = [];
+  const detectedTypes = await detectProjectTypes(workspacePath);
 
   // JavaScript/TypeScript (package.json)
-  try {
-    const pkgJsonPath = `${workspacePath}/package.json`;
-    const content = await api.fs.readFile(pkgJsonPath);
-    const pkg = JSON.parse(content);
-    const { detectVerificationCommands } = await import("./doneCriteria");
-    allCommands.push(...detectVerificationCommands({
-      scripts: pkg.scripts || {},
-      devDependencies: pkg.devDependencies || {},
-      dependencies: pkg.dependencies || {},
-    }));
-  } catch { /* not a JS project */ }
+  if (detectedTypes.has("js-ts")) {
+    try {
+      const pkgJsonPath = `${workspacePath}/package.json`;
+      const content = await api.fs.readFile(pkgJsonPath);
+      const pkg = JSON.parse(content);
+      const { detectVerificationCommands } = await import("./doneCriteria");
+      allCommands.push(...detectVerificationCommands({
+        scripts: pkg.scripts || {},
+        devDependencies: pkg.devDependencies || {},
+        dependencies: pkg.dependencies || {},
+      }));
+    } catch { /* package.json not readable */ }
+  }
 
   // Rust (Cargo.toml)
-  try {
-    await api.fs.readFile(`${workspacePath}/Cargo.toml`);
-    allCommands.push(
-      { command: "cargo check", label: "Rust check", required: true, checkType: "exit-code" },
-      { command: "cargo test", label: "Rust tests", required: false, checkType: "exit-code" },
-      { command: "cargo clippy", label: "Rust lint", required: false, checkType: "exit-code" },
-    );
-  } catch { /* not a Rust project */ }
-
-  // Python (pyproject.toml or setup.py)
-  try {
-    await api.fs.readFile(`${workspacePath}/pyproject.toml`);
-    allCommands.push(
-      { command: "mypy .", label: "Python type check", required: false, checkType: "exit-code" },
-      { command: "ruff check .", label: "Python lint", required: false, checkType: "exit-code" },
-      { command: "pytest", label: "Python tests", required: false, checkType: "exit-code" },
-    );
-  } catch {
+  if (detectedTypes.has("rust")) {
     try {
-      await api.fs.readFile(`${workspacePath}/setup.py`);
+      await api.fs.readFile(`${workspacePath}/Cargo.toml`);
       allCommands.push(
-        { command: "mypy .", label: "Python type check", required: false, checkType: "exit-code" },
-        { command: "ruff check .", label: "Python lint", required: false, checkType: "exit-code" },
-        { command: "pytest", label: "Python tests", required: false, checkType: "exit-code" },
+        { command: "cargo check", label: "Rust check", required: true, checkType: "exit-code" },
+        { command: "cargo test", label: "Rust tests", required: false, checkType: "exit-code" },
+        { command: "cargo clippy", label: "Rust lint", required: false, checkType: "exit-code" },
       );
-    } catch { /* not a Python project */ }
+    } catch { /* not a Rust project */ }
+  }
+
+  // Python (.py files detected)
+  if (detectedTypes.has("python")) {
+    allCommands.push(
+      { command: "python3 -c \"import py_compile; import glob; [py_compile.compile(f, doraise=True) for f in glob.glob('**/*.py', recursive=True)[:20]]\"", label: "Python syntax check", required: false, checkType: "exit-code" },
+    );
   }
 
   // Go (go.mod)
-  try {
-    await api.fs.readFile(`${workspacePath}/go.mod`);
-    allCommands.push(
-      { command: "go build ./...", label: "Go build", required: true, checkType: "exit-code" },
-      { command: "go test ./...", label: "Go tests", required: false, checkType: "exit-code" },
-      { command: "go vet ./...", label: "Go vet", required: false, checkType: "exit-code" },
-    );
-  } catch { /* not a Go project */ }
+  if (detectedTypes.has("go")) {
+    try {
+      await api.fs.readFile(`${workspacePath}/go.mod`);
+      allCommands.push(
+        { command: "go build ./...", label: "Go build", required: true, checkType: "exit-code" },
+        { command: "go test ./...", label: "Go tests", required: false, checkType: "exit-code" },
+        { command: "go vet ./...", label: "Go vet", required: false, checkType: "exit-code" },
+      );
+    } catch { /* not a Go project */ }
+  }
 
-  // Monorepo (turbo.json)
-  try {
-    await api.fs.readFile(`${workspacePath}/turbo.json`);
-    allCommands.push(
-      { command: "turbo build", label: "Monorepo build", required: true, checkType: "exit-code" },
-      { command: "turbo lint", label: "Monorepo lint", required: false, checkType: "exit-code" },
-      { command: "turbo test", label: "Monorepo tests", required: false, checkType: "exit-code" },
-    );
-  } catch { /* not a monorepo */ }
+  // Monorepo (turbo.json) — only if no language-specific commands found
+  if (allCommands.length === 0) {
+    try {
+      await api.fs.readFile(`${workspacePath}/turbo.json`);
+      allCommands.push(
+        { command: "turbo build", label: "Monorepo build", required: true, checkType: "exit-code" },
+        { command: "turbo lint", label: "Monorepo lint", required: false, checkType: "exit-code" },
+        { command: "turbo test", label: "Monorepo tests", required: false, checkType: "exit-code" },
+      );
+    } catch { /* not a monorepo */ }
+  }
 
   return allCommands;
 }
@@ -363,9 +388,24 @@ export async function buildDefaultCriteria(
   const { buildDoneCriteria } = await import("./doneCriteria");
   const commands = await detectCommandsFromWorkspace(workspacePath);
 
+  // Build checklist based on what commands were detected
+  const checklist: string[] = [];
+  if (commands.some(c => c.label.includes("type check") || c.label.includes("check"))) {
+    checklist.push("Changes compile without errors");
+  }
+  if (commands.some(c => c.label.includes("test"))) {
+    checklist.push("All tests pass");
+  }
+  if (commands.some(c => c.label.includes("lint"))) {
+    checklist.push("Code passes linting");
+  }
+  if (checklist.length === 0) {
+    checklist.push("Changes are correct");
+  }
+
   return buildDoneCriteria({
     verificationCommands: commands,
-    checklist: ["Changes compile without errors", "All tests pass"],
+    checklist,
     ...overrides,
   });
 }

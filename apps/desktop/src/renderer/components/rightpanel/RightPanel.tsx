@@ -139,56 +139,112 @@ function DiffTab() {
     void (async () => {
       if (cancelled) return;
       setLoading(true);
-      const api = createDalamAPI();
       try {
-        const { Command } = await import("@tauri-apps/plugin-shell");
         const wsPath = useWorkspace.getState().workspaces.find(
           (w) => w.id === useWorkspace.getState().activeWorkspaceId
         )?.path ?? "";
-        const relPath = wsPath && current.path.startsWith(wsPath)
-          ? current.path.slice(wsPath.length + 1)
-          : current.path;
 
-        if (current.action === "deleted") {
-          // File is deleted — read original from git HEAD
-          setModifiedContent("");
-          if (wsPath && relPath) {
-            try {
-              const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
-              const result = await cmd.execute();
-              if (!cancelled) setOriginalContent(result.stdout ?? "");
-            } catch {
-              if (!cancelled) setOriginalContent("");
-            }
-          } else {
-            if (!cancelled) setOriginalContent("");
+        // Strategy 1: Check if there's a DiffProposal attached to a pending tool call for this file
+        const chatState = useChat.getState();
+        let proposalOldContent: string | null = null;
+        let proposalNewContent: string | null = null;
+
+        // Search pending tool calls for a matching diff proposal
+        for (const tc of chatState.pendingToolCalls) {
+          if (tc.diff && tc.diff.filePath === current.path) {
+            proposalOldContent = tc.diff.oldContent;
+            proposalNewContent = tc.diff.newContent;
+            break;
           }
-        } else if (current.action === "created") {
-          // New file — no original content
-          setOriginalContent("");
-          const currentContent = await api.fs.readFile(current.path);
-          if (!cancelled) setModifiedContent(currentContent);
+        }
+
+        // Also search messages for tool calls with diff proposals
+        if (proposalOldContent === null) {
+          for (let i = chatState.messages.length - 1; i >= 0; i--) {
+            const msg = chatState.messages[i];
+            if (!msg.toolCalls) continue;
+            for (const tc of msg.toolCalls) {
+              if (tc.diff && tc.diff.filePath === current.path) {
+                proposalOldContent = tc.diff.oldContent;
+                proposalNewContent = tc.diff.newContent;
+                break;
+              }
+            }
+            if (proposalOldContent !== null) break;
+          }
+        }
+
+        if (cancelled) return;
+
+        if (proposalOldContent !== null && proposalNewContent !== null) {
+          // Use content directly from the DiffProposal — no disk read needed
+          setOriginalContent(proposalOldContent);
+          setModifiedContent(proposalNewContent);
         } else {
-          // Modified file — read current and original from git
-          const currentContent = await api.fs.readFile(current.path);
-          if (cancelled) return;
-          setModifiedContent(currentContent);
-          if (wsPath && relPath) {
-            try {
-              const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
-              const result = await cmd.execute();
-              if (!cancelled) setOriginalContent(result.stdout ?? "");
-            } catch {
+          // Strategy 2: Read from disk (for git-status opened files, not diff proposals)
+          const api = createDalamAPI();
+          const { Command } = await import("@tauri-apps/plugin-shell");
+
+          // Resolve relative paths to absolute for readFile
+          const absPath = wsPath && !current.path.startsWith("/") && !current.path.startsWith("C:")
+            ? `${wsPath}/${current.path}`
+            : current.path;
+
+          const relPath = wsPath && current.path.startsWith(wsPath)
+            ? current.path.slice(wsPath.length + 1)
+            : current.path;
+
+          if (current.action === "deleted") {
+            // File is deleted — read original from git HEAD
+            setModifiedContent("");
+            if (wsPath && relPath) {
+              try {
+                const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+                const result = await cmd.execute();
+                if (!cancelled) setOriginalContent(result.stdout ?? "");
+              } catch {
+                if (!cancelled) setOriginalContent("");
+              }
+            } else {
               if (!cancelled) setOriginalContent("");
             }
+          } else if (current.action === "created") {
+            // New file — no original content
+            setOriginalContent("");
+            try {
+              const currentContent = await api.fs.readFile(absPath);
+              if (!cancelled) setModifiedContent(currentContent);
+            } catch {
+              if (!cancelled) setModifiedContent("// New file — unable to read from disk");
+            }
           } else {
-            if (!cancelled) setOriginalContent("");
+            // Modified file — read current and original from git
+            try {
+              const currentContent = await api.fs.readFile(absPath);
+              if (cancelled) return;
+              setModifiedContent(currentContent);
+            } catch {
+              if (!cancelled) setModifiedContent("// Unable to load file");
+            }
+            if (wsPath && relPath) {
+              try {
+                const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+                const result = await cmd.execute();
+                if (!cancelled) setOriginalContent(result.stdout ?? "");
+              } catch {
+                if (!cancelled) setOriginalContent("");
+              }
+            } else {
+              if (!cancelled) setOriginalContent("");
+            }
           }
         }
       } catch {
         if (cancelled) return;
-        setModifiedContent("// Unable to load file");
-        setOriginalContent("// Unable to load file");
+        // Only set error state for modified files — CREATED files keep empty original
+        if (current.action !== "created") {
+          setModifiedContent("// Unable to load file");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -588,11 +644,22 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
   const [showAllAdded, setShowAllAdded] = useState(false);
   const [showAllDeleted, setShowAllDeleted] = useState(false);
   const [showAllUntracked, setShowAllUntracked] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const toast = useToast();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const ws = workspaces.find((w) => w.id === activeWorkspaceId);
 
   const hasChanges = status && (status.modified.length > 0 || status.added.length > 0 || status.deleted.length > 0 || status.untracked.length > 0);
+  const totalChanges = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0) + (status?.untracked.length ?? 0);
+
+  const toggleSection = (section: string) => {
+    setCollapsedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
+  };
 
   const handleCommit = useCallback(async () => {
     if (!commitMsg.trim()) { toast.error("Empty", "Commit message is required"); return; }
@@ -679,7 +746,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           <div className="p-3 border-b border-dalam-border-primary bg-dalam-bg-secondary/20">
             <textarea
               className="w-full bg-dalam-bg-tertiary border border-dalam-border-primary rounded-lg px-3 py-2 text-xs font-mono text-dalam-text-primary placeholder:text-dalam-text-muted resize-none outline-none focus:border-dalam-accent-primary transition-colors min-h-[56px]"
-              placeholder="Commit message"
+              placeholder="Commit message (Ctrl+Enter to commit)"
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
               onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); handleCommit(); } }}
@@ -692,62 +759,83 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
             >
               <GitCommitHorizontal className="w-3.5 h-3.5" />
               Commit
+              <span className="text-[9px] opacity-60 ml-1">({totalChanges})</span>
             </button>
           </div>
 
           {/* File changes */}
           <div className="py-1">
             {(status.modified?.length ?? 0) > 0 && (
-              <div>
-                <SectionHeader label="Modified" count={status.modified.length} color="text-dalam-git-modified" />
+              <GitSection
+                label="Modified"
+                count={status.modified.length}
+                collapsed={collapsedSections.has("modified")}
+                onToggle={() => toggleSection("modified")}
+                color="text-dalam-git-modified"
+              >
                 {(showAllModified ? status.modified : status.modified.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="modified" icon={<FileCode className="w-3 h-3 text-dalam-git-modified" />} />
+                  <FileRow key={f} path={f} action="modified" icon="M" iconColor="text-dalam-git-modified" />
                 ))}
                 {status.modified.length > 20 && !showAllModified && (
                   <button onClick={() => setShowAllModified(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
                     Show all {status.modified.length} files
                   </button>
                 )}
-              </div>
+              </GitSection>
             )}
             {(status.added?.length ?? 0) > 0 && (
-              <div>
-                <SectionHeader label="Added" count={status.added.length} color="text-dalam-git-added" />
+              <GitSection
+                label="Added"
+                count={status.added.length}
+                collapsed={collapsedSections.has("added")}
+                onToggle={() => toggleSection("added")}
+                color="text-dalam-git-added"
+              >
                 {(showAllAdded ? status.added : status.added.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-git-added" />} />
+                  <FileRow key={f} path={f} action="created" icon="A" iconColor="text-dalam-git-added" />
                 ))}
                 {status.added.length > 20 && !showAllAdded && (
                   <button onClick={() => setShowAllAdded(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
                     Show all {status.added.length} files
                   </button>
                 )}
-              </div>
+              </GitSection>
             )}
             {(status.deleted?.length ?? 0) > 0 && (
-              <div>
-                <SectionHeader label="Deleted" count={status.deleted.length} color="text-dalam-git-deleted" />
+              <GitSection
+                label="Deleted"
+                count={status.deleted.length}
+                collapsed={collapsedSections.has("deleted")}
+                onToggle={() => toggleSection("deleted")}
+                color="text-dalam-git-deleted"
+              >
                 {(showAllDeleted ? status.deleted : status.deleted.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="deleted" icon={<X className="w-3 h-3 text-dalam-git-deleted" />} />
+                  <FileRow key={f} path={f} action="deleted" icon="D" iconColor="text-dalam-git-deleted" />
                 ))}
                 {status.deleted.length > 20 && !showAllDeleted && (
                   <button onClick={() => setShowAllDeleted(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
                     Show all {status.deleted.length} files
                   </button>
                 )}
-              </div>
+              </GitSection>
             )}
             {(status.untracked?.length ?? 0) > 0 && (
-              <div>
-                <SectionHeader label="Untracked" count={status.untracked.length} color="text-dalam-text-muted" />
+              <GitSection
+                label="Untracked"
+                count={status.untracked.length}
+                collapsed={collapsedSections.has("untracked")}
+                onToggle={() => toggleSection("untracked")}
+                color="text-dalam-text-muted"
+              >
                 {(showAllUntracked ? status.untracked : status.untracked.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="created" icon={<Plus className="w-3 h-3 text-dalam-text-muted" />} />
+                  <FileRow key={f} path={f} action="created" icon="?" iconColor="text-dalam-text-muted" />
                 ))}
                 {status.untracked.length > 20 && !showAllUntracked && (
                   <button onClick={() => setShowAllUntracked(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
                     Show all {status.untracked.length} files
                   </button>
                 )}
-              </div>
+              </GitSection>
             )}
           </div>
         </>
@@ -764,16 +852,25 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
   );
 }
 
-function SectionHeader({ label, count, color }: { label: string; count: number; color: string }) {
+function GitSection({ label, count, collapsed, onToggle, color, children }: { label: string; count: number; collapsed: boolean; onToggle: () => void; color: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted">
-      <span className={color}>{count}</span>
-      <span>{label}</span>
+    <div>
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted hover:bg-dalam-bg-hover transition-colors"
+      >
+        <svg className={`w-2.5 h-2.5 transition-transform ${collapsed ? "" : "rotate-90"}`} viewBox="0 0 12 12" fill="currentColor">
+          <path d="M4.5 2L9.5 6L4.5 10V2Z" />
+        </svg>
+        <span className={color}>{count}</span>
+        <span>{label}</span>
+      </button>
+      {!collapsed && children}
     </div>
   );
 }
 
-function FileRow({ path, icon, action = "modified" }: { path: string; icon: React.ReactNode; action?: "created" | "modified" | "deleted" | "renamed" }) {
+function FileRow({ path, icon, iconColor, action = "modified" }: { path: string; icon: string; iconColor: string; action?: "created" | "modified" | "deleted" | "renamed" }) {
   const openDiff = useDiffView((s) => s.openFile);
   const fileName = path.split("/").pop() ?? path;
   const dir = path.split("/").slice(0, -1).join("/");
@@ -782,10 +879,10 @@ function FileRow({ path, icon, action = "modified" }: { path: string; icon: Reac
     openDiff({ path, action, additions: 0, deletions: 0 });
   };
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-dalam-bg-hover transition-colors group" onClick={handleOpenDiff}>
-      <span className="flex-shrink-0">{icon}</span>
+    <div className="flex items-center gap-2 px-3 py-1 hover:bg-dalam-bg-hover transition-colors group cursor-pointer" onClick={handleOpenDiff}>
+      <span className={`w-4 h-4 flex items-center justify-center text-[9px] font-bold flex-shrink-0 ${iconColor}`}>{icon}</span>
       <div className="flex-1 min-w-0">
-        <div className="text-xs text-dalam-text-primary truncate">{fileName}</div>
+        <div className="text-xs text-dalam-text-primary truncate font-mono">{fileName}</div>
         {dir && <div className="text-[9px] text-dalam-text-muted/60 truncate">{dir}</div>}
       </div>
       <button className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-dalam-text-muted hover:text-dalam-text-primary" title="Open diff" onClick={handleOpenDiff}><Eye className="w-3 h-3" /></button>

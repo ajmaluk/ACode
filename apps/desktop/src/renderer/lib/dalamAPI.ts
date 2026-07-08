@@ -2109,7 +2109,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             type: "file-changed",
             change: {
               path: pending.filePath,
-              action: "modified",
+              action: pending.oldContent === "" ? "created" : "modified",
               additions: pending.hunks.reduce((n, h) => n + h.newLines, 0),
               deletions: pending.hunks.reduce((n, h) => n + h.oldLines, 0),
             },
@@ -3225,16 +3225,22 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
     // Otherwise create diff proposal for user approval
     const diffId = "diff-" + crypto.randomUUID();
-    const oldLines = oldContent.split("\n");
-    const newLinesArr = newContent.split("\n");
+    // Use proper Myers diff algorithm instead of crude all-removes-then-adds
+    const { computeDiff } = await import("./diff");
+    const computed = computeDiff(oldContent, newContent);
     const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
-    for (const line of oldLines) {
-      diffLines.push({ type: "remove", content: line });
+    for (const hunk of computed.hunks) {
+      for (const line of hunk.lines) {
+        if (line.type === "remove") {
+          diffLines.push({ type: "remove", content: line.content });
+        } else if (line.type === "add") {
+          diffLines.push({ type: "add", content: line.content });
+        }
+      }
     }
-    for (const line of newLinesArr) {
-      diffLines.push({ type: "add", content: line });
-    }
-    const hunks = [{ oldStart: 1, oldLines: oldLines.length, newStart: 1, newLines: newLinesArr.length, lines: diffLines }];
+    const hunks = computed.hunks.length > 0
+      ? computed.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: diffLines }))
+      : [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: newContent.split("\n").length, lines: newContent.split("\n").map(l => ({ type: "add" as const, content: l })) }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });
@@ -3322,15 +3328,23 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
     // Otherwise create diff proposal for user approval
     const diffId = "diff-" + crypto.randomUUID();
+    // Use proper Myers diff algorithm instead of crude all-removes-then-adds
+    const { computeDiff: computeDiffEdit } = await import("./diff");
+    const computedEdit = computeDiffEdit(original, updated);
     const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
-    for (const line of oldLines) {
-      diffLines.push({ type: "remove", content: line });
-    }
-    for (const line of newLines) {
-      diffLines.push({ type: "add", content: line });
+    for (const hunk of computedEdit.hunks) {
+      for (const line of hunk.lines) {
+        if (line.type === "remove") {
+          diffLines.push({ type: "remove", content: line.content });
+        } else if (line.type === "add") {
+          diffLines.push({ type: "add", content: line.content });
+        }
+      }
     }
     const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
-    const hunks = [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
+    const hunks = computedEdit.hunks.length > 0
+      ? computedEdit.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: diffLines }))
+      : [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });

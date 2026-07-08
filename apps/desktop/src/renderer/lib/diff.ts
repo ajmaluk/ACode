@@ -347,6 +347,41 @@ export function computeDiff(
     return { hunks: [], additions: 0, deletions: 0 };
   }
 
+  // Handle empty old text — all lines are additions
+  if (oldText === "") {
+    const newLines = newText.split("\n");
+    if (newLines.length === 0 || (newLines.length === 1 && newLines[0] === "")) {
+      return { hunks: [], additions: 0, deletions: 0 };
+    }
+    const diffLines: ComputedDiffLine[] = newLines.map((content, i) => ({
+      type: "add" as const,
+      content,
+      oldLineNum: null,
+      newLineNum: i + 1,
+    }));
+    return {
+      hunks: [{ oldStart: 1, oldCount: 0, newStart: 1, newCount: newLines.length, lines: diffLines }],
+      additions: newLines.length,
+      deletions: 0,
+    };
+  }
+
+  // Handle empty new text — all lines are deletions
+  if (newText === "") {
+    const oldLines = oldText.split("\n");
+    const diffLines: ComputedDiffLine[] = oldLines.map((content, i) => ({
+      type: "remove" as const,
+      content,
+      oldLineNum: i + 1,
+      newLineNum: null,
+    }));
+    return {
+      hunks: [{ oldStart: 1, oldCount: oldLines.length, newStart: 1, newCount: 0, lines: diffLines }],
+      additions: 0,
+      deletions: oldLines.length,
+    };
+  }
+
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
 
