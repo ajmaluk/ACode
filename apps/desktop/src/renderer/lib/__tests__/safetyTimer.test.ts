@@ -163,7 +163,7 @@ describe("safetyTimer", () => {
     it("resets streaming state and adds system message on timeout", () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const { get } = createDefaultState();
-      let lastSetCall: Record<string, unknown> = {};
+      const lastSetCall: Record<string, unknown> = {};
 
       resetSafetyTimer(get, (partial) => {
         Object.assign(lastSetCall, partial);
@@ -241,7 +241,7 @@ describe("safetyTimer", () => {
     it("clears pending tool calls and activities on timeout", () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const { get } = createDefaultState();
-      let capturedSet: Record<string, unknown> = {};
+      const capturedSet: Record<string, unknown> = {};
 
       resetSafetyTimer(get, (partial) => {
         Object.assign(capturedSet, partial);

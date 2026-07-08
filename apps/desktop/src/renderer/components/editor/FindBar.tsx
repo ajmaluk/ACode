@@ -17,12 +17,10 @@ export function FindBar({ onSearch, onReplace, onReplaceAll, onClose, matchCount
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
   const [useRegex, setUseRegex] = useState(false);
-  const [showReplaceState, setShowReplace] = useState(showReplace ?? false);
+  const [showReplaceLocal, setShowReplace] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (showReplace !== undefined) setShowReplace(showReplace);
-  }, [showReplace]);
+  // Use prop when provided, otherwise use local toggle state
+  const showReplaceState = showReplace !== undefined ? showReplace : showReplaceLocal;
 
   useEffect(() => {
     inputRef.current?.focus();

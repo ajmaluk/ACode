@@ -16,6 +16,31 @@ import {
   Info, MessageSquare,
 } from "lucide-react";
 
+function parseShellArgs(input: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let inQuote: string | null = null;
+  let escape = false;
+  for (const ch of input) {
+    if (escape) { current += ch; escape = false; continue; }
+    if (ch === "\\" && inQuote === "\"") { escape = true; continue; }
+    if (ch === "\\" && inQuote === "'") { current += ch; continue; }
+    if (ch === "\"" || ch === "'") {
+      if (inQuote === ch) { inQuote = null; }
+      else if (!inQuote) { inQuote = ch; }
+      else { current += ch; }
+      continue;
+    }
+    if (ch === " " && !inQuote) {
+      if (current) { args.push(current); current = ""; }
+      continue;
+    }
+    current += ch;
+  }
+  if (current) args.push(current);
+  return args;
+}
+
 const MCP_PRESETS = [
   { name: "Filesystem", description: "Read, write, and manage files on your system", command: "npx", args: "-y @modelcontextprotocol/server-filesystem /path/to/allowed/dir", icon: FolderOpen },
   { name: "Memory", description: "Persistent knowledge graph memory for the agent", command: "npx", args: "-y @modelcontextprotocol/server-memory", icon: Database },
@@ -916,7 +941,7 @@ function McpTab() {
 
   const onAdd = () => {
     if (!name.trim()) { toast({ kind: "warning", title: "Name required" }); return; }
-    const args = argsText.split(/\s+/).filter(Boolean);
+    const args = parseShellArgs(argsText);
     const env: Record<string, string> = {};
     envEntries.forEach((e) => { if (e.key.trim()) env[e.key.trim()] = e.value; });
     addMcpServer({

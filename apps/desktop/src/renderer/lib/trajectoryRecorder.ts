@@ -508,9 +508,11 @@ if (typeof window !== "undefined") {
         // Read existing + append new, fire-and-forget
         api.fs.readFile(filePath).then(existing => {
           return api.fs.writeFile(filePath, existing + newLines);
-        }).catch(() => {
+        }).catch((_err) => {
           // File may not exist yet — try write-only
-          api.fs.writeFile(filePath, newLines).catch(() => {});
+          api.fs.writeFile(filePath, newLines).catch((writeErr) => {
+            console.warn("[trajectory] Failed to flush trajectory on unload:", writeErr);
+          });
         });
         buffer.turns = [];
       }

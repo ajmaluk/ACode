@@ -110,11 +110,12 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
   const pendingDataRef = useRef<string>("");
   useEffect(() => {
     activeRef.current = active;
-    // When tab becomes active, flush any buffered data
+    // When tab becomes active, flush any buffered data and focus
     if (active && pendingDataRef.current) {
       const term = terminalsMapRef.current.get(tabId);
       if (term) {
         term.write(pendingDataRef.current);
+        term.focus();
       }
       pendingDataRef.current = "";
     }
@@ -148,6 +149,7 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
 
     setTimeout(() => {
       fit.fit();
+      if (active) term.focus();
     }, 50);
 
     const api = createDalamAPI();
@@ -164,6 +166,11 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
         }
         procIdRef.current = procId;
         procIdsRef.current.set(tabId, procId);
+
+        // Focus terminal after shell process is ready
+        if (active) {
+          term.focus();
+        }
 
         unsubData = api.terminal.onData(procId, (data) => {
           if (isCleanedUp) return;
@@ -261,12 +268,28 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
     if (active) {
       const t = setTimeout(() => {
         fitAddonRef.current?.fit();
-      }, 50);
+        const term = terminalsMapRef.current.get(tabId);
+        if (term) term.focus();
+      }, 100);
       return () => clearTimeout(t);
     }
-  }, [active]);
+  }, [active, tabId, terminalsMapRef]);
 
-  return <div ref={containerRef} className="w-full h-full" />;
+  return (
+    <div
+      ref={containerRef}
+      className="w-full h-full terminal-container"
+      tabIndex={0}
+      onClick={() => {
+        const term = terminalsMapRef.current.get(tabId);
+        if (term) term.focus();
+      }}
+      onFocus={() => {
+        const term = terminalsMapRef.current.get(tabId);
+        if (term) term.focus();
+      }}
+    />
+  );
 }
 
 export function TerminalPanel() {

@@ -131,6 +131,8 @@ async function ensureDB(): Promise<IDBDatabase> {
 
 /**
  * Read a blob from IndexedDB.
+ * Returns null for both "not found" and errors (backward compatible).
+ * Logs warnings for actual errors to aid debugging.
  */
 export async function idbGet(storeName: ObjectStoreName, key: string): Promise<unknown> {
   try {
@@ -140,10 +142,13 @@ export async function idbGet(storeName: ObjectStoreName, key: string): Promise<u
       const store = tx.objectStore(storeName);
       const request = store.get(key);
       request.onsuccess = () => resolve(request.result ?? null);
-      request.onerror = () => resolve(null);
+      request.onerror = () => {
+        console.warn(`[IndexedDB] Error reading key "${key}" from ${storeName}:`, request.error);
+        resolve(null);
+      };
     });
   } catch (err) {
-    console.warn("[Storage] IndexedDB read failed:", err);
+    console.warn(`[Storage] IndexedDB read failed for ${storeName}/${key}:`, err);
     return null;
   }
 }

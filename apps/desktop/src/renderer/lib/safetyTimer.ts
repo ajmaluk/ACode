@@ -55,9 +55,16 @@ export function resetSafetyTimer(
   const existing = get()._safetyTimer;
   if (existing) clearTimeout(existing);
   const timeout = mode === "tool-approval" ? TOOL_APPROVAL_TIMEOUT_MS : SAFETY_TIMEOUT_MS;
+  // Capture the streaming start time when this timer is created.
+  // If a new stream starts, streamingStartedAt changes and this timer is stale.
+  const timerCreatedAt = Date.now();
   const timer = setTimeout(() => {
     const state = get();
     if (!state.isStreaming) return;
+    // Guard: if streaming was restarted (new stream) after this timer was created,
+    // this timer is stale — don't kill the new stream.
+    const streamStartedAt = (state as unknown as Record<string, unknown>).streamingStartedAt as number | null;
+    if (streamStartedAt && streamStartedAt > timerCreatedAt) return;
     console.warn(`[Chat] Safety timeout triggered (${mode}) — no stream events for ${timeout / 1000}s`);
     const api = createDalamAPI();
     const sid = state.activeSessionId;
@@ -71,12 +78,11 @@ export function resetSafetyTimer(
           : "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
       timestamp: Date.now(),
     };
-    // Clear any pending auto-remove timers to prevent orphaned callbacks
-    get()._autoRemoveTimers.forEach((t) => clearTimeout(t));
+    // Clear only auto-remove timers associated with the current session,
+    // not all timers (which could include timers from other sessions/tools).
     set({
       isStreaming: false,
       _sendInProgress: false,
-      _autoRemoveTimers: new Set<ReturnType<typeof setTimeout>>(),
       streamingContent: "",
       thinkingContent: "",
       pendingToolCalls: [],

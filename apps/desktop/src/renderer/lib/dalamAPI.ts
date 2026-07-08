@@ -42,6 +42,8 @@ const sessionRateLimitErrors = new Map<string, number>();
 // Persistent stdio connections for MCP servers. Avoids spawning a new
 // process per tool call — instead, connections are reused and cleaned
 // up after 30 minutes of inactivity.
+// Mutex to prevent parallel connection creation for the same server
+const _mcpStdioMutexes = new Map<string, Promise<McpStdioConnection | null>>();
 interface McpStdioConnection {
   cmd: unknown; // Tauri Command instance
   child: { write(input: string): Promise<void>; kill(): Promise<void> };
@@ -1084,7 +1086,7 @@ const dalamAPI: DalamAPI = {
                   break;
                 }
                 const schema = tool.inputSchema ? JSON.stringify(tool.inputSchema).slice(0, 300) : "{}";
-                mcpToolsDocumentation += `- <mcp_${server.name}_${tool.name}/>: ${tool.description?.slice(0, 150) || "No description"}\n`;
+                mcpToolsDocumentation += `- <mcp_${server.name}_${tool.name}/>: ${tool.description?.slice(0, 150) || "No description"}\n  Args: ${schema}\n`;
               }
             }
           }
@@ -2438,15 +2440,6 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
   }
   return toolCalls;
 }
-
-
-// Pre-compiled regex patterns for parseToolCalls
-const ATTRCapture = '((?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\')\\s*)*';
-const ATTRSelfClose = ATTRCapture + '\\s*\\/?>';
-// ATTRClose was unused — removed
-
-// Capture content between opening and closing tags (non-self-closing tags)
-const ATTRFull = ATTRCapture + '\\s*>([\\s\\S]*?)<\\/\\s*';
 
 // All tool regex patterns pre-compiled at module level (compiled once, reused per call)
 // Fixed: Use proper key="value" attribute patterns instead of broken ATTRSelfClose
@@ -4174,29 +4167,70 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             conn.pendingRequests.delete(reqIdStr);
             reject(err);
           });
-          // Timeout after 30s
-          setTimeout(() => {
+          // Timeout after 30s — clear on resolution to prevent stale timer
+          const timeoutId = setTimeout(() => {
             if (conn.pendingRequests.has(reqIdStr)) {
               conn.pendingRequests.delete(reqIdStr);
               reject(new Error("Timeout waiting for tools/call response (30s)"));
             }
           }, 30000);
+          // Wrap resolve/reject to clear timeout on settlement
+          const originalPending = conn.pendingRequests.get(reqIdStr);
+          if (originalPending) {
+            conn.pendingRequests.set(reqIdStr, {
+              resolve: (v) => { clearTimeout(timeoutId); originalPending.resolve(v); },
+              reject: (e) => { clearTimeout(timeoutId); originalPending.reject(e); },
+            });
+          }
         });
         return await resultPromise;
       }
 
-      // ── No existing connection — create a new one ──
-      try {
+      // ── No existing connection — create a new one (with mutex) ──
+      // Check if another call is already creating a connection for this server
+      const existingMutex = _mcpStdioMutexes.get(serverName);
+      if (existingMutex) {
+        const conn = await existingMutex;
+        if (conn) {
+          // Another call created the connection — use it
+          conn.lastUsed = Date.now();
+          const reqId = ++conn.requestIdCounter;
+          const reqIdStr = String(reqId);
+          const resultPromise = new Promise<string>((resolve, reject) => {
+            conn.pendingRequests.set(reqIdStr, { resolve: resolve as (value: unknown) => void, reject });
+            const req = JSON.stringify({
+              jsonrpc: "2.0",
+              method: "tools/call",
+              params: { name: toolName, arguments: mcpArgs },
+              id: reqId,
+            }) + "\n";
+            conn.child.write(req).catch((err) => {
+              conn.pendingRequests.delete(reqIdStr);
+              reject(err);
+            });
+            setTimeout(() => {
+              if (conn.pendingRequests.has(reqIdStr)) {
+                conn.pendingRequests.delete(reqIdStr);
+                reject(new Error("Timeout waiting for tools/call response (30s)"));
+              }
+            }, 30000);
+          });
+          return await resultPromise;
+        }
+      }
+
+      // No mutex — we are the creator
+      const connectionPromise = (async (): Promise<McpStdioConnection | null> => {
+        try {
         const { Command } = await import("@tauri-apps/plugin-shell");
         const cmd = Command.create(command, server.args ?? [], { env: server.env });
 
-        const resultPromise = new Promise<string>((resolve, reject) => {
+        const connRecord = await new Promise<McpStdioConnection>((resolve, reject) => {
           let outputBuffer = "";
           let resolved = false;
           let childProc: Awaited<ReturnType<typeof cmd.spawn>> | null = null;
           let jsonBuffer = "";
           let bracesDepth = 0;
-                    // Create the connection record now so we can register it immediately
           const connRecord: McpStdioConnection = {
             cmd,
             child: null as unknown as McpStdioConnection["child"],
@@ -4216,7 +4250,6 @@ async function executeToolInner(name: string, args: Record<string, string>, work
               const trimmed = line.trim();
               if (!trimmed) continue;
 
-              // Accumulate JSON across multiple lines by tracking brace depth
               jsonBuffer += (jsonBuffer ? "\n" : "") + trimmed;
               if (jsonBuffer.startsWith("{")) {
                 for (const ch of trimmed) {
@@ -4230,7 +4263,6 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                   jsonBuffer = "";
                   bracesDepth = 0;
 
-                  // Check if this is a response to a pending request
                   if (parsed.id !== undefined && connRecord.pendingRequests.size > 0) {
                     const pendingId = String(parsed.id);
                     const pending = connRecord.pendingRequests.get(pendingId);
@@ -4252,11 +4284,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                     if (parsed.error) {
                       reject(new Error(parsed.error.message || JSON.stringify(parsed.error)));
                     } else if (!parsed || typeof parsed !== "object" || (!("result" in parsed) && !("content" in parsed))) {
-                      resolve(`[MCP Error: Invalid response format from server "${serverName}"]`);
+                      resolve(connRecord); // Still resolve so cleanup happens
                     } else {
-                      const content = parsed.result?.content || parsed.content || [];
-                      const text = content.map((c: AnthropicContentBlock) => c.text || JSON.stringify(c)).join("\n");
-                      resolve(text);
+                      resolve(connRecord);
                     }
                     return;
                   }
@@ -4281,7 +4311,6 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                 write: (input: string) => childProc!.write(input),
                 kill: () => childProc!.kill(),
               };
-              // Register in pool before sending requests
               _mcpStdioConnections.set(serverName, connRecord);
 
               const initReq = JSON.stringify({
@@ -4293,16 +4322,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
               await childProc.write(initReq);
               const initNotif = JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) + "\n";
               await childProc.write(initNotif);
-              // Mark as initialized after handshake
               connRecord.initialized = true;
-
-              const req = JSON.stringify({
-                jsonrpc: "2.0",
-                method: "tools/call",
-                params: { name: toolName, arguments: mcpArgs },
-                id: 2,
-              }) + "\n";
-              await childProc.write(req);
+              resolve(connRecord);
             } catch (spawnErr) {
               _mcpStdioConnections.delete(serverName);
               if (!resolved) {
@@ -4323,12 +4344,41 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           }, 30000);
         });
 
-        return await resultPromise;
-      } catch (err) {
+        return connRecord;
+      } catch {
         _mcpStdioConnections.delete(serverName);
-        const errMsg = (err as Error)?.message ?? String(err);
-        throw new Error(`MCP tool "${toolName}" on server "${serverName}" failed: ${errMsg}`, { cause: err });
+        return null;
+      } finally {
+        _mcpStdioMutexes.delete(serverName);
       }
+      })(); // end connectionPromise
+      _mcpStdioMutexes.set(serverName, connectionPromise);
+      const conn = await connectionPromise;
+      if (!conn) throw new Error(`Failed to connect to MCP server "${serverName}"`);
+      // Send tool call on the newly created connection
+      conn.lastUsed = Date.now();
+      const reqId = ++conn.requestIdCounter;
+      const reqIdStr = String(reqId);
+      const resultPromise = new Promise<string>((resolve, reject) => {
+        conn.pendingRequests.set(reqIdStr, { resolve: resolve as (value: unknown) => void, reject });
+        const req = JSON.stringify({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: { name: toolName, arguments: mcpArgs },
+          id: reqId,
+        }) + "\n";
+        conn.child.write(req).catch((err) => {
+          conn.pendingRequests.delete(reqIdStr);
+          reject(err);
+        });
+        setTimeout(() => {
+          if (conn.pendingRequests.has(reqIdStr)) {
+            conn.pendingRequests.delete(reqIdStr);
+            reject(new Error("Timeout waiting for tools/call response (30s)"));
+          }
+        }, 30000);
+      });
+      return await resultPromise;
     }
   }
 
@@ -4386,26 +4436,24 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
   if (name === "set_right_panel_tab") {
     const tab = args.tab as string;
-    const validTabs = ["git", "diff", "review", "browser", "progress"];
-    if (!validTabs.includes(tab)) {
+    const validTabs = ["git", "diff", "review", "browser", "progress"] as const;
+    if (!validTabs.includes(tab as typeof validTabs[number])) {
       return `Error: Invalid panel tab "${tab}". Valid tabs: ${validTabs.join(", ")}.`;
     }
     const { useUI } = await import("../store/useAppStore");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    useUI.getState().setRightPanelTab(tab as any);
+    useUI.getState().setRightPanelTab(tab as typeof validTabs[number]);
     useUI.getState().setRightPanelOpen(true);
     return `Right panel switched to "${tab}" tab.`;
   }
 
   if (name === "set_bottom_panel_tab") {
     const tab = args.tab as string;
-    const validTabs = ["terminal", "output", "problems"];
-    if (!validTabs.includes(tab)) {
+    const validTabs = ["terminal", "output", "problems"] as const;
+    if (!validTabs.includes(tab as typeof validTabs[number])) {
       return `Error: Invalid bottom panel tab "${tab}". Valid tabs: ${validTabs.join(", ")}.`;
     }
     const { useUI } = await import("../store/useAppStore");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    useUI.getState().setBottomPanelTab(tab as any);
+    useUI.getState().setBottomPanelTab(tab as typeof validTabs[number]);
     useUI.getState().setBottomPanelOpen(true);
     return `Bottom panel switched to "${tab}" tab.`;
   }
@@ -4413,8 +4461,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
   if (name === "new_terminal") {
     const { useTerminal, useChat, useWorkspace } = await import("../store/useAppStore");
     const cwd = args.cwd || useChat.getState().session?.workspacePath || useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId)?.path || ".";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const shell = args.shell as any || "bash";
+    const validShells = ["bash", "zsh", "fish", "powershell", "cmd"] as const;
+    const rawShell = (args.shell as string) || "bash";
+    const shell = validShells.includes(rawShell as typeof validShells[number]) ? rawShell as typeof validShells[number] : "bash";
     useTerminal.getState().addTab(cwd, shell);
     return `Opened new ${shell} terminal in ${cwd}.`;
   }

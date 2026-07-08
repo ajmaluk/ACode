@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import React, { useMemo, lazy, Suspense } from "react";
+import React, { useMemo, Suspense } from "react";
 import {
   FileText, Copy, RotateCcw, Info,
 } from "lucide-react";

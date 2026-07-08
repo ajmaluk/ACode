@@ -33,7 +33,9 @@ export async function proposeSkillFromSession(sessionId: string, workspacePath: 
   const messages: ChatMessage[] = store.sessionMessages[sessionId] || [];
   
   // Count tool outputs to estimate complexity
-  const toolsExecuted = messages.filter((m: ChatMessage) => m.role === "user" && (m.content.startsWith("[TOOL RESULT") || m.content.startsWith("[TOOL ERROR"))).length;
+  const toolsExecuted = messages.filter((m: ChatMessage) =>
+    m.role === "tool" || (m.role === "user" && (m.content.startsWith("[TOOL RESULT") || m.content.startsWith("[TOOL ERROR")))
+  ).length;
 
   // Gatekeeper: only crystallize if complex or manually forced
   if (!force && toolsExecuted < 5) {

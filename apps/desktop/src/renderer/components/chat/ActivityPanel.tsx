@@ -5,7 +5,7 @@ import {
   X, FileCode, FilePlus,
   ChevronDown, Loader2,
   FileText, GitBranch, Terminal, Search, FolderOpen,
-  Check, Zap, Code2, ClipboardList, Brain,
+  Check, Zap, Code2, ClipboardList,
   Database, HelpCircle, Globe, Layout,
 } from "lucide-react";
 import { useChat } from "@/store/useAppStore";

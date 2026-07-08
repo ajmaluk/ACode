@@ -210,7 +210,6 @@ export async function runVerificationPipeline(
   const requiredFailures = commandResults.filter(r => r.required && !r.passed).length;
   const requiredPassed = commandResults.filter(r => r.required && r.passed).length;
   const totalRequired = commandResults.filter(r => r.required).length;
-  const allFailed = requiredFailures > 0 || unmetFileChanges.length > 0;
 
   let status: "passed" | "failed" | "partial";
   if (totalRequired > 0) {

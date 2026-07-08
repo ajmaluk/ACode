@@ -3,9 +3,6 @@ import { hookBus } from "./hookBus";
 import type {
   PostToolUseEvent,
   SessionStartEvent,
-  UserPromptSubmitEvent,
-  StopEvent,
-  SessionEndEvent,
 } from "./hookBus";
 
 // Mock heavy dependencies that hookListeners imports

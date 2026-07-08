@@ -3,7 +3,7 @@
  * Tests streaming API, XML tool call parsing, and task management.
  */
 
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
 // Tests that DON'T need the NVIDIA API (no network calls)
 describe("XML Tool Call Parsing", () => {
@@ -47,8 +47,8 @@ describe("XML Tool Call Parsing", () => {
   it("parses edit_file with search/replace content", async () => {
     const { parseXmlToolCalls } = await import("@/store/useAppStore");
     const content = `<edit_file path="/src/hello.ts">
-<search>const greeting = \"Hello\";</search>
-<replace>const greeting = \"Hi\";</replace>
+<search>const greeting = "Hello";</search>
+<replace>const greeting = "Hi";</replace>
 </edit_file>`;
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);

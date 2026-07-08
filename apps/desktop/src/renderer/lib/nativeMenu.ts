@@ -161,6 +161,13 @@ export async function setupNativeMenus(): Promise<void> {
           accelerator: "CmdOrCtrl+Shift+E",
           action: () => emitMenuAction("view.editor-mode"),
         }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({
+          id: "view.toggle-devtools",
+          text: "Toggle Developer Tools",
+          accelerator: "CmdOrCtrl+Shift+I",
+          action: () => emitMenuAction("view.toggle-devtools"),
+        }),
       ],
     });
 

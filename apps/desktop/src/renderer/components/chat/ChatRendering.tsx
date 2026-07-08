@@ -54,7 +54,13 @@ function LinkComponent({ href, children, ...props }: React.AnchorHTMLAttributes<
       const u = new URL(href);
       const safe = u.protocol === "http:" || u.protocol === "https:";
       return { isExternal: safe, safeHref: safe ? u.href : "#" };
-    } catch { return { isExternal: false, safeHref: href }; }
+    } catch {
+      // Invalid URL — check for javascript: or other dangerous protocols
+      if (/^\s*javascript:/i.test(href) || /^\s*data:/i.test(href) || /^\s*vbscript:/i.test(href)) {
+        return { isExternal: false, safeHref: "#" };
+      }
+      return { isExternal: false, safeHref: href };
+    }
   })();
 
   return (
@@ -182,7 +188,7 @@ export const CodeBlock = React.memo(function CodeBlock({ language, content }: { 
     const currentTab = openTabs.find((t) => t.path === activeFilePath);
     const hasExistingContent = currentTab && currentTab.content.trim().length > 0;
     if (hasExistingContent) {
-      let shouldOverwrite = true;
+      let shouldOverwrite;
       try {
         const { confirm } = await import("@tauri-apps/plugin-dialog");
         shouldOverwrite = await confirm(

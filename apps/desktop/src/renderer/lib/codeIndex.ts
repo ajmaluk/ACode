@@ -18,6 +18,14 @@
 import { getDb, isDatabaseReady } from "./database";
 import { joinPath } from "@/lib/pathUtils";
 
+function hashString(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
 // ─── Constants ───────────────────────────────────────────────
 const EXCLUDED_DIRS = new Set([
   ".git", "node_modules", "__pycache__", ".next", ".nuxt",
@@ -159,7 +167,7 @@ export async function indexWorkspace(
           : fullPath;
 
         const language = detectLanguage(relativePath);
-        const id = `code-${relativePath.replace(/[^a-zA-Z0-9]/g, "-")}`;
+        const id = `code-${hashString(relativePath)}`;
 
         // Upsert: delete old entry, insert new
         await db.execute("DELETE FROM code_index WHERE file_path = ?", [relativePath]);

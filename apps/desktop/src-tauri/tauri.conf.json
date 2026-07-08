@@ -20,7 +20,8 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "label": "main"
+        "label": "main",
+        "devtools": true
       }
     ],
     "security": {

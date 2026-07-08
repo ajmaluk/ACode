@@ -1,8 +1,11 @@
 /**
- * Change Stack — tracks file changes for undo support.
+ * Change Stack — tracks file changes for undo support (session-scoped).
  *
  * Records before/after content for editFile and writeFile operations,
  * allowing the `/undo` command to revert the last change.
+ *
+ * Each session has its own isolated undo stack to prevent cross-session
+ * interference when the user switches between chat sessions.
  */
 
 export interface ChangeRecord {
@@ -14,22 +17,38 @@ export interface ChangeRecord {
   messageId: string;
 }
 
-// Limit stack size to prevent unbounded memory growth
-const MAX_CHANGES = 50;
-const changeStack: ChangeRecord[] = [];
+// Limit stack size per session to prevent unbounded memory growth
+const MAX_CHANGES_PER_SESSION = 50;
+// Session-scoped stacks: sessionId → ChangeRecord[]
+const sessionStacks = new Map<string, ChangeRecord[]>();
+// Fallback for calls without a session ID (backward compatibility)
+const fallbackStack: ChangeRecord[] = [];
+
+function getStack(sessionId?: string): ChangeRecord[] {
+  if (sessionId) {
+    let stack = sessionStacks.get(sessionId);
+    if (!stack) {
+      stack = [];
+      sessionStacks.set(sessionId, stack);
+    }
+    return stack;
+  }
+  return fallbackStack;
+}
 
 /**
  * Record a file change for potential undo.
  */
-export function recordChange(change: Omit<ChangeRecord, "timestamp">): void {
+export function recordChange(change: Omit<ChangeRecord, "timestamp">, sessionId?: string): void {
+  const stack = getStack(sessionId);
   const entry: ChangeRecord = {
     ...change,
     timestamp: Date.now(),
   };
-  changeStack.push(entry);
+  stack.push(entry);
   // Cap stack size
-  if (changeStack.length > MAX_CHANGES) {
-    changeStack.shift();
+  if (stack.length > MAX_CHANGES_PER_SESSION) {
+    stack.shift();
   }
 }
 
@@ -37,29 +56,35 @@ export function recordChange(change: Omit<ChangeRecord, "timestamp">): void {
  * Pop the last change from the stack.
  * Returns null if stack is empty.
  */
-export function popChange(): ChangeRecord | null {
-  return changeStack.length > 0 ? changeStack.pop()! : null;
+export function popChange(sessionId?: string): ChangeRecord | null {
+  const stack = getStack(sessionId);
+  return stack.length > 0 ? stack.pop()! : null;
 }
 
 /**
  * Peek at the last change without removing it.
  */
-export function peekChange(): ChangeRecord | null {
-  return changeStack.length > 0 ? changeStack[changeStack.length - 1] : null;
+export function peekChange(sessionId?: string): ChangeRecord | null {
+  const stack = getStack(sessionId);
+  return stack.length > 0 ? stack[stack.length - 1] : null;
 }
 
 /**
- * Clear all changes (e.g., on session start).
+ * Clear all changes for a session (e.g., on session end).
  */
-export function clearChanges(): void {
-  changeStack.length = 0;
+export function clearChanges(sessionId?: string): void {
+  if (sessionId) {
+    sessionStacks.delete(sessionId);
+  } else {
+    fallbackStack.length = 0;
+  }
 }
 
 /**
  * Get current stack size (for UI indicator).
  */
-export function getChangeStackSize(): number {
-  return changeStack.length;
+export function getChangeStackSize(sessionId?: string): number {
+  return getStack(sessionId).length;
 }
 
 /**
@@ -67,8 +92,8 @@ export function getChangeStackSize(): number {
  * Writes the beforeContent back to the file and removes the record.
  * Returns a description of what was undone, or null if stack is empty.
  */
-export async function applyUndo(): Promise<{ filePath: string; restoredContent: string } | null> {
-  const change = popChange();
+export async function applyUndo(sessionId?: string): Promise<{ filePath: string; restoredContent: string } | null> {
+  const change = popChange(sessionId);
   if (!change) return null;
 
   try {
@@ -80,13 +105,13 @@ export async function applyUndo(): Promise<{ filePath: string; restoredContent: 
     };
   } catch (err) {
     // If the file write fails, push the change back so it isn't lost
-    // Use push directly to preserve the original timestamp and ordering
+    const stack = getStack(sessionId);
     const msg = (err as Error)?.message ?? String(err);
     console.warn(`[ChangeStack] Failed to undo ${change.filePath}: ${msg}`);
-    changeStack.push(change);
+    stack.push(change);
     // Cap stack size
-    if (changeStack.length > MAX_CHANGES) {
-      changeStack.shift();
+    if (stack.length > MAX_CHANGES_PER_SESSION) {
+      stack.shift();
     }
     return null;
   }

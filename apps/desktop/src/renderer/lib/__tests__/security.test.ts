@@ -153,7 +153,7 @@ describe("validateMcpUrl", () => {
 describe("audit logging", () => {
   beforeEach(() => {
     // Clear audit log by getting and ignoring old entries
-    const oldLog = getAuditLog();
+    getAuditLog();
     // Can't actually clear it, but we can work with what we have
   });
 

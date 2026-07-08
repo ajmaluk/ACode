@@ -650,8 +650,8 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const ws = workspaces.find((w) => w.id === activeWorkspaceId);
 
-  const hasChanges = status && (status.modified.length > 0 || status.added.length > 0 || status.deleted.length > 0 || status.untracked.length > 0);
-  const totalChanges = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0) + (status?.untracked.length ?? 0);
+  const hasChanges = status && ((status.modified?.length ?? 0) > 0 || (status.added?.length ?? 0) > 0 || (status.deleted?.length ?? 0) > 0 || (status.untracked?.length ?? 0) > 0);
+  const totalChanges = (status?.modified?.length ?? 0) + (status?.added?.length ?? 0) + (status?.deleted?.length ?? 0) + (status?.untracked?.length ?? 0);
 
   const toggleSection = (section: string) => {
     setCollapsedSections(prev => {
@@ -703,7 +703,7 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           {ws && (
             <button
               onClick={async () => {
-                let confirmed = false;
+                let confirmed;
                 try {
                   const { confirm } = await import("@tauri-apps/plugin-dialog");
                   confirmed = await confirm("Initialize a new Git repository in this folder?", { title: "Initialize Git?", kind: "warning" });
@@ -924,7 +924,7 @@ function BrowserTab() {
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       // Validate origin to prevent messages from external pages
-      if (e.origin !== window.location.origin && e.origin !== "null") return;
+      if (e.origin !== window.location.origin) return;
       if (e.data?.type === "dalam-navigate" && e.data?.url) {
         const tab = useUI.getState().browserTabs.find(t => t.id === activeTab?.id);
         if (tab) {

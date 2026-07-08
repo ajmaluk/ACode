@@ -222,51 +222,54 @@ function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: numb
 
   // For larger segments, split into chunks and diff each with Myers
   const CHUNK_SIZE = 500;
+
+  function lcsChunkDiff(oldChunk: string[], newChunk: string[], baseOldIdx: number, baseNewIdx: number): DiffOp[] {
+    const cn = oldChunk.length;
+    const cm = newChunk.length;
+    const dp: number[][] = Array.from({ length: cn + 1 }, () => new Array(cm + 1).fill(0));
+    for (let i = 1; i <= cn; i++) {
+      for (let j = 1; j <= cm; j++) {
+        dp[i][j] = oldChunk[i - 1] === newChunk[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+    const chunkOps: DiffOp[] = [];
+    let i = cn, j = cm;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldChunk[i - 1] === newChunk[j - 1]) {
+        chunkOps.push({ type: "keep", oldIdx: i - 1 + baseOldIdx, newIdx: j - 1 + baseNewIdx });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        chunkOps.push({ type: "insert", newIdx: j - 1 + baseNewIdx });
+        j--;
+      } else {
+        chunkOps.push({ type: "delete", oldIdx: i - 1 + baseOldIdx });
+        i--;
+      }
+    }
+    return chunkOps.reverse();
+  }
+
   const ops: DiffOp[] = [];
   let oldPos = 0;
   let newPos = 0;
   while (oldPos < n || newPos < m) {
     const oldChunk = oldLines.slice(oldPos, oldPos + CHUNK_SIZE);
     const newChunk = newLines.slice(newPos, newPos + CHUNK_SIZE);
-    // Simple LCS-based diff for this chunk
     const cn = oldChunk.length;
     const cm = newChunk.length;
     if (cn + cm <= 200) {
-      // Very small chunk — direct O(mn)
-      const dp: number[][] = Array.from({ length: cn + 1 }, () => new Array(cm + 1).fill(0));
-      for (let i = 1; i <= cn; i++) {
-        for (let j = 1; j <= cm; j++) {
-          dp[i][j] = oldChunk[i - 1] === newChunk[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-        }
-      }
-      let i = cn, j = cm;
-      const chunkOps: DiffOp[] = [];
-      while (i > 0 || j > 0) {
-        if (i > 0 && j > 0 && oldChunk[i - 1] === newChunk[j - 1]) {
-          chunkOps.push({ type: "keep", oldIdx: i - 1 + oldPos + oldOffset, newIdx: j - 1 + newPos + newOffset });
-          i--; j--;
-        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-          chunkOps.push({ type: "insert", newIdx: j - 1 + newPos + newOffset });
-          j--;
-        } else {
-          chunkOps.push({ type: "delete", oldIdx: i - 1 + oldPos + oldOffset });
-          i--;
-        }
-      }
-      ops.push(...chunkOps.reverse());
+      ops.push(...lcsChunkDiff(oldChunk, newChunk, oldPos + oldOffset, newPos + newOffset));
     } else {
-      // Larger chunk — fall back to line-by-line within this chunk
+      // Larger chunk — split into segments and diff each correctly
+      const SEGMENT_SIZE = 100;
       const maxChunkLen = Math.max(cn, cm);
-      for (let k = 0; k < maxChunkLen; k++) {
-        if (k < cn && k < cm && oldChunk[k] === newChunk[k]) {
-          ops.push({ type: "keep", oldIdx: k + oldPos + oldOffset, newIdx: k + newPos + newOffset });
-        } else {
-          if (k < cn) ops.push({ type: "delete", oldIdx: k + oldPos + oldOffset });
-          if (k < cm) ops.push({ type: "insert", newIdx: k + newPos + newOffset });
-        }
+      for (let segStart = 0; segStart < maxChunkLen; segStart += SEGMENT_SIZE) {
+        const segEnd = Math.min(segStart + SEGMENT_SIZE, maxChunkLen);
+        const oldSeg = oldChunk.slice(segStart, segEnd);
+        const newSeg = newChunk.slice(segStart, segEnd);
+        ops.push(...lcsChunkDiff(oldSeg, newSeg, oldPos + oldOffset + segStart, newPos + newOffset + segStart));
       }
     }
-    // Advance positions by the actual chunk sizes consumed
     oldPos += cn;
     newPos += cm;
   }

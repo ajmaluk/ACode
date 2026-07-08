@@ -917,51 +917,6 @@ function savePersistedMessagesImmediate(messages: MessagesMap) {
   _doSavePersistedMessages(messages);
 }
 
-function truncateToolResults(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>): Record<string, import("@dalam/shared-types").ChatMessage[]> {
-  const result: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
-  for (const [sessionId, msgs] of Object.entries(messages)) {
-    result[sessionId] = msgs.map(m => {
-      if (m.toolCalls && m.toolCalls.length > 0) {
-        return { ...m, toolCalls: m.toolCalls.map(tc => ({ ...tc, result: tc.result ? tc.result.slice(0, 500) : undefined })) };
-      }
-      return m;
-    });
-  }
-  return result;
-}
-
-function trimOldMessages(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>): Record<string, import("@dalam/shared-types").ChatMessage[]> {
-  const result: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
-  const sessionIds = Object.keys(messages);
-  for (const sessionId of sessionIds) {
-    const msgs = messages[sessionId];
-    const cutoff = msgs.length > 20 ? msgs.length - 20 : 0;
-    result[sessionId] = msgs.map((m, i) => {
-      if (i < cutoff && m.content && m.content.length > 2000) {
-        return { ...m, content: m.content.slice(0, 2000) + "\n... [trimmed for storage]" };
-      }
-      return m;
-    });
-  }
-  return result;
-}
-
-function dropOldestSessions(messages: Record<string, import("@dalam/shared-types").ChatMessage[]>, keepCount: number): Record<string, import("@dalam/shared-types").ChatMessage[]> {
-  const entries = Object.entries(messages);
-  if (entries.length <= keepCount) return messages;
-  // Keep the most recent sessions (by last message timestamp)
-  const sorted = entries.sort((a, b) => {
-    const aLast = a[1][a[1].length - 1]?.timestamp ?? 0;
-    const bLast = b[1][b[1].length - 1]?.timestamp ?? 0;
-    return bLast - aLast;
-  });
-  const result: Record<string, import("@dalam/shared-types").ChatMessage[]> = {};
-  for (const [id, msgs] of sorted.slice(0, keepCount)) {
-    result[id] = msgs;
-  }
-  return result;
-}
-
 function loadPersistedAgents(): Record<string, PrimaryAgentName> {
   try {
     const raw = localStorage.getItem(SESSION_AGENTS_KEY);
@@ -4215,8 +4170,6 @@ export const useChat = create<ChatState>((set, get) => ({
         const liveMessages = get().sessionMessages[sessionId] ?? messages;
         const { toCompact } = selectMessagesForCompaction(liveMessages, 6);
         if (toCompact.length > 0) {
-          // Build index set for efficient lookup against live messages
-          const toCompactIndices = new Set(toCompact.map(m => liveMessages.indexOf(m)));
           // Only prune tool outputs in the messages being compacted (preserve full outputs in kept messages)
           // Use freshStats (post Tier 1) instead of stale stats for accurate pruning decision
           const prunedToCompact = freshStats.shouldPrune
@@ -4232,31 +4185,37 @@ export const useChat = create<ChatState>((set, get) => ({
           const model = selectedModelId || useSettings.getState().settings.selectedModel;
           const summary = await api.agent.summarizeMessages(model, compactionMessages);
           if (summary) {
-            // Replace compacted messages with summary + kept messages (from live messages)
-            const toKeep = liveMessages.filter((_, i) => !toCompactIndices.has(i));
-            const summaryMsg: ChatMessage = {
-              id: "compact-" + crypto.randomUUID(),
-              role: "system",
-              content: `[Conversation summary]\n${summary}`,
-              timestamp: Date.now(),
-            };
-            const compacted = [summaryMsg, ...toKeep];
             _compactionTier[sessionId] = 2;
             set((s) => {
+              // Re-read LIVE messages inside updater to avoid losing messages
+              // that arrived during the LLM summarize call (async gap).
+              const currentMessages = s.sessionMessages[sessionId] ?? liveMessages;
+              const currentIndices = new Set(toCompact.map(m => currentMessages.indexOf(m)).filter(i => i >= 0));
+              const toKeepNow = currentMessages.filter((_, i) => !currentIndices.has(i));
+              const summaryMsg: ChatMessage = {
+                id: "compact-" + crypto.randomUUID(),
+                role: "system",
+                content: `[Conversation summary]\n${summary}`,
+                timestamp: Date.now(),
+              };
+              const compactedNow = [summaryMsg, ...toKeepNow];
               const nextSummaries = { ...s.compactionSummaries, [sessionId]: summary };
-              const nextMessages = { ...s.sessionMessages, [sessionId]: compacted };
+              const nextMessages = { ...s.sessionMessages, [sessionId]: compactedNow };
               const isActiveSession = s.activeSessionId === sessionId;
               return {
                 compactionSummaries: nextSummaries,
                 sessionMessages: nextMessages,
-                ...(isActiveSession ? { messages: compacted } : {}),
+                ...(isActiveSession ? { messages: compactedNow } : {}),
               };
             });
             savePersistedCompactionSummaries(get().compactionSummaries);
             savePersistedMessages(get().sessionMessages);
 
             // Anti-thrashing: track savings (Hermes ineffective compression detection)
-            const savingsPercent = ((liveMessages.length - compacted.length) / liveMessages.length) * 100;
+            const postCompactionMessages = get().sessionMessages[sessionId] ?? [];
+            const savingsPercent = liveMessages.length > 0
+              ? ((liveMessages.length - postCompactionMessages.length) / liveMessages.length) * 100
+              : 0;
             if (savingsPercent < COMPACTION_MIN_SAVINGS_PERCENT) {
               // Ineffective — mark with negative count and record skip timestamp
               _lastCompactionCounts[sessionId] = -liveMessages.length;
@@ -4264,7 +4223,7 @@ export const useChat = create<ChatState>((set, get) => ({
               console.warn(`[Compaction] Anti-thrashing: savings ${savingsPercent.toFixed(1)}% < ${COMPACTION_MIN_SAVINGS_PERCENT}% threshold. Skipping for ${ANTI_THRASH_SKIP_MS / 1000}s.`);
             } else {
               // Effective — record positive count
-              _lastCompactionCounts[sessionId] = compacted.length;
+              _lastCompactionCounts[sessionId] = postCompactionMessages.length;
               delete _antiThrashTimestamps[sessionId]; // Clear skip timestamp on success
             }
           }
@@ -4560,6 +4519,7 @@ type TerminalState = {
 
 // Persist terminal state keyed by session ID (proper Map, not single cache)
 const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
+const MAX_TERMINAL_CACHE_SIZE = 20;
 
 export const useTerminal = create<TerminalState>((set, get) => ({
   tabs: [] as TerminalTab[],
@@ -4588,8 +4548,9 @@ export const useTerminal = create<TerminalState>((set, get) => ({
       const remaining = s.tabs.filter((t) => t.id !== id);
       const newActive =
         s.activeTabId === id ? remaining[0]?.id ?? null : s.activeTabId;
-      const { [id]: _removed, ...rest } = s.output;
-      return { tabs: remaining, activeTabId: newActive, output: rest };
+      const { [id]: _removedOutput, ...restOutput } = s.output;
+      const { [id]: _removedPending, ...restPending } = s.pendingCommands;
+      return { tabs: remaining, activeTabId: newActive, output: restOutput, pendingCommands: restPending };
     });
   },
   setActiveTab(id) {
@@ -4621,6 +4582,11 @@ export const useTerminal = create<TerminalState>((set, get) => ({
   },
   saveForSession(sessionId) {
     const { tabs, activeTabId } = get();
+    // Evict oldest entries if at cap
+    if (_terminalStateCache.size >= MAX_TERMINAL_CACHE_SIZE && !_terminalStateCache.has(sessionId)) {
+      const firstKey = _terminalStateCache.keys().next().value;
+      if (firstKey !== undefined) _terminalStateCache.delete(firstKey);
+    }
     _terminalStateCache.set(sessionId, { tabs: tabs as TerminalTab[], activeTabId });
   },
   restoreForSession(sessionId) {
@@ -5089,21 +5055,6 @@ const DEFAULT_PROVIDERS: ModelProvider[] = [
     ],
   },
   {
-    id: "groq",
-    name: "Groq",
-    type: "built-in",
-    enabled: false,
-    baseUrl: "https://api.groq.com/openai/v1",
-    apiKey: "",
-    apiFormat: "openai",
-    models: [
-      { name: "Llama 3.3 70B", modelId: "llama-3.3-70b-versatile", contextWindow: "128k" },
-      { name: "Llama 3.1 8B", modelId: "llama-3.1-8b-instant", contextWindow: "128k" },
-      { name: "Gemma 2 9B", modelId: "gemma2-9b-it", contextWindow: "8k" },
-      { name: "Mixtral 8x7B", modelId: "mixtral-8x7b-32768", contextWindow: "32k" },
-    ],
-  },
-  {
     id: "nvidia",
     name: "NVIDIA NIM",
     type: "built-in",
@@ -5435,8 +5386,16 @@ export const useUI = create<UIState>((set, get) => ({
           title: deriveTitleFromUrl(truncated),
           history: isSameUrl
             ? t.history
-            : [...t.history.slice(0, t.historyIdx + 1), truncated],
-          historyIdx: isSameUrl ? t.historyIdx : t.historyIdx + 1,
+            : (() => {
+                const newHistory = [...t.history.slice(0, t.historyIdx + 1), truncated];
+                // Cap history at 100 entries to prevent unbounded growth
+                const MAX_BROWSER_HISTORY = 100;
+                if (newHistory.length > MAX_BROWSER_HISTORY) {
+                  return newHistory.slice(newHistory.length - MAX_BROWSER_HISTORY);
+                }
+                return newHistory;
+              })(),
+          historyIdx: isSameUrl ? t.historyIdx : Math.min(t.historyIdx + 1, 99),
           loading: false,
         };
       }),

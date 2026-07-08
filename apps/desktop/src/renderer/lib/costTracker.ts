@@ -34,6 +34,7 @@ const DEFAULT_PRICING: Record<string, { input: number; output: number }> = {
 const _pricing = { ...DEFAULT_PRICING };
 
 const _sessionCosts = new Map<string, SessionCost>();
+const MAX_SESSION_COSTS = 50; // Cap to prevent unbounded memory growth
 
 function getEmptyCost(): SessionCost {
   return { totalInputTokens: 0, totalOutputTokens: 0, totalCostUsd: 0, byModel: {} };
@@ -56,6 +57,11 @@ export function recordTokenUsage(sessionId: string, modelId: string, usage: Toke
   let cost = _sessionCosts.get(sessionId);
   if (!cost) {
     cost = getEmptyCost();
+    // Evict oldest entries if at cap
+    if (_sessionCosts.size >= MAX_SESSION_COSTS) {
+      const firstKey = _sessionCosts.keys().next().value;
+      if (firstKey !== undefined) _sessionCosts.delete(firstKey);
+    }
     _sessionCosts.set(sessionId, cost);
   }
 

@@ -7,16 +7,12 @@
  * - code: code generation, refactoring, testing
  */
 
+import type { ModelProfile } from "@dalam/shared-types";
+
 export type TaskComplexity = "simple" | "code" | "complex";
 
-export interface ModelProfile {
-  id: string;
-  name: string;
-  providerId: string;
-  modelId: string;
-  useFor: TaskComplexity[];
-  enabled: boolean;
-}
+// Re-export for backward compatibility
+export type { ModelProfile };
 
 /** Keywords that indicate simple tasks (quick questions, formatting, etc.) */
 const SIMPLE_KEYWORDS = [

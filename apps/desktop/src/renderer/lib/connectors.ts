@@ -823,11 +823,11 @@ export async function saveConnectorConfig(
   }
   saveConnectorConfigs(configs);
 
-  // Stop the existing connector if running
+  // Stop and remove the existing connector atomically
   const connector = connectors.get(config.id);
   if (connector) {
-    try { await connector.stop(); } catch { /* ignore */ }
     connectors.delete(config.id);
+    try { await connector.stop(); } catch { /* ignore */ }
   }
 
   // Re-initialize if enabled and callbacks are provided

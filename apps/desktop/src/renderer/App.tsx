@@ -228,6 +228,24 @@ export function App() {
         case "view.editor-mode":
           ui.setViewMode("editor");
           break;
+        case "view.toggle-devtools":
+          void (async () => {
+            try {
+              const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+              const appWindow = await getCurrentWebviewWindow();
+              if (appWindow) {
+                const webview = appWindow as any;
+                if (webview.isDevtoolsOpen && await webview.isDevtoolsOpen()) {
+                  await webview.closeDevtools();
+                } else if (webview.openDevtools) {
+                  await webview.openDevtools();
+                }
+              }
+            } catch (err) {
+              if (import.meta.env.DEV) console.error("Failed to toggle devtools:", err);
+            }
+          })();
+          break;
 
         // Go
         case "go.quick-open":

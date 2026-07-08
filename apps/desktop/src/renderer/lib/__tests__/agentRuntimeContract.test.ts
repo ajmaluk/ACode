@@ -19,7 +19,6 @@ import {
   getPendingApprovalCount,
   getPendingExecutionCount,
   type AgentRuntimeState,
-  type AgentEvent,
 } from "../agentRuntimeContract";
 
 function emptyState(): AgentRuntimeState {
