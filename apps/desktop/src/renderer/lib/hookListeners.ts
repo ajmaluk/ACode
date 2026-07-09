@@ -176,7 +176,7 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
     const { useChat, useWorkspace } = await import("../store/useAppStore");
     const { extractMemoriesFromExchange, extractMemoriesWithLLM, saveMemory } = await import("./memoryStore");
 
-    const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
+    const sessionMessages = useChat.getState().sessionMessages?.[event.sessionId];
     if (!sessionMessages || sessionMessages.length < 2) return;
 
     // Find the last user message
@@ -302,7 +302,7 @@ async function triggerSkillCrystallization(event: SessionEndEvent): Promise<void
 async function runGeneReflection(event: SessionEndEvent): Promise<void> {
   try {
     const { useChat } = await import("../store/useAppStore");
-    const messages = useChat.getState().sessionMessages[event.sessionId] || [];
+    const messages = useChat.getState().sessionMessages?.[event.sessionId] || [];
     if (messages.length < 4) return;
 
     const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId, migrateLocalStorageGenes } = await import("./genes");
@@ -432,7 +432,7 @@ function generateSessionTitle(firstUserMessage: string): string {
 async function autoGenerateSessionTitle(event: SessionEndEvent): Promise<void> {
   try {
     const { useChat } = await import("../store/useAppStore");
-    const messages = useChat.getState().sessionMessages[event.sessionId];
+    const messages = useChat.getState().sessionMessages?.[event.sessionId];
     if (!messages || messages.length < 2) return;
 
     // Find the first user message
@@ -474,7 +474,7 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
     const { useChat, useWorkspace } = await import("../store/useAppStore");
     const { extractMemoriesFromExchange, saveMemory } = await import("./memoryStore");
 
-    const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
+    const sessionMessages = useChat.getState().sessionMessages?.[event.sessionId];
     if (!sessionMessages || sessionMessages.length < 4) return;
 
     // Get the last user-assistant exchange
@@ -518,7 +518,7 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
       );
     }
   } catch (e) {
-    console.warn("[ContextPressure] Failed to auto-save memories:", e);
+    if (e instanceof Error && e.name !== "EnvironmentTeardownError") console.warn("[ContextPressure] Failed to auto-save memories:", e);
   }
 }
 

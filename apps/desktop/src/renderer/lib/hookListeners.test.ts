@@ -16,7 +16,7 @@ vi.mock("./dalamAPI", () => ({
 }));
 
 vi.mock("../store/useAppStore", () => ({
-  useChat: { getState: vi.fn(() => ({ activeSessionId: null })) },
+  useChat: { getState: vi.fn(() => ({ activeSessionId: null, chatSessions: [], sessionMessages: {} })) },
   useWorkspace: { getState: vi.fn(() => ({ workspaces: [], activeWorkspaceId: null })) },
   useSettings: { getState: vi.fn(() => ({ settings: {} })) },
 }));

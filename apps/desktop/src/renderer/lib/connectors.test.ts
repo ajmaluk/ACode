@@ -102,7 +102,7 @@ describe("connectors", () => {
 
     it("handles stop failures gracefully", async () => {
       const connector = createMockConnector("c1", "Fail");
-      (connector.stop as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("stop failed"));
+      (connector.stop as ReturnType<typeof vi.fn>).mockImplementation(async () => { throw new Error("stop failed"); });
       registerConnector(connector);
       await expect(shutdownConnectors()).resolves.not.toThrow();
     });

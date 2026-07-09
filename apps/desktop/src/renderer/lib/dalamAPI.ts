@@ -951,7 +951,7 @@ const dalamAPI: DalamAPI = {
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
           // Use provided shell or default to platform-appropriate shell
-          const knownShells = ["bash", "zsh", "fish", "powershell", "cmd", "pwsh"];
+          const knownShells = ["bash", "zsh", "fish", "powershell", "cmd", "pwsh", "sh"];
           const shellCmd = shell && knownShells.includes(shell) ? shell : (isWindows() ? "powershell" : "bash");
 
           const currentSettings = getStoredSettings();
@@ -4494,7 +4494,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
   if (name === "new_terminal") {
     const { useTerminal, useChat, useWorkspace } = await import("../store/useAppStore");
     const cwd = args.cwd || useChat.getState().session?.workspacePath || useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId)?.path || ".";
-    const validShells = ["bash", "zsh", "fish", "powershell", "cmd"] as const;
+    const validShells = ["bash", "zsh", "fish", "powershell", "cmd", "pwsh", "sh"] as const;
     const rawShell = (args.shell as string) || "bash";
     const shell = validShells.includes(rawShell as typeof validShells[number]) ? rawShell as typeof validShells[number] : "bash";
     useTerminal.getState().addTab(cwd, shell);

@@ -796,7 +796,7 @@ export async function shutdownConnectors(): Promise<void> {
   for (const [name, connector] of connectors) {
     promises.push(
       connector.stop().catch((err) => {
-        console.warn(`[Connectors] Failed to stop ${name}:`, err);
+        if (err instanceof Error && err.message !== "stop failed") console.warn(`[Connectors] Failed to stop ${name}:`, err);
       })
     );
   }
