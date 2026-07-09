@@ -30,45 +30,56 @@ export function QuestionDialog() {
 
   // All keyboard handling lives in the container's onKeyDown so stopPropagation
   // blocks global shortcuts (Ctrl+K etc.) while still processing dialog keys.
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!request) return;
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!request) return;
 
-    if (e.key === "Escape") {
-      e.preventDefault();
-      resolve(null);
-      return;
-    }
-
-    if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
-      e.preventDefault();
-      setSelected((prev) => {
-        const next = Math.min(prev + 1, maxIndex);
-        if (next === maxIndex) {
-          setInputFocused(true);
-          requestAnimationFrame(() => inputRef.current?.focus());
-        }
-        return next;
-      });
-    } else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-      e.preventDefault();
-      setSelected((prev) => {
-        const next = Math.max(prev - 1, 0);
-        if (next < maxIndex) {
-          setInputFocused(false);
-          inputRef.current?.blur();
-        }
-        return next;
-      });
-    } else if (e.key === "Enter" || (e.key === " " && !inputFocused)) {
-      e.preventDefault();
-      if (inputFocused && customText.trim()) {
-        resolve({ selectedLabel: "Custom", customText: customText.trim() });
-      } else if (selected >= 0 && selected < optionCount) {
-        resolve({ selectedLabel: request.options[selected].label });
+      if (e.key === "Escape") {
+        e.preventDefault();
+        resolve(null);
+        return;
       }
-    }
-    // Space key falls through for input typing when inputFocused is true
-  }, [request, resolve, inputFocused, customText, selected, optionCount, maxIndex]);
+
+      if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
+        e.preventDefault();
+        setSelected((prev) => {
+          const next = Math.min(prev + 1, maxIndex);
+          if (next === maxIndex) {
+            setInputFocused(true);
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }
+          return next;
+        });
+      } else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
+        e.preventDefault();
+        setSelected((prev) => {
+          const next = Math.max(prev - 1, 0);
+          if (next < maxIndex) {
+            setInputFocused(false);
+            inputRef.current?.blur();
+          }
+          return next;
+        });
+      } else if (e.key === "Enter" || (e.key === " " && !inputFocused)) {
+        e.preventDefault();
+        if (inputFocused && customText.trim()) {
+          resolve({ selectedLabel: "Custom", customText: customText.trim() });
+        } else if (selected >= 0 && selected < optionCount) {
+          resolve({ selectedLabel: request.options[selected].label });
+        }
+      }
+      // Space key falls through for input typing when inputFocused is true
+    },
+    [
+      request,
+      resolve,
+      inputFocused,
+      customText,
+      selected,
+      optionCount,
+      maxIndex,
+    ],
+  );
 
   const handleSubmit = useCallback(() => {
     if (!request) return;
@@ -86,7 +97,9 @@ export function QuestionDialog() {
   return (
     <div
       className="fixed inset-0 z-[55] flex items-center justify-center bg-black/55 backdrop-blur-sm animate-fade-in p-4"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) resolve(null); }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) resolve(null);
+      }}
     >
       <div
         ref={containerRef}
@@ -99,8 +112,12 @@ export function QuestionDialog() {
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-dalam-border-primary bg-dalam-bg-secondary/50">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-medium text-dalam-text-primary truncate">{request.header}</span>
-            <span className="text-sm text-dalam-text-primary truncate">{request.question}</span>
+            <span className="text-sm font-medium text-dalam-text-primary truncate">
+              {request.header}
+            </span>
+            <span className="text-sm text-dalam-text-primary truncate">
+              {request.question}
+            </span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-dalam-text-muted flex-shrink-0">
             {request.workspaceName && (
@@ -116,7 +133,11 @@ export function QuestionDialog() {
               </>
             )}
             <span className="ml-2 text-dalam-text-muted/60">1 / 1</span>
-            <button className="ml-2 btn-icon p-1" onClick={() => resolve(null)} title="Close">
+            <button
+              className="ml-2 btn-icon p-1"
+              onClick={() => resolve(null)}
+              title="Close"
+            >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -129,17 +150,29 @@ export function QuestionDialog() {
             return (
               <button
                 key={opt.label}
-                onClick={() => { setSelected(idx); setInputFocused(false); }}
-                onMouseEnter={() => { setSelected(idx); setInputFocused(false); }}
+                onClick={() => {
+                  setSelected(idx);
+                  setInputFocused(false);
+                }}
+                onMouseEnter={() => {
+                  setSelected(idx);
+                  setInputFocused(false);
+                }}
                 className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                   active ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
                 }`}
               >
-                <span className="text-xs text-dalam-text-muted w-4 mt-0.5 text-center flex-shrink-0">{idx + 1}.</span>
+                <span className="text-xs text-dalam-text-muted w-4 mt-0.5 text-center flex-shrink-0">
+                  {idx + 1}.
+                </span>
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-dalam-text-primary font-medium">{opt.label}</span>
+                  <span className="text-sm text-dalam-text-primary font-medium">
+                    {opt.label}
+                  </span>
                   {opt.description && (
-                    <span className="text-sm text-dalam-text-muted ml-2">{opt.description}</span>
+                    <span className="text-sm text-dalam-text-muted ml-2">
+                      {opt.description}
+                    </span>
                   )}
                 </div>
               </button>
@@ -150,22 +183,31 @@ export function QuestionDialog() {
           {request.allowFreeText !== false && (
             <div
               className={`flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                selected === maxIndex && inputFocused ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
+                selected === maxIndex && inputFocused
+                  ? "bg-dalam-bg-hover"
+                  : "hover:bg-dalam-bg-hover/50"
               }`}
-              onMouseEnter={() => { setSelected(maxIndex); }}
+              onMouseEnter={() => {
+                setSelected(maxIndex);
+              }}
               onClick={() => {
                 setSelected(maxIndex);
                 setInputFocused(true);
                 inputRef.current?.focus();
               }}
             >
-              <span className="text-xs text-dalam-text-muted w-4 mt-2 text-center flex-shrink-0">{optionCount + 1}.</span>
+              <span className="text-xs text-dalam-text-muted w-4 mt-2 text-center flex-shrink-0">
+                {optionCount + 1}.
+              </span>
               <input
                 ref={inputRef}
                 type="text"
                 value={customText}
                 onChange={(e) => setCustomText(e.target.value)}
-                onFocus={() => { setSelected(maxIndex); setInputFocused(true); }}
+                onFocus={() => {
+                  setSelected(maxIndex);
+                  setInputFocused(true);
+                }}
                 onBlur={() => setInputFocused(false)}
                 placeholder="Enter your answer…"
                 className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted"

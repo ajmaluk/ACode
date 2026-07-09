@@ -9,7 +9,11 @@
  */
 
 interface CacheEntry {
-  tools: { name: string; description: string; inputSchema?: Record<string, unknown> }[];
+  tools: {
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+  }[];
   timestamp: number;
   serverUrl?: string;
   ttlMs: number;
@@ -46,8 +50,8 @@ export function getCachedTools(serverName: string): CacheEntry | null {
       // Expired — clean up
       localStorage.removeItem(key);
     }
-  } catch {
-    // Ignore parse errors
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[McpCache] Failed to parse cached tools:", e);
   }
 
   return null;
@@ -58,9 +62,13 @@ export function getCachedTools(serverName: string): CacheEntry | null {
  */
 export function cacheTools(
   serverName: string,
-  tools: { name: string; description: string; inputSchema?: Record<string, unknown> }[],
+  tools: {
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+  }[],
   serverUrl?: string,
-  ttlMs: number = DEFAULT_TTL_MS
+  ttlMs: number = DEFAULT_TTL_MS,
 ): void {
   const entry: CacheEntry = {
     tools,
@@ -76,8 +84,8 @@ export function cacheTools(
   try {
     const key = CACHE_KEY_PREFIX + serverName;
     localStorage.setItem(key, JSON.stringify(entry));
-  } catch {
-    // localStorage full or unavailable — memory cache is sufficient
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[McpCache] Failed to cache tools in localStorage:", e);
   }
 }
 
@@ -88,8 +96,8 @@ export function invalidateCache(serverName: string): void {
   memoryCache.delete(serverName);
   try {
     localStorage.removeItem(CACHE_KEY_PREFIX + serverName);
-  } catch {
-    // Ignore
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[McpCache] Failed to remove cached entry from localStorage:", e);
   }
 }
 
@@ -99,12 +107,14 @@ export function invalidateCache(serverName: string): void {
 export function clearAllCaches(): void {
   memoryCache.clear();
   try {
-    const keys = Object.keys(localStorage).filter(k => k.startsWith(CACHE_KEY_PREFIX));
+    const keys = Object.keys(localStorage).filter((k) =>
+      k.startsWith(CACHE_KEY_PREFIX),
+    );
     for (const key of keys) {
       localStorage.removeItem(key);
     }
-  } catch {
-    // Ignore
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[McpCache] Failed to clear all caches:", e);
   }
 }
 
@@ -128,14 +138,16 @@ export function getCacheStats(): {
   let totalToolsCached = 0;
 
   try {
-    const keys = Object.keys(localStorage).filter(k => k.startsWith(CACHE_KEY_PREFIX));
+    const keys = Object.keys(localStorage).filter((k) =>
+      k.startsWith(CACHE_KEY_PREFIX),
+    );
     localStorageEntries = keys.length;
     for (const key of keys) {
       const entry: CacheEntry = JSON.parse(localStorage.getItem(key) || "{}");
       totalToolsCached += entry.tools?.length || 0;
     }
-  } catch {
-    // Ignore
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[McpCache] Failed to compute cache stats:", e);
   }
 
   return {

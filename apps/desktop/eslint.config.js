@@ -8,6 +8,12 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
     plugins: {
       "react-hooks": reactHooks,
       "react-refresh": reactRefresh,
@@ -17,6 +23,10 @@ export default tseslint.config(
       "react-refresh/only-export-components": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-floating-promises": "warn",
+      "@typescript-eslint/consistent-type-imports": ["warn", { disallowTypeAnnotations: false }],
+      "prefer-const": "error",
+      "no-empty": ["error", { allowEmptyCatch: true }],
       "no-console": "off",
     },
   }

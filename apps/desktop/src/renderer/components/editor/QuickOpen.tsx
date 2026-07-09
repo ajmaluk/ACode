@@ -7,14 +7,25 @@ interface QuickOpenProps {
   onClose: () => void;
 }
 
-function flattenTree(nodes: { name: string; path: string; type: string; children?: unknown[] }[]): string[] {
+function flattenTree(
+  nodes: { name: string; path: string; type: string; children?: unknown[] }[],
+): string[] {
   const paths: string[] = [];
   for (const node of nodes) {
     if (node.type === "file") {
       paths.push(node.path);
     }
     if (node.children && Array.isArray(node.children)) {
-      paths.push(...flattenTree(node.children as { name: string; path: string; type: string; children?: unknown[] }[]));
+      paths.push(
+        ...flattenTree(
+          node.children as {
+            name: string;
+            path: string;
+            type: string;
+            children?: unknown[];
+          }[],
+        ),
+      );
     }
   }
   return paths;
@@ -22,7 +33,21 @@ function flattenTree(nodes: { name: string; path: string; type: string; children
 
 function getFileIcon(name: string) {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["ts", "tsx", "js", "jsx", "json", "html", "css", "py", "rs", "go"].includes(ext)) return FileCode;
+  if (
+    [
+      "ts",
+      "tsx",
+      "js",
+      "jsx",
+      "json",
+      "html",
+      "css",
+      "py",
+      "rs",
+      "go",
+    ].includes(ext)
+  )
+    return FileCode;
   return FileText;
 }
 
@@ -68,36 +93,50 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
   // Clamp selectedIndex when filtered results shrink (avoid setState in effect)
   const safeIndex = Math.min(selectedIndex, Math.max(0, filtered.length - 1));
 
-  const handleQueryChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setQuery(e.target.value);
-    setSelectedIndex(0);
-  }, []);
+  const handleQueryChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setQuery(e.target.value);
+      setSelectedIndex(0);
+    },
+    [],
+  );
 
-  const handleSelect = useCallback(async (path: string) => {
-    await openFile(path);
-    onClose();
-  }, [openFile, onClose]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
+  const handleSelect = useCallback(
+    async (path: string) => {
+      await openFile(path);
       onClose();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && filtered[safeIndex]) {
-      void handleSelect(filtered[safeIndex]);
-    }
-  }, [onClose, filtered, safeIndex, handleSelect]);
+    },
+    [openFile, onClose],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter" && filtered[safeIndex]) {
+        void handleSelect(filtered[safeIndex]);
+      }
+    },
+    [onClose, filtered, safeIndex, handleSelect],
+  );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+      onClick={onClose}
+    >
       <div
         className="w-[560px] bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl overflow-hidden animate-fade-in"
         onClick={(e) => e.stopPropagation()}
-        role="dialog" aria-modal="true" aria-label="Quick open file"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Quick open file"
       >
         <div className="flex items-center gap-2 px-3 py-2 border-b border-dalam-border-primary">
           <Search className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
@@ -110,7 +149,10 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
             className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted"
             placeholder="Search files by name"
           />
-          <button onClick={onClose} className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors">
+          <button
+            onClick={onClose}
+            className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -128,14 +170,18 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
               <button
                 key={path}
                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-                  isSelected ? "bg-dalam-accent-subtle text-dalam-text-primary" : "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+                  isSelected
+                    ? "bg-dalam-accent-subtle text-dalam-text-primary"
+                    : "text-dalam-text-secondary hover:bg-dalam-bg-hover"
                 }`}
                 onClick={() => void handleSelect(path)}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
                 <Icon className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                 <span className="text-xs font-medium truncate">{name}</span>
-                <span className="text-[10px] text-dalam-text-muted truncate ml-auto">{path}</span>
+                <span className="text-[10px] text-dalam-text-muted truncate ml-auto">
+                  {path}
+                </span>
               </button>
             );
           })}

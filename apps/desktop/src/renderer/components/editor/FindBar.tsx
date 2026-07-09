@@ -2,7 +2,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Replace, CaseSensitive, WholeWord, Regex } from "lucide-react";
 
 interface FindBarProps {
-  onSearch: (query: string, options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean }) => void;
+  onSearch: (
+    query: string,
+    options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean },
+  ) => void;
   onReplace: (replacement: string) => void;
   onReplaceAll: (replacement: string) => void;
   onClose: () => void;
@@ -11,7 +14,15 @@ interface FindBarProps {
   showReplace?: boolean;
 }
 
-export function FindBar({ onSearch, onReplace, onReplaceAll, onClose, matchCount, currentMatch, showReplace }: FindBarProps) {
+export function FindBar({
+  onSearch,
+  onReplace,
+  onReplaceAll,
+  onClose,
+  matchCount,
+  currentMatch,
+  showReplace,
+}: FindBarProps) {
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -20,7 +31,8 @@ export function FindBar({ onSearch, onReplace, onReplaceAll, onClose, matchCount
   const [showReplaceLocal, setShowReplace] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // Use prop when provided, otherwise use local toggle state
-  const showReplaceState = showReplace !== undefined ? showReplace : showReplaceLocal;
+  const showReplaceState =
+    showReplace !== undefined ? showReplace : showReplaceLocal;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -39,22 +51,25 @@ export function FindBar({ onSearch, onReplace, onReplaceAll, onClose, matchCount
     return () => clearTimeout(debounceTimerRef.current);
   }, [query, caseSensitive, wholeWord, useRegex, onSearch]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      onClose();
-    } else if (e.key === "Enter" && e.shiftKey) {
-      // Previous match — dispatch event for Monaco editor to handle
-      e.preventDefault();
-      window.dispatchEvent(new CustomEvent("editor:find-previous"));
-    } else if (e.key === "Enter") {
-      // Next match — dispatch event for Monaco editor to handle
-      e.preventDefault();
-      window.dispatchEvent(new CustomEvent("editor:find-next"));
-    } else if (e.key === "Tab" && e.altKey) {
-      e.preventDefault();
-      setShowReplace((v) => !v);
-    }
-  }, [onClose]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      } else if (e.key === "Enter" && e.shiftKey) {
+        // Previous match — dispatch event for Monaco editor to handle
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("editor:find-previous"));
+      } else if (e.key === "Enter") {
+        // Next match — dispatch event for Monaco editor to handle
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("editor:find-next"));
+      } else if (e.key === "Tab" && e.altKey) {
+        e.preventDefault();
+        setShowReplace((v) => !v);
+      }
+    },
+    [onClose],
+  );
 
   return (
     <div className="absolute top-0 right-0 z-30 bg-dalam-bg-secondary border border-dalam-border-primary border-t-0 border-r-0 rounded-bl-lg shadow-lg animate-fade-in">

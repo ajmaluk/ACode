@@ -28,7 +28,14 @@ describe("ProviderError", () => {
   });
 
   it("supports all error codes", () => {
-    const codes = ["auth", "credit", "network", "provider", "timeout", "validation"] as const;
+    const codes = [
+      "auth",
+      "credit",
+      "network",
+      "provider",
+      "timeout",
+      "validation",
+    ] as const;
     for (const code of codes) {
       const err = new ProviderError(`Test ${code}`, code);
       expect(err.code).toBe(code);
@@ -55,7 +62,10 @@ describe("getRecentFiles", () => {
   });
 
   it("returns parsed array from localStorage", () => {
-    localStorage.setItem("dalam.recentFiles.v1", JSON.stringify(["/a.ts", "/b.ts"]));
+    localStorage.setItem(
+      "dalam.recentFiles.v1",
+      JSON.stringify(["/a.ts", "/b.ts"]),
+    );
     expect(getRecentFiles()).toEqual(["/a.ts", "/b.ts"]);
   });
 
@@ -83,11 +93,14 @@ describe("getActiveProvider", () => {
       selectedModel: "gpt-4o",
     };
     localStorage.setItem("dalam.settings.v1", JSON.stringify(defaultSettings));
-    localStorage.setItem("dalam.provider.test-provider", JSON.stringify({
-      baseUrl: "https://api.test.com",
-      apiKey: "sk-test-key",
-      apiFormat: "openai",
-    }));
+    localStorage.setItem(
+      "dalam.provider.test-provider",
+      JSON.stringify({
+        baseUrl: "https://api.test.com",
+        apiKey: "sk-test-key",
+        apiFormat: "openai",
+      }),
+    );
   });
 
   it("throws ProviderError when no provider selected", () => {
@@ -96,17 +109,26 @@ describe("getActiveProvider", () => {
   });
 
   it("throws ProviderError with 'provider' code when no provider config", () => {
-    localStorage.setItem("dalam.settings.v1", JSON.stringify({ selectedProvider: "nonexistent" }));
+    localStorage.setItem(
+      "dalam.settings.v1",
+      JSON.stringify({ selectedProvider: "nonexistent" }),
+    );
     expect(() => getActiveProvider()).toThrow(ProviderError);
   });
 
   it("throws ProviderError when requireModel is true and no model", () => {
-    localStorage.setItem("dalam.settings.v1", JSON.stringify({ selectedProvider: "test-provider" }));
+    localStorage.setItem(
+      "dalam.settings.v1",
+      JSON.stringify({ selectedProvider: "test-provider" }),
+    );
     expect(() => getActiveProvider(true)).toThrow(ProviderError);
   });
 
   it("does not throw when requireModel is false and no model", () => {
-    localStorage.setItem("dalam.settings.v1", JSON.stringify({ selectedProvider: "test-provider" }));
+    localStorage.setItem(
+      "dalam.settings.v1",
+      JSON.stringify({ selectedProvider: "test-provider" }),
+    );
     expect(() => getActiveProvider(false)).not.toThrow();
   });
 
@@ -122,9 +144,17 @@ describe("getActiveProvider", () => {
 
   it("falls back to providers array when individual provider not found", () => {
     localStorage.removeItem("dalam.provider.test-provider");
-    localStorage.setItem("dalam.providers.v1", JSON.stringify([
-      { id: "test-provider", baseUrl: "https://fallback.com", apiKey: "sk-fallback", apiFormat: "openai" },
-    ]));
+    localStorage.setItem(
+      "dalam.providers.v1",
+      JSON.stringify([
+        {
+          id: "test-provider",
+          baseUrl: "https://fallback.com",
+          apiKey: "sk-fallback",
+          apiFormat: "openai",
+        },
+      ]),
+    );
     const result = getActiveProvider();
     expect(result.config.baseUrl).toBe("https://fallback.com");
     expect(result.config.apiKey).toBe("sk-fallback");
@@ -159,21 +189,32 @@ describe("corsFetch", () => {
   });
 
   it("passes through network error from browser fetch", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network failure")));
-    await expect(corsFetch("https://example.com", { method: "GET" })).rejects.toThrow("Network failure");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("Network failure")),
+    );
+    await expect(
+      corsFetch("https://example.com", { method: "GET" }),
+    ).rejects.toThrow("Network failure");
     vi.unstubAllGlobals();
   });
 
   it("forwards headers to underlying fetch", async () => {
     let capturedHeaders: Record<string, string> = {};
-    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
-      capturedHeaders = opts.headers as Record<string, string>;
-      return Promise.resolve(new Response("ok", { status: 200 }));
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
+        capturedHeaders = opts.headers as Record<string, string>;
+        return Promise.resolve(new Response("ok", { status: 200 }));
+      }),
+    );
 
     await corsFetch("https://example.com", {
       method: "POST",
-      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ key: "value" }),
     });
     expect(capturedHeaders["Authorization"]).toBe("Bearer test");
@@ -182,7 +223,10 @@ describe("corsFetch", () => {
   });
 
   it("handles non-ok status codes", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Not found", { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("Not found", { status: 404 })),
+    );
     const result = await corsFetch("https://example.com", { method: "GET" });
     expect(result.ok).toBe(false);
     expect(result.status).toBe(404);

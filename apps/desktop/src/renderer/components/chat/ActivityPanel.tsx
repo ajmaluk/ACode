@@ -2,19 +2,38 @@
 
 import React, { useState } from "react";
 import {
-  X, FileCode, FilePlus,
-  ChevronDown, Loader2,
-  FileText, GitBranch, Terminal, Search, FolderOpen,
-  Check, Zap, Code2, ClipboardList,
-  Database, HelpCircle, Globe, Layout,
+  X,
+  FileCode,
+  FilePlus,
+  ChevronDown,
+  Loader2,
+  FileText,
+  GitBranch,
+  Terminal,
+  Search,
+  FolderOpen,
+  Check,
+  Zap,
+  Code2,
+  ClipboardList,
+  Database,
+  HelpCircle,
+  Globe,
+  Layout,
 } from "lucide-react";
 import { useChat } from "@/store/useAppStore";
 import { ThinkingBlock, TaskPlanBlock, SubAgentList } from "./ActivityBlocks";
 // ============================================================================
 // WorkingTimer — elapsed time display
 // ============================================================================
-export const WorkingTimer = React.memo(function WorkingTimer({ startTime }: { startTime: number }) {
-  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
+export const WorkingTimer = React.memo(function WorkingTimer({
+  startTime,
+}: {
+  startTime: number;
+}) {
+  const [elapsed, setElapsed] = useState(() =>
+    Math.floor((Date.now() - startTime) / 1000),
+  );
   React.useEffect(() => {
     const interval = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTime) / 1000));
@@ -76,7 +95,9 @@ export function InlineActivityRow({
           </span>
         )}
         {duration && (
-          <span className="text-[10px] text-dalam-text-muted/50 tabular-nums ml-auto">{duration}</span>
+          <span className="text-[10px] text-dalam-text-muted/50 tabular-nums ml-auto">
+            {duration}
+          </span>
         )}
         {hasDetail && (
           <ChevronDown
@@ -99,14 +120,25 @@ export function InlineActivityRow({
 
 export function getFileIcon(ext: string): React.ElementType {
   const iconMap: Record<string, React.ElementType> = {
-    ts: FileCode, tsx: FileCode, js: FileCode, jsx: FileCode,
-    json: FileCode, html: FileCode, css: FileCode,
-    md: FileText, py: FileCode, rs: FileCode, go: FileCode,
+    ts: FileCode,
+    tsx: FileCode,
+    js: FileCode,
+    jsx: FileCode,
+    json: FileCode,
+    html: FileCode,
+    css: FileCode,
+    md: FileText,
+    py: FileCode,
+    rs: FileCode,
+    go: FileCode,
   };
   return iconMap[ext] || FileText;
 }
 
-export function getToolMeta(name: string): { icon: React.ElementType; label: string } {
+export function getToolMeta(name: string): {
+  icon: React.ElementType;
+  label: string;
+} {
   const meta: Record<string, { icon: React.ElementType; label: string }> = {
     read_file: { icon: FileText, label: "Read" },
     read: { icon: FileText, label: "Read" },
@@ -141,144 +173,163 @@ export function getToolMeta(name: string): { icon: React.ElementType; label: str
 // ============================================================================
 // StreamingActivityPanel — shows all activities inline during streaming
 // ============================================================================
-export const StreamingActivityPanel = React.memo(function StreamingActivityPanel({
-  activities,
-  toolCalls,
-  thinkingContent,
-  sessionStartTime,
-}: {
-  activities: import("@dalam/shared-types").PendingActivity[];
-  toolCalls: import("@dalam/shared-types").ToolCall[];
-  thinkingContent: string;
-  sessionStartTime: number;
-}) {
-  const taskPlan = useChat((s) => s.taskPlan);
-  const taskPlanSummary = useChat((s) => s.taskPlanSummary);
-  const subAgents = useChat((s) => s.subAgents);
-  const streamingStartedAt = useChat((s) => s.streamingStartedAt);
+export const StreamingActivityPanel = React.memo(
+  function StreamingActivityPanel({
+    activities,
+    toolCalls,
+    thinkingContent,
+    sessionStartTime,
+  }: {
+    activities: import("@dalam/shared-types").PendingActivity[];
+    toolCalls: import("@dalam/shared-types").ToolCall[];
+    thinkingContent: string;
+    sessionStartTime: number;
+  }) {
+    const taskPlan = useChat((s) => s.taskPlan);
+    const taskPlanSummary = useChat((s) => s.taskPlanSummary);
+    const subAgents = useChat((s) => s.subAgents);
+    const streamingStartedAt = useChat((s) => s.streamingStartedAt);
 
-  return (
-    <div className="animate-fade-in">
-      {taskPlan && taskPlan.length > 0 && (
-        <TaskPlanBlock tasks={taskPlan} summary={taskPlanSummary} />
-      )}
-      {subAgents.length > 0 && (
-        <SubAgentList agents={subAgents} />
-      )}
-      <div className="mb-2">
-        <WorkingTimer startTime={streamingStartedAt ?? sessionStartTime} />
-      </div>
-      {thinkingContent && (
-        <ThinkingBlock content={thinkingContent} streaming />
-      )}
-      {toolCalls.length > 0 && (
-        <div className="space-y-0.5">
-          {toolCalls.map((tc) => {
-            const meta = getToolMeta(tc.name);
-            const isRunning = tc.status === "running" || tc.status === "pending";
-            const isCompleted = tc.status === "completed";
-            const isFailed = tc.status === "failed";
-            const status = isRunning ? "running" : isCompleted ? "completed" : isFailed ? "failed" : undefined;
-
-            const target = (() => {
-              const args = tc.args;
-              if (!args) return "";
-              if (typeof args.path === "string") return args.path;
-              if (typeof args.command === "string") return `$ ${args.command}`;
-              if (typeof args.query === "string") return args.query;
-              if (typeof args.pattern === "string") return args.pattern;
-              return "";
-            })();
-
-            return (
-              <InlineActivityRow
-                key={tc.id}
-                icon={React.createElement(meta.icon, { className: "w-3 h-3 flex-shrink-0" })}
-                label={meta.label}
-                target={target}
-                status={status}
-              >
-                {tc.result && (
-                  <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
-                    {tc.result.slice(0, 2000)}
-                  </pre>
-                )}
-              </InlineActivityRow>
-            );
-          })}
+    return (
+      <div className="animate-fade-in">
+        {taskPlan && taskPlan.length > 0 && (
+          <TaskPlanBlock tasks={taskPlan} summary={taskPlanSummary} />
+        )}
+        {subAgents.length > 0 && <SubAgentList agents={subAgents} />}
+        <div className="mb-2">
+          <WorkingTimer startTime={streamingStartedAt ?? sessionStartTime} />
         </div>
-      )}
-      {activities.length > 0 && (
-        <div className="space-y-0.5">
-          {activities.map((activity, idx) => {
-            const isLast = idx === activities.length - 1;
-            const status: "completed" | "running" = isLast && activity.type !== "skill" ? "running" : "completed";
-            if (activity.type === "explore") {
+        {thinkingContent && (
+          <ThinkingBlock content={thinkingContent} streaming />
+        )}
+        {toolCalls.length > 0 && (
+          <div className="space-y-0.5">
+            {toolCalls.map((tc) => {
+              const meta = getToolMeta(tc.name);
+              const isRunning =
+                tc.status === "running" || tc.status === "pending";
+              const isCompleted = tc.status === "completed";
+              const isFailed = tc.status === "failed";
+              const status = isRunning
+                ? "running"
+                : isCompleted
+                  ? "completed"
+                  : isFailed
+                    ? "failed"
+                    : undefined;
+
+              const target = (() => {
+                const args = tc.args;
+                if (!args) return "";
+                if (typeof args.path === "string") return args.path;
+                if (typeof args.command === "string")
+                  return `$ ${args.command}`;
+                if (typeof args.query === "string") return args.query;
+                if (typeof args.pattern === "string") return args.pattern;
+                return "";
+              })();
+
               return (
                 <InlineActivityRow
-                  key={`explore-${idx}`}
-                  icon={<Search className="w-3 h-3 flex-shrink-0" />}
-                  label="Searched"
-                  target={activity.query}
-                  status={status}
-                />
-              );
-            }
-            if (activity.type === "read") {
-              const fileName = activity.path.split("/").pop() || activity.path;
-              const ext = fileName.split(".").pop()?.toLowerCase() || "";
-              return (
-                <InlineActivityRow
-                  key={`read-${idx}`}
-                  icon={React.createElement(getFileIcon(ext), { className: "w-3 h-3 flex-shrink-0" })}
-                  label="Read"
-                  target={fileName}
-                  status={status}
-                />
-              );
-            }
-            if (activity.type === "bash") {
-              return (
-                <InlineActivityRow
-                  key={`bash-${idx}`}
-                  icon={<Terminal className="w-3 h-3 flex-shrink-0" />}
-                  label="Ran"
-                  target={`$ ${activity.command}`}
+                  key={tc.id}
+                  icon={React.createElement(meta.icon, {
+                    className: "w-3 h-3 flex-shrink-0",
+                  })}
+                  label={meta.label}
+                  target={target}
                   status={status}
                 >
-                  <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
-                    {activity.result.slice(0, 2000)}
-                    {activity.result.length > 2000 && <span className="text-dalam-text-muted"> (truncated)</span>}
-                  </pre>
+                  {tc.result && (
+                    <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                      {tc.result.slice(0, 2000)}
+                    </pre>
+                  )}
                 </InlineActivityRow>
               );
-            }
-            if (activity.type === "skill") {
-              return (
-                <InlineActivityRow
-                  key={`skill-${idx}`}
-                  icon={<Zap className="w-3 h-3 flex-shrink-0" />}
-                  label="Invoked"
-                  target={`$${activity.name}`}
-                  status="completed"
-                />
-              );
-            }
-            if (activity.type === "plan") {
-              return (
-                <InlineActivityRow
-                  key={`plan-${idx}`}
-                  icon={<ClipboardList className="w-3 h-3 flex-shrink-0" />}
-                  label="Plan"
-                  target={activity.plan.slice(0, 60)}
-                  status="completed"
-                />
-              );
-            }
-            return null;
-          })}
-        </div>
-      )}
-    </div>
-  );
-});
+            })}
+          </div>
+        )}
+        {activities.length > 0 && (
+          <div className="space-y-0.5">
+            {activities.map((activity, idx) => {
+              const isLast = idx === activities.length - 1;
+              const status: "completed" | "running" =
+                isLast && activity.type !== "skill" ? "running" : "completed";
+              if (activity.type === "explore") {
+                return (
+                  <InlineActivityRow
+                    key={`explore-${idx}`}
+                    icon={<Search className="w-3 h-3 flex-shrink-0" />}
+                    label="Searched"
+                    target={activity.query}
+                    status={status}
+                  />
+                );
+              }
+              if (activity.type === "read") {
+                const fileName =
+                  activity.path.split("/").pop() || activity.path;
+                const ext = fileName.split(".").pop()?.toLowerCase() || "";
+                return (
+                  <InlineActivityRow
+                    key={`read-${idx}`}
+                    icon={React.createElement(getFileIcon(ext), {
+                      className: "w-3 h-3 flex-shrink-0",
+                    })}
+                    label="Read"
+                    target={fileName}
+                    status={status}
+                  />
+                );
+              }
+              if (activity.type === "bash") {
+                return (
+                  <InlineActivityRow
+                    key={`bash-${idx}`}
+                    icon={<Terminal className="w-3 h-3 flex-shrink-0" />}
+                    label="Ran"
+                    target={`$ ${activity.command}`}
+                    status={status}
+                  >
+                    <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                      {activity.result.slice(0, 2000)}
+                      {activity.result.length > 2000 && (
+                        <span className="text-dalam-text-muted">
+                          {" "}
+                          (truncated)
+                        </span>
+                      )}
+                    </pre>
+                  </InlineActivityRow>
+                );
+              }
+              if (activity.type === "skill") {
+                return (
+                  <InlineActivityRow
+                    key={`skill-${idx}`}
+                    icon={<Zap className="w-3 h-3 flex-shrink-0" />}
+                    label="Invoked"
+                    target={`$${activity.name}`}
+                    status="completed"
+                  />
+                );
+              }
+              if (activity.type === "plan") {
+                return (
+                  <InlineActivityRow
+                    key={`plan-${idx}`}
+                    icon={<ClipboardList className="w-3 h-3 flex-shrink-0" />}
+                    label="Plan"
+                    target={activity.plan.slice(0, 60)}
+                    status="completed"
+                  />
+                );
+              }
+              return null;
+            })}
+          </div>
+        )}
+      </div>
+    );
+  },
+);

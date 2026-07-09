@@ -61,8 +61,8 @@ export function countTokens(text: string, model: string): number {
 
     const encoder = getEncoder(model);
     return encoder.encode(text).length;
-  } catch {
-    // Fallback to heuristic if tiktoken fails
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Tokenizer] tiktoken failed, falling back to heuristic:", e);
     return heuristicTokenCount(text);
   }
 }
@@ -94,7 +94,9 @@ export function countMessageTokens(
 function heuristicTokenCount(text: string): number {
   let count = 0;
   // CJK characters
-  const cjk = text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g);
+  const cjk = text.match(
+    /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g,
+  );
   if (cjk) count += cjk.length * 0.6;
   // Remove CJK for latin counting
   const latin = text.replace(

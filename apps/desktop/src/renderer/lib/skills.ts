@@ -26,7 +26,10 @@ import { joinPath } from "@/lib/pathUtils";
  * Returns { frontmatter, body } where frontmatter is a record of parsed
  * key-value pairs and body is the markdown content after the closing `---`.
  */
-export function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; body: string } {
+export function parseFrontmatter(raw: string): {
+  frontmatter: Record<string, string>;
+  body: string;
+} {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return { frontmatter: {}, body: raw };
 
@@ -46,11 +49,14 @@ export function parseFrontmatter(raw: string): { frontmatter: Record<string, str
 
     let value = kvMatch[2].trim();
     // Strip surrounding quotes
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
       value = value.slice(1, -1);
     }
     // Unescape escaped quotes and backslashes
-    value = value.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    value = value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
     frontmatter[kvMatch[1]] = value;
   }
 
@@ -65,7 +71,7 @@ export function skillInfoFromParsed(
   frontmatter: Record<string, string>,
   body: string,
   location: string,
-  source: SkillInfo["source"]
+  source: SkillInfo["source"],
 ): SkillInfo | null {
   const name = frontmatter.name?.trim();
   if (!name) return null; // name is required
@@ -114,28 +120,42 @@ export function validateSkill(rawContent: string): SkillValidationResult {
 
   // Validate name format (alphanumeric, hyphens, underscores)
   if (frontmatter.name && !/^[a-zA-Z0-9_-]+$/.test(frontmatter.name)) {
-    warnings.push("Name contains special characters. Use only alphanumeric, hyphens, and underscores.");
+    warnings.push(
+      "Name contains special characters. Use only alphanumeric, hyphens, and underscores.",
+    );
   }
 
   // Description validation
   if (!frontmatter.description?.trim()) {
-    warnings.push("Missing description field. Adding a description helps users understand the skill.");
+    warnings.push(
+      "Missing description field. Adding a description helps users understand the skill.",
+    );
   } else if (frontmatter.description.length > 200) {
-    warnings.push("Description is very long (>200 chars). Consider shortening.");
+    warnings.push(
+      "Description is very long (>200 chars). Consider shortening.",
+    );
   }
 
   // Content validation
   if (!body.trim()) {
-    errors.push("Empty skill body. The skill must have content after the frontmatter.");
+    errors.push(
+      "Empty skill body. The skill must have content after the frontmatter.",
+    );
   } else if (body.length < 50) {
-    warnings.push("Skill body is very short (<50 chars). Consider adding more detailed instructions.");
+    warnings.push(
+      "Skill body is very short (<50 chars). Consider adding more detailed instructions.",
+    );
   } else if (body.length > 10000) {
-    warnings.push("Skill body is very long (>10K chars). Consider breaking into multiple skills.");
+    warnings.push(
+      "Skill body is very long (>10K chars). Consider breaking into multiple skills.",
+    );
   }
 
   // Check for common issues
   if (body.includes("```") && (body.match(/```/g)?.length ?? 0) % 2 !== 0) {
-    warnings.push("Unclosed code fence detected. Check for matching opening/closing ```.");
+    warnings.push(
+      "Unclosed code fence detected. Check for matching opening/closing ```.",
+    );
   }
 
   return {
@@ -288,15 +308,69 @@ Structure:
 Do NOT write any code. The plan goes in \`.dalam/plans/\`.`;
 
 export const BUNDLED_SKILLS: SkillInfo[] = [
-  { name: "accessibility-compliance", description: "Audit code for WCAG 2.1 AA compliance", content: SKILL_BODY_ACCESSIBILITY, location: "bundled://accessibility-compliance/SKILL.md", source: "bundled" },
-  { name: "refactor", description: "Suggest refactors for readability and maintainability", content: SKILL_BODY_REFACTOR, location: "bundled://refactor/SKILL.md", source: "bundled" },
-  { name: "explain", description: "Explain code in plain English", content: SKILL_BODY_EXPLAIN, location: "bundled://explain/SKILL.md", source: "bundled" },
-  { name: "test-writer", description: "Write unit tests for the given function", content: SKILL_BODY_TEST, location: "bundled://test-writer/SKILL.md", source: "bundled" },
-  { name: "code-review", description: "Review changes for correctness and style", content: SKILL_BODY_REVIEW, location: "bundled://code-review/SKILL.md", source: "bundled" },
-  { name: "docs-writer", description: "Write or update documentation", content: SKILL_BODY_DOCS, location: "bundled://docs-writer/SKILL.md", source: "bundled" },
-  { name: "perf-audit", description: "Profile and optimize hot paths", content: SKILL_BODY_PERF, location: "bundled://perf-audit/SKILL.md", source: "bundled" },
-  { name: "debug", description: "Debug a failing test or reported issue", content: SKILL_BODY_DEBUG, location: "bundled://debug/SKILL.md", source: "bundled" },
-  { name: "plan", description: "Create a detailed implementation plan", content: SKILL_BODY_PLAN, location: "bundled://plan/SKILL.md", source: "bundled" },
+  {
+    name: "accessibility-compliance",
+    description: "Audit code for WCAG 2.1 AA compliance",
+    content: SKILL_BODY_ACCESSIBILITY,
+    location: "bundled://accessibility-compliance/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "refactor",
+    description: "Suggest refactors for readability and maintainability",
+    content: SKILL_BODY_REFACTOR,
+    location: "bundled://refactor/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "explain",
+    description: "Explain code in plain English",
+    content: SKILL_BODY_EXPLAIN,
+    location: "bundled://explain/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "test-writer",
+    description: "Write unit tests for the given function",
+    content: SKILL_BODY_TEST,
+    location: "bundled://test-writer/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "code-review",
+    description: "Review changes for correctness and style",
+    content: SKILL_BODY_REVIEW,
+    location: "bundled://code-review/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "docs-writer",
+    description: "Write or update documentation",
+    content: SKILL_BODY_DOCS,
+    location: "bundled://docs-writer/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "perf-audit",
+    description: "Profile and optimize hot paths",
+    content: SKILL_BODY_PERF,
+    location: "bundled://perf-audit/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "debug",
+    description: "Debug a failing test or reported issue",
+    content: SKILL_BODY_DEBUG,
+    location: "bundled://debug/SKILL.md",
+    source: "bundled",
+  },
+  {
+    name: "plan",
+    description: "Create a detailed implementation plan",
+    content: SKILL_BODY_PLAN,
+    location: "bundled://plan/SKILL.md",
+    source: "bundled",
+  },
 ];
 
 // ----------------------------------------------------------------------------
@@ -305,7 +379,8 @@ export const BUNDLED_SKILLS: SkillInfo[] = [
 
 class SkillRegistry {
   private skills: Map<string, SkillInfo> = new Map();
-  private backups: Map<string, { skill: SkillInfo; timestamp: number }[]> = new Map();
+  private backups: Map<string, { skill: SkillInfo; timestamp: number }[]> =
+    new Map();
   private listeners = new Set<() => void>();
   private batchDepth = 0;
 
@@ -316,7 +391,9 @@ class SkillRegistry {
   /** Suppress notifications during bulk operations. Emits once at the end. */
   batchUpdate(fn: () => void): void {
     this.batchDepth++;
-    try { fn(); } finally {
+    try {
+      fn();
+    } finally {
       this.batchDepth--;
       if (this.batchDepth === 0) this.emit();
     }
@@ -324,7 +401,9 @@ class SkillRegistry {
 
   /** Return every skill, sorted by name. */
   list(): SkillInfo[] {
-    return Array.from(this.skills.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return Array.from(this.skills.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
   }
 
   /** Return only skills the user has enabled (via Settings). */
@@ -351,7 +430,7 @@ class SkillRegistry {
   restoreFromBackup(name: string, timestamp: number): SkillInfo | undefined {
     const backups = this.backups.get(name);
     if (!backups) return undefined;
-    const backup = backups.find(b => b.timestamp === timestamp);
+    const backup = backups.find((b) => b.timestamp === timestamp);
     if (!backup) return undefined;
     this.skills.set(name, backup.skill);
     this.emit();
@@ -373,7 +452,7 @@ class SkillRegistry {
       const backupList = this.backups.get(skill.name)!;
       backupList.push({
         skill: { ...existing },
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
       // Keep only last 10 backups per skill to prevent unbounded growth
       if (backupList.length > 10) {
@@ -422,10 +501,12 @@ export const skillRegistry = new SkillRegistry();
 export async function loadSkillsFromDirectory(
   skillsDir: string,
   fsAdapter: {
-    listDir: (path: string) => Promise<{ name: string; path: string; type: string }[]>;
+    listDir: (
+      path: string,
+    ) => Promise<{ name: string; path: string; type: string }[]>;
     readFile: (path: string) => Promise<string>;
   },
-  source: SkillInfo["source"]
+  source: SkillInfo["source"],
 ): Promise<SkillInfo[]> {
   const skills: SkillInfo[] = [];
 
@@ -459,9 +540,11 @@ export async function loadSkillsFromDirectory(
 export async function loadProjectSkills(
   workspacePath: string,
   fsAdapter: {
-    listDir: (path: string) => Promise<{ name: string; path: string; type: string }[]>;
+    listDir: (
+      path: string,
+    ) => Promise<{ name: string; path: string; type: string }[]>;
     readFile: (path: string) => Promise<string>;
-  }
+  },
 ): Promise<SkillInfo[]> {
   const skillsDir = joinPath(workspacePath, ".dalam", "skills");
   return loadSkillsFromDirectory(skillsDir, fsAdapter, "project");
@@ -474,7 +557,7 @@ export async function loadProjectSkills(
  */
 export function refreshProjectSkills(
   projectSkills: SkillInfo[],
-  registry: SkillRegistry = skillRegistry
+  registry: SkillRegistry = skillRegistry,
 ): void {
   registry.batchUpdate(() => {
     // Remove all existing project-level skills
@@ -504,12 +587,16 @@ export async function loadSkillContent(
   fsAdapter?: {
     readFile: (path: string) => Promise<string>;
   },
-  registry: SkillRegistry = skillRegistry
+  registry: SkillRegistry = skillRegistry,
 ): Promise<string> {
   // Already loaded (bundled skills always have content)
   if (skill.content) return skill.content;
   // Can't load without adapter or non-file location
-  if (!fsAdapter || !skill.location || skill.location.startsWith("bundled://")) {
+  if (
+    !fsAdapter ||
+    !skill.location ||
+    skill.location.startsWith("bundled://")
+  ) {
     return skill.content || "";
   }
   try {
@@ -542,10 +629,12 @@ export function renderSkillForPrompt(skill: SkillInfo): string {
  */
 export function matchSkillInvocation(
   text: string,
-  registry: SkillInfo[]
+  registry: SkillInfo[],
 ): { skill: SkillInfo; args: string } | null {
   // First try explicit $skill-name invocation
-  const m = text.match(/(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+))?(?=[\s,.;:!?)}\]]|$)/i);
+  const m = text.match(
+    /(?:^|\s)\$([a-z0-9][a-z0-9-]*)(?:[ \t]+([^\n]+))?(?=[\s,.;:!?)}\]]|$)/i,
+  );
   if (m) {
     const name = m[1].toLowerCase();
     const args = (m[2] ?? "").trim();
@@ -566,7 +655,7 @@ export function matchSkillInvocation(
     const skillName = skill.name.toLowerCase();
     // Match skill name as a whole word (with optional trailing args)
     // Use word boundary assertions to prevent partial matches
-    const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedName = skillName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const wordRegex = new RegExp(`(?:^|\\b)${escapedName}\\b`, "i");
     if (wordRegex.test(lowerText)) {
       // Extract everything after the skill name as args

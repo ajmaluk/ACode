@@ -6,9 +6,22 @@
 import type { MouseEvent, ReactNode } from "react";
 
 export type ContextMenuItem =
-  | { type: "item"; label: string; shortcut?: string; icon?: ReactNode; perform: () => void; destructive?: boolean; disabled?: boolean }
+  | {
+      type: "item";
+      label: string;
+      shortcut?: string;
+      icon?: ReactNode;
+      perform: () => void;
+      destructive?: boolean;
+      disabled?: boolean;
+    }
   | { type: "separator" }
-  | { type: "submenu"; label: string; icon?: ReactNode; items: ContextMenuItem[] };
+  | {
+      type: "submenu";
+      label: string;
+      icon?: ReactNode;
+      items: ContextMenuItem[];
+    };
 
 export type ContextMenuState = {
   x: number;
@@ -22,9 +35,13 @@ let globalSetMenu: ((s: ContextMenuState | null) => void) | null = null;
  * Connect the ContextMenuProvider to the shared menu state.
  * Returns an unsubscribe function (call on unmount).
  */
-export function connectContextMenu(setter: (s: ContextMenuState | null) => void): () => void {
+export function connectContextMenu(
+  setter: (s: ContextMenuState | null) => void,
+): () => void {
   globalSetMenu = setter;
-  return () => { globalSetMenu = null; };
+  return () => {
+    globalSetMenu = null;
+  };
 }
 
 /**

@@ -220,7 +220,9 @@ describe("loadInstructions", () => {
 
   it("handles read errors gracefully", async () => {
     const brokenAdapter: InstructionFsAdapter = {
-      readFile: async () => { throw new Error("Read error"); },
+      readFile: async () => {
+        throw new Error("Read error");
+      },
       exists: async () => true,
       getHomeDir: async () => "/home/user",
     };
@@ -248,7 +250,12 @@ describe("formatInstructionsForPrompt", () => {
       globalRules: "Use strict TypeScript",
       pathScopedRules: new Map(),
       loadedPaths: ["/workspace/DALAM.md"],
-      layers: { global: "", org: "", project: "Use strict TypeScript", local: "" },
+      layers: {
+        global: "",
+        org: "",
+        project: "Use strict TypeScript",
+        local: "",
+      },
     });
     expect(result).toContain("WORKSPACE INSTRUCTIONS");
     expect(result).toContain("Use strict TypeScript");

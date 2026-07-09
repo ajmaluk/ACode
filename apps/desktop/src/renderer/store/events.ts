@@ -19,7 +19,10 @@ type EventHandler<T> = (data: T) => void;
 class EventBus {
   private handlers = new Map<string, Set<EventHandler<unknown>>>();
 
-  on<K extends EventKey>(event: K, handler: EventHandler<EventMap[K]>): () => void {
+  on<K extends EventKey>(
+    event: K,
+    handler: EventHandler<EventMap[K]>,
+  ): () => void {
     if (!this.handlers.has(event)) {
       this.handlers.set(event, new Set());
     }

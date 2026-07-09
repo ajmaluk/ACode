@@ -1,16 +1,38 @@
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useGit, useChat, useWorkspace, useDiffView, useUI } from "@/store/useAppStore";
+import {
+  useGit,
+  useChat,
+  useWorkspace,
+  useDiffView,
+  useUI,
+} from "@/store/useAppStore";
 import type { GitStatus } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { computeDiff } from "@/lib/diff";
 import { useToast } from "@/components/ui/toastStore";
 import {
-  GitBranch, FileCode, Check, X,
-  RefreshCw, Globe, ListTodo, Circle,
-  Plus, Loader2, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Eye,
-  Code2, PanelRightClose, GitCommitHorizontal,
-  Columns, WandSparkles, History,
+  GitBranch,
+  FileCode,
+  Check,
+  X,
+  RefreshCw,
+  Globe,
+  ListTodo,
+  Circle,
+  Plus,
+  Loader2,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowDown,
+  Eye,
+  Code2,
+  PanelRightClose,
+  GitCommitHorizontal,
+  Columns,
+  WandSparkles,
+  History,
 } from "lucide-react";
 
 type Tab = "git" | "diff" | "review" | "browser" | "progress";
@@ -27,10 +49,21 @@ export function RightPanel() {
   const { status, refresh, error } = useGit();
   const { activeWorkspaceId } = useWorkspace();
   const { open: diffOpen, current: diffCurrent } = useDiffView();
-  const { browserTabs, activeBrowserTabId, rightPanelTab: tab, setRightPanelTab: setTab } = useUI();
-  const changeCount = (status?.modified.length ?? 0) + (status?.added.length ?? 0) + (status?.deleted.length ?? 0) + (status?.untracked?.length ?? 0);
+  const {
+    browserTabs,
+    activeBrowserTabId,
+    rightPanelTab: tab,
+    setRightPanelTab: setTab,
+  } = useUI();
+  const changeCount =
+    (status?.modified.length ?? 0) +
+    (status?.added.length ?? 0) +
+    (status?.deleted.length ?? 0) +
+    (status?.untracked?.length ?? 0);
 
-  useEffect(() => { void refresh(); }, [refresh, activeWorkspaceId]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh, activeWorkspaceId]);
 
   // Unified tab-switching + panel-opening effect with priority: diff > browser > git
   // Note: `tab` is NOT in deps — it's read from the store snapshot via `useUI.getState()`
@@ -49,10 +82,23 @@ export function RightPanel() {
       return;
     }
     // Only set a default tab if current isn't one of the main tabs
-    if (currentTab !== "git" && currentTab !== "browser" && currentTab !== "diff" && currentTab !== "review" && currentTab !== "progress") {
+    if (
+      currentTab !== "git" &&
+      currentTab !== "browser" &&
+      currentTab !== "diff" &&
+      currentTab !== "review" &&
+      currentTab !== "progress"
+    ) {
       setTab(activeWorkspaceId ? "git" : "browser");
     }
-  }, [activeWorkspaceId, diffOpen, diffCurrent, activeBrowserTabId, browserTabs.length, setTab]);
+  }, [
+    activeWorkspaceId,
+    diffOpen,
+    diffCurrent,
+    activeBrowserTabId,
+    browserTabs.length,
+    setTab,
+  ]);
 
   return (
     <aside className="h-full flex flex-row-reverse bg-dalam-bg-primary border-l border-dalam-border-primary">
@@ -68,7 +114,8 @@ export function RightPanel() {
                 key={t.id}
                 onClick={() => {
                   setTab(t.id);
-                  if (!useUI.getState().rightPanelOpen) useUI.getState().setRightPanelOpen(true);
+                  if (!useUI.getState().rightPanelOpen)
+                    useUI.getState().setRightPanelOpen(true);
                 }}
                 title={t.label}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-100 relative group ${
@@ -110,17 +157,47 @@ export function RightPanel() {
           </span>
           <div className="flex items-center gap-0.5">
             {tab === "git" && (
-              <button className="btn-icon !p-1" onClick={() => void refresh()} title="Refresh"><RefreshCw className="w-3 h-3" /></button>
+              <button
+                className="btn-icon !p-1"
+                onClick={() => void refresh()}
+                title="Refresh"
+              >
+                <RefreshCw className="w-3 h-3" />
+              </button>
             )}
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-            {tab === "git" && <ErrorBoundary><GitTab status={status} error={error} onRefresh={() => void refresh()} /></ErrorBoundary>}
-            {tab === "diff" && <ErrorBoundary><DiffTab /></ErrorBoundary>}
-            {tab === "review" && <ErrorBoundary><ReviewTab /></ErrorBoundary>}
-            {tab === "browser" && <ErrorBoundary><BrowserTab /></ErrorBoundary>}
-            {tab === "progress" && <ErrorBoundary><ProgressTab /></ErrorBoundary>}
-          </div>
+          {tab === "git" && (
+            <ErrorBoundary>
+              <GitTab
+                status={status}
+                error={error}
+                onRefresh={() => void refresh()}
+              />
+            </ErrorBoundary>
+          )}
+          {tab === "diff" && (
+            <ErrorBoundary>
+              <DiffTab />
+            </ErrorBoundary>
+          )}
+          {tab === "review" && (
+            <ErrorBoundary>
+              <ReviewTab />
+            </ErrorBoundary>
+          )}
+          {tab === "browser" && (
+            <ErrorBoundary>
+              <BrowserTab />
+            </ErrorBoundary>
+          )}
+          {tab === "progress" && (
+            <ErrorBoundary>
+              <ProgressTab />
+            </ErrorBoundary>
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -141,9 +218,12 @@ function DiffTab() {
       if (cancelled) return;
       setLoading(true);
       try {
-        const wsPath = useWorkspace.getState().workspaces.find(
-          (w) => w.id === useWorkspace.getState().activeWorkspaceId
-        )?.path ?? "";
+        const wsPath =
+          useWorkspace
+            .getState()
+            .workspaces.find(
+              (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+            )?.path ?? "";
 
         // Strategy 1: Check if there's a DiffProposal attached to a pending tool call for this file
         const chatState = useChat.getState();
@@ -187,23 +267,30 @@ function DiffTab() {
           const { Command } = await import("@tauri-apps/plugin-shell");
 
           // Resolve relative paths to absolute for readFile
-          const absPath = wsPath && !current.path.startsWith("/") && !current.path.startsWith("C:")
-            ? `${wsPath}/${current.path}`
-            : current.path;
+          const absPath =
+            wsPath &&
+            !current.path.startsWith("/") &&
+            !current.path.startsWith("C:")
+              ? `${wsPath}/${current.path}`
+              : current.path;
 
-          const relPath = wsPath && current.path.startsWith(wsPath)
-            ? current.path.slice(wsPath.length + 1)
-            : current.path;
+          const relPath =
+            wsPath && current.path.startsWith(wsPath)
+              ? current.path.slice(wsPath.length + 1)
+              : current.path;
 
           if (current.action === "deleted") {
             // File is deleted — read original from git HEAD
             setModifiedContent("");
             if (wsPath && relPath) {
               try {
-                const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+                const cmd = Command.create("git", ["show", `HEAD:${relPath}`], {
+                  cwd: wsPath,
+                });
                 const result = await cmd.execute();
                 if (!cancelled) setOriginalContent(result.stdout ?? "");
-              } catch {
+              } catch (e) {
+                if (import.meta.env.DEV) console.warn("[RightPanel] git show for original content:", e);
                 if (!cancelled) setOriginalContent("");
               }
             } else {
@@ -215,8 +302,10 @@ function DiffTab() {
             try {
               const currentContent = await api.fs.readFile(absPath);
               if (!cancelled) setModifiedContent(currentContent);
-            } catch {
-              if (!cancelled) setModifiedContent("// New file — unable to read from disk");
+            } catch (e) {
+              if (import.meta.env.DEV) console.warn("[RightPanel] readFile for new file:", e);
+              if (!cancelled)
+                setModifiedContent("// New file — unable to read from disk");
             }
           } else {
             // Modified file — read current and original from git
@@ -224,15 +313,19 @@ function DiffTab() {
               const currentContent = await api.fs.readFile(absPath);
               if (cancelled) return;
               setModifiedContent(currentContent);
-            } catch {
+            } catch (e) {
+              if (import.meta.env.DEV) console.warn("[RightPanel] readFile for modified file:", e);
               if (!cancelled) setModifiedContent("// Unable to load file");
             }
             if (wsPath && relPath) {
               try {
-                const cmd = Command.create("git", ["show", `HEAD:${relPath}`], { cwd: wsPath });
+                const cmd = Command.create("git", ["show", `HEAD:${relPath}`], {
+                  cwd: wsPath,
+                });
                 const result = await cmd.execute();
                 if (!cancelled) setOriginalContent(result.stdout ?? "");
-              } catch {
+              } catch (e) {
+                if (import.meta.env.DEV) console.warn("[RightPanel] git show for modified file original:", e);
                 if (!cancelled) setOriginalContent("");
               }
             } else {
@@ -240,7 +333,8 @@ function DiffTab() {
             }
           }
         }
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[RightPanel] loading diff content:", e);
         if (cancelled) return;
         // Only set error state for modified files — CREATED files keep empty original
         if (current.action !== "created") {
@@ -250,7 +344,9 @@ function DiffTab() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [current]);
 
   if (!current) {
@@ -260,9 +356,12 @@ function DiffTab() {
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
             <Columns className="w-7 h-7 text-dalam-accent-primary" />
           </div>
-          <p className="text-sm text-dalam-text-primary font-medium mb-1">No diff selected</p>
+          <p className="text-sm text-dalam-text-primary font-medium mb-1">
+            No diff selected
+          </p>
           <p className="text-xs text-dalam-text-muted max-w-[200px] leading-relaxed">
-            Click on a file in the Git tab or select a change from the chat to view its diff here.
+            Click on a file in the Git tab or select a change from the chat to
+            view its diff here.
           </p>
         </div>
       </div>
@@ -274,17 +373,49 @@ function DiffTab() {
       <div className="flex items-center justify-between px-3 py-2 border-b border-dalam-border-primary bg-dalam-bg-tertiary/50 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
-          <span className="text-xs text-dalam-text-primary font-mono truncate">{current.path}</span>
-          <span className="px-1.5 py-0.5 text-[9px] rounded bg-dalam-bg-active text-dalam-text-muted uppercase flex-shrink-0">{current.action}</span>
+          <span className="text-xs text-dalam-text-primary font-mono truncate">
+            {current.path}
+          </span>
+          <span className="px-1.5 py-0.5 text-[9px] rounded bg-dalam-bg-active text-dalam-text-muted uppercase flex-shrink-0">
+            {current.action}
+          </span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-          <button className="btn-icon" onClick={prev} disabled={history.length === 0} title="Previous change"><ArrowLeft className="w-3.5 h-3.5" /></button>
-          <button className="btn-icon" onClick={next} disabled={forwardStack.length === 0} title="Next change"><ArrowRight className="w-3.5 h-3.5" /></button>
+          <button
+            className="btn-icon"
+            onClick={prev}
+            disabled={history.length === 0}
+            title="Previous change"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            className="btn-icon"
+            onClick={next}
+            disabled={forwardStack.length === 0}
+            title="Next change"
+          >
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
           <div className="w-px h-4 bg-dalam-border-primary mx-1" />
-          <button className={`btn-icon ${view === "unified" ? "text-dalam-accent-primary" : ""}`} onClick={() => setView("unified")} title="Unified view"><Code2 className="w-3.5 h-3.5" /></button>
-          <button className={`btn-icon ${view === "split" ? "text-dalam-accent-primary" : ""}`} onClick={() => setView("split")} title="Split view"><Columns className="w-3.5 h-3.5" /></button>
+          <button
+            className={`btn-icon ${view === "unified" ? "text-dalam-accent-primary" : ""}`}
+            onClick={() => setView("unified")}
+            title="Unified view"
+          >
+            <Code2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            className={`btn-icon ${view === "split" ? "text-dalam-accent-primary" : ""}`}
+            onClick={() => setView("split")}
+            title="Split view"
+          >
+            <Columns className="w-3.5 h-3.5" />
+          </button>
           <div className="w-px h-4 bg-dalam-border-primary mx-1" />
-          <button className="btn-icon" onClick={close} title="Close diff"><X className="w-3.5 h-3.5" /></button>
+          <button className="btn-icon" onClick={close} title="Close diff">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
@@ -293,15 +424,30 @@ function DiffTab() {
           <Loader2 className="w-5 h-5 text-dalam-accent-primary animate-spin" />
         </div>
       ) : (
-        <DiffContent originalContent={originalContent} modifiedContent={modifiedContent} view={view} />
+        <DiffContent
+          originalContent={originalContent}
+          modifiedContent={modifiedContent}
+          view={view}
+        />
       )}
     </div>
   );
 }
 
 /** Render the actual diff content using the LCS-based diff algorithm. */
-function DiffContent({ originalContent, modifiedContent, view }: { originalContent: string; modifiedContent: string; view: "unified" | "split" }) {
-  const diff = useMemo(() => computeDiff(originalContent, modifiedContent), [originalContent, modifiedContent]);
+function DiffContent({
+  originalContent,
+  modifiedContent,
+  view,
+}: {
+  originalContent: string;
+  modifiedContent: string;
+  view: "unified" | "split";
+}) {
+  const diff = useMemo(
+    () => computeDiff(originalContent, modifiedContent),
+    [originalContent, modifiedContent],
+  );
 
   if (diff.hunks.length === 0) {
     return (
@@ -309,7 +455,9 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
         <div className="text-center">
           <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" />
           <p className="text-sm text-dalam-text-muted">No differences</p>
-          <p className="text-xs text-dalam-text-muted/60 mt-1">Files are identical</p>
+          <p className="text-xs text-dalam-text-muted/60 mt-1">
+            Files are identical
+          </p>
         </div>
       </div>
     );
@@ -319,9 +467,15 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
     <div className="flex-1 min-h-0 overflow-y-auto p-3">
       {/* Summary bar */}
       <div className="flex items-center gap-3 mb-3 text-[11px]">
-        <span className="text-dalam-git-added font-mono">+{diff.additions}</span>
-        <span className="text-dalam-git-deleted font-mono">-{diff.deletions}</span>
-        <span className="text-dalam-text-muted">{diff.hunks.length} hunk{diff.hunks.length !== 1 ? "s" : ""}</span>
+        <span className="text-dalam-git-added font-mono">
+          +{diff.additions}
+        </span>
+        <span className="text-dalam-git-deleted font-mono">
+          -{diff.deletions}
+        </span>
+        <span className="text-dalam-text-muted">
+          {diff.hunks.length} hunk{diff.hunks.length !== 1 ? "s" : ""}
+        </span>
       </div>
 
       {view === "unified" ? (
@@ -330,11 +484,19 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
             <div key={hunkIdx} className="mb-3">
               {/* Hunk header */}
               <div className="flex items-center px-2 py-1 bg-dalam-bg-tertiary/60 text-dalam-text-muted text-[10px] border-t border-b border-dalam-border-primary/40">
-                <span>@@ -{hunk.oldStart},{hunk.oldCount} +{hunk.newStart},{hunk.newCount} @@</span>
+                <span>
+                  @@ -{hunk.oldStart},{hunk.oldCount} +{hunk.newStart},
+                  {hunk.newCount} @@
+                </span>
               </div>
               {/* Lines */}
               {hunk.lines.map((line, lineIdx) => {
-                const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
+                const prefix =
+                  line.type === "add"
+                    ? "+"
+                    : line.type === "remove"
+                      ? "-"
+                      : " ";
                 return (
                   <div
                     key={lineIdx}
@@ -346,22 +508,34 @@ function DiffContent({ originalContent, modifiedContent, view }: { originalConte
                           : ""
                     }`}
                   >
-                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
-                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
-                    <span className={`w-5 text-center select-none flex-shrink-0 ${
-                      line.type === "add"
-                        ? "text-dalam-git-added"
-                        : line.type === "remove"
-                          ? "text-dalam-git-deleted"
-                          : "text-dalam-text-muted/40"
-                    }`}>{prefix}</span>
-                    <span className={`flex-1 whitespace-pre px-1 ${
-                      line.type === "add"
-                        ? "text-dalam-git-added"
-                        : line.type === "remove"
-                          ? "text-dalam-git-deleted"
-                          : "text-dalam-text-primary"
-                    }`}>{line.content || "\u00A0"}</span>
+                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">
+                      {line.oldLineNum ?? ""}
+                    </span>
+                    <span className="w-[38px] text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">
+                      {line.newLineNum ?? ""}
+                    </span>
+                    <span
+                      className={`w-5 text-center select-none flex-shrink-0 ${
+                        line.type === "add"
+                          ? "text-dalam-git-added"
+                          : line.type === "remove"
+                            ? "text-dalam-git-deleted"
+                            : "text-dalam-text-muted/40"
+                      }`}
+                    >
+                      {prefix}
+                    </span>
+                    <span
+                      className={`flex-1 whitespace-pre px-1 ${
+                        line.type === "add"
+                          ? "text-dalam-git-added"
+                          : line.type === "remove"
+                            ? "text-dalam-git-deleted"
+                            : "text-dalam-text-primary"
+                      }`}
+                    >
+                      {line.content || "\u00A0"}
+                    </span>
                   </div>
                 );
               })}
@@ -391,12 +565,20 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
       dst.scrollTop = src.scrollTop;
       dst.scrollLeft = src.scrollLeft;
     }
-    requestAnimationFrame(() => { syncingRef.current = false; });
+    requestAnimationFrame(() => {
+      syncingRef.current = false;
+    });
   }, []);
 
   const [leftLines, rightLines] = useMemo(() => {
-    const left: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
-    const right: { line: import("@/lib/diff").ComputedDiffLine; rowIdx: number }[] = [];
+    const left: {
+      line: import("@/lib/diff").ComputedDiffLine;
+      rowIdx: number;
+    }[] = [];
+    const right: {
+      line: import("@/lib/diff").ComputedDiffLine;
+      rowIdx: number;
+    }[] = [];
     let rowIdx = 0;
 
     for (const hunk of hunks) {
@@ -438,35 +620,73 @@ function SplitDiffView({ hunks }: { hunks: import("@/lib/diff").DiffHunk[] }) {
   return (
     <div className="flex gap-0 border border-dalam-border-primary/40 rounded-lg overflow-hidden">
       {/* Left panel: old */}
-      <div ref={leftRef} className="flex-1 min-w-0 overflow-y-auto border-r border-dalam-border-primary/40" onScroll={() => handleScroll("left")}>
-        <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">Original</div>
+      <div
+        ref={leftRef}
+        className="flex-1 min-w-0 overflow-y-auto border-r border-dalam-border-primary/40"
+        onScroll={() => handleScroll("left")}
+      >
+        <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">
+          Original
+        </div>
         {Array.from({ length: totalRows }, (_, i) => {
           const entry = leftLines[i];
           if (!entry) return <div key={i} className="h-[20px]" />;
           const { line } = entry;
           const isRemove = line.type === "remove";
           return (
-            <div key={i} className={`flex hover:bg-dalam-bg-hover/30 text-[11px] font-mono leading-relaxed ${isRemove ? "bg-dalam-git-deleted/10" : ""}`}>
-              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.oldLineNum ?? ""}</span>
-              <span className={`w-4 text-center select-none flex-shrink-0 ${isRemove ? "text-dalam-git-deleted" : "text-dalam-text-muted/30"}`}>{isRemove ? "-" : " "}</span>
-              <span className={`flex-1 whitespace-pre px-1 ${isRemove ? "text-dalam-git-deleted" : "text-dalam-text-secondary"}`}>{line.content || "\u00A0"}</span>
+            <div
+              key={i}
+              className={`flex hover:bg-dalam-bg-hover/30 text-[11px] font-mono leading-relaxed ${isRemove ? "bg-dalam-git-deleted/10" : ""}`}
+            >
+              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">
+                {line.oldLineNum ?? ""}
+              </span>
+              <span
+                className={`w-4 text-center select-none flex-shrink-0 ${isRemove ? "text-dalam-git-deleted" : "text-dalam-text-muted/30"}`}
+              >
+                {isRemove ? "-" : " "}
+              </span>
+              <span
+                className={`flex-1 whitespace-pre px-1 ${isRemove ? "text-dalam-git-deleted" : "text-dalam-text-secondary"}`}
+              >
+                {line.content || "\u00A0"}
+              </span>
             </div>
           );
         })}
       </div>
       {/* Right panel: new */}
-      <div ref={rightRef} className="flex-1 min-w-0 overflow-y-auto" onScroll={() => handleScroll("right")}>
-        <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">Modified</div>
+      <div
+        ref={rightRef}
+        className="flex-1 min-w-0 overflow-y-auto"
+        onScroll={() => handleScroll("right")}
+      >
+        <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-1 px-2 py-1 bg-dalam-bg-tertiary/40">
+          Modified
+        </div>
         {Array.from({ length: totalRows }, (_, i) => {
           const entry = rightLines[i];
           if (!entry) return <div key={i} className="h-[20px]" />;
           const { line } = entry;
           const isAdd = line.type === "add";
           return (
-            <div key={i} className={`flex hover:bg-dalam-bg-hover/30 text-[11px] font-mono leading-relaxed ${isAdd ? "bg-dalam-git-added/10" : ""}`}>
-              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">{line.newLineNum ?? ""}</span>
-              <span className={`w-4 text-center select-none flex-shrink-0 ${isAdd ? "text-dalam-git-added" : "text-dalam-text-muted/30"}`}>{isAdd ? "+" : " "}</span>
-              <span className={`flex-1 whitespace-pre px-1 ${isAdd ? "text-dalam-git-added" : "text-dalam-text-primary"}`}>{line.content || "\u00A0"}</span>
+            <div
+              key={i}
+              className={`flex hover:bg-dalam-bg-hover/30 text-[11px] font-mono leading-relaxed ${isAdd ? "bg-dalam-git-added/10" : ""}`}
+            >
+              <span className="w-10 text-right pr-1 opacity-35 select-none tabular-nums text-dalam-text-muted flex-shrink-0">
+                {line.newLineNum ?? ""}
+              </span>
+              <span
+                className={`w-4 text-center select-none flex-shrink-0 ${isAdd ? "text-dalam-git-added" : "text-dalam-text-muted/30"}`}
+              >
+                {isAdd ? "+" : " "}
+              </span>
+              <span
+                className={`flex-1 whitespace-pre px-1 ${isAdd ? "text-dalam-git-added" : "text-dalam-text-primary"}`}
+              >
+                {line.content || "\u00A0"}
+              </span>
             </div>
           );
         })}
@@ -480,7 +700,12 @@ function ReviewTab() {
   const openDiff = useDiffView((s) => s.openFile);
 
   const fileChanges = useMemo(() => {
-    const changes: { path: string; action: string; additions: number; deletions: number }[] = [];
+    const changes: {
+      path: string;
+      action: string;
+      additions: number;
+      deletions: number;
+    }[] = [];
     const seen = new Set<string>();
     // Include committed changes from messages
     for (const msg of messages) {
@@ -513,9 +738,12 @@ function ReviewTab() {
             <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
               <WandSparkles className="w-7 h-7 text-dalam-accent-primary" />
             </div>
-            <p className="text-sm text-dalam-text-primary font-medium mb-1">No Changes Yet</p>
+            <p className="text-sm text-dalam-text-primary font-medium mb-1">
+              No Changes Yet
+            </p>
             <p className="text-xs text-dalam-text-muted max-w-[200px] leading-relaxed">
-              File changes made by the agent will appear here. Click any file to review the diff.
+              File changes made by the agent will appear here. Click any file to
+              review the diff.
             </p>
           </div>
         </div>
@@ -526,23 +754,40 @@ function ReviewTab() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="px-3 py-2 border-b border-dalam-border-primary">
-        <span className="text-xs text-dalam-text-muted">{fileChanges.length} file(s) changed</span>
+        <span className="text-xs text-dalam-text-muted">
+          {fileChanges.length} file(s) changed
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {fileChanges.map((fc) => (
           <div
             key={fc.path}
             className="flex items-center gap-2 px-3 py-2 hover:bg-dalam-bg-hover transition-colors cursor-pointer"
-            onClick={() => { openDiff({ path: fc.path, action: fc.action as "created" | "modified" | "deleted", additions: fc.additions, deletions: fc.deletions }); }}
+            onClick={() => {
+              openDiff({
+                path: fc.path,
+                action: fc.action as "created" | "modified" | "deleted",
+                additions: fc.additions,
+                deletions: fc.deletions,
+              });
+            }}
           >
             <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-xs text-dalam-text-primary truncate">{fc.path.split("/").pop()}</div>
-              <div className="text-[10px] text-dalam-text-muted truncate">{fc.path}</div>
+              <div className="text-xs text-dalam-text-primary truncate">
+                {fc.path.split("/").pop()}
+              </div>
+              <div className="text-[10px] text-dalam-text-muted truncate">
+                {fc.path}
+              </div>
             </div>
             <div className="flex items-center gap-1 text-[10px]">
-              {fc.additions > 0 && <span className="text-dalam-git-added">+{fc.additions}</span>}
-              {fc.deletions > 0 && <span className="text-dalam-git-deleted">-{fc.deletions}</span>}
+              {fc.additions > 0 && (
+                <span className="text-dalam-git-added">+{fc.additions}</span>
+              )}
+              {fc.deletions > 0 && (
+                <span className="text-dalam-git-deleted">-{fc.deletions}</span>
+              )}
             </div>
           </div>
         ))}
@@ -555,8 +800,23 @@ function ProgressTab() {
   const { todos, taskPlan, taskPlanSummary, isStreaming } = useChat();
   // Combine todos and taskPlan for display
   const allTasks = [
-    ...todos.map(t => ({ id: t.id, title: t.content, status: t.status === "in_progress" ? "running" as const : t.status === "completed" ? "completed" as const : t.status === "failed" ? "failed" as const : "pending" as const })),
-    ...(taskPlan ?? []).map(t => ({ id: t.id, title: t.title, status: t.status })),
+    ...todos.map((t) => ({
+      id: t.id,
+      title: t.content,
+      status:
+        t.status === "in_progress"
+          ? ("running" as const)
+          : t.status === "completed"
+            ? ("completed" as const)
+            : t.status === "failed"
+              ? ("failed" as const)
+              : ("pending" as const),
+    })),
+    ...(taskPlan ?? []).map((t) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+    })),
   ];
   const activeTasks = allTasks.filter((t) => t.status === "running");
   const pendingTasks = allTasks.filter((t) => t.status === "pending");
@@ -569,7 +829,9 @@ function ProgressTab() {
         <div className="text-center">
           <ListTodo className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" />
           <p className="text-sm text-dalam-text-muted">No tasks yet</p>
-          <p className="text-xs text-dalam-text-muted/60 mt-1">The agent will create a task plan when working on complex tasks</p>
+          <p className="text-xs text-dalam-text-muted/60 mt-1">
+            The agent will create a task plan when working on complex tasks
+          </p>
         </div>
       </div>
     );
@@ -580,7 +842,9 @@ function ProgressTab() {
       {isStreaming && activeTasks.length === 0 && (
         <div className="flex items-center gap-2 px-3 py-2 bg-dalam-bg-tertiary rounded-lg">
           <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin" />
-          <span className="text-xs text-dalam-text-secondary">Processing...</span>
+          <span className="text-xs text-dalam-text-secondary">
+            Processing...
+          </span>
         </div>
       )}
       {activeTasks.length > 0 && (
@@ -590,7 +854,10 @@ function ProgressTab() {
             In progress
           </div>
           {activeTasks.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+            <div
+              key={t.id}
+              className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
+            >
               <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin mt-0.5 flex-shrink-0" />
               <span className="text-xs text-dalam-text-primary">{t.title}</span>
             </div>
@@ -599,9 +866,14 @@ function ProgressTab() {
       )}
       {pendingTasks.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-2">Pending</div>
+          <div className="text-[10px] uppercase tracking-wider text-dalam-text-muted mb-2">
+            Pending
+          </div>
           {pendingTasks.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+            <div
+              key={t.id}
+              className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
+            >
               <Circle className="w-3.5 h-3.5 text-dalam-text-muted mt-0.5 flex-shrink-0" />
               <span className="text-xs text-dalam-text-muted">{t.title}</span>
             </div>
@@ -610,20 +882,32 @@ function ProgressTab() {
       )}
       {completedTasks.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-dalam-git-added mb-2">Completed ({completedTasks.length}/{allTasks.length})</div>
+          <div className="text-[10px] uppercase tracking-wider text-dalam-git-added mb-2">
+            Completed ({completedTasks.length}/{allTasks.length})
+          </div>
           {completedTasks.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+            <div
+              key={t.id}
+              className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
+            >
               <Check className="w-3.5 h-3.5 text-dalam-git-added mt-0.5 flex-shrink-0" />
-              <span className="text-xs text-dalam-text-primary line-through opacity-70">{t.title}</span>
+              <span className="text-xs text-dalam-text-primary line-through opacity-70">
+                {t.title}
+              </span>
             </div>
           ))}
         </div>
       )}
       {failedTasks.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-dalam-git-deleted mb-2">Failed</div>
+          <div className="text-[10px] uppercase tracking-wider text-dalam-git-deleted mb-2">
+            Failed
+          </div>
           {failedTasks.map((t) => (
-            <div key={t.id} className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors">
+            <div
+              key={t.id}
+              className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
+            >
               <X className="w-3.5 h-3.5 text-dalam-git-deleted mt-0.5 flex-shrink-0" />
               <span className="text-xs text-dalam-git-deleted">{t.title}</span>
             </div>
@@ -632,29 +916,50 @@ function ProgressTab() {
       )}
       {taskPlanSummary && (
         <div className="mt-2 px-3 py-2 bg-dalam-bg-secondary rounded-lg border border-dalam-border-primary">
-          <span className="text-xs text-dalam-text-secondary">{taskPlanSummary}</span>
+          <span className="text-xs text-dalam-text-secondary">
+            {taskPlanSummary}
+          </span>
         </div>
       )}
     </div>
   );
 }
 
-function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error: string | null; onRefresh: () => void }) {
+function GitTab({
+  status,
+  error,
+  onRefresh,
+}: {
+  status: GitStatus | null;
+  error: string | null;
+  onRefresh: () => void;
+}) {
   const [commitMsg, setCommitMsg] = useState("");
   const [showAllModified, setShowAllModified] = useState(false);
   const [showAllAdded, setShowAllAdded] = useState(false);
   const [showAllDeleted, setShowAllDeleted] = useState(false);
   const [showAllUntracked, setShowAllUntracked] = useState(false);
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
+    new Set(),
+  );
   const toast = useToast();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const ws = workspaces.find((w) => w.id === activeWorkspaceId);
 
-  const hasChanges = status && ((status.modified?.length ?? 0) > 0 || (status.added?.length ?? 0) > 0 || (status.deleted?.length ?? 0) > 0 || (status.untracked?.length ?? 0) > 0);
-  const totalChanges = (status?.modified?.length ?? 0) + (status?.added?.length ?? 0) + (status?.deleted?.length ?? 0) + (status?.untracked?.length ?? 0);
+  const hasChanges =
+    status &&
+    ((status.modified?.length ?? 0) > 0 ||
+      (status.added?.length ?? 0) > 0 ||
+      (status.deleted?.length ?? 0) > 0 ||
+      (status.untracked?.length ?? 0) > 0);
+  const totalChanges =
+    (status?.modified?.length ?? 0) +
+    (status?.added?.length ?? 0) +
+    (status?.deleted?.length ?? 0) +
+    (status?.untracked?.length ?? 0);
 
   const toggleSection = (section: string) => {
-    setCollapsedSections(prev => {
+    setCollapsedSections((prev) => {
       const next = new Set(prev);
       if (next.has(section)) next.delete(section);
       else next.add(section);
@@ -663,19 +968,30 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
   };
 
   const handleCommit = useCallback(async () => {
-    if (!commitMsg.trim()) { toast.error("Empty", "Commit message is required"); return; }
+    if (!commitMsg.trim()) {
+      toast.error("Empty", "Commit message is required");
+      return;
+    }
     try {
       const api = createDalamAPI();
-      const wsPath = useWorkspace.getState().workspaces.find(
-        (w) => w.id === useWorkspace.getState().activeWorkspaceId
-      )?.path ?? ".";
+      const wsPath =
+        useWorkspace
+          .getState()
+          .workspaces.find(
+            (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+          )?.path ?? ".";
       const { Command } = await import("@tauri-apps/plugin-shell");
       await Command.create("git", ["add", "-A"], { cwd: wsPath }).execute();
       await api.git.commit(wsPath, commitMsg.trim());
       toast.success("Committed", commitMsg.trim().slice(0, 50));
       setCommitMsg("");
       onRefresh();
-    } catch (err) { toast.error("Error", `Failed to commit: ${(err as Error)?.message ?? "Unknown error"}`); }
+    } catch (err) {
+      toast.error(
+        "Error",
+        `Failed to commit: ${(err as Error)?.message ?? "Unknown error"}`,
+      );
+    }
   }, [commitMsg, onRefresh, toast]);
 
   if (!status && !error) {
@@ -696,9 +1012,13 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-bg-tertiary flex items-center justify-center">
             <GitBranch className="w-7 h-7 text-dalam-text-muted/50" />
           </div>
-          <p className="text-sm text-dalam-text-primary font-medium mb-1">No git repository</p>
+          <p className="text-sm text-dalam-text-primary font-medium mb-1">
+            No git repository
+          </p>
           <p className="text-xs text-dalam-text-muted max-w-[220px] leading-relaxed mb-4">
-            {ws ? `The folder "${ws.name}" is not a git repository.` : "No workspace selected."}
+            {ws
+              ? `The folder "${ws.name}" is not a git repository.`
+              : "No workspace selected."}
           </p>
           {ws && (
             <button
@@ -706,18 +1026,32 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 let confirmed;
                 try {
                   const { confirm } = await import("@tauri-apps/plugin-dialog");
-                  confirmed = await confirm("Initialize a new Git repository in this folder?", { title: "Initialize Git?", kind: "warning" });
-                } catch {
-                  confirmed = window.confirm("Initialize a new Git repository in this folder?");
+                  confirmed = await confirm(
+                    "Initialize a new Git repository in this folder?",
+                    { title: "Initialize Git?", kind: "warning" },
+                  );
+                } catch (e) {
+                  if (import.meta.env.DEV) console.warn("[RightPanel] Tauri confirm dialog failed, falling back:", e);
+                  confirmed = window.confirm(
+                    "Initialize a new Git repository in this folder?",
+                  );
                 }
                 if (!confirmed) return;
                 try {
                   const { Command } = await import("@tauri-apps/plugin-shell");
-                  await Command.create("git", ["init"], { cwd: ws.path }).execute();
-                  toast.success("Git initialized", "Repository created successfully");
+                  await Command.create("git", ["init"], {
+                    cwd: ws.path,
+                  }).execute();
+                  toast.success(
+                    "Git initialized",
+                    "Repository created successfully",
+                  );
                   onRefresh();
                 } catch (err) {
-                  toast.error("Failed to initialize git", (err as Error)?.message ?? "Unknown error");
+                  toast.error(
+                    "Failed to initialize git",
+                    (err as Error)?.message ?? "Unknown error",
+                  );
                 }
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs font-medium rounded-lg transition-colors mx-auto"
@@ -734,19 +1068,35 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
   return (
     <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
       {/* Branch info */}
-      {status && (<div className="px-3 pt-2.5 pb-1.5 border-b border-dalam-border-primary">
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-dalam-accent-subtle rounded-md">
-            <GitBranch className="w-3 h-3 text-dalam-accent-primary" />
-            <span className="text-[11px] font-medium text-dalam-accent-primary font-mono">{status.branch}</span>
-          </div>
-          <div className="flex items-center gap-1 text-[10px] text-dalam-text-muted">
-            {status.ahead > 0 && <span className="flex items-center gap-0.5"><ArrowUp className="w-2.5 h-2.5" />{status.ahead}</span>}
-            {status.behind > 0 && <span className="flex items-center gap-0.5"><ArrowDown className="w-2.5 h-2.5" />{status.behind}</span>}
-            {status.ahead === 0 && status.behind === 0 && <span className="text-dalam-git-added">up to date</span>}
+      {status && (
+        <div className="px-3 pt-2.5 pb-1.5 border-b border-dalam-border-primary">
+          <div className="flex items-center gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-dalam-accent-subtle rounded-md">
+              <GitBranch className="w-3 h-3 text-dalam-accent-primary" />
+              <span className="text-[11px] font-medium text-dalam-accent-primary font-mono">
+                {status.branch}
+              </span>
+            </div>
+            <div className="flex items-center gap-1 text-[10px] text-dalam-text-muted">
+              {status.ahead > 0 && (
+                <span className="flex items-center gap-0.5">
+                  <ArrowUp className="w-2.5 h-2.5" />
+                  {status.ahead}
+                </span>
+              )}
+              {status.behind > 0 && (
+                <span className="flex items-center gap-0.5">
+                  <ArrowDown className="w-2.5 h-2.5" />
+                  {status.behind}
+                </span>
+              )}
+              {status.ahead === 0 && status.behind === 0 && (
+                <span className="text-dalam-git-added">up to date</span>
+              )}
+            </div>
           </div>
         </div>
-      </div>)}
+      )}
 
       {hasChanges ? (
         <>
@@ -757,7 +1107,12 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
               placeholder={`Commit message (${navigator.platform.includes("Mac") ? "Cmd" : "Ctrl"}+Enter to commit)`}
               value={commitMsg}
               onChange={(e) => setCommitMsg(e.target.value)}
-              onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); handleCommit(); } }}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  void handleCommit();
+                }
+              }}
               rows={2}
             />
             <button
@@ -767,7 +1122,9 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
             >
               <GitCommitHorizontal className="w-3.5 h-3.5" />
               Commit
-              <span className="text-[9px] opacity-60 ml-1">({totalChanges})</span>
+              <span className="text-[9px] opacity-60 ml-1">
+                ({totalChanges})
+              </span>
             </button>
           </div>
 
@@ -781,11 +1138,23 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 onToggle={() => toggleSection("modified")}
                 color="text-dalam-git-modified"
               >
-                {(showAllModified ? status.modified : status.modified.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="modified" icon="M" iconColor="text-dalam-git-modified" />
+                {(showAllModified
+                  ? status.modified
+                  : status.modified.slice(0, 20)
+                ).map((f) => (
+                  <FileRow
+                    key={f}
+                    path={f}
+                    action="modified"
+                    icon="M"
+                    iconColor="text-dalam-git-modified"
+                  />
                 ))}
                 {status.modified.length > 20 && !showAllModified && (
-                  <button onClick={() => setShowAllModified(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                  <button
+                    onClick={() => setShowAllModified(true)}
+                    className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
+                  >
                     Show all {status.modified.length} files
                   </button>
                 )}
@@ -799,11 +1168,22 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 onToggle={() => toggleSection("added")}
                 color="text-dalam-git-added"
               >
-                {(showAllAdded ? status.added : status.added.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="created" icon="A" iconColor="text-dalam-git-added" />
-                ))}
+                {(showAllAdded ? status.added : status.added.slice(0, 20)).map(
+                  (f) => (
+                    <FileRow
+                      key={f}
+                      path={f}
+                      action="created"
+                      icon="A"
+                      iconColor="text-dalam-git-added"
+                    />
+                  ),
+                )}
                 {status.added.length > 20 && !showAllAdded && (
-                  <button onClick={() => setShowAllAdded(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                  <button
+                    onClick={() => setShowAllAdded(true)}
+                    className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
+                  >
                     Show all {status.added.length} files
                   </button>
                 )}
@@ -817,11 +1197,23 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 onToggle={() => toggleSection("deleted")}
                 color="text-dalam-git-deleted"
               >
-                {(showAllDeleted ? status.deleted : status.deleted.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="deleted" icon="D" iconColor="text-dalam-git-deleted" />
+                {(showAllDeleted
+                  ? status.deleted
+                  : status.deleted.slice(0, 20)
+                ).map((f) => (
+                  <FileRow
+                    key={f}
+                    path={f}
+                    action="deleted"
+                    icon="D"
+                    iconColor="text-dalam-git-deleted"
+                  />
                 ))}
                 {status.deleted.length > 20 && !showAllDeleted && (
-                  <button onClick={() => setShowAllDeleted(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                  <button
+                    onClick={() => setShowAllDeleted(true)}
+                    className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
+                  >
                     Show all {status.deleted.length} files
                   </button>
                 )}
@@ -835,11 +1227,23 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
                 onToggle={() => toggleSection("untracked")}
                 color="text-dalam-text-muted"
               >
-                {(showAllUntracked ? status.untracked : status.untracked.slice(0, 20)).map((f) => (
-                  <FileRow key={f} path={f} action="created" icon="?" iconColor="text-dalam-text-muted" />
+                {(showAllUntracked
+                  ? status.untracked
+                  : status.untracked.slice(0, 20)
+                ).map((f) => (
+                  <FileRow
+                    key={f}
+                    path={f}
+                    action="created"
+                    icon="?"
+                    iconColor="text-dalam-text-muted"
+                  />
                 ))}
                 {status.untracked.length > 20 && !showAllUntracked && (
-                  <button onClick={() => setShowAllUntracked(true)} className="text-xs text-dalam-accent-primary hover:underline px-3 py-1">
+                  <button
+                    onClick={() => setShowAllUntracked(true)}
+                    className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
+                  >
                     Show all {status.untracked.length} files
                   </button>
                 )}
@@ -852,7 +1256,9 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
           <div className="text-center">
             <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" />
             <p className="text-sm text-dalam-text-muted">No changes</p>
-            <p className="text-xs text-dalam-text-muted/60 mt-1">Working tree is clean</p>
+            <p className="text-xs text-dalam-text-muted/60 mt-1">
+              Working tree is clean
+            </p>
           </div>
         </div>
       )}
@@ -860,14 +1266,32 @@ function GitTab({ status, error, onRefresh }: { status: GitStatus | null; error:
   );
 }
 
-function GitSection({ label, count, collapsed, onToggle, color, children }: { label: string; count: number; collapsed: boolean; onToggle: () => void; color: string; children: React.ReactNode }) {
+function GitSection({
+  label,
+  count,
+  collapsed,
+  onToggle,
+  color,
+  children,
+}: {
+  label: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  color: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <button
         onClick={onToggle}
         className="flex items-center gap-1.5 w-full px-3 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted hover:bg-dalam-bg-hover transition-colors"
       >
-        <svg className={`w-2.5 h-2.5 transition-transform ${collapsed ? "" : "rotate-90"}`} viewBox="0 0 12 12" fill="currentColor">
+        <svg
+          className={`w-2.5 h-2.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
+          viewBox="0 0 12 12"
+          fill="currentColor"
+        >
           <path d="M4.5 2L9.5 6L4.5 10V2Z" />
         </svg>
         <span className={color}>{count}</span>
@@ -878,7 +1302,17 @@ function GitSection({ label, count, collapsed, onToggle, color, children }: { la
   );
 }
 
-function FileRow({ path, icon, iconColor, action = "modified" }: { path: string; icon: string; iconColor: string; action?: "created" | "modified" | "deleted" | "renamed" }) {
+function FileRow({
+  path,
+  icon,
+  iconColor,
+  action = "modified",
+}: {
+  path: string;
+  icon: string;
+  iconColor: string;
+  action?: "created" | "modified" | "deleted" | "renamed";
+}) {
   const openDiff = useDiffView((s) => s.openFile);
   const fileName = path.split("/").pop() ?? path;
   const dir = path.split("/").slice(0, -1).join("/");
@@ -887,13 +1321,32 @@ function FileRow({ path, icon, iconColor, action = "modified" }: { path: string;
     openDiff({ path, action, additions: 0, deletions: 0 });
   };
   return (
-    <div className="flex items-center gap-2 px-3 py-1 hover:bg-dalam-bg-hover transition-colors group cursor-pointer" onClick={handleOpenDiff}>
-      <span className={`w-4 h-4 flex items-center justify-center text-[9px] font-bold flex-shrink-0 ${iconColor}`}>{icon}</span>
+    <div
+      className="flex items-center gap-2 px-3 py-1 hover:bg-dalam-bg-hover transition-colors group cursor-pointer"
+      onClick={handleOpenDiff}
+    >
+      <span
+        className={`w-4 h-4 flex items-center justify-center text-[9px] font-bold flex-shrink-0 ${iconColor}`}
+      >
+        {icon}
+      </span>
       <div className="flex-1 min-w-0">
-        <div className="text-xs text-dalam-text-primary truncate font-mono">{fileName}</div>
-        {dir && <div className="text-[9px] text-dalam-text-muted/60 truncate">{dir}</div>}
+        <div className="text-xs text-dalam-text-primary truncate font-mono">
+          {fileName}
+        </div>
+        {dir && (
+          <div className="text-[9px] text-dalam-text-muted/60 truncate">
+            {dir}
+          </div>
+        )}
       </div>
-      <button className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-dalam-text-muted hover:text-dalam-text-primary" title="Open diff" onClick={handleOpenDiff}><Eye className="w-3 h-3" /></button>
+      <button
+        className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-dalam-text-muted hover:text-dalam-text-primary"
+        title="Open diff"
+        onClick={handleOpenDiff}
+      >
+        <Eye className="w-3 h-3" />
+      </button>
     </div>
   );
 }
@@ -926,9 +1379,13 @@ function BrowserTab() {
       // Validate origin to prevent messages from external pages
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === "dalam-navigate" && e.data?.url) {
-        const tab = useUI.getState().browserTabs.find(t => t.id === activeTab?.id);
+        const tab = useUI
+          .getState()
+          .browserTabs.find((t) => t.id === activeTab?.id);
         if (tab) {
-          useUI.getState().updateBrowserTab(tab.id, { url: e.data.url, loading: false });
+          useUI
+            .getState()
+            .updateBrowserTab(tab.id, { url: e.data.url, loading: false });
         }
       }
     };
@@ -980,30 +1437,71 @@ function BrowserTab() {
             <span className="truncate max-w-[100px]">{t.title}</span>
             <button
               className="ml-1 rounded p-0.5 opacity-0 hover:opacity-100 hover:bg-dalam-bg-active transition-opacity"
-              onClick={(e) => { e.stopPropagation(); removeBrowserTab(t.id); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                removeBrowserTab(t.id);
+              }}
             >
               <X className="w-2.5 h-2.5" />
             </button>
           </div>
         ))}
-        <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex-shrink-0" onClick={() => addBrowserTab()}>
+        <button
+          className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex-shrink-0"
+          onClick={() => addBrowserTab()}
+        >
           <Plus className="w-3 h-3" />
         </button>
       </div>
 
       {/* URL bar */}
-      <form onSubmit={onNavigate} className="flex items-center gap-1.5 px-2 py-1.5 border-b border-dalam-border-primary bg-dalam-bg-tertiary/50 flex-shrink-0">
-        <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx <= 0} onClick={() => activeTab && goBackBrowser(activeTab.id)} title="Back"><ArrowLeft className="w-3 h-3" /></button>
-        <button type="button" className="btn-icon" disabled={!activeTab || activeTab.historyIdx >= activeTab.history.length - 1} onClick={() => activeTab && goForwardBrowser(activeTab.id)} title="Forward"><ArrowRight className="w-3 h-3" /></button>
-        <button type="button" className="btn-icon" onClick={() => activeTab && refreshBrowser(activeTab.id)} title="Refresh"><RefreshCw className="w-3 h-3" /></button>
+      <form
+        onSubmit={onNavigate}
+        className="flex items-center gap-1.5 px-2 py-1.5 border-b border-dalam-border-primary bg-dalam-bg-tertiary/50 flex-shrink-0"
+      >
+        <button
+          type="button"
+          className="btn-icon"
+          disabled={!activeTab || activeTab.historyIdx <= 0}
+          onClick={() => activeTab && goBackBrowser(activeTab.id)}
+          title="Back"
+        >
+          <ArrowLeft className="w-3 h-3" />
+        </button>
+        <button
+          type="button"
+          className="btn-icon"
+          disabled={
+            !activeTab || activeTab.historyIdx >= activeTab.history.length - 1
+          }
+          onClick={() => activeTab && goForwardBrowser(activeTab.id)}
+          title="Forward"
+        >
+          <ArrowRight className="w-3 h-3" />
+        </button>
+        <button
+          type="button"
+          className="btn-icon"
+          onClick={() => activeTab && refreshBrowser(activeTab.id)}
+          title="Refresh"
+        >
+          <RefreshCw className="w-3 h-3" />
+        </button>
         {activeTab?.loading && (
-          <button type="button" onClick={() => {
-            if (!activeTab) return;
-            if (iframeRef.current) {
-              iframeRef.current.src = "about:blank";
-              useUI.getState().updateBrowserTab(activeTab.id, { loading: false });
-            }
-          }} className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors" title="Stop loading">
+          <button
+            type="button"
+            onClick={() => {
+              if (!activeTab) return;
+              if (iframeRef.current) {
+                iframeRef.current.src = "about:blank";
+                useUI
+                  .getState()
+                  .updateBrowserTab(activeTab.id, { loading: false });
+              }
+            }}
+            className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+            title="Stop loading"
+          >
             <X className="w-3.5 h-3.5" />
           </button>
         )}
@@ -1027,14 +1525,18 @@ function BrowserTab() {
               className="w-full h-full border-0 bg-white"
               sandbox="allow-scripts allow-popups allow-forms"
               onLoad={() => {
-                const currentTab = useUI.getState().browserTabs.find((t) => t.id === activeTab.id);
+                const currentTab = useUI
+                  .getState()
+                  .browserTabs.find((t) => t.id === activeTab.id);
                 if (!currentTab || !currentTab.loading) return;
                 useUI.getState().updateBrowserTab(currentTab.id, {
                   loading: false,
                 });
               }}
               onError={() => {
-                const currentTab = useUI.getState().browserTabs.find((t) => t.id === activeTab.id);
+                const currentTab = useUI
+                  .getState()
+                  .browserTabs.find((t) => t.id === activeTab.id);
                 if (!currentTab || !currentTab.loading) return;
                 useUI.getState().updateBrowserTab(currentTab.id, {
                   loading: false,
@@ -1051,8 +1553,12 @@ function BrowserTab() {
           <div className="w-full h-full flex items-center justify-center p-8 bg-dalam-bg-primary">
             <div className="text-center">
               <Globe className="w-10 h-10 mx-auto mb-3 text-dalam-text-muted/40" />
-              <p className="text-sm text-dalam-text-muted">Enter a URL to browse</p>
-              <p className="text-xs text-dalam-text-muted/60 mt-1">Built-in web browser</p>
+              <p className="text-sm text-dalam-text-muted">
+                Enter a URL to browse
+              </p>
+              <p className="text-xs text-dalam-text-muted/60 mt-1">
+                Built-in web browser
+              </p>
             </div>
           </div>
         )}

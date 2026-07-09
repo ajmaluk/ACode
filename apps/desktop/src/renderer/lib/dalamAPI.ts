@@ -17,7 +17,9 @@ const _debugLog = (...args: unknown[]) => {
     if (typeof window !== "undefined" && (window as unknown as Record<string, unknown>).__DALAM_DEBUG) {
       console.log("[DALAM]", ...args);
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] if (typeof window !== \"undefined\" && (window as un:", e);
+  }
 };
 import { loadGenePool, expressGenes, formatGenesForPrompt } from "./genes";
 
@@ -115,7 +117,7 @@ interface AnthropicContentBlock {
  * instead of throwing. This allows the app to gracefully handle workspaces
  * that haven't been granted filesystem scope yet.
  */
-async function scopeSafeExists(path: string): Promise<boolean> {
+export async function scopeSafeExists(path: string): Promise<boolean> {
   try {
     const { exists } = await import("@tauri-apps/plugin-fs");
     return await exists(path);
@@ -124,6 +126,65 @@ async function scopeSafeExists(path: string): Promise<boolean> {
     const msg = (e as Error)?.message ?? String(e);
     if (msg.includes("forbidden") || msg.includes("scope")) {
       return false;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Scope-safe wrapper for Tauri's `mkdir()` function.
+ * Catches "forbidden path" errors and returns false instead of throwing.
+ */
+export async function scopeSafeMkdir(
+  path: string,
+  options?: { recursive?: boolean },
+): Promise<boolean> {
+  try {
+    const { mkdir } = await import("@tauri-apps/plugin-fs");
+    await mkdir(path, options);
+    return true;
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      return false;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Scope-safe wrapper for Tauri's `writeTextFile()` function.
+ * Catches "forbidden path" errors and returns false instead of throwing.
+ */
+export async function scopeSafeWriteFile(
+  path: string,
+  contents: string,
+): Promise<boolean> {
+  try {
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    await writeTextFile(path, contents);
+    return true;
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      return false;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Scope-safe wrapper for Tauri's `readTextFile()` function.
+ * Catches "forbidden path" errors and returns null instead of throwing.
+ */
+export async function scopeSafeReadFile(path: string): Promise<string | null> {
+  try {
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    return await readTextFile(path);
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (msg.includes("forbidden") || msg.includes("scope")) {
+      return null;
     }
     throw e;
   }
@@ -141,8 +202,13 @@ function dirname(p: string): string {
 export function getRecentFiles(): string[] {
   try {
     const raw = localStorage.getItem("dalam.recentFiles.v1");
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] getRecentFiles:", e);
+    return [];
+  }
 }
 
 function addRecentFile(path: string) {
@@ -155,7 +221,9 @@ function getStoredSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.settings);
     if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch { /* settings load failed, use defaults */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] const raw = localStorage.getItem(STORAGE_KEYS.sett:", e);
+  }
   return { ...DEFAULT_SETTINGS };
 }
 
@@ -176,7 +244,9 @@ function getProviderConfig(providerId: string): { baseUrl: string; apiKey: strin
       if (!provider?.baseUrl || !provider?.apiKey) return null;
       return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
     }
-  } catch { /* provider config parse failed */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] const raw = localStorage.getItem(`dalam.provider.$:", e);
+  }
   return null;
 }
 
@@ -358,7 +428,8 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
       arrayBuffer: getBody,
       clone: cloneResponse,
     } as Response;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
     // Fallback to browser fetch if plugin unavailable
     return fetch(url, options);
   }
@@ -471,7 +542,10 @@ async function* streamOpenAI(
   let currentClearFn: (() => void) | undefined;
   let abortHandlerOpenAI: (() => void) | null = null;
   if (signal) {
-    abortHandlerOpenAI = () => currentClearFn?.();
+    abortHandlerOpenAI = () => {
+      currentClearFn?.();
+      try { void reader.cancel(); } catch { /* reader may already be closed */ }
+    };
     signal.addEventListener("abort", abortHandlerOpenAI, { once: true });
   }
 
@@ -541,7 +615,8 @@ async function* streamOpenAI(
           }
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
-              const tcIdx = tc.index ?? 0;
+              if (tc.index === undefined) continue; // skip malformed chunks without index
+              const tcIdx = tc.index;
               const fn = tc.function;
               if (fn?.name) {
                 const existing = _tcArgBuffers.get(tcIdx);
@@ -596,7 +671,8 @@ async function* streamOpenAI(
           }
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
-              const tcIdx = tc.index ?? 0;
+              if (tc.index === undefined) continue; // skip malformed chunks without index
+              const tcIdx = tc.index;
               const fn = tc.function;
               if (fn?.name) {
                 const existing = _tcArgBuffers.get(tcIdx);
@@ -627,11 +703,13 @@ async function* streamOpenAI(
     }
     // Flush any remaining incomplete tool call buffers (emit with whatever args we have)
     for (const [, buf] of _tcArgBuffers) {
+      if (!buf.args || !buf.args.trim()) continue; // skip empty buffers
       try {
         const parsedArgs = JSON.parse(buf.args || "{}")
         const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
         yield { type: "message-delta", messageId: "", content: "\n" + xmlTag + "\n" };
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] JSON parse:", e);
         // Emit as raw text fallback so the tool call isn't silently dropped
         yield { type: "message-delta", messageId: "", content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
       }
@@ -717,7 +795,8 @@ async function* streamAnthropic(
                 const parsedArgs = JSON.parse(buf.args || "{}");
                 const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
                 yield { type: "message-delta", messageId: msgId, content: "\n" + xmlTag + "\n" };
-              } catch {
+              } catch (e) {
+                if (import.meta.env.DEV) console.warn("[DALAM] JSON parse:", e);
                 yield { type: "message-delta", messageId: msgId, content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
               }
               _anthropicToolBuffers.delete(json.content_block_id);
@@ -771,7 +850,8 @@ async function* streamAnthropic(
         const parsedArgs = JSON.parse(buf.args || "{}");
         const xmlTag = _emitToolCallXml(buf.name, parsedArgs);
         yield { type: "message-delta", messageId: msgId, content: "\n" + xmlTag + "\n" };
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] JSON parse:", e);
         yield { type: "message-delta", messageId: msgId, content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
       }
     }
@@ -807,7 +887,8 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
   let entries;
   try {
     entries = await readDir(dirPath);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] readDir(dirPath);:", e);
     return [];
   }
   const nodes: FileNode[] = [];
@@ -826,7 +907,8 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
         if (info.isSymlink || (info.realpath && info.realpath !== fullPath)) {
           continue;
         }
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] stat(fullPath);:", e);
         // if stat fails, skip to be safe
         continue;
       }
@@ -904,7 +986,9 @@ const dalamAPI: DalamAPI = {
             closeTab(tab.path);
           }
         }
-      } catch { /* store not available */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+      }
     },
     async renamePath(path, newName) {
       const { rename, readFile, writeFile: fsWriteFile, remove: fsRemove } = await import("@tauri-apps/plugin-fs");
@@ -912,7 +996,8 @@ const dalamAPI: DalamAPI = {
       const newPath = joinPathUtil(parentDir, newName);
       try {
         await rename(path, newPath);
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] rename(path, newPath);:", e);
         const bytes = await readFile(path);
         await fsWriteFile(newPath, bytes);
         await fsRemove(path);
@@ -924,7 +1009,9 @@ const dalamAPI: DalamAPI = {
         const wasActive = useWorkspace.getState().activeFilePath === path;
         closeTab(path);
         if (wasActive) setActiveFile(newPath);
-      } catch { /* store not available */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+      }
     },
     async watchPath(path: string, sessionId?: string) {
       const { watchImmediate } = await import("@tauri-apps/plugin-fs");
@@ -1301,7 +1388,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             } else {
               browserContextBlock = `\n\n=== BROWSER CONTEXT ===\nThe user referenced @browser but no matching tab is found.\nOpen tabs: ${ui.browserTabs.length}\nUse <browser_navigate url="..."/> to open a page first.\n========================`;
             }
-          } catch { /* UI not available */ }
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+          }
         }
 
         const systemPrompt =
@@ -1444,7 +1533,10 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           }
 
           // Always include the first user message (original prompt) for task context
-          const firstUserMsg = allMsgs.find((m) => m.role === "user");
+          // The first user message is the first message with role="user" AND content that
+          // doesn't start with "[Tool result" or "[Tool error" — this prevents picking
+          // a tool result message as the "first user prompt" when tool results use "user" role.
+          const firstUserMsg = allMsgs.find((m) => m.role === "user" && typeof m.content === "string" && !m.content.startsWith("[Tool ") && !m.content.startsWith("[TOOL "));
           if (firstUserMsg && !msgs.includes(firstUserMsg)) {
             const firstContent = typeof firstUserMsg.content === "string" ? firstUserMsg.content : "";
             const firstTokens = estTokens(firstContent);
@@ -1574,7 +1666,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
 
           // Start turn
           emit({ type: "message-start", messageId: sessionId });
-          useChat.setState({ isStreaming: true });
+          // isStreaming handled by appendStream on message-start
 
           await rateLimitDelay();
 
@@ -1704,10 +1796,14 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                   try {
                     const { _pendingResolutions } = await import("../store/useAppStore");
                     _pendingResolutions.set(tc.id, "approved");
-                  } catch { /* store not available */ }
+                  } catch (e) {
+                    if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+                  }
                 }
               }
-            } catch { /* store not available */ }
+            } catch (e) {
+              if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+            }
 
             // Execute tools with approval — parallel for read-only, sequential for write tools
             const toolResults: string[] = [];
@@ -1771,6 +1867,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
                     toolResults.push(`[Tool error for ${tc.name}]\nError: ${errMsg}${suggestion}`);
                   }
+                } else if (ac.signal.aborted) {
+                  emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
+                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
                 } else {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
                   toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
@@ -1849,39 +1948,16 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               const toolResultContent = toolResults.join("\n\n");
               currentHistory.push({ id: "tr-" + crypto.randomUUID(), role: "user" as const, content: toolResultContent, timestamp: Date.now() });
               totalToolCalls += parsedTools.length;
-
-              // Persist tool results to sessionMessages so the LLM sees them on the next turn
-              // Mark as isToolResult so the chat UI can filter them out (they're internal context)
-              try {
-                const { useChat } = await import("../store/useAppStore");
-                const store = useChat.getState();
-                const sid = store.activeSessionId;
-                if (sid) {
-                  const toolResultMsg: ChatMessage = {
-                    id: "tr-" + crypto.randomUUID(),
-                    role: "user",
-                    content: toolResultContent,
-                    timestamp: Date.now(),
-                    isToolResult: true,
-                  };
-                  const existing = store.sessionMessages[sid] ?? [];
-                  useChat.setState({
-                    sessionMessages: { ...store.sessionMessages, [sid]: [...existing, toolResultMsg] },
-                  });
-                }
-              } catch { /* store not available */ }
             }
 
             // Reset streaming state
             emit({ type: "message-end", messageId: lastMessageId || sessionId });
             emittedEndInThisIteration = true;
-            useChat.setState({ streamingContent: "", thinkingContent: "" });
 
             // If the abort signal fired during tool execution, break out of the
             // while loop entirely rather than continuing (which would hit the
             // aborted stream, throw AbortError, and double-emit message-end).
             if (ac.signal.aborted) {
-              useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
               break;
             }
 
@@ -1896,7 +1972,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                 (update: Record<string, unknown>) => useChat.setState(update as any),
                 "normal",
               );
-            } catch { /* ignore */ }
+            } catch (e) {
+              if (import.meta.env.DEV) console.warn("[DALAM] import(\"./safetyTimer\");:", e);
+            }
 
             sessionRateLimitErrors.set(sessionId, 0);
             continue;
@@ -1906,7 +1984,6 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           emit({ type: "message-end", messageId: lastMessageId || sessionId });
           emittedEndInThisIteration = true;
           sessionRateLimitErrors.set(sessionId, 0);
-          useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
           break;
         }
 
@@ -1944,7 +2021,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             // Always emit message-end for finalizer turn
             emit({ type: "message-end", messageId: sessionId });
             emittedEndInThisIteration = true;
-          } catch {
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
             emit({ type: "message-delta", messageId: sessionId, content: "\n\n[Agent reached iteration limit. No summary available.]" });
             // Emit message-end even on error
             if (!emittedEndInThisIteration) {
@@ -1980,7 +2058,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         try {
           const { useChat } = await import("../store/useAppStore");
           messageCount = useChat.getState().sessionMessages[sessionId]?.length ?? 0;
-        } catch { /* failed to read session message count */ }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+        }
 
         if (err instanceof ProviderError) {
           if (err.code === "credit") sessionRateLimitErrors.set(sessionId, (sessionRateLimitErrors.get(sessionId) ?? 0) + 1);
@@ -2034,7 +2114,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         // Clean up file watchers — only clean watchers registered by this call
         for (const [key, unwatch] of fileWatchers) {
           if (key.startsWith(sessionId + ":")) {
-            try { unwatch(); } catch { /* ignore */ }
+            try {              unwatch();} catch (e) { if (import.meta.env.DEV) console.warn("[DALAM] unwatch();", e); }
             fileWatchers.delete(key);
           }
         }
@@ -2046,19 +2126,20 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         for (const [key, proposal] of pendingDiffProposals) {
           if (proposal.createdAt < staleThreshold) pendingDiffProposals.delete(key);
         }
-        // Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire.
-        // Only do this if we're still the active controller — otherwise a concurrent sendPrompt
-        // owns the streaming state and we must not interfere.
-        if (isStillActive) {
-          try {
-            const { useChat } = await import("../store/useAppStore");
-            const state = useChat.getState();
-            if (state.isStreaming && state.activeSessionId === sessionId) {
-              _debugLog(`[sendPrompt] finally: isStreaming still true for ${sessionId}, force-clearing`);
-              emit({ type: "message-end", messageId: sessionId });
-              useChat.setState({ isStreaming: false, streamingContent: "", thinkingContent: "" });
-            }
-          } catch { /* store not available */ }
+// Safety: ensure isStreaming is always cleared, even if message-end/error failed to fire.
+          // Only do this if we're still the active controller — otherwise a concurrent sendPrompt
+          // owns the streaming state and we must not interfere.
+          if (isStillActive) {
+            try {
+              const { useChat } = await import("../store/useAppStore");
+              const state = useChat.getState();
+              if (state.isStreaming && state.activeSessionId === sessionId) {
+                _debugLog(`[sendPrompt] finally: isStreaming still true for ${sessionId}, force-clearing`);
+                emit({ type: "message-end", messageId: sessionId });
+              }
+            } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+          }
         }
         // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
         const streamCleanup = streamCleanups.get(sessionId);
@@ -2083,7 +2164,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         const { useChat } = await import("../store/useAppStore");
         const sessionMessages = useChat.getState().sessionMessages[sessionId];
         messageCount = sessionMessages?.length ?? 0;
-      } catch { /* store not available */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+      }
       // Only emit SessionEnd if we're the ones cleaning up (not sendPrompt's finally)
       if (activeControllers.has(sessionId) && !emittedSessionEnds.has(sessionId)) {
         emittedSessionEnds.add(sessionId);
@@ -2149,7 +2232,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         try {
           const { recordChange: rc } = await import("./changeStack");
           rc({ filePath: pending.filePath, beforeContent: pending.oldContent, afterContent: pending.newContent, toolCallId: "diff-" + diffId, messageId: sessionId });
-        } catch { /* changeStack not available */ }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[DALAM] import(\"./changeStack\");:", e);
+        }
         const cb = streamCallbacks.get(sessionId);
         if (cb) {
           cb({
@@ -2181,7 +2266,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               messages: [...chatState.messages, approvalMsg],
             });
           }
-        } catch { /* store not available */ }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+        }
       }
     },
     async rejectDiff(_sessionId: string, diffId: string) {
@@ -2297,13 +2384,16 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("reveal_in_finder", { path });
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] import(\"@tauri-apps/api/core\");:", e);
         try {
           const { Command } = await import("@tauri-apps/plugin-shell");
           const cmd = isWindows() ? "explorer" : platform() === "mac" ? "open" : "xdg-open";
           const dir = path.includes("/") ? path.split("/").slice(0, -1).join("/") : path.includes("\\") ? path.split("\\").slice(0, -1).join("\\") : path;
           await Command.create(cmd, [dir]).execute();
-        } catch { /* silent */ }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[DALAM] import(\"@tauri-apps/plugin-shell\");:", e);
+        }
       }
     },
     async getAppVersion() { return "0.1.0"; },
@@ -2323,7 +2413,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       const { invoke } = await import("@tauri-apps/api/core");
       try {
         return await invoke<string>("clipboard_read_image");
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] invoke<string>(\"clipboard_read_image\");:", e);
         return null;
       }
     },
@@ -2887,7 +2978,9 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   try {
     const { useSkillsMcp } = await import("../store/useAppStore");
     mcpServers = useSkillsMcp.getState().mcpServers;
-  } catch { /* MCP store not available, skip server lookup */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+  }
   let mcpMatch;
   REGEX_MCP_TAG.lastIndex = 0;
   while ((mcpMatch = REGEX_MCP_TAG.exec(text)) !== null) {
@@ -3098,8 +3191,8 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       if (!resolved) {
         _debugLog(`waitForToolApproval: timed out after ${TIMEOUT_MS}ms for tool ${toolCallId}`);
         // Notify the store so the UI tool status is updated
-        import("../store/useAppStore").then(({ useChat }) => {
-          try { useChat.getState().resolveToolApproval(toolCallId, "denied"); } catch { /* ignore */ }
+        void import("../store/useAppStore").then(({ useChat }) => {
+          try {            void useChat.getState().resolveToolApproval(toolCallId, "denied");} catch (e) { if (import.meta.env.DEV) console.warn("[DALAM] useChat.getState().resolveToolApproval(toolCallId,", e); }
         }).catch(() => { });
         finish("denied");
       }
@@ -3122,6 +3215,7 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   git_checkout: 15_000,
   git_diff_file: 15_000,
   list_dir: 10_000,
+  question: 600_000,
   default: 30_000,
 };
 
@@ -3178,7 +3272,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       if (fileSize > MAX_READ_SIZE) {
         return `[File too large to read: ${fileSize} bytes. Use offset/limit to read specific portions, or list_dir/grep_file to inspect.]`;
       }
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] stat(args.path);:", e);
       // stat() failed — mark as failed but DON'T proceed with full read
       statFailed = true;
     }
@@ -3188,7 +3283,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     let bytes: Uint8Array;
     try {
       bytes = await readFile(args.path);
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] readFile(args.path);:", e);
       return `[Unable to read file: ${args.path}. The file may have been deleted or access was denied.]`;
     }
     const ext = args.path.split(".").pop()?.toLowerCase() ?? "";
@@ -3231,12 +3327,19 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     if (typeof args.content !== "string") {
       return "Error: write_file requires a 'content' argument (string)";
     }
-    const { writeFile, readFile: fsReadFile } = await import("@tauri-apps/plugin-fs");
+    const { writeFile, readFile: fsReadFile, mkdir: fsMkdir } = await import("@tauri-apps/plugin-fs");
+    // Auto-create parent directory if it doesn't exist (like mkdir -p)
+    const parentDir = dirname(args.path);
+    if (parentDir && parentDir !== "." && parentDir !== "/") {
+      try { await fsMkdir(parentDir, { recursive: true }); } catch { /* directory may already exist */ }
+    }
     let oldContent = "";
     try {
       const existingBytes = await fsReadFile(args.path);
       oldContent = new TextDecoder().decode(existingBytes);
-    } catch { /* new file */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] fsReadFile(args.path);:", e);
+    }
     const newContent = args.content;
 
     // When auto-approved (permission already granted), write directly without diff proposal
@@ -3246,7 +3349,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       try {
         const { recordChange: rc } = await import("./changeStack");
         rc({ filePath: args.path, beforeContent: oldContent, afterContent: newContent, toolCallId: "write-" + crypto.randomUUID(), messageId: "auto" });
-      } catch { /* changeStack not available */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] import(\"./changeStack\");:", e);
+      }
       // Emit file-changed event for UI tracking
       emit({
         type: "file-changed",
@@ -3277,7 +3382,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       }
     }
     const hunks = computed.hunks.length > 0
-      ? computed.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: diffLines }))
+      ? computed.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: h.lines.map(l => ({ type: l.type === "remove" ? "remove" as const : "add" as const, content: l.content })) }))
       : [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: newContent.split("\n").length, lines: newContent.split("\n").map(l => ({ type: "add" as const, content: l })) }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
@@ -3344,7 +3449,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       try {
         const { recordChange: rc } = await import("./changeStack");
         rc({ filePath: args.path, beforeContent: original, afterContent: updated, toolCallId: "edit-" + crypto.randomUUID(), messageId: "auto" });
-      } catch { /* changeStack not available */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] import(\"./changeStack\");:", e);
+      }
       // Emit file-changed event for UI tracking
       const searchLine = original.substring(0, searchIdx).split("\n").length;
       emit({
@@ -3381,7 +3488,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     }
     const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
     const hunks = computedEdit.hunks.length > 0
-      ? computedEdit.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: diffLines }))
+      ? computedEdit.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: h.lines.map(l => ({ type: l.type === "remove" ? "remove" as const : "add" as const, content: l.content })) }))
       : [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
@@ -3403,10 +3510,15 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       if (fileSize > 5 * 1024 * 1024) {
         return `[File too large to grep: ${(fileSize / 1024 / 1024).toFixed(1)}MB. Use run_command with grep instead.]`;
       }
-    } catch { /* stat may fail, proceed with read */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] stat(args.path);:", e);
+    }
     const bytes = await readFile(args.path);
-    const content = new TextDecoder().decode(bytes);
-    const lines = content.split("\n");
+    const contentDecoder = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    if (contentDecoder.includes("\0") || (contentDecoder.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
+      return `[Binary file: ${args.path.split("/").pop()} — ${bytes.length} bytes. Use run_command with grep instead.]`;
+    }
+    const lines = contentDecoder.split("\n");
     const pattern = args.pattern;
     const isRegex = args.regex === "true";
     const maxResults = args.max_results ? parseInt(args.max_results, 10) : 50;
@@ -3421,7 +3533,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           matches.push({ line: i + 1, text: line.trim() });
         }
       }
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] const re = isRegex ? new RegExp(pattern, \"i\") : nu:", e);
       return "Error: Invalid regex pattern";
     }
     if (matches.length === 0) return `No matches found for "${pattern}" in ${args.path}`;
@@ -3439,12 +3552,16 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     let re: RegExp | null = null;
     try {
       re = isRegex ? new RegExp(pattern, "i") : null;
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] re = isRegex ? new RegExp(pattern, \"i\") : null;:", e);
       return "Error: Invalid regex pattern";
     }
+    // Convert glob to regex, preserving character classes like [abc].
+    // Strategy: escape all regex metacharacters EXCEPT [ and ] which are glob character classes.
+    // Then convert glob wildcards to regex equivalents.
     const globRegex = new RegExp(
       "^" + fileGlob
-        .replace(/([.+^${}()|[\]\\])/g, "\\$1")  // Escape regex metacharacters first
+        .replace(/[.+^${}()|\\]/g, "\\$&")  // Escape regex metacharacters EXCEPT brackets
         .replace(/\*\*\//g, ".*")  // **/ → match any path prefix
         .replace(/\*\*/g, ".*")    // ** → match anything
         .replace(/\*/g, "[^/]*")   // * → match within segment
@@ -3458,7 +3575,12 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       visited.add(dir);
       const { readDir: rd } = await import("@tauri-apps/plugin-fs");
       let entries;
-      try { entries = await rd(dir); } catch { return; }
+      try {
+        entries = await rd(dir);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] entries = await rd(dir);", e);
+        return;
+      }
       for (const entry of entries) {
         if (!entry.name || results.length >= maxResults) break;
         if (JUNK_DIRS.has(entry.name)) continue;
@@ -3471,7 +3593,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           if (!globRegex.test(relPath) && !globRegex.test(entry.name)) continue;
           // Skip binary files
           const ext = entry.name?.split(".").pop()?.toLowerCase() ?? "";
-          const binaryExts = new Set(["png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", "webp", "mp3", "mp4", "avi", "mov", "pdf", "zip", "tar", "gz", "exe", "dll", "so", "dylib", "bin", "dat", "db", "sqlite"]);
+          const binaryExts = new Set(["png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "mp3", "mp4", "avi", "mov", "pdf", "zip", "tar", "gz", "exe", "dll", "so", "dylib", "bin", "dat", "db", "sqlite"]);
           if (binaryExts.has(ext)) continue;
           try {
             const bytes = await readFile(full);
@@ -3486,7 +3608,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                 results.push({ file: full, line: i + 1, text: lines[i].trim().slice(0, 200) });
               }
             }
-          } catch { /* skip unreadable files */ }
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DALAM] readFile(full);:", e);
+          }
         }
       }
     }
@@ -3497,6 +3621,13 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
   if (name === "bash" || name === "shell" || name === "execute") {
     return executeToolInner("run_command", args, workspacePath, emit, autoApprove);
+  }
+
+  if (name === "grep") {
+    return executeToolInner("grep_file", args, workspacePath, emit, autoApprove);
+  }
+  if (name === "search") {
+    return executeToolInner("search_files", args, workspacePath, emit, autoApprove);
   }
 
   if (name === "run_command") {
@@ -3708,7 +3839,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     let config: { baseUrl: string; apiKey: string; apiFormat: string };
     try {
       ({ settings, config } = getActiveProvider());
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] ({ settings, config } = getActiveProvider());:", e);
       return "Error: No provider configured. Cannot run LLM extraction.";
     }
 
@@ -3875,7 +4007,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
         }
         // Cross-origin fallback
         return `Browser URL: ${iframe.src || "(loading...)"}. Page is cross-origin — cannot read content. Use browser_navigate to a same-origin URL.`;
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
         return `Browser URL: ${iframe.src || "(unknown)"}. Cannot read cross-origin content.`;
       }
     }
@@ -3981,10 +4114,12 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       const { extendSafetyTimerForApproval } = await import("./safetyTimer");
       const { useChat } = await import("../store/useAppStore");
       extendSafetyTimerForApproval(
-        () => useChat.getState() as any,
-        (update: Record<string, unknown>) => useChat.setState(update as any),
+        () => useChat.getState(),
+        (update: Record<string, unknown>) => useChat.setState(update as Partial<typeof useChat.getState>),
       );
-    } catch { /* safety timer not available */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] import(\"./safetyTimer\");:", e);
+    }
 
     // Emit ask-question event and wait for user response
     const { useQuestion } = await import("../store/useAppStore");
@@ -4032,7 +4167,12 @@ async function executeToolInner(name: string, args: Record<string, string>, work
         else if (v === "null") out[k] = null;
         else if (v !== "" && !isNaN(Number(v))) out[k] = Number(v);
         else if ((v.startsWith("[") && v.endsWith("]")) || (v.startsWith("{") && v.endsWith("}"))) {
-          try { out[k] = JSON.parse(v); } catch { out[k] = v; }
+          try {
+            out[k] = JSON.parse(v);
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DALAM] out[k] = JSON.parse(v);", e);
+            out[k] = v;
+          }
         }
         else out[k] = v;
       }
@@ -4152,7 +4292,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                 await corsFetch(url, { method: "POST", headers: freshHeaders, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }) });
               }
             }
-          } catch { /* re-init failed, will throw below */ }
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DALAM] corsFetch(url, {:", e);
+          }
           // Retry tool call with fresh session
           const retryResp = await corsFetch(url, {
             method: "POST",
@@ -4241,12 +4383,21 @@ async function executeToolInner(name: string, args: Record<string, string>, work
               conn.pendingRequests.delete(reqIdStr);
               reject(err);
             });
-            setTimeout(() => {
+            const timeoutId = setTimeout(() => {
               if (conn.pendingRequests.has(reqIdStr)) {
                 conn.pendingRequests.delete(reqIdStr);
                 reject(new Error("Timeout waiting for tools/call response (30s)"));
               }
             }, 30000);
+            // Clear timeout on resolution to prevent timer leak
+            const origResolve = conn.pendingRequests.get(reqIdStr)?.resolve;
+            const origReject = conn.pendingRequests.get(reqIdStr)?.reject;
+            if (origResolve) {
+              conn.pendingRequests.set(reqIdStr, {
+                resolve: (v) => { clearTimeout(timeoutId); origResolve(v); },
+                reject: (e) => { clearTimeout(timeoutId); if (origReject) origReject(e); else reject(e); },
+              });
+            }
           });
           return await resultPromise;
         }
@@ -4323,7 +4474,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
                     }
                     return;
                   }
-                } catch {
+                } catch (e) {
+                  if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
                   // Incomplete or malformed — keep buffering
                 }
               } else {
@@ -4366,7 +4518,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             }
           };
 
-          doSpawn();
+          void doSpawn();
 
           setTimeout(() => {
             if (!resolved) {
@@ -4378,7 +4530,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
         });
 
         return connRecord;
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
         _mcpStdioConnections.delete(serverName);
         return null;
       } finally {
@@ -4423,7 +4576,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       return `Error: Invalid theme "${theme}". Must be "light", "dark", or "system".`;
     }
     const { useSettings } = await import("../store/useAppStore");
-    useSettings.getState().update("theme", theme as "light" | "dark" | "system");
+    void useSettings.getState().update("theme", theme as "light" | "dark" | "system");
     return `Theme changed to "${theme}".`;
   }
 
@@ -4431,7 +4584,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     const { useSettings } = await import("../store/useAppStore");
     const current = useSettings.getState().settings.theme;
     const next = current === "dark" ? "light" : current === "light" ? "system" : "dark";
-    useSettings.getState().update("theme", next);
+    void useSettings.getState().update("theme", next);
     return `Theme toggled to "${next}" (was "${current}").`;
   }
 
@@ -4611,7 +4764,9 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
   const { modelId, config } = providerConfig;
 
   for (let subLoop = 0; subLoop < MAX_SUB_ITERATIONS; subLoop++) {
-    if (signal.aborted || Date.now() - subStartTime > SUB_TIMEOUT_MS) break;
+    // Check abort AFTER listener is registered to avoid race (listener is set up below)
+    if (signal.aborted) break;
+    if (Date.now() - subStartTime > SUB_TIMEOUT_MS) break;
 
     const apiMessages: ApiMessage[] = subHistory.map((m) => ({
       role: m.role,
@@ -4716,10 +4871,15 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
     } catch (err) {
       const errMsg = (err as Error)?.message ?? String(err);
       const isAbort = (err as Error)?.name === "AbortError";
-      if (isAbort || signal.aborted) {
+      const isIterAbort = isAbort && !signal.aborted;
+      if (isAbort && !isIterAbort) {
         subFailed = true;
         subError = "Sub-agent aborted by user";
         break;
+      }
+      if (isIterAbort) {
+        subHistory.push({ role: "user", content: `[System: Sub-agent iteration timed out — continuing with partial output]` });
+        continue;
       }
       // Transient errors: add to history and let LLM retry
       subHistory.push({ role: "user", content: `[System error on iteration ${subLoop + 1}: ${errMsg}]

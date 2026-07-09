@@ -35,15 +35,18 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   },
   {
     pattern: /Type '(.+?)' is not assignable to type '(.+?)'/,
-    suggestion: "Type mismatch: $1 cannot be assigned to $2. Check the type definitions.",
+    suggestion:
+      "Type mismatch: $1 cannot be assigned to $2. Check the type definitions.",
   },
   {
     pattern: /Property '(.+?)' does not exist on type '(.+?)'/,
-    suggestion: "Property '$1' is not defined on type '$2'. Check spelling or add to type definition.",
+    suggestion:
+      "Property '$1' is not defined on type '$2'. Check spelling or add to type definition.",
   },
   {
     pattern: /Object is possibly 'undefined'/,
-    suggestion: "Null reference risk. Add a null check or use optional chaining (?.).",
+    suggestion:
+      "Null reference risk. Add a null check or use optional chaining (?.).",
   },
   {
     pattern: /(.+?) is not a function/,
@@ -65,7 +68,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   },
   {
     pattern: /SyntaxError: unexpected token '(.+?)'/,
-    suggestion: "Syntax error: unexpected token '$1'. Check parentheses and brackets.",
+    suggestion:
+      "Syntax error: unexpected token '$1'. Check parentheses and brackets.",
   },
 
   // Rust
@@ -91,11 +95,13 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   // Git
   {
     pattern: /fatal: not a git repository/,
-    suggestion: "Not a git repository. Run 'git init' or navigate to a git project.",
+    suggestion:
+      "Not a git repository. Run 'git init' or navigate to a git project.",
   },
   {
     pattern: /CONFLICT \(merge conflict\) in (.+?)$/,
-    suggestion: "Merge conflict in $1. Open the file and resolve conflicts manually.",
+    suggestion:
+      "Merge conflict in $1. Open the file and resolve conflicts manually.",
   },
 
   // Network / API
@@ -122,15 +128,18 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   // Context overflow (matches OpenCode patterns)
   {
     pattern: /context[_ ]length[_ ]exceeded/i,
-    suggestion: "Context window exceeded. The conversation is too long. Compaction will be triggered automatically.",
+    suggestion:
+      "Context window exceeded. The conversation is too long. Compaction will be triggered automatically.",
   },
   {
     pattern: /prompt[_ ]is[_ ]too[_ ]long/i,
-    suggestion: "Prompt too long. Reduce the message size or start a new session.",
+    suggestion:
+      "Prompt too long. Reduce the message size or start a new session.",
   },
   {
     pattern: /input[_ ]is[_ ]too[_ ]long/i,
-    suggestion: "Input too long for the model. The conversation will be compacted.",
+    suggestion:
+      "Input too long for the model. The conversation will be compacted.",
   },
   {
     pattern: /maximum[_ ]context[_ ]length/i,
@@ -151,11 +160,13 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   },
   {
     pattern: /quota[_ ]exceeded/i,
-    suggestion: "API quota exceeded. Check your billing or wait for quota reset.",
+    suggestion:
+      "API quota exceeded. Check your billing or wait for quota reset.",
   },
   {
     pattern: /content[_ ]policy/i,
-    suggestion: "Content policy violation. The request was blocked by the provider.",
+    suggestion:
+      "Content policy violation. The request was blocked by the provider.",
   },
   {
     pattern: /overloaded/i,
@@ -164,7 +175,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   // Tool execution errors
   {
     pattern: /tool[_ ].*timed[_ ]out/i,
-    suggestion: "Tool execution timed out. The operation may be too slow or the server unresponsive.",
+    suggestion:
+      "Tool execution timed out. The operation may be too slow or the server unresponsive.",
   },
   {
     pattern: /permission[_ ]denied/i,
@@ -208,7 +220,10 @@ export function matchErrorPattern(errorMessage: string): {
     const match = errorMessage.match(pattern);
     if (match) {
       return {
-        suggestion: suggestion.replace(/\$(\d+)/g, (_, i) => match[parseInt(i)] ?? ""),
+        suggestion: suggestion.replace(
+          /\$(\d+)/g,
+          (_, i) => match[parseInt(i)] ?? "",
+        ),
         autoFix: autoFix?.(match) ?? undefined,
       };
     }

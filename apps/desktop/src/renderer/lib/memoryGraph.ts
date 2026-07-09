@@ -95,9 +95,16 @@ interface QTNode {
 
 function createQuadNode(cx: number, cy: number, size: number): QTNode {
   return {
-    cx, cy, size,
-    mass: 0, totalMassX: 0, totalMassY: 0,
-    childNW: null, childNE: null, childSW: null, childSE: null,
+    cx,
+    cy,
+    size,
+    mass: 0,
+    totalMassX: 0,
+    totalMassY: 0,
+    childNW: null,
+    childNE: null,
+    childSW: null,
+    childSE: null,
     body: null,
   };
 }
@@ -175,7 +182,7 @@ function computeForce(
   const distSq = dx * dx + dy * dy;
 
   // Leaf node or far enough to treat as single body
-  if (qt.body !== null || qt.size * qt.size / distSq < theta * theta) {
+  if (qt.body !== null || (qt.size * qt.size) / distSq < theta * theta) {
     // Skip self-interaction to avoid NaN from division by zero
     if (qt.body === p) return { fx: 0, fy: 0 };
     const dist = Math.sqrt(distSq) || 1;
@@ -184,7 +191,8 @@ function computeForce(
   }
 
   // Recurse into children
-  let fx = 0, fy = 0;
+  let fx = 0,
+    fy = 0;
   for (const child of [qt.childNW, qt.childNE, qt.childSW, qt.childSE]) {
     if (child) {
       const f = computeForce(p, child, repulsion, theta);
@@ -224,9 +232,27 @@ function addEdgeDeduped(
  * and co-occurrence scoring.
  */
 export function buildMemoryGraph(
-  memories: { id: string; summary: string; category: string; tags: string[]; tier: string; sourceSession?: string }[],
-  genes: { id: string; name: string; trigger: string; category: string; confidence: number }[],
-  agentSessions: { id: string; title: string; agentName: string; messageCount: number }[],
+  memories: {
+    id: string;
+    summary: string;
+    category: string;
+    tags: string[];
+    tier: string;
+    sourceSession?: string;
+  }[],
+  genes: {
+    id: string;
+    name: string;
+    trigger: string;
+    category: string;
+    confidence: number;
+  }[],
+  agentSessions: {
+    id: string;
+    title: string;
+    agentName: string;
+    messageCount: number;
+  }[],
 ): GraphData {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -241,7 +267,10 @@ export function buildMemoryGraph(
       id,
       label: mem.summary.slice(0, 30),
       type: "memory",
-      x: 0, y: 0, vx: 0, vy: 0,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
       size: Math.max(6, Math.min(14, mem.tags.length * 2 + 4)),
       color: NODE_COLORS.memory,
       connections: [],
@@ -257,7 +286,10 @@ export function buildMemoryGraph(
       id,
       label: gene.name,
       type: "gene",
-      x: 0, y: 0, vx: 0, vy: 0,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
       size: Math.max(6, Math.min(12, gene.confidence * 10 + 2)),
       color: NODE_COLORS.gene,
       connections: [],
@@ -279,7 +311,10 @@ export function buildMemoryGraph(
       id,
       label: agentName,
       type: "agent",
-      x: 0, y: 0, vx: 0, vy: 0,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
       size: Math.max(8, Math.min(16, sessions.length)),
       color: NODE_COLORS.agent,
       connections: [],
@@ -308,7 +343,14 @@ export function buildMemoryGraph(
     if (!nodeIds.has(agentId)) continue;
     for (const mem of memories) {
       if (mem.sourceSession === session.id) {
-        addEdgeDeduped(edges, seen, agentId, `mem-${mem.id}`, "created_by", 0.5);
+        addEdgeDeduped(
+          edges,
+          seen,
+          agentId,
+          `mem-${mem.id}`,
+          "created_by",
+          0.5,
+        );
       }
     }
   }
@@ -328,8 +370,8 @@ export function buildMemoryGraph(
     const geneId = `gene-${gene.id}`;
     for (const session of agentSessions) {
       const sessionMemories = sessionMemoriesMap.get(session.id) || [];
-      const hasOverlap = sessionMemories.some(m =>
-        m.tags.some(t => gene.trigger.includes(t) || gene.name.includes(t))
+      const hasOverlap = sessionMemories.some((m) =>
+        m.tags.some((t) => gene.trigger.includes(t) || gene.name.includes(t)),
       );
       if (hasOverlap) {
         const agentId = `agent-${session.agentName}`;
@@ -347,8 +389,9 @@ export function buildMemoryGraph(
     for (let j = 0; j < memories.length; j++) {
       if (i === j) continue;
       const b = memories[j];
-      const overlap = a.tags.filter(t => b.tags.includes(t)).length;
-      const summaryOverlap = a.summary.slice(0, 10) === b.summary.slice(0, 10) ? 1 : 0;
+      const overlap = a.tags.filter((t) => b.tags.includes(t)).length;
+      const summaryOverlap =
+        a.summary.slice(0, 10) === b.summary.slice(0, 10) ? 1 : 0;
       const score = overlap + summaryOverlap;
       if (score > 0) similarities.push({ idx: j, score });
     }
@@ -364,7 +407,7 @@ export function buildMemoryGraph(
   // Connect nodes within the same category to form clusters
   const categoryGroups = new Map<string, string[]>();
   for (const node of nodes) {
-    const cat = node.metadata?.category as string || node.type;
+    const cat = (node.metadata?.category as string) || node.type;
     const group = categoryGroups.get(cat) || [];
     group.push(node.id);
     categoryGroups.set(cat, group);
@@ -386,7 +429,7 @@ export function buildMemoryGraph(
     nodeDegrees.set(e.target, (nodeDegrees.get(e.target) || 0) + 1);
   }
   const hubs = nodes
-    .filter(n => (nodeDegrees.get(n.id) || 0) >= 2)
+    .filter((n) => (nodeDegrees.get(n.id) || 0) >= 2)
     .sort((a, b) => (nodeDegrees.get(b.id) || 0) - (nodeDegrees.get(a.id) || 0))
     .slice(0, 15);
   for (let i = 0; i < hubs.length; i++) {
@@ -450,18 +493,26 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
     }
   }
 
-  const iterations = Math.max(MIN_ITERATIONS, Math.min(MAX_ITERATIONS_BASE, Math.round(50 * Math.sqrt(n / 100))));
+  const iterations = Math.max(
+    MIN_ITERATIONS,
+    Math.min(MAX_ITERATIONS_BASE, Math.round(50 * Math.sqrt(n / 100))),
+  );
   const repulsion = 600;
   const attraction = 0.015;
   const damping = 0.82;
   const theta = 0.7; // Barnes-Hut accuracy
 
   // Pre-compute edge endpoints for O(1) attraction lookups
-  const edgeEndpoints: { source: GraphNode; target: GraphNode; weight: number }[] = [];
+  const edgeEndpoints: {
+    source: GraphNode;
+    target: GraphNode;
+    weight: number;
+  }[] = [];
   for (const edge of edges) {
     const s = nodeMap.get(edge.source);
     const t = nodeMap.get(edge.target);
-    if (s && t) edgeEndpoints.push({ source: s, target: t, weight: edge.weight });
+    if (s && t)
+      edgeEndpoints.push({ source: s, target: t, weight: edge.weight });
   }
 
   const CONVERGENCE_THRESHOLD = 0.3;
@@ -470,8 +521,10 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
     const alpha = cooling * cooling; // quadratic cooling
 
     // Build quadtree for this iteration
-    let boundsMinX = Infinity, boundsMinY = Infinity;
-    let boundsMaxX = -Infinity, boundsMaxY = -Infinity;
+    let boundsMinX = Infinity,
+      boundsMinY = Infinity;
+    let boundsMaxX = -Infinity,
+      boundsMaxY = -Infinity;
     for (const node of nodes) {
       if (node.x < boundsMinX) boundsMinX = node.x;
       if (node.y < boundsMinY) boundsMinY = node.y;
@@ -479,7 +532,8 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
       if (node.y > boundsMaxY) boundsMaxY = node.y;
     }
     const padding = 10;
-    const size = Math.max(boundsMaxX - boundsMinX, boundsMaxY - boundsMinY) + padding * 2;
+    const size =
+      Math.max(boundsMaxX - boundsMinX, boundsMaxY - boundsMinY) + padding * 2;
     const rootCx = (boundsMinX + boundsMaxX) / 2;
     const rootCy = (boundsMinY + boundsMaxY) / 2;
     const qt = createQuadNode(rootCx, rootCy, size);
@@ -536,7 +590,8 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
     }
 
     // Early exit when system is stable
-    if (totalDisplacement / n < CONVERGENCE_THRESHOLD && iter > MIN_ITERATIONS) break;
+    if (totalDisplacement / n < CONVERGENCE_THRESHOLD && iter > MIN_ITERATIONS)
+      break;
   }
 }
 
@@ -546,7 +601,11 @@ function applyForceLayout(nodes: GraphNode[], edges: GraphEdge[]): void {
  * Hit test: find node at given canvas coordinates.
  * Checks highest-degree nodes first for better UX.
  */
-export function hitTest(nodes: GraphNode[], x: number, y: number): GraphNode | null {
+export function hitTest(
+  nodes: GraphNode[],
+  x: number,
+  y: number,
+): GraphNode | null {
   let best: GraphNode | null = null;
   let bestDist = Infinity;
   for (const node of nodes) {
@@ -581,7 +640,9 @@ export function degreeCentrality(nodes: GraphNode[]): Map<string, number> {
  * Compute clustering coefficient for each node.
  * CC(v) = 2 * edges_between_neighbors(v) / (deg(v) * (deg(v) - 1))
  */
-export function clusteringCoefficients(nodes: GraphNode[]): Map<string, number> {
+export function clusteringCoefficients(
+  nodes: GraphNode[],
+): Map<string, number> {
   const neighborSets = new Map<string, Set<string>>();
   for (const node of nodes) {
     neighborSets.set(node.id, new Set(node.connections));
@@ -642,7 +703,7 @@ export function connectedComponents(nodes: GraphNode[]): string[][] {
     parent.set(node.id, node.id);
     rank.set(node.id, 0);
   }
-  const nodeIds = new Set(nodes.map(n => n.id));
+  const nodeIds = new Set(nodes.map((n) => n.id));
   for (const node of nodes) {
     for (const conn of node.connections) {
       // Skip dangling edge references to prevent infinite recursion
@@ -757,7 +818,10 @@ export function graphDiameter(nodes: GraphNode[]): number {
 /**
  * Full graph statistics summary.
  */
-export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): GraphStats {
+export function computeGraphStats(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+): GraphStats {
   const centrality = degreeCentrality(nodes);
   const clustering = clusteringCoefficients(nodes);
   const components = connectedComponents(nodes);
@@ -779,13 +843,15 @@ export function computeGraphStats(nodes: GraphNode[], edges: GraphEdge[]): Graph
   return {
     totalNodes: nodes.length,
     totalEdges: edges.length,
-    avgDegree: nodes.length > 0
-      ? nodes.reduce((s, n) => s + n.connections.length, 0) / nodes.length
-      : 0,
+    avgDegree:
+      nodes.length > 0
+        ? nodes.reduce((s, n) => s + n.connections.length, 0) / nodes.length
+        : 0,
     maxDegree,
     density: graphDensity(nodes, edges),
     components: components.length,
-    avgClusteringCoefficient: nodes.length > 0 ? totalClustering / nodes.length : 0,
+    avgClusteringCoefficient:
+      nodes.length > 0 ? totalClustering / nodes.length : 0,
     mostCentralNodes: mostCentral.slice(0, 10),
     diameter: graphDiameter(nodes),
   };

@@ -14,8 +14,14 @@ import { z } from "zod";
 
 export const ReadFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
-  offset: z.string().regex(/^\d+$/, "offset must be a positive integer").optional(),
-  limit: z.string().regex(/^\d+$/, "limit must be a positive integer").optional(),
+  offset: z
+    .string()
+    .regex(/^\d+$/, "offset must be a positive integer")
+    .optional(),
+  limit: z
+    .string()
+    .regex(/^\d+$/, "limit must be a positive integer")
+    .optional(),
 });
 
 export const WriteFileArgsSchema = z.object({
@@ -32,7 +38,10 @@ export const EditFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
   search: z.string().min(1, "search string is required"),
   replace: z.string(),
-  occurrence: z.string().regex(/^\d+$/, "occurrence must be a non-negative integer").optional(),
+  occurrence: z
+    .string()
+    .regex(/^\d+$/, "occurrence must be a non-negative integer")
+    .optional(),
 });
 
 export const ListDirArgsSchema = z.object({
@@ -43,7 +52,10 @@ export const GrepFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
   pattern: z.string().min(1, "pattern is required"),
   regex: z.string().optional(),
-  max_results: z.string().regex(/^\d+$/, "max_results must be a numeric string").optional(),
+  max_results: z
+    .string()
+    .regex(/^\d+$/, "max_results must be a numeric string")
+    .optional(),
 });
 
 export const SearchFilesArgsSchema = z.object({
@@ -51,7 +63,10 @@ export const SearchFilesArgsSchema = z.object({
   path: z.string().optional(),
   glob: z.string().optional(),
   regex: z.string().optional(),
-  max_results: z.string().regex(/^\d+$/, "max_results must be a numeric string").optional(),
+  max_results: z
+    .string()
+    .regex(/^\d+$/, "max_results must be a numeric string")
+    .optional(),
 });
 
 export const RunCommandArgsSchema = z.object({
@@ -90,13 +105,17 @@ export const NotifyArgsSchema = z.object({
 export const SystemInfoArgsSchema = z.object({});
 
 export const OpenUrlArgsSchema = z.object({
-  url: z.string().url("must be a valid URL").refine(
-    (url) => {
-      try { return ["http:", "https:", "mailto:"].includes(new URL(url).protocol); }
-      catch { return false; }
-    },
-    "Only http, https, and mailto URLs are allowed"
-  ),
+  url: z
+    .string()
+    .url("must be a valid URL")
+    .refine((url) => {
+      try {
+        return ["http:", "https:", "mailto:"].includes(new URL(url).protocol);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[ToolSchemas] Failed to parse URL for protocol check:", url, e);
+        return false;
+      }
+    }, "Only http, https, and mailto URLs are allowed"),
 });
 
 export const LaunchAppArgsSchema = z.object({
@@ -114,7 +133,10 @@ export const MemorySaveArgsSchema = z.object({
     .enum(["user", "feedback", "project", "reference", "task", "decision"])
     .optional()
     .default("project"),
-  tier: z.enum(["critical", "high", "medium", "low"]).optional().default("medium"),
+  tier: z
+    .enum(["critical", "high", "medium", "low"])
+    .optional()
+    .default("medium"),
   summary: z.string().optional(),
   tags: z.string().optional(),
   content: z.string(),
@@ -162,7 +184,9 @@ export const BrowserExecuteArgsSchema = z.object({
 });
 
 export const CreateTaskPlanArgsSchema = z.object({
-  tasks: z.string().min(1, "tasks is required — newline-separated list of task titles"),
+  tasks: z
+    .string()
+    .min(1, "tasks is required — newline-separated list of task titles"),
 });
 
 export const WebFetchArgsSchema = z.object({
@@ -249,7 +273,10 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   write_file: { schema: WriteFileArgsSchema, requiredFields: ["path"] },
   edit_file: { schema: EditFileArgsSchema, requiredFields: ["path"] },
   list_dir: { schema: ListDirArgsSchema, requiredFields: ["path"] },
-  grep_file: { schema: GrepFileArgsSchema, requiredFields: ["path", "pattern"] },
+  grep_file: {
+    schema: GrepFileArgsSchema,
+    requiredFields: ["path", "pattern"],
+  },
   grep: { schema: GrepFileArgsSchema, requiredFields: ["path", "pattern"] },
   search_files: { schema: SearchFilesArgsSchema, requiredFields: ["pattern"] },
   search: { schema: SearchFilesArgsSchema, requiredFields: ["pattern"] },
@@ -264,12 +291,18 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   git_checkout: { schema: GitCheckoutArgsSchema, requiredFields: ["branch"] },
   git_diff_file: { schema: GitDiffFileArgsSchema, requiredFields: ["path"] },
   clipboard_read: { schema: ClipboardReadArgsSchema, requiredFields: [] },
-  clipboard_write: { schema: ClipboardWriteArgsSchema, requiredFields: ["text"] },
+  clipboard_write: {
+    schema: ClipboardWriteArgsSchema,
+    requiredFields: ["text"],
+  },
   notify: { schema: NotifyArgsSchema, requiredFields: ["title"] },
   system_info: { schema: SystemInfoArgsSchema, requiredFields: [] },
   open_url: { schema: OpenUrlArgsSchema, requiredFields: ["url"] },
   launch_app: { schema: LaunchAppArgsSchema, requiredFields: ["name"] },
-  reveal_in_finder: { schema: RevealInFinderArgsSchema, requiredFields: ["path"] },
+  reveal_in_finder: {
+    schema: RevealInFinderArgsSchema,
+    requiredFields: ["path"],
+  },
   memory_save: { schema: MemorySaveArgsSchema, requiredFields: ["content"] },
   memory_search: { schema: MemorySearchArgsSchema, requiredFields: ["query"] },
   memory_delete: { schema: MemoryDeleteArgsSchema, requiredFields: ["id"] },
@@ -281,10 +314,19 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   task: { schema: TaskArgsSchema, requiredFields: ["prompt"] },
   open_panel: { schema: OpenPanelArgsSchema, requiredFields: ["panel"] },
   screenshot: { schema: ScreenshotArgsSchema, requiredFields: [] },
-  browser_navigate: { schema: BrowserNavigateArgsSchema, requiredFields: ["url"] },
+  browser_navigate: {
+    schema: BrowserNavigateArgsSchema,
+    requiredFields: ["url"],
+  },
   run_preview: { schema: RunPreviewArgsSchema, requiredFields: ["command"] },
-  browser_execute: { schema: BrowserExecuteArgsSchema, requiredFields: ["script"] },
-  create_task_plan: { schema: CreateTaskPlanArgsSchema, requiredFields: ["tasks"] },
+  browser_execute: {
+    schema: BrowserExecuteArgsSchema,
+    requiredFields: ["script"],
+  },
+  create_task_plan: {
+    schema: CreateTaskPlanArgsSchema,
+    requiredFields: ["tasks"],
+  },
   question: { schema: QuestionArgsSchema, requiredFields: ["question"] },
   webfetch: { schema: WebFetchArgsSchema, requiredFields: ["url"] },
   websearch: { schema: WebSearchArgsSchema, requiredFields: ["query"] },
@@ -298,12 +340,27 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   toggle_theme: { schema: ToggleThemeArgsSchema, requiredFields: [] },
   set_view_mode: { schema: SetViewModeArgsSchema, requiredFields: ["mode"] },
   toggle_view_mode: { schema: ToggleViewModeArgsSchema, requiredFields: [] },
-  toggle_right_panel: { schema: ToggleRightPanelArgsSchema, requiredFields: [] },
-  toggle_bottom_panel: { schema: ToggleBottomPanelArgsSchema, requiredFields: [] },
-  set_right_panel_tab: { schema: SetRightPanelTabArgsSchema, requiredFields: ["tab"] },
-  set_bottom_panel_tab: { schema: SetBottomPanelTabArgsSchema, requiredFields: ["tab"] },
+  toggle_right_panel: {
+    schema: ToggleRightPanelArgsSchema,
+    requiredFields: [],
+  },
+  toggle_bottom_panel: {
+    schema: ToggleBottomPanelArgsSchema,
+    requiredFields: [],
+  },
+  set_right_panel_tab: {
+    schema: SetRightPanelTabArgsSchema,
+    requiredFields: ["tab"],
+  },
+  set_bottom_panel_tab: {
+    schema: SetBottomPanelTabArgsSchema,
+    requiredFields: ["tab"],
+  },
   new_terminal: { schema: NewTerminalArgsSchema, requiredFields: [] },
-  terminal_write: { schema: TerminalWriteArgsSchema, requiredFields: ["command"] },
+  terminal_write: {
+    schema: TerminalWriteArgsSchema,
+    requiredFields: ["command"],
+  },
 };
 
 // ─── Security Validation ─────────────────────────────────────
@@ -311,19 +368,19 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
 /** Paths that should never be read or written to */
 const DANGEROUS_PATH_PATTERNS = [
   /\.\./, // path traversal
-  /^\/etc\//,
-  /^\/usr\//,
-  /^\/var\//,
-  /^\/bin\//,
-  /^\/sbin\//,
-  /^\/root\//,
+  /^\/etc(?:\/|$)/i,
+  /^\/usr(?:\/|$)/i,
+  /^\/var(?:\/|$)/i,
+  /^\/bin(?:\/|$)/i,
+  /^\/sbin(?:\/|$)/i,
+  /^\/root(?:\/|$)/i,
   /^~\//,
-  // Windows critical paths
-  /^[a-zA-Z]:\\Windows\\/,
-  /^[a-zA-Z]:\\Program Files/,
-  /^[a-zA-Z]:\\System32/,
-  /^[a-zA-Z]:\\Boot/,
-  /^[a-zA-Z]:\\ProgramData/,
+  // Windows critical paths (both backslash and forward-slash variants)
+  /^[a-zA-Z]:(?:\\|\/)Windows(?:\\|\/)/i,
+  /^[a-zA-Z]:(?:\\|\/)Program Files/i,
+  /^[a-zA-Z]:(?:\\|\/)System32/i,
+  /^[a-zA-Z]:(?:\\|\/)Boot/i,
+  /^[a-zA-Z]:(?:\\|\/)ProgramData/i,
 ];
 
 /**
@@ -355,13 +412,12 @@ const DANGEROUS_COMMANDS = [
   "mv /* ",
   "mv /etc/",
   "mv /usr/",
-  // Unix - downloading and executing
-  "curl | sh",
-  "curl | bash",
-  "wget | sh",
-  "wget | bash",
-  "curl -s | sh",
-  "curl -s | bash",
+  // Unix - downloading and executing (piped to shell)
+  // Must match "curl ... | sh" even with intermediate args
+  "pipe_curl_sh",
+  "pipe_curl_bash",
+  "pipe_wget_sh",
+  "pipe_wget_bash",
   // Windows - destructive operations
   "Format-Volume",
   "Remove-Item -Recurse -Force C:\\",
@@ -385,9 +441,9 @@ const DANGEROUS_COMMANDS = [
 function normalizeCommand(cmd: string): string {
   return cmd
     .toLowerCase()
-    .replace(/\s+/g, " ")  // Collapse whitespace
-    .replace(/["']/g, "")  // Remove quotes (common bypass)
-    .replace(/\\/g, "")    // Remove backslashes (Windows paths)
+    .replace(/\s+/g, " ") // Collapse whitespace
+    .replace(/["']/g, "") // Remove quotes (common bypass)
+    .replace(/\\/g, "") // Remove backslashes (Windows paths)
     .trim();
 }
 
@@ -398,22 +454,33 @@ function normalizeCommand(cmd: string): string {
 export function validateToolArgs(
   toolName: string,
   args: Record<string, unknown>,
-): { valid: true; args: Record<string, unknown> } | { valid: false; error: string } {
+):
+  | { valid: true; args: Record<string, unknown> }
+  | { valid: false; error: string } {
   const entry = TOOL_SCHEMAS[toolName];
 
   if (!entry) {
     // Unknown tool — validate MCP tools against a generic schema
     if (toolName.startsWith("mcp_")) {
       if (typeof args !== "object" || args === null || Array.isArray(args)) {
-        return { valid: false, error: `MCP tool ${toolName}: args must be a plain object` };
+        return {
+          valid: false,
+          error: `MCP tool ${toolName}: args must be a plain object`,
+        };
       }
       // Validate all arg values are JSON-serializable primitives or simple objects
       for (const [key, val] of Object.entries(args)) {
         if (typeof key !== "string") {
-          return { valid: false, error: `MCP tool ${toolName}: arg keys must be strings` };
+          return {
+            valid: false,
+            error: `MCP tool ${toolName}: arg keys must be strings`,
+          };
         }
         if (val !== null && typeof val === "function") {
-          return { valid: false, error: `MCP tool ${toolName}: arg '${key}' cannot be a function` };
+          return {
+            valid: false,
+            error: `MCP tool ${toolName}: arg '${key}' cannot be a function`,
+          };
         }
       }
       // Security scan for string arg values — block dangerous paths and commands
@@ -421,14 +488,23 @@ export function validateToolArgs(
         if (typeof val === "string") {
           for (const pattern of DANGEROUS_PATH_PATTERNS) {
             if (pattern.test(val)) {
-              return { valid: false, error: `MCP tool ${toolName}: path not allowed` };
+              return {
+                valid: false,
+                error: `MCP tool ${toolName}: path not allowed`,
+              };
             }
           }
           const normalizedCmd = normalizeCommand(val);
           for (const dangerous of DANGEROUS_COMMANDS) {
             const normalizedDangerous = normalizeCommand(dangerous);
-            if (normalizedCmd === normalizedDangerous || normalizedCmd.startsWith(normalizedDangerous + " ")) {
-              return { valid: false, error: `MCP tool ${toolName}: dangerous command blocked` };
+            if (
+              normalizedCmd === normalizedDangerous ||
+              normalizedCmd.startsWith(normalizedDangerous + " ")
+            ) {
+              return {
+                valid: false,
+                error: `MCP tool ${toolName}: dangerous command blocked`,
+              };
             }
           }
         }
@@ -440,7 +516,11 @@ export function validateToolArgs(
 
   // Check required fields first (cheap)
   for (const field of entry.requiredFields) {
-    if (args[field] === undefined || args[field] === null || args[field] === "") {
+    if (
+      args[field] === undefined ||
+      args[field] === null ||
+      args[field] === ""
+    ) {
       return {
         valid: false,
         error: `${toolName} requires a '${field}' argument`,
@@ -458,8 +538,13 @@ export function validateToolArgs(
     };
   }
 
-  // Security checks for file operations
-  if (["read_file", "write_file", "edit_file", "list_dir", "grep_file", "get_disk_space", "reveal_in_finder"].includes(toolName)) {
+  // Security checks for file operations (including create_file and aliases)
+  const pathCheckedTools = [
+    "read_file", "write_file", "edit_file", "list_dir",
+    "grep_file", "grep", "search_files", "search",
+    "create_file", "get_disk_space", "reveal_in_finder",
+  ];
+  if (pathCheckedTools.includes(toolName)) {
     const path = String(args.path ?? "");
     for (const pattern of DANGEROUS_PATH_PATTERNS) {
       if (pattern.test(path)) {
@@ -487,7 +572,8 @@ export function validateToolArgs(
   }
 
   // Security checks for commands (normalized to prevent bypass via whitespace)
-  if (toolName === "run_command") {
+  const commandCheckedTools = ["run_command", "bash", "shell", "execute", "run_preview", "terminal_write"];
+  if (commandCheckedTools.includes(toolName)) {
     const cmd = normalizeCommand(String(args.command || ""));
     for (const dangerous of DANGEROUS_COMMANDS) {
       const normalizedDangerous = normalizeCommand(dangerous);
@@ -495,12 +581,26 @@ export function validateToolArgs(
       // Block "rm -rf /" and "echo && rm -rf /" but allow "rm -rf /tmp/build"
       // Use negative lookahead to ensure the pattern is NOT followed by path chars
       let matched: boolean;
-      if (normalizedDangerous.endsWith("/")) {
-        const escaped = normalizedDangerous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (normalizedDangerous === "pipe_curl_sh") {
+        matched = /\b(curl|wget)\b[^|]*\|[^|]*\bsh\b/.test(cmd);
+      } else if (normalizedDangerous === "pipe_curl_bash") {
+        matched = /\b(curl|wget)\b[^|]*\|[^|]*\bbash\b/.test(cmd);
+      } else if (normalizedDangerous === "pipe_wget_sh") {
+        matched = /\bwget\b[^|]*\|[^|]*\bsh\b/.test(cmd);
+      } else if (normalizedDangerous === "pipe_wget_bash") {
+        matched = /\bwget\b[^|]*\|[^|]*\bbash\b/.test(cmd);
+      } else if (normalizedDangerous.endsWith("/")) {
+        const escaped = normalizedDangerous.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&",
+        );
         const regex = new RegExp(`${escaped}(?![\\w/])`);
         matched = regex.test(cmd);
       } else {
-        matched = cmd === normalizedDangerous || cmd.startsWith(normalizedDangerous + " ") || cmd.includes(normalizedDangerous);
+        matched =
+          cmd === normalizedDangerous ||
+          cmd.startsWith(normalizedDangerous + " ") ||
+          cmd.includes(normalizedDangerous);
       }
       if (matched) {
         return {
@@ -522,8 +622,8 @@ export function validateToolArgs(
 export type ToolCategory = "edit" | "bash" | "read" | "other";
 
 export type ToolRegistryEntry = {
-  tag: string;                  // XML tag name (e.g., "bash", "shell")
-  tool: string;                 // canonical internal name (e.g., "bash")
+  tag: string; // XML tag name (e.g., "bash", "shell")
+  tool: string; // canonical internal name (e.g., "bash")
   category: ToolCategory;
 };
 
@@ -601,7 +701,11 @@ export const TOOL_REGISTRY: ToolRegistryEntry[] = [
   { tag: "toggle_right_panel", tool: "toggle_right_panel", category: "read" },
   { tag: "toggle_bottom_panel", tool: "toggle_bottom_panel", category: "read" },
   { tag: "set_right_panel_tab", tool: "set_right_panel_tab", category: "read" },
-  { tag: "set_bottom_panel_tab", tool: "set_bottom_panel_tab", category: "read" },
+  {
+    tag: "set_bottom_panel_tab",
+    tool: "set_bottom_panel_tab",
+    category: "read",
+  },
 
   // Terminal
   { tag: "new_terminal", tool: "new_terminal", category: "bash" },
@@ -622,7 +726,13 @@ for (const entry of TOOL_REGISTRY) {
 }
 
 export const TOOL_CATEGORIES = {
-  edit: new Set(TOOL_REGISTRY.filter(e => e.category === "edit").map(e => e.tool)),
-  bash: new Set(TOOL_REGISTRY.filter(e => e.category === "bash").map(e => e.tool)),
-  read: new Set(TOOL_REGISTRY.filter(e => e.category === "read").map(e => e.tool)),
+  edit: new Set(
+    TOOL_REGISTRY.filter((e) => e.category === "edit").map((e) => e.tool),
+  ),
+  bash: new Set(
+    TOOL_REGISTRY.filter((e) => e.category === "bash").map((e) => e.tool),
+  ),
+  read: new Set(
+    TOOL_REGISTRY.filter((e) => e.category === "read").map((e) => e.tool),
+  ),
 };

@@ -28,7 +28,9 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches TypeScript type mismatch", () => {
-    const result = matchErrorPattern("Type 'string' is not assignable to type 'number'");
+    const result = matchErrorPattern(
+      "Type 'string' is not assignable to type 'number'",
+    );
     expect(result).not.toBeNull();
     expect(result!.suggestion).toContain("string");
     expect(result!.suggestion).toContain("number");
@@ -36,7 +38,9 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches missing property errors", () => {
-    const result = matchErrorPattern("Property 'foobar' does not exist on type 'User'");
+    const result = matchErrorPattern(
+      "Property 'foobar' does not exist on type 'User'",
+    );
     expect(result).not.toBeNull();
     expect(result!.suggestion).toContain("foobar");
     expect(result!.suggestion).toContain("User");
@@ -55,7 +59,9 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches Python ModuleNotFoundError", () => {
-    const result = matchErrorPattern("ModuleNotFoundError: No module named 'requests'");
+    const result = matchErrorPattern(
+      "ModuleNotFoundError: No module named 'requests'",
+    );
     expect(result).not.toBeNull();
     expect(result!.suggestion).toContain("requests");
     expect(result!.autoFix).toBeDefined();
@@ -63,7 +69,9 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches Python ImportError", () => {
-    const result = matchErrorPattern("ImportError: cannot import name 'Client' from 'discord'");
+    const result = matchErrorPattern(
+      "ImportError: cannot import name 'Client' from 'discord'",
+    );
     expect(result).not.toBeNull();
     expect(result!.suggestion).toContain("Client");
     expect(result!.suggestion).toContain("discord");
@@ -89,9 +97,13 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches rate limit errors (case-insensitive)", () => {
-    expect(matchErrorPattern("HTTP 429 Too Many Requests - rate limit exceeded")).not.toBeNull();
+    expect(
+      matchErrorPattern("HTTP 429 Too Many Requests - rate limit exceeded"),
+    ).not.toBeNull();
     expect(matchErrorPattern("429 Rate Limit Exceeded")).not.toBeNull();
-    expect(matchErrorPattern("429 - rate_limit: please slow down")).not.toBeNull();
+    expect(
+      matchErrorPattern("429 - rate_limit: please slow down"),
+    ).not.toBeNull();
   });
 
   it("matches 401 unauthorized errors", () => {
@@ -119,7 +131,9 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches file not found errors", () => {
-    const result = matchErrorPattern("ENOENT: no such file or directory, open 'foo.txt'");
+    const result = matchErrorPattern(
+      "ENOENT: no such file or directory, open 'foo.txt'",
+    );
     expect(result).not.toBeNull();
     expect(result!.suggestion).toContain("not found");
   });
@@ -156,7 +170,8 @@ describe("matchErrorPattern", () => {
   });
 
   it("matches partially within longer messages", () => {
-    const result = matchErrorPattern(`[Error] Build failed: Cannot find module 'chalk'
+    const result =
+      matchErrorPattern(`[Error] Build failed: Cannot find module 'chalk'
     at require (internal/modules/cjs/helpers.js:88:18)`);
     expect(result).not.toBeNull();
     expect(result!.suggestion).toContain("chalk");

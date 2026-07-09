@@ -1,5 +1,11 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from "react";
-import { buildMemoryGraph, hitTest, NODE_COLORS, type GraphNode, type GraphData } from "@/lib/memoryGraph";
+import {
+  buildMemoryGraph,
+  hitTest,
+  NODE_COLORS,
+  type GraphNode,
+  type GraphData,
+} from "@/lib/memoryGraph";
 import { useSkillsMcp, useChat, useWorkspace } from "@/store/useAppStore";
 import { loadGenePool } from "@/lib/genes";
 import { isDatabaseReady } from "@/lib/database";
@@ -13,7 +19,9 @@ export function MemoryGraph() {
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 500 });
   const [isDragging, setIsDragging] = useState(false);
-  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const [isDark, setIsDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
 
   // Refs for animation loop state (avoids tearing down RAF on hover/select)
   const panOffsetRef = useRef({ x: 0, y: 0 });
@@ -26,15 +34,23 @@ export function MemoryGraph() {
   const timeRef = useRef(0);
 
   // Sync hover/select to refs for animation loop
-  useEffect(() => { hoveredNodeRef.current = hoveredNode; }, [hoveredNode]);
-  useEffect(() => { selectedNodeRef.current = selectedNode; }, [selectedNode]);
+  useEffect(() => {
+    hoveredNodeRef.current = hoveredNode;
+  }, [hoveredNode]);
+  useEffect(() => {
+    selectedNodeRef.current = selectedNode;
+  }, [selectedNode]);
 
   // Track theme changes
   useEffect(() => {
-    const check = () => setIsDark(document.documentElement.classList.contains("dark"));
+    const check = () =>
+      setIsDark(document.documentElement.classList.contains("dark"));
     check();
     const observer = new MutationObserver(check);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
     return () => observer.disconnect();
   }, []);
 
@@ -46,7 +62,10 @@ export function MemoryGraph() {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (width > 0 && height > 0) {
-          setCanvasSize({ width: Math.floor(width), height: Math.floor(height) });
+          setCanvasSize({
+            width: Math.floor(width),
+            height: Math.floor(height),
+          });
         }
       }
     });
@@ -78,9 +97,15 @@ export function MemoryGraph() {
       const { chatSessions, sessionMessages } = useChat.getState();
       const genePool = await loadGenePool();
       const { activeWorkspaceId, workspaces } = useWorkspace.getState();
-      const ws = workspaces.find(w => w.id === activeWorkspaceId);
+      const ws = workspaces.find((w) => w.id === activeWorkspaceId);
 
-      const memories: { id: string; summary: string; category: string; tags: string[]; tier: string }[] = [];
+      const memories: {
+        id: string;
+        summary: string;
+        category: string;
+        tags: string[];
+        tier: string;
+      }[] = [];
       if (ws && isDatabaseReady()) {
         try {
           const { getAllMemories } = await import("@/lib/memoryStore");
@@ -94,7 +119,9 @@ export function MemoryGraph() {
               tier: m.tier,
             });
           }
-        } catch { /* memory store not available */ }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[MemoryGraph] Memory store not available:", e);
+        }
       }
 
       for (const session of chatSessions.slice(0, 30)) {
@@ -126,7 +153,9 @@ export function MemoryGraph() {
           id: `mcp-${m.name}`,
           summary: m.name,
           category: "skill",
-          tags: (m.tools?.length ? m.tools.map(t => t.name) : undefined) || [m.transport],
+          tags: (m.tools?.length ? m.tools.map((t) => t.name) : undefined) || [
+            m.transport,
+          ],
           tier: m.enabled ? "high" : "low",
         });
       }
@@ -159,24 +188,30 @@ export function MemoryGraph() {
       const data = buildMemoryGraph(
         memories.slice(0, 200),
         genePool.genes,
-        chatSessions.slice(0, 30).map(s => ({
+        chatSessions.slice(0, 30).map((s) => ({
           id: s.id,
           title: s.title,
           agentName: s.agentName,
           messageCount: s.messageCount,
-        }))
+        })),
       );
 
       setGraphData(data);
     };
-    build();
-    return () => { cancelled = true; };
+    void build();
+    return () => {
+      cancelled = true;
+    };
   }, []); // Only build once on mount
 
   // Compute rescale transform for fitting graph to canvas (pure, no setState)
   const rescaleTransform = useMemo(() => {
-    if (!graphData || graphData.nodes.length < 3) return { scale: 1, offsetX: 0, offsetY: 0 };
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    if (!graphData || graphData.nodes.length < 3)
+      return { scale: 1, offsetX: 0, offsetY: 0 };
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
     for (const n of graphData.nodes) {
       if (n.x < minX) minX = n.x;
       if (n.x > maxX) maxX = n.x;
@@ -243,7 +278,7 @@ export function MemoryGraph() {
             -pan.x / zoom - 100,
             -pan.y / zoom - 100,
             w / zoom + 200,
-            h / zoom + 200
+            h / zoom + 200,
           );
         }
       }
@@ -258,7 +293,8 @@ export function MemoryGraph() {
         const target = nodeMap.get(edge.target);
         if (!source || !target) continue;
 
-        const isHighlighted = selected &&
+        const isHighlighted =
+          selected &&
           (edge.source === selected.id || edge.target === selected.id);
         const isDimmed = selected && !isHighlighted;
 
@@ -273,12 +309,21 @@ export function MemoryGraph() {
         const ctrlX = midX + nx * curveAmount;
         const ctrlY = midY + ny * curveAmount;
 
-        const alpha = isDimmed ? "15" : (isHighlighted ? "bb" : "44");
-        const grad = ctx.createLinearGradient(source.x, source.y, target.x, target.y);
+        const alpha = isDimmed ? "15" : isHighlighted ? "bb" : "44";
+        const grad = ctx.createLinearGradient(
+          source.x,
+          source.y,
+          target.x,
+          target.y,
+        );
         grad.addColorStop(0, source.color + alpha);
         grad.addColorStop(1, target.color + alpha);
         ctx.strokeStyle = grad;
-        ctx.lineWidth = isDimmed ? 0.3 : (isHighlighted ? Math.max(1.5, edge.weight * 3) : Math.max(0.5, edge.weight * 1.5));
+        ctx.lineWidth = isDimmed
+          ? 0.3
+          : isHighlighted
+            ? Math.max(1.5, edge.weight * 3)
+            : Math.max(0.5, edge.weight * 1.5);
         ctx.lineCap = "round";
 
         ctx.beginPath();
@@ -327,11 +372,18 @@ export function MemoryGraph() {
 
         // Node with radial gradient
         const nodeGrad = ctx.createRadialGradient(
-          node.x - size * 0.3, node.y - size * 0.3, 0,
-          node.x, node.y, size
+          node.x - size * 0.3,
+          node.y - size * 0.3,
+          0,
+          node.x,
+          node.y,
+          size,
         );
         const baseColor = dimmed ? node.color + "40" : node.color;
-        nodeGrad.addColorStop(0, dimmed ? node.color + "30" : node.color + "ee");
+        nodeGrad.addColorStop(
+          0,
+          dimmed ? node.color + "30" : node.color + "ee",
+        );
         nodeGrad.addColorStop(1, baseColor);
         ctx.beginPath();
         ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
@@ -343,7 +395,9 @@ export function MemoryGraph() {
           ctx.lineWidth = 2.5;
           ctx.stroke();
         } else if (isHovered) {
-          ctx.strokeStyle = isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.3)";
+          ctx.strokeStyle = isDark
+            ? "rgba(255,255,255,0.5)"
+            : "rgba(0,0,0,0.3)";
           ctx.lineWidth = 1.5;
           ctx.stroke();
         }
@@ -351,11 +405,17 @@ export function MemoryGraph() {
         // Label
         if (size > 3 || zoom > 0.8) {
           const labelColor = dimmed
-            ? (isDark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.3)")
-            : (isDark ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.8)");
+            ? isDark
+              ? "rgba(255,255,255,0.3)"
+              : "rgba(0,0,0,0.3)"
+            : isDark
+              ? "rgba(255,255,255,0.85)"
+              : "rgba(0,0,0,0.8)";
           const outlineColor = dimmed
             ? "transparent"
-            : (isDark ? "rgba(0,0,0,0.6)" : "rgba(255,255,255,0.9)");
+            : isDark
+              ? "rgba(0,0,0,0.6)"
+              : "rgba(255,255,255,0.9)";
           const fontSize = Math.max(9, Math.min(12, 10 / zoom));
           ctx.font = `500 ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
           ctx.textAlign = "center";
@@ -395,23 +455,32 @@ export function MemoryGraph() {
     };
   }, []);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isDragging) {
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
-      panOffsetRef.current = { x: panStartRef.current.x + dx, y: panStartRef.current.y + dy };
-      return;
-    }
-    if (!graphData) return;
-    const { x, y } = screenToGraph(e.clientX, e.clientY);
-    setHoveredNode(hitTest(graphData.nodes, x, y));
-  }, [graphData, isDragging, screenToGraph]);
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (isDragging) {
+        const dx = e.clientX - dragStartRef.current.x;
+        const dy = e.clientY - dragStartRef.current.y;
+        panOffsetRef.current = {
+          x: panStartRef.current.x + dx,
+          y: panStartRef.current.y + dy,
+        };
+        return;
+      }
+      if (!graphData) return;
+      const { x, y } = screenToGraph(e.clientX, e.clientY);
+      setHoveredNode(hitTest(graphData.nodes, x, y));
+    },
+    [graphData, isDragging, screenToGraph],
+  );
 
-  const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!graphData) return;
-    const { x, y } = screenToGraph(e.clientX, e.clientY);
-    setSelectedNode(hitTest(graphData.nodes, x, y));
-  }, [graphData, screenToGraph]);
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!graphData) return;
+      const { x, y } = screenToGraph(e.clientX, e.clientY);
+      setSelectedNode(hitTest(graphData.nodes, x, y));
+    },
+    [graphData, screenToGraph],
+  );
 
   const handleDoubleClick = useCallback(() => {
     panOffsetRef.current = { x: 0, y: 0 };
@@ -419,17 +488,20 @@ export function MemoryGraph() {
     setSelectedNode(null);
   }, []);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button === 1 || e.button === 0) {
-      const { x, y } = screenToGraph(e.clientX, e.clientY);
-      const node = graphData ? hitTest(graphData.nodes, x, y) : null;
-      if (node && e.button === 0) return;
-      e.preventDefault();
-      setIsDragging(true);
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-      panStartRef.current = { ...panOffsetRef.current };
-    }
-  }, [graphData, screenToGraph]);
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (e.button === 1 || e.button === 0) {
+        const { x, y } = screenToGraph(e.clientX, e.clientY);
+        const node = graphData ? hitTest(graphData.nodes, x, y) : null;
+        if (node && e.button === 0) return;
+        e.preventDefault();
+        setIsDragging(true);
+        dragStartRef.current = { x: e.clientX, y: e.clientY };
+        panStartRef.current = { ...panOffsetRef.current };
+      }
+    },
+    [graphData, screenToGraph],
+  );
 
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
 
@@ -442,7 +514,10 @@ export function MemoryGraph() {
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
       const oldZoom = zoomRef.current;
-      const newZoom = Math.max(0.2, Math.min(5, oldZoom * (e.deltaY > 0 ? 0.9 : 1.1)));
+      const newZoom = Math.max(
+        0.2,
+        Math.min(5, oldZoom * (e.deltaY > 0 ? 0.9 : 1.1)),
+      );
       const pan = panOffsetRef.current;
       zoomRef.current = newZoom;
       panOffsetRef.current = {
@@ -477,23 +552,37 @@ export function MemoryGraph() {
         <div className="flex items-center gap-4 text-[10px] text-dalam-text-muted">
           {legend.map(([type, color]) => (
             <div key={type} className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+              <span
+                className="w-2.5 h-2.5 rounded-full"
+                style={{ backgroundColor: color }}
+              />
               <span>{type}</span>
             </div>
           ))}
         </div>
         <div className="flex items-center gap-2 text-[10px] text-dalam-text-muted">
           {graphData && (
-            <span>{graphData.nodes.length} nodes · {graphData.edges.length} edges</span>
+            <span>
+              {graphData.nodes.length} nodes · {graphData.edges.length} edges
+            </span>
           )}
-          <button onClick={handleReset} className="px-2 py-0.5 rounded bg-dalam-bg-tertiary hover:bg-dalam-bg-hover transition-colors">
+          <button
+            onClick={handleReset}
+            className="px-2 py-0.5 rounded bg-dalam-bg-tertiary hover:bg-dalam-bg-hover transition-colors"
+          >
             Reset
           </button>
-          <span className="opacity-50">Scroll to pan · Ctrl+scroll to zoom · Double-click to reset</span>
+          <span className="opacity-50">
+            Scroll to pan · Ctrl+scroll to zoom · Double-click to reset
+          </span>
         </div>
       </div>
 
-      <div ref={containerRef} className="relative bg-dalam-bg-primary border border-dalam-border-primary rounded-xl overflow-hidden" style={{ height: "500px" }}>
+      <div
+        ref={containerRef}
+        className="relative bg-dalam-bg-primary border border-dalam-border-primary rounded-xl overflow-hidden"
+        style={{ height: "500px" }}
+      >
         <canvas
           ref={canvasRef}
           width={canvasSize.width}
@@ -512,48 +601,68 @@ export function MemoryGraph() {
         {graphData && graphData.nodes.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center">
-              <p className="text-sm text-dalam-text-muted">No data to visualize</p>
-              <p className="text-xs text-dalam-text-muted/60 mt-1">Start a chat session to populate the graph</p>
+              <p className="text-sm text-dalam-text-muted">
+                No data to visualize
+              </p>
+              <p className="text-xs text-dalam-text-muted/60 mt-1">
+                Start a chat session to populate the graph
+              </p>
             </div>
           </div>
         )}
 
-        {(selectedNode || hoveredNode) && (() => {
-          const node = selectedNode || hoveredNode;
-          if (!node) return null;
-          return (
-            <div className="absolute top-3 right-3 bg-dalam-bg-secondary/95 backdrop-blur-sm border border-dalam-border-primary rounded-lg p-3 shadow-xl min-w-[200px] max-w-[280px]">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: node.color }} />
-                <div className="text-xs font-semibold text-dalam-text-primary truncate">{node.label}</div>
-              </div>
-              <div className="space-y-1 text-[10px] text-dalam-text-muted">
-                <div className="flex justify-between">
-                  <span>Type</span>
-                  <span className="text-dalam-text-secondary">{node.type}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Connections</span>
-                  <span className="text-dalam-text-secondary">{node.connections.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Size</span>
-                  <span className="text-dalam-text-secondary">{node.size.toFixed(1)}</span>
-                </div>
-                {node.metadata && Object.keys(node.metadata).length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-dalam-border-primary/50 space-y-1">
-                    {Object.entries(node.metadata).slice(0, 5).map(([k, v]) => (
-                      <div key={k} className="flex justify-between gap-2">
-                        <span className="truncate">{k}</span>
-                        <span className="text-dalam-text-secondary truncate max-w-[120px]">{String(v)}</span>
-                      </div>
-                    ))}
+        {(selectedNode || hoveredNode) &&
+          (() => {
+            const node = selectedNode || hoveredNode;
+            if (!node) return null;
+            return (
+              <div className="absolute top-3 right-3 bg-dalam-bg-secondary/95 backdrop-blur-sm border border-dalam-border-primary rounded-lg p-3 shadow-xl min-w-[200px] max-w-[280px]">
+                <div className="flex items-center gap-2 mb-2">
+                  <span
+                    className="w-3 h-3 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: node.color }}
+                  />
+                  <div className="text-xs font-semibold text-dalam-text-primary truncate">
+                    {node.label}
                   </div>
-                )}
+                </div>
+                <div className="space-y-1 text-[10px] text-dalam-text-muted">
+                  <div className="flex justify-between">
+                    <span>Type</span>
+                    <span className="text-dalam-text-secondary">
+                      {node.type}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Connections</span>
+                    <span className="text-dalam-text-secondary">
+                      {node.connections.length}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Size</span>
+                    <span className="text-dalam-text-secondary">
+                      {node.size.toFixed(1)}
+                    </span>
+                  </div>
+                  {node.metadata && Object.keys(node.metadata).length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-dalam-border-primary/50 space-y-1">
+                      {Object.entries(node.metadata)
+                        .slice(0, 5)
+                        .map(([k, v]) => (
+                          <div key={k} className="flex justify-between gap-2">
+                            <span className="truncate">{k}</span>
+                            <span className="text-dalam-text-secondary truncate max-w-[120px]">
+                              {String(v)}
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })()}
+            );
+          })()}
       </div>
     </div>
   );

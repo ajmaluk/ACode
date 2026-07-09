@@ -46,12 +46,19 @@ export const useToasts = create<ToastState>((set, get) => ({
  */
 export function useToast() {
   const push = useToasts((s) => s.push);
-  return useMemo(() => ({
-    info: (title: string, description?: string) => push({ kind: "info", title, description }),
-    success: (title: string, description?: string) => push({ kind: "success", title, description }),
-    warning: (title: string, description?: string) => push({ kind: "warning", title, description }),
-    error: (title: string, description?: string) => push({ kind: "error", title, description }),
-  }), [push]);
+  return useMemo(
+    () => ({
+      info: (title: string, description?: string) =>
+        push({ kind: "info", title, description }),
+      success: (title: string, description?: string) =>
+        push({ kind: "success", title, description }),
+      warning: (title: string, description?: string) =>
+        push({ kind: "warning", title, description }),
+      error: (title: string, description?: string) =>
+        push({ kind: "error", title, description }),
+    }),
+    [push],
+  );
 }
 
 /**
@@ -76,6 +83,8 @@ export function useProgressKeyframes() {
       }
     `;
     document.head.appendChild(style);
-    return () => { style.remove(); };
+    return () => {
+      style.remove();
+    };
   }, []);
 }

@@ -1,5 +1,17 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
-import { useWorkspace, useSettings, useChat, useUI, useTerminal } from "@/store/useAppStore";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+} from "react";
+import {
+  useWorkspace,
+  useSettings,
+  useChat,
+  useUI,
+  useTerminal,
+} from "@/store/useAppStore";
 import type { FileNode } from "@dalam/shared-types";
 import { CodeView } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
@@ -8,10 +20,7 @@ import { QuickOpen } from "@/components/editor/QuickOpen";
 import { GoToLine } from "@/components/editor/GoToLine";
 import { ChatView } from "@/components/editor/ChatView";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
-import {
-  X, FileCode, FilePlus, Circle,
-  Check, Code2,
-} from "lucide-react";
+import { X, FileCode, FilePlus, Circle, Check, Code2 } from "lucide-react";
 import { useToast } from "@/components/ui/toastStore";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename, findFirstFile } from "@/lib/pathUtils";
@@ -26,11 +35,22 @@ function countLines(text: string): number {
   return count;
 }
 
-const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ fileTree, openFile }: { fileTree: FileNode[]; openFile: (path: string) => Promise<void> }) {
+const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({
+  fileTree,
+  openFile,
+}: {
+  fileTree: FileNode[];
+  openFile: (path: string) => Promise<void>;
+}) {
   const toast = useToast();
   const mod = modKey();
   const firstFile = useMemo(() => findFirstFile(fileTree), [fileTree]);
-  const handleClick = useCallback(async () => { if (firstFile) { await openFile(firstFile); toast.info("Opened file", basename(firstFile)); } }, [firstFile, openFile, toast]);
+  const handleClick = useCallback(async () => {
+    if (firstFile) {
+      await openFile(firstFile);
+      toast.info("Opened file", basename(firstFile));
+    }
+  }, [firstFile, openFile, toast]);
   return (
     <button
       className={`px-3 h-full transition-colors ${firstFile ? "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover" : "text-dalam-text-muted/40 cursor-not-allowed"}`}
@@ -44,7 +64,16 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({ file
 });
 
 export function EditorPane() {
-  const { openTabs, activeFilePath, setActiveFile, closeTab, updateTabContent, markSaved, fileTree, openFile } = useWorkspace();
+  const {
+    openTabs,
+    activeFilePath,
+    setActiveFile,
+    closeTab,
+    updateTabContent,
+    markSaved,
+    fileTree,
+    openFile,
+  } = useWorkspace();
   const { viewMode } = useUI();
   const toast = useToast();
   const activeTab = openTabs.find((t) => t.path === activeFilePath) ?? null;
@@ -54,7 +83,11 @@ export function EditorPane() {
   const [findReplaceMode, setFindReplaceMode] = useState(false);
   const [showQuickOpen, setShowQuickOpen] = useState(false);
   const [showGoToLine, setShowGoToLine] = useState(false);
-  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  const [tabContextMenu, setTabContextMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+  } | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const monacoEditorRef = useRef<any>(null);
 
@@ -69,8 +102,14 @@ export function EditorPane() {
   }, [viewMode]);
 
   useEffect(() => {
-    const onFind = () => { setShowFindBar(true); setFindReplaceMode(false); };
-    const onFindReplace = () => { setShowFindBar(true); setFindReplaceMode(true); };
+    const onFind = () => {
+      setShowFindBar(true);
+      setFindReplaceMode(false);
+    };
+    const onFindReplace = () => {
+      setShowFindBar(true);
+      setFindReplaceMode(true);
+    };
     const onQuickOpen = () => setShowQuickOpen(true);
     const onGoToLine = () => setShowGoToLine(true);
     const onGoToLineNumber = (e: Event) => {
@@ -85,11 +124,17 @@ export function EditorPane() {
     };
     const onFindNext = () => {
       const editor = monacoEditorRef.current;
-      if (editor) editor.trigger("findBar", "editor.action.nextMatchFindAction", null);
+      if (editor)
+        editor.trigger("findBar", "editor.action.nextMatchFindAction", null);
     };
     const onFindPrevious = () => {
       const editor = monacoEditorRef.current;
-      if (editor) editor.trigger("findBar", "editor.action.previousMatchFindAction", null);
+      if (editor)
+        editor.trigger(
+          "findBar",
+          "editor.action.previousMatchFindAction",
+          null,
+        );
     };
     const onToggleComment = () => {
       const editor = monacoEditorRef.current;
@@ -133,7 +178,10 @@ export function EditorPane() {
           markSaved(tab.path);
           toast.success("File saved", tab.name);
         } catch (err) {
-          toast.error("Save failed", (err as Error)?.message ?? "Unknown error");
+          toast.error(
+            "Save failed",
+            (err as Error)?.message ?? "Unknown error",
+          );
         }
       }
 
@@ -150,7 +198,10 @@ export function EditorPane() {
           }
           toast.success("All files saved", `${dirty.length} file(s)`);
         } catch (err) {
-          toast.error("Save all failed", (err as Error)?.message ?? "Unknown error");
+          toast.error(
+            "Save all failed",
+            (err as Error)?.message ?? "Unknown error",
+          );
         }
       }
 
@@ -247,9 +298,16 @@ export function EditorPane() {
             const editor = monacoEditorRef.current;
             if (editor) editor.getAction("editor.action.formatDocument")?.run();
           } else if (action === "toggleMinimap") {
-            void useSettings.getState().update("showMinimap", !useSettings.getState().settings.showMinimap);
+            void useSettings
+              .getState()
+              .update(
+                "showMinimap",
+                !useSettings.getState().settings.showMinimap,
+              );
           } else if (action === "toggleWordWrap") {
-            void useSettings.getState().update("wordWrap", !useSettings.getState().settings.wordWrap);
+            void useSettings
+              .getState()
+              .update("wordWrap", !useSettings.getState().settings.wordWrap);
           }
           return;
         }
@@ -269,32 +327,64 @@ export function EditorPane() {
   const [findMatchCount, setFindMatchCount] = useState(0);
   const [findCurrentMatch, setFindCurrentMatch] = useState(0);
 
-  const handleFindSearch = useCallback((query: string, options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean }) => {
-    const editor = monacoEditorRef.current;
-    if (!editor) return;
-    if (!query) { setFindMatchCount(0); setFindCurrentMatch(0); return; }
-    const model = editor.getModel();
-    if (!model) return;
-    // Use Monaco's find controller directly
-    const findController = editor.getContribution("editor.contrib.findController") as { start: (searchString: string, options: { caseSensitive: boolean; wholeWord: boolean; isRegex: boolean }) => void } | null;
-    if (findController) {
-      findController.start(query, {
-        caseSensitive: options.caseSensitive,
-        wholeWord: options.wholeWord,
-        isRegex: options.regex,
-      });
-    }
-    // Count matches using Monaco's model
-    const matches = model.findMatches(query, false, options.regex, options.caseSensitive, options.wholeWord ? "true" : null, false) as Array<{ range: { startLineNumber: number; startColumn: number } }>;
-    setFindMatchCount(matches.length);
-    const pos = editor.getPosition();
-    if (pos && matches.length > 0) {
-      const idx = matches.findIndex((m) => m.range.startLineNumber === pos.lineNumber && m.range.startColumn === pos.column);
-      setFindCurrentMatch(idx >= 0 ? idx + 1 : 1);
-    } else {
-      setFindCurrentMatch(matches.length > 0 ? 1 : 0);
-    }
-  }, []);
+  const handleFindSearch = useCallback(
+    (
+      query: string,
+      options: { caseSensitive: boolean; wholeWord: boolean; regex: boolean },
+    ) => {
+      const editor = monacoEditorRef.current;
+      if (!editor) return;
+      if (!query) {
+        setFindMatchCount(0);
+        setFindCurrentMatch(0);
+        return;
+      }
+      const model = editor.getModel();
+      if (!model) return;
+      // Use Monaco's find controller directly
+      const findController = editor.getContribution(
+        "editor.contrib.findController",
+      ) as {
+        start: (
+          searchString: string,
+          options: {
+            caseSensitive: boolean;
+            wholeWord: boolean;
+            isRegex: boolean;
+          },
+        ) => void;
+      } | null;
+      if (findController) {
+        findController.start(query, {
+          caseSensitive: options.caseSensitive,
+          wholeWord: options.wholeWord,
+          isRegex: options.regex,
+        });
+      }
+      // Count matches using Monaco's model
+      const matches = model.findMatches(
+        query,
+        false,
+        options.regex,
+        options.caseSensitive,
+        options.wholeWord ? "true" : null,
+        false,
+      ) as Array<{ range: { startLineNumber: number; startColumn: number } }>;
+      setFindMatchCount(matches.length);
+      const pos = editor.getPosition();
+      if (pos && matches.length > 0) {
+        const idx = matches.findIndex(
+          (m) =>
+            m.range.startLineNumber === pos.lineNumber &&
+            m.range.startColumn === pos.column,
+        );
+        setFindCurrentMatch(idx >= 0 ? idx + 1 : 1);
+      } else {
+        setFindCurrentMatch(matches.length > 0 ? 1 : 0);
+      }
+    },
+    [],
+  );
 
   const handleFindClose = useCallback(() => {
     setShowFindBar(false);
@@ -325,13 +415,23 @@ export function EditorPane() {
             {openTabs.map((t) => {
               const active = t.path === activeFilePath;
               return (
-                <div key={t.path}
+                <div
+                  key={t.path}
                   className={`group flex items-center gap-1.5 px-3 h-full border-r border-dalam-border-primary cursor-pointer transition-colors ${active ? "bg-dalam-bg-primary text-dalam-text-primary" : "bg-dalam-bg-secondary text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
                   onClick={() => setActiveFile(t.path)}
-                  onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.path); } }}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      closeTab(t.path);
+                    }
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    setTabContextMenu({ x: e.clientX, y: e.clientY, path: t.path });
+                    setTabContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      path: t.path,
+                    });
                   }}
                   draggable
                   onDragStart={(e) => {
@@ -347,8 +447,12 @@ export function EditorPane() {
                     const draggedPath = e.dataTransfer.getData("text/plain");
                     if (draggedPath && draggedPath !== t.path) {
                       const tabs = useWorkspace.getState().openTabs;
-                      const fromIdx = tabs.findIndex(tab => tab.path === draggedPath);
-                      const toIdx = tabs.findIndex(tab => tab.path === t.path);
+                      const fromIdx = tabs.findIndex(
+                        (tab) => tab.path === draggedPath,
+                      );
+                      const toIdx = tabs.findIndex(
+                        (tab) => tab.path === t.path,
+                      );
                       if (fromIdx >= 0 && toIdx >= 0) {
                         const newTabs = [...tabs];
                         const [moved] = newTabs.splice(fromIdx, 1);
@@ -357,13 +461,19 @@ export function EditorPane() {
                       }
                     }
                   }}
-                  title={`${t.path}${t.dirty ? " (unsaved)" : ""}`}>
-                  {t.dirty && <Circle className="w-2 h-2 fill-current text-dalam-accent-primary flex-shrink-0" />}
+                  title={`${t.path}${t.dirty ? " (unsaved)" : ""}`}
+                >
+                  {t.dirty && (
+                    <Circle className="w-2 h-2 fill-current text-dalam-accent-primary flex-shrink-0" />
+                  )}
                   <FileCode className="w-3.5 h-3.5 flex-shrink-0" />
                   <span className="text-xs whitespace-nowrap">{t.name}</span>
                   <button
                     className={`ml-1 rounded p-0.5 ${active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100"} hover:bg-dalam-bg-active transition-opacity`}
-                    onClick={(e) => { e.stopPropagation(); closeTab(t.path); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTab(t.path);
+                    }}
                     title={t.dirty ? "Close (unsaved)" : "Close"}
                     aria-label={`Close ${t.name}`}
                   >
@@ -375,10 +485,32 @@ export function EditorPane() {
             <MemoizedOpenFileButton fileTree={fileTree} openFile={openFile} />
             <div className="flex-1" />
             <div className="flex items-center gap-0.5 pr-1">
-              <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="Toggle word wrap" onClick={() => { void useSettings.getState().update("wordWrap", !useSettings.getState().settings.wordWrap); }}>
+              <button
+                className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+                title="Toggle word wrap"
+                onClick={() => {
+                  void useSettings
+                    .getState()
+                    .update(
+                      "wordWrap",
+                      !useSettings.getState().settings.wordWrap,
+                    );
+                }}
+              >
                 <span className="text-xs">W</span>
               </button>
-              <button className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors" title="Toggle minimap" onClick={() => { void useSettings.getState().update("showMinimap", !useSettings.getState().settings.showMinimap); }}>
+              <button
+                className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+                title="Toggle minimap"
+                onClick={() => {
+                  void useSettings
+                    .getState()
+                    .update(
+                      "showMinimap",
+                      !useSettings.getState().settings.showMinimap,
+                    );
+                }}
+              >
                 <span className="text-xs">M</span>
               </button>
             </div>
@@ -410,14 +542,36 @@ export function EditorPane() {
 
           <div className="flex-1 min-h-0 relative">
             {activeTab ? (
-              <CodeView path={activeTab.path} content={activeTab.content} onChange={(v) => updateTabContent(activeTab.path, v)} onEditorReady={(e) => { monacoEditorRef.current = e; const active = useWorkspace.getState().openTabs.find(t => t.path === useWorkspace.getState().activeFilePath); if (active?.cursor) { e.setPosition({ lineNumber: active.cursor.line, column: active.cursor.column }); e.revealLineInCenter(active.cursor.line); } }} />
+              <CodeView
+                path={activeTab.path}
+                content={activeTab.content}
+                onChange={(v) => updateTabContent(activeTab.path, v)}
+                onEditorReady={(e) => {
+                  monacoEditorRef.current = e;
+                  const active = useWorkspace
+                    .getState()
+                    .openTabs.find(
+                      (t) => t.path === useWorkspace.getState().activeFilePath,
+                    );
+                  if (active?.cursor) {
+                    e.setPosition({
+                      lineNumber: active.cursor.line,
+                      column: active.cursor.column,
+                    });
+                    e.revealLineInCenter(active.cursor.line);
+                  }
+                }}
+              />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-dalam-text-muted">
                 <div className="w-16 h-16 mb-4 rounded-2xl bg-dalam-bg-active flex items-center justify-center">
                   <Code2 className="w-8 h-8 text-dalam-text-muted/50" />
                 </div>
                 <p className="text-sm font-medium mb-1">No file open</p>
-                <p className="text-xs text-dalam-text-muted/60 mb-4">Select a file from the explorer or use {modKey()}P to quick open</p>
+                <p className="text-xs text-dalam-text-muted/60 mb-4">
+                  Select a file from the explorer or use {modKey()}P to quick
+                  open
+                </p>
               </div>
             )}
           </div>
@@ -429,7 +583,11 @@ export function EditorPane() {
           <GoToLine
             maxLine={countLines(activeTab.content)}
             onGoToLine={(line) => {
-              window.dispatchEvent(new CustomEvent("editor:go-to-line-number", { detail: { line } }));
+              window.dispatchEvent(
+                new CustomEvent("editor:go-to-line-number", {
+                  detail: { line },
+                }),
+              );
             }}
             onClose={() => setShowGoToLine(false)}
           />
@@ -456,10 +614,26 @@ function EditorStatusBar() {
   const activeTab = openTabs.find((t) => t.path === activeFilePath);
   const mod = modKey();
   const extToLang: Record<string, string> = {
-    ts: "TypeScript", tsx: "TypeScript React", js: "JavaScript", jsx: "JavaScript React",
-    py: "Python", rs: "Rust", go: "Go", java: "Java", rb: "Ruby", css: "CSS",
-    html: "HTML", json: "JSON", md: "Markdown", yaml: "YAML", yml: "YAML",
-    sh: "Shell", bash: "Bash", toml: "TOML", xml: "XML", sql: "SQL",
+    ts: "TypeScript",
+    tsx: "TypeScript React",
+    js: "JavaScript",
+    jsx: "JavaScript React",
+    py: "Python",
+    rs: "Rust",
+    go: "Go",
+    java: "Java",
+    rb: "Ruby",
+    css: "CSS",
+    html: "HTML",
+    json: "JSON",
+    md: "Markdown",
+    yaml: "YAML",
+    yml: "YAML",
+    sh: "Shell",
+    bash: "Bash",
+    toml: "TOML",
+    xml: "XML",
+    sql: "SQL",
   };
   const ext = activeTab?.path.split(".").pop()?.toLowerCase() ?? "";
   const language = ext ? (extToLang[ext] ?? ext.toUpperCase()) : "";
@@ -472,8 +646,12 @@ function EditorStatusBar() {
         {activeTab && (
           <span className="flex items-center gap-1.5 flex-shrink-0">
             <FileCode className="w-3 h-3" />
-            <span className="truncate max-w-[200px]" title={activeTab.path}>{activeTab.name}</span>
-            {activeTab.dirty && <Circle className="w-1.5 h-1.5 fill-current text-dalam-accent-primary flex-shrink-0" />}
+            <span className="truncate max-w-[200px]" title={activeTab.path}>
+              {activeTab.name}
+            </span>
+            {activeTab.dirty && (
+              <Circle className="w-1.5 h-1.5 fill-current text-dalam-accent-primary flex-shrink-0" />
+            )}
           </span>
         )}
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
@@ -487,7 +665,9 @@ function EditorStatusBar() {
         )}
         {cursor && (
           <span className="flex items-center gap-1 flex-shrink-0">
-            <span>Ln {cursor.line}, Col {cursor.column}</span>
+            <span>
+              Ln {cursor.line}, Col {cursor.column}
+            </span>
           </span>
         )}
         {lineCount > 0 && (
@@ -502,7 +682,9 @@ function EditorStatusBar() {
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
         <button
           className="flex-shrink-0 hover:text-dalam-text-primary transition-colors"
-          onClick={() => { void useSettings.getState().update("wordWrap", !wordWrap); }}
+          onClick={() => {
+            void useSettings.getState().update("wordWrap", !wordWrap);
+          }}
           title={`Toggle word wrap (${platform() === "mac" ? "⌥" : "Alt"}Z)`}
         >
           {wordWrap ? "Wrap" : "No wrap"}
@@ -517,7 +699,10 @@ function EditorStatusBar() {
                 await api.fs.writeFile(activeTab.path, activeTab.content);
                 markSaved(activeTab.path);
               } catch (err) {
-                toast.error("Save failed", (err as Error)?.message ?? "Unknown error");
+                toast.error(
+                  "Save failed",
+                  (err as Error)?.message ?? "Unknown error",
+                );
               }
             }}
             className="flex items-center gap-1 text-dalam-text-secondary hover:text-dalam-text-primary transition-colors"
@@ -539,7 +724,17 @@ function EditorStatusBar() {
   );
 }
 
-function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabPath: string; onClose: () => void }) {
+function TabContextMenu({
+  x,
+  y,
+  tabPath,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  tabPath: string;
+  onClose: () => void;
+}) {
   const { closeTab, openTabs } = useWorkspace();
   const mod = modKey();
 
@@ -559,7 +754,7 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
     const idx = openTabs.findIndex((t) => t.path === tabPath);
     if (idx >= 0) {
       // Snapshot paths before iterating to avoid mutation-during-iteration bugs
-      const pathsToClose = openTabs.slice(idx + 1).map(t => t.path);
+      const pathsToClose = openTabs.slice(idx + 1).map((t) => t.path);
       for (const path of pathsToClose) {
         closeTab(path);
       }
@@ -571,7 +766,7 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
     const idx = openTabs.findIndex((t) => t.path === tabPath);
     if (idx >= 0) {
       // Snapshot paths before iterating to avoid mutation-during-iteration bugs
-      const pathsToClose = openTabs.slice(0, idx).map(t => t.path);
+      const pathsToClose = openTabs.slice(0, idx).map((t) => t.path);
       for (const path of pathsToClose) {
         closeTab(path);
       }
@@ -588,16 +783,25 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
 
   const copyPath = async () => {
     try {
-      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      const { writeText } =
+        await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(tabPath);
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[EditorPane] Tauri clipboard failed, falling back:", e);
       await navigator.clipboard.writeText(tabPath);
     }
     onClose();
   };
 
   const items = [
-    { label: "Close", shortcut: `${mod}W`, action: () => { closeTab(tabPath); onClose(); } },
+    {
+      label: "Close",
+      shortcut: `${mod}W`,
+      action: () => {
+        closeTab(tabPath);
+        onClose();
+      },
+    },
     { label: "Close Others", action: closeOthers },
     { label: "Close All", action: closeAll },
     { label: "Close To Right", action: closeToRight },
@@ -605,20 +809,26 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
     { label: "Close Saved", action: closeSaved },
     { type: "separator" as const },
     { label: "Copy Path", shortcut: `${mod}⇧C`, action: copyPath },
-    { label: "Copy Relative Path", action: async () => {
-      const { workspaces, activeWorkspaceId } = useWorkspace.getState();
-      const ws = workspaces.find(w => w.id === activeWorkspaceId);
-      const relPath = ws && tabPath.startsWith(ws.path)
-        ? tabPath.slice(ws.path.length + 1)
-        : tabPath;
-      try {
-        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-        await writeText(relPath);
-      } catch {
-        await navigator.clipboard.writeText(relPath);
-      }
-      onClose();
-    }},
+    {
+      label: "Copy Relative Path",
+      action: async () => {
+        const { workspaces, activeWorkspaceId } = useWorkspace.getState();
+        const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+        const relPath =
+          ws && tabPath.startsWith(ws.path)
+            ? tabPath.slice(ws.path.length + 1)
+            : tabPath;
+        try {
+          const { writeText } =
+            await import("@tauri-apps/plugin-clipboard-manager");
+          await writeText(relPath);
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[EditorPane] Tauri clipboard failed for relative path:", e);
+          await navigator.clipboard.writeText(relPath);
+        }
+        onClose();
+      },
+    },
   ];
 
   return (
@@ -628,7 +838,10 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
       onMouseDown={(e) => e.stopPropagation()}
     >
       {items.map((item, idx) => {
-        if (item.type === "separator") return <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />;
+        if (item.type === "separator")
+          return (
+            <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />
+          );
         return (
           <button
             key={idx}
@@ -637,7 +850,9 @@ function TabContextMenu({ x, y, tabPath, onClose }: { x: number; y: number; tabP
           >
             <span>{item.label}</span>
             {"shortcut" in item && item.shortcut && (
-              <kbd className="text-[10px] text-dalam-text-muted whitespace-nowrap">{item.shortcut}</kbd>
+              <kbd className="text-[10px] text-dalam-text-muted whitespace-nowrap">
+                {item.shortcut}
+              </kbd>
             )}
           </button>
         );

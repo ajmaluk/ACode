@@ -32,7 +32,9 @@ export class CancellationToken {
 
   throwIfAborted(): void {
     if (this._aborted) {
-      throw new Error(`Operation cancelled: ${this._reason || "unknown reason"}`);
+      throw new Error(
+        `Operation cancelled: ${this._reason || "unknown reason"}`,
+      );
     }
   }
 
@@ -48,7 +50,7 @@ export class CancellationToken {
     }
     this._listeners.push(callback);
     return () => {
-      this._listeners = this._listeners.filter(l => l !== callback);
+      this._listeners = this._listeners.filter((l) => l !== callback);
     };
   }
 
@@ -66,10 +68,12 @@ export class CancellationToken {
     };
 
     for (const token of tokens) {
-      unsubscribes.push(token.onAbort(() => {
-        cleanup();
-        combined.abort(token.reason);
-      }));
+      unsubscribes.push(
+        token.onAbort(() => {
+          cleanup();
+          combined.abort(token.reason);
+        }),
+      );
     }
 
     // Also clean up if combined is aborted independently

@@ -15,20 +15,23 @@ export interface SessionCost {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCostUsd: number;
-  byModel: Record<string, { inputTokens: number; outputTokens: number; costUsd: number }>;
+  byModel: Record<
+    string,
+    { inputTokens: number; outputTokens: number; costUsd: number }
+  >;
 }
 
 // Default pricing per 1M tokens (USD)
 const DEFAULT_PRICING: Record<string, { input: number; output: number }> = {
-  "gpt-4o": { input: 2.50, output: 10.00 },
-  "gpt-4o-mini": { input: 0.15, output: 0.60 },
-  "gpt-4-turbo": { input: 10.00, output: 30.00 },
-  "claude-4-sonnet": { input: 3.00, output: 15.00 },
-  "claude-4-opus": { input: 15.00, output: 75.00 },
-  "claude-3-5-sonnet": { input: 3.00, output: 15.00 },
-  "claude-3-5-haiku": { input: 0.80, output: 4.00 },
-  "gemini-2.5-pro": { input: 1.25, output: 10.00 },
-  "gemini-2.5-flash": { input: 0.15, output: 0.60 },
+  "gpt-4o": { input: 2.5, output: 10.0 },
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "gpt-4-turbo": { input: 10.0, output: 30.0 },
+  "claude-4-sonnet": { input: 3.0, output: 15.0 },
+  "claude-4-opus": { input: 15.0, output: 75.0 },
+  "claude-3-5-sonnet": { input: 3.0, output: 15.0 },
+  "claude-3-5-haiku": { input: 0.8, output: 4.0 },
+  "gemini-2.5-pro": { input: 1.25, output: 10.0 },
+  "gemini-2.5-flash": { input: 0.15, output: 0.6 },
 };
 
 const _pricing = { ...DEFAULT_PRICING };
@@ -37,7 +40,12 @@ const _sessionCosts = new Map<string, SessionCost>();
 const MAX_SESSION_COSTS = 50; // Cap to prevent unbounded memory growth
 
 function getEmptyCost(): SessionCost {
-  return { totalInputTokens: 0, totalOutputTokens: 0, totalCostUsd: 0, byModel: {} };
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCostUsd: 0,
+    byModel: {},
+  };
 }
 
 function getPrice(modelId: string): { input: number; output: number } {
@@ -47,13 +55,17 @@ function getPrice(modelId: string): { input: number; output: number } {
   for (const [key, val] of Object.entries(_pricing)) {
     if (lower.includes(key) || key.includes(lower)) return val;
   }
-  return { input: 3.00, output: 15.00 }; // Default fallback
+  return { input: 3.0, output: 15.0 }; // Default fallback
 }
 
 /**
  * Record token usage for a session.
  */
-export function recordTokenUsage(sessionId: string, modelId: string, usage: TokenUsage): void {
+export function recordTokenUsage(
+  sessionId: string,
+  modelId: string,
+  usage: TokenUsage,
+): void {
   let cost = _sessionCosts.get(sessionId);
   if (!cost) {
     cost = getEmptyCost();
@@ -98,7 +110,8 @@ export function parseUsageFromChunk(chunk: unknown): TokenUsage | null {
       return {
         inputTokens: u.prompt_tokens ?? 0,
         outputTokens: u.completion_tokens ?? 0,
-        totalTokens: u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
+        totalTokens:
+          u.total_tokens ?? (u.prompt_tokens ?? 0) + (u.completion_tokens ?? 0),
       };
     }
     // Anthropic format: { usage: { input_tokens, output_tokens } }
@@ -138,13 +151,17 @@ export function formatCostDetailed(sessionId: string): string {
   const cost = getSessionCost(sessionId);
   const lines = ["=== Token Usage & Cost ==="];
 
-  lines.push(`Total: \u2191${cost.totalInputTokens.toLocaleString()} in / \u2193${cost.totalOutputTokens.toLocaleString()} out`);
+  lines.push(
+    `Total: \u2191${cost.totalInputTokens.toLocaleString()} in / \u2193${cost.totalOutputTokens.toLocaleString()} out`,
+  );
   lines.push(`Cost: $${cost.totalCostUsd.toFixed(4)}`);
 
   if (Object.keys(cost.byModel).length > 0) {
     lines.push("\nBy Model:");
     for (const [model, data] of Object.entries(cost.byModel)) {
-      lines.push(`  ${model}: ${data.inputTokens.toLocaleString()} in / ${data.outputTokens.toLocaleString()} out | $${data.costUsd.toFixed(4)}`);
+      lines.push(
+        `  ${model}: ${data.inputTokens.toLocaleString()} in / ${data.outputTokens.toLocaleString()} out | $${data.costUsd.toFixed(4)}`,
+      );
     }
   }
 
@@ -161,21 +178,30 @@ export function clearSessionCost(sessionId: string): void {
 /**
  * Update pricing for a model.
  */
-export function setModelPricing(modelId: string, input: number, output: number): void {
+export function setModelPricing(
+  modelId: string,
+  input: number,
+  output: number,
+): void {
   _pricing[modelId] = { input, output };
 }
 
 /**
  * Get current pricing for all models (for settings UI).
  */
-export function getModelPricing(): Record<string, { input: number; output: number }> {
+export function getModelPricing(): Record<
+  string,
+  { input: number; output: number }
+> {
   return { ..._pricing };
 }
 
 /**
  * Load custom pricing overrides from a JSON record.
  */
-export function loadPricingOverrides(overrides: Record<string, { input: number; output: number }>): void {
+export function loadPricingOverrides(
+  overrides: Record<string, { input: number; output: number }>,
+): void {
   for (const [model, price] of Object.entries(overrides)) {
     if (price.input > 0 && price.output > 0) {
       _pricing[model] = price;
@@ -187,6 +213,6 @@ export function loadPricingOverrides(overrides: Record<string, { input: number; 
  * Reset pricing to defaults.
  */
 export function resetPricing(): void {
-  Object.keys(_pricing).forEach(k => delete _pricing[k]);
+  Object.keys(_pricing).forEach((k) => delete _pricing[k]);
   Object.assign(_pricing, DEFAULT_PRICING);
 }

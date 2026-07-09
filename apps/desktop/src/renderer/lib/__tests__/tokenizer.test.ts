@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { countTokens, countMessageTokens, computeTokenBudget } from "../tokenizer";
+import {
+  countTokens,
+  countMessageTokens,
+  computeTokenBudget,
+} from "../tokenizer";
 
 describe("countTokens", () => {
   it("returns 0 for empty string", () => {
@@ -19,7 +23,8 @@ describe("countTokens", () => {
   });
 
   it("counts tokens for longer text", () => {
-    const text = "The quick brown fox jumps over the lazy dog. This is a longer passage of text to ensure accurate counting across multiple tokens.";
+    const text =
+      "The quick brown fox jumps over the lazy dog. This is a longer passage of text to ensure accurate counting across multiple tokens.";
     const count = countTokens(text, "gpt-4");
     expect(count).toBeGreaterThan(5);
     expect(count).toBeLessThan(50);
@@ -48,7 +53,9 @@ describe("countTokens", () => {
   });
 
   it("applies 0.9x factor for Anthropic models", () => {
-    const text = "A longer piece of text that will have more tokens. ".repeat(20);
+    const text = "A longer piece of text that will have more tokens. ".repeat(
+      20,
+    );
     const claudeCount = countTokens(text, "claude-3-sonnet");
     const gptCount = countTokens(text, "gpt-4");
     // Claude should be ~90% of GPT count
@@ -124,7 +131,12 @@ describe("computeTokenBudget", () => {
   });
 
   it("reports no pressure when usage is low", () => {
-    const budget = computeTokenBudget([{ role: "user", content: "Hi" }], 10, 8192, "gpt-4");
+    const budget = computeTokenBudget(
+      [{ role: "user", content: "Hi" }],
+      10,
+      8192,
+      "gpt-4",
+    );
     expect(budget.pressure).toBe("none");
   });
 

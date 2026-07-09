@@ -9,7 +9,13 @@
  * - Stack capping at MAX_CHANGES
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { recordChange, popChange, peekChange, clearChanges, getChangeStackSize } from "../changeStack";
+import {
+  recordChange,
+  popChange,
+  peekChange,
+  clearChanges,
+  getChangeStackSize,
+} from "../changeStack";
 
 beforeEach(() => {
   clearChanges();
@@ -37,12 +43,18 @@ describe("recordChange / popChange", () => {
 
   it("pops in reverse order (last in, first out)", () => {
     recordChange({
-      filePath: "/first.ts", beforeContent: "a", afterContent: "b",
-      toolCallId: "tc-1", messageId: "msg-1",
+      filePath: "/first.ts",
+      beforeContent: "a",
+      afterContent: "b",
+      toolCallId: "tc-1",
+      messageId: "msg-1",
     });
     recordChange({
-      filePath: "/second.ts", beforeContent: "c", afterContent: "d",
-      toolCallId: "tc-2", messageId: "msg-1",
+      filePath: "/second.ts",
+      beforeContent: "c",
+      afterContent: "d",
+      toolCallId: "tc-2",
+      messageId: "msg-1",
     });
 
     expect(popChange()!.filePath).toBe("/second.ts");
@@ -56,8 +68,11 @@ describe("recordChange / popChange", () => {
 
   it("calls from different modules don't interfere", () => {
     recordChange({
-      filePath: "/a.ts", beforeContent: "", afterContent: "x",
-      toolCallId: "tc-1", messageId: "msg-1",
+      filePath: "/a.ts",
+      beforeContent: "",
+      afterContent: "x",
+      toolCallId: "tc-1",
+      messageId: "msg-1",
     });
     expect(popChange()).not.toBeNull();
     expect(popChange()).toBeNull();
@@ -67,8 +82,11 @@ describe("recordChange / popChange", () => {
 describe("peekChange", () => {
   it("returns the last change without removing it", () => {
     recordChange({
-      filePath: "/test.ts", beforeContent: "old", afterContent: "new",
-      toolCallId: "tc-1", messageId: "msg-1",
+      filePath: "/test.ts",
+      beforeContent: "old",
+      afterContent: "new",
+      toolCallId: "tc-1",
+      messageId: "msg-1",
     });
 
     const firstPeek = peekChange();
@@ -92,14 +110,20 @@ describe("getChangeStackSize", () => {
     expect(getChangeStackSize()).toBe(0);
 
     recordChange({
-      filePath: "/a.ts", beforeContent: "", afterContent: "",
-      toolCallId: "tc-1", messageId: "msg-1",
+      filePath: "/a.ts",
+      beforeContent: "",
+      afterContent: "",
+      toolCallId: "tc-1",
+      messageId: "msg-1",
     });
     expect(getChangeStackSize()).toBe(1);
 
     recordChange({
-      filePath: "/b.ts", beforeContent: "", afterContent: "",
-      toolCallId: "tc-2", messageId: "msg-1",
+      filePath: "/b.ts",
+      beforeContent: "",
+      afterContent: "",
+      toolCallId: "tc-2",
+      messageId: "msg-1",
     });
     expect(getChangeStackSize()).toBe(2);
 
@@ -111,12 +135,18 @@ describe("getChangeStackSize", () => {
 describe("clearChanges", () => {
   it("empties the stack", () => {
     recordChange({
-      filePath: "/a.ts", beforeContent: "", afterContent: "",
-      toolCallId: "tc-1", messageId: "msg-1",
+      filePath: "/a.ts",
+      beforeContent: "",
+      afterContent: "",
+      toolCallId: "tc-1",
+      messageId: "msg-1",
     });
     recordChange({
-      filePath: "/b.ts", beforeContent: "", afterContent: "",
-      toolCallId: "tc-2", messageId: "msg-1",
+      filePath: "/b.ts",
+      beforeContent: "",
+      afterContent: "",
+      toolCallId: "tc-2",
+      messageId: "msg-1",
     });
     expect(getChangeStackSize()).toBe(2);
 

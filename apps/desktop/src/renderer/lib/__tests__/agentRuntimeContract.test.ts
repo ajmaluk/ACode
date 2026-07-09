@@ -51,13 +51,20 @@ describe("phase transitions", () => {
     expect(state.currentMessageId).toBe("msg-1");
 
     // streaming → streaming (tool call detected)
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "read_file" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "read_file",
+    });
     expect(state.phase).toBe("streaming");
     expect(state.pendingToolCallIds.has("tc-1")).toBe(true);
     expect(state.toolCallStatuses.get("tc-1")).toBe("pending");
 
     // streaming → tool-waiting-approval
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc-1",
+    });
     expect(state.phase).toBe("tool-waiting-approval");
     expect(state.toolCallStatuses.get("tc-1")).toBe("awaiting-approval");
 
@@ -67,7 +74,11 @@ describe("phase transitions", () => {
     expect(state.toolCallStatuses.get("tc-1")).toBe("approved");
 
     // tool-running → tool-results
-    state = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc-1", success: true });
+    state = agentReducer(state, {
+      type: "TOOL_RESULT_RECEIVED",
+      toolCallId: "tc-1",
+      success: true,
+    });
     expect(state.phase).toBe("tool-results");
     expect(state.toolCallStatuses.get("tc-1")).toBe("completed");
     expect(state.resolvedToolCallIds.has("tc-1")).toBe(true);
@@ -80,7 +91,15 @@ describe("phase transitions", () => {
 
   // ── Abort from any phase ──
   it("can abort from any phase", () => {
-    const phases = ["idle", "sending", "streaming", "tool-waiting-approval", "tool-running", "tool-results", "finalizing"];
+    const phases = [
+      "idle",
+      "sending",
+      "streaming",
+      "tool-waiting-approval",
+      "tool-running",
+      "tool-results",
+      "finalizing",
+    ];
     for (const phase of phases) {
       let state = emptyState();
       // Force transition to the target phase
@@ -90,19 +109,50 @@ describe("phase transitions", () => {
         state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
       } else if (phase === "tool-waiting-approval") {
         state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-        state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-        state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+        state = agentReducer(state, {
+          type: "TOOL_CALL",
+          toolCallId: "tc-1",
+          toolName: "test",
+        });
+        state = agentReducer(state, {
+          type: "TOOL_APPROVAL_REQUESTED",
+          toolCallId: "tc-1",
+        });
       } else if (phase === "tool-running") {
         state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-        state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-        state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
-        state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc-1" });
+        state = agentReducer(state, {
+          type: "TOOL_CALL",
+          toolCallId: "tc-1",
+          toolName: "test",
+        });
+        state = agentReducer(state, {
+          type: "TOOL_APPROVAL_REQUESTED",
+          toolCallId: "tc-1",
+        });
+        state = agentReducer(state, {
+          type: "TOOL_APPROVED",
+          toolCallId: "tc-1",
+        });
       } else if (phase === "tool-results") {
         state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-        state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-        state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
-        state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc-1" });
-        state = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc-1", success: true });
+        state = agentReducer(state, {
+          type: "TOOL_CALL",
+          toolCallId: "tc-1",
+          toolName: "test",
+        });
+        state = agentReducer(state, {
+          type: "TOOL_APPROVAL_REQUESTED",
+          toolCallId: "tc-1",
+        });
+        state = agentReducer(state, {
+          type: "TOOL_APPROVED",
+          toolCallId: "tc-1",
+        });
+        state = agentReducer(state, {
+          type: "TOOL_RESULT_RECEIVED",
+          toolCallId: "tc-1",
+          success: true,
+        });
       } else if (phase === "finalizing") {
         state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
         state = agentReducer(state, { type: "FINALIZING", messageId: "m-1" });
@@ -119,7 +169,11 @@ describe("phase transitions", () => {
   it("invalid transitions return the same state reference", () => {
     const state = emptyState();
     // From idle, SEND_PROMPT is valid, but TOOL_RESULT_RECEIVED is not
-    const result = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc-1", success: true });
+    const result = agentReducer(state, {
+      type: "TOOL_RESULT_RECEIVED",
+      toolCallId: "tc-1",
+      success: true,
+    });
     expect(result.phase).toBe("idle");
   });
 });
@@ -144,8 +198,15 @@ describe("TOOL_APPROVED / TOOL_DENIED invariants", () => {
   it("TOOL_APPROVED throws if tool was not awaiting-approval", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "test",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc-1",
+    });
     // tc-1 is now "awaiting-approval". Approve a different toolCallId that doesn't exist.
     expect(() => {
       agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc-2" });
@@ -155,8 +216,15 @@ describe("TOOL_APPROVED / TOOL_DENIED invariants", () => {
   it("TOOL_DENIED transitions to tool-results and marks resolved", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "test",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc-1",
+    });
 
     state = agentReducer(state, { type: "TOOL_DENIED", toolCallId: "tc-1" });
     expect(state.phase).toBe("tool-results");
@@ -169,8 +237,15 @@ describe("TOOL_TIMEOUT / TOOL_RETRY", () => {
   it("TOOL_TIMEOUT requires tool to be running", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "test",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc-1",
+    });
     state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc-1" });
 
     // timeout when "approved" (should be "running" first)
@@ -182,11 +257,22 @@ describe("TOOL_TIMEOUT / TOOL_RETRY", () => {
   it("TOOL_RETRY resets tool status for re-execution", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "test",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc-1",
+    });
     state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc-1" });
     // tc-1 is now "approved" (phase: tool-running). TOOL_RETRY from "tool-running" is valid.
-    state = agentReducer(state, { type: "TOOL_RETRY", toolCallId: "tc-1", attempt: 1 });
+    state = agentReducer(state, {
+      type: "TOOL_RETRY",
+      toolCallId: "tc-1",
+      attempt: 1,
+    });
     expect(state.phase).toBe("tool-retrying");
     expect(state.toolCallStatuses.get("tc-1")).toBe("pending");
   });
@@ -196,10 +282,18 @@ describe("STREAM_MESSAGE_END with pending diffs", () => {
   it("transitions to streaming-pending-diffs when tools have unresolved diffs", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "write_file" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "write_file",
+    });
     state.diffToToolCall.set("diff-1", "tc-1");
 
-    state = agentReducer(state, { type: "STREAM_MESSAGE_END", messageId: "m-1", hasMoreTools: false });
+    state = agentReducer(state, {
+      type: "STREAM_MESSAGE_END",
+      messageId: "m-1",
+      hasMoreTools: false,
+    });
     expect(state.phase).toBe("streaming-pending-diffs");
     expect(state.pendingDiffToolCalls).toContain("tc-1");
   });
@@ -207,10 +301,18 @@ describe("STREAM_MESSAGE_END with pending diffs", () => {
   it("DIFF_RESOLVED transitions back to idle when all diffs resolved", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "write_file" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "write_file",
+    });
     state.diffToToolCall.set("diff-1", "tc-1");
 
-    state = agentReducer(state, { type: "STREAM_MESSAGE_END", messageId: "m-1", hasMoreTools: false });
+    state = agentReducer(state, {
+      type: "STREAM_MESSAGE_END",
+      messageId: "m-1",
+      hasMoreTools: false,
+    });
     expect(state.phase).toBe("streaming-pending-diffs");
 
     state = agentReducer(state, { type: "DIFF_RESOLVED", diffId: "diff-1" });
@@ -239,7 +341,11 @@ describe("transition logging", () => {
     let state = emptyState();
     state = agentReducer(state, { type: "SEND_PROMPT", sessionId: "s-1" });
     state = agentReducer(state, { type: "STREAM_START", messageId: "m-1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "test" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "test",
+    });
 
     expect(state.transitionLog.length).toBe(3);
     expect(state.transitionLog[0].from).toBe("idle");
@@ -255,7 +361,9 @@ describe("helper functions", () => {
     it("returns human-readable labels", () => {
       expect(getPhaseLabel("idle")).toBe("Idle");
       expect(getPhaseLabel("streaming")).toBe("Streaming");
-      expect(getPhaseLabel("tool-waiting-approval")).toBe("Waiting for approval");
+      expect(getPhaseLabel("tool-waiting-approval")).toBe(
+        "Waiting for approval",
+      );
       expect(getPhaseLabel("aborted")).toBe("Aborted");
     });
   });

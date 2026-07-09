@@ -2,9 +2,23 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { useTerminal, useWorkspace, useChat, useSettings } from "@/store/useAppStore";
+import {
+  useTerminal,
+  useWorkspace,
+  useChat,
+  useSettings,
+} from "@/store/useAppStore";
 import { Tooltip } from "../ui/Tooltip";
-import { Plus, X, Trash2, Bot, Wifi, ChevronDown, TerminalSquare, FolderOpen } from "lucide-react";
+import {
+  Plus,
+  X,
+  Trash2,
+  Bot,
+  Wifi,
+  ChevronDown,
+  TerminalSquare,
+  FolderOpen,
+} from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename } from "@/lib/pathUtils";
@@ -89,7 +103,14 @@ interface TerminalTabContentProps {
   procIdsRef: React.MutableRefObject<Map<string, string>>;
 }
 
-function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procIdsRef }: TerminalTabContentProps) {
+function TerminalTabContent({
+  tabId,
+  cwd,
+  shell,
+  active,
+  terminalsMapRef,
+  procIdsRef,
+}: TerminalTabContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const procIdRef = useRef<string | null>(null);
@@ -98,13 +119,20 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
   useEffect(() => {
     const term = terminalsMapRef.current.get(tabId);
     if (term) {
-      term.options.fontFamily = settings.terminalFont ? `${settings.terminalFont}, SF Mono, Menlo, monospace` : "JetBrains Mono, SF Mono, Menlo, monospace";
+      term.options.fontFamily = settings.terminalFont
+        ? `${settings.terminalFont}, SF Mono, Menlo, monospace`
+        : "JetBrains Mono, SF Mono, Menlo, monospace";
       term.options.fontSize = settings.terminalFontSize || 13;
       setTimeout(() => {
         fitAddonRef.current?.fit();
       }, 50);
     }
-  }, [settings.terminalFont, settings.terminalFontSize, terminalsMapRef, tabId]);
+  }, [
+    settings.terminalFont,
+    settings.terminalFontSize,
+    terminalsMapRef,
+    tabId,
+  ]);
 
   const activeRef = useRef(active);
   const pendingDataRef = useRef<string>("");
@@ -127,7 +155,9 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
 
     const term = new Terminal({
       theme: getTermTheme(effectiveTheme() === "dark"),
-      fontFamily: settings.terminalFont ? `${settings.terminalFont}, SF Mono, Menlo, monospace` : "JetBrains Mono, SF Mono, Menlo, monospace",
+      fontFamily: settings.terminalFont
+        ? `${settings.terminalFont}, SF Mono, Menlo, monospace`
+        : "JetBrains Mono, SF Mono, Menlo, monospace",
       fontSize: settings.terminalFontSize || 13,
       lineHeight: 1.2,
       cursorBlink: true,
@@ -199,7 +229,11 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
 
         // Ctrl+L / Cmd+L to clear terminal
         term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-          if (e.key === "l" && (e.ctrlKey || e.metaKey) && e.type === "keydown") {
+          if (
+            e.key === "l" &&
+            (e.ctrlKey || e.metaKey) &&
+            e.type === "keydown"
+          ) {
             term.clear();
             term.scrollToBottom();
             void api.terminal.writeInput(procId, "clear\r");
@@ -214,7 +248,9 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
         }
       } catch (err) {
         if (!isCleanedUp) {
-          term.writeln(`\r\n\x1b[31mError spawning terminal: ${String(err)}\x1b[0m`);
+          term.writeln(
+            `\r\n\x1b[31mError spawning terminal: ${String(err)}\x1b[0m`,
+          );
         }
       }
     };
@@ -293,14 +329,25 @@ function TerminalTabContent({ tabId, cwd, shell, active, terminalsMapRef, procId
 }
 
 export function TerminalPanel() {
-  const { tabs, activeTabId, addTab, closeTab, setActiveTab, updateTabShell, ensureTabForCwd } = useTerminal();
+  const {
+    tabs,
+    activeTabId,
+    addTab,
+    closeTab,
+    setActiveTab,
+    updateTabShell,
+    ensureTabForCwd,
+  } = useTerminal();
   const { activeWorkspaceId, workspaces } = useWorkspace();
   const isStreaming = useChat((s) => s.isStreaming);
   const session = useChat((s) => s.session);
   const [showShellDropdown, setShowShellDropdown] = useState(false);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
-  const [availableShells, setAvailableShells] = useState<ShellOption[]>([]);    // Auto-create terminal for current workspace when panel opens with no tabs
-  const cwd = session?.workspacePath ?? workspaces.find((w) => w.id === activeWorkspaceId)?.path ?? "";
+  const [availableShells, setAvailableShells] = useState<ShellOption[]>([]); // Auto-create terminal for current workspace when panel opens with no tabs
+  const cwd =
+    session?.workspacePath ??
+    workspaces.find((w) => w.id === activeWorkspaceId)?.path ??
+    "";
   useEffect(() => {
     if (cwd && tabs.length === 0) {
       ensureTabForCwd(cwd);
@@ -351,7 +398,11 @@ export function TerminalPanel() {
           bash: { value: "bash", label: "Bash", icon: "\u{1F41A}" },
           zsh: { value: "zsh", label: "Zsh", icon: "z" },
           fish: { value: "fish", label: "Fish", icon: "\u{1F41F}" },
-          powershell: { value: "powershell", label: "PowerShell", icon: "\u{26A1}" },
+          powershell: {
+            value: "powershell",
+            label: "PowerShell",
+            icon: "\u{26A1}",
+          },
           pwsh: { value: "pwsh", label: "PowerShell Core", icon: "P" },
           cmd: { value: "cmd", label: "Command Prompt", icon: ">" },
           sh: { value: "sh", label: "sh", icon: "$" },
@@ -367,36 +418,49 @@ export function TerminalPanel() {
         }
 
         setAvailableShells(detected);
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[TerminalPanel] Failed to detect available shells:", e);
         // Fallback: show platform defaults
-        setAvailableShells(isWindows() ? [
-          { value: "powershell", label: "PowerShell", icon: "\u{26A1}" },
-          { value: "pwsh", label: "PowerShell Core", icon: "P" },
-          { value: "cmd", label: "Command Prompt", icon: ">" },
-        ] : [
-          { value: "bash", label: "Bash", icon: "\u{1F41A}" },
-          { value: "zsh", label: "Zsh", icon: "z" },
-          { value: "fish", label: "Fish", icon: "\u{1F41F}" },
-          { value: "sh", label: "sh", icon: "$" },
-        ]);
+        setAvailableShells(
+          isWindows()
+            ? [
+                { value: "powershell", label: "PowerShell", icon: "\u{26A1}" },
+                { value: "pwsh", label: "PowerShell Core", icon: "P" },
+                { value: "cmd", label: "Command Prompt", icon: ">" },
+              ]
+            : [
+                { value: "bash", label: "Bash", icon: "\u{1F41A}" },
+                { value: "zsh", label: "Zsh", icon: "z" },
+                { value: "fish", label: "Fish", icon: "\u{1F41F}" },
+                { value: "sh", label: "sh", icon: "$" },
+              ],
+        );
       }
     };
     void detect();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const handleAddTab = useCallback((shell?: ShellType) => {
-    const defaultShell = availableShells[0]?.value ?? "bash";
-    addTab(cwd, shell ?? defaultShell);
-    setShowAddDropdown(false);
-  }, [addTab, cwd, availableShells]);
+  const handleAddTab = useCallback(
+    (shell?: ShellType) => {
+      const defaultShell = availableShells[0]?.value ?? "bash";
+      addTab(cwd, shell ?? defaultShell);
+      setShowAddDropdown(false);
+    },
+    [addTab, cwd, availableShells],
+  );
 
-  const handleShellChange = useCallback((tabId: string, shell: ShellType) => {
-    updateTabShell(tabId, shell);
-    setShowShellDropdown(false);
-  }, [updateTabShell]);
+  const handleShellChange = useCallback(
+    (tabId: string, shell: ShellType) => {
+      updateTabShell(tabId, shell);
+      setShowShellDropdown(false);
+    },
+    [updateTabShell],
+  );
 
-  const activeTab = tabs.find(t => t.id === activeTabId);
+  const activeTab = tabs.find((t) => t.id === activeTabId);
 
   return (
     <div className="h-full flex flex-col bg-dalam-bg-primary">
@@ -413,8 +477,13 @@ export function TerminalPanel() {
             onClick={() => setActiveTab(t.id)}
           >
             <TerminalSquare className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate max-w-[120px] font-mono text-[11px]" title={t.cwd}>
-              {t.cwd === "." || t.cwd === "/" ? t.shell : t.cwd.split("/").pop() || t.shell}
+            <span
+              className="truncate max-w-[120px] font-mono text-[11px]"
+              title={t.cwd}
+            >
+              {t.cwd === "." || t.cwd === "/"
+                ? t.shell
+                : t.cwd.split("/").pop() || t.shell}
             </span>
             {tabs.length > 1 && (
               <button
@@ -435,7 +504,10 @@ export function TerminalPanel() {
           <Tooltip content="New terminal in this project" side="top">
             <button
               className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex items-center gap-0.5"
-              onClick={() => { setShowShellDropdown(false); setShowAddDropdown(!showAddDropdown); }}
+              onClick={() => {
+                setShowShellDropdown(false);
+                setShowAddDropdown(!showAddDropdown);
+              }}
               aria-expanded={showAddDropdown}
               aria-haspopup="menu"
             >
@@ -444,7 +516,10 @@ export function TerminalPanel() {
             </button>
           </Tooltip>
           {showAddDropdown && (
-            <div className="absolute top-full left-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[200px]" role="menu">
+            <div
+              className="absolute top-full left-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[200px]"
+              role="menu"
+            >
               <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary">
                 Shell
               </div>
@@ -480,7 +555,10 @@ export function TerminalPanel() {
             <Tooltip content="Change shell type" side="top">
               <button
                 className="flex items-center gap-1 px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors text-[10px]"
-                onClick={() => { setShowAddDropdown(false); setShowShellDropdown(!showShellDropdown); }}
+                onClick={() => {
+                  setShowAddDropdown(false);
+                  setShowShellDropdown(!showShellDropdown);
+                }}
                 aria-expanded={showShellDropdown}
                 aria-haspopup="menu"
               >
@@ -490,7 +568,10 @@ export function TerminalPanel() {
               </button>
             </Tooltip>
             {showShellDropdown && (
-              <div className="absolute top-full right-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[180px]" role="menu">
+              <div
+                className="absolute top-full right-0 mt-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl py-1 z-50 min-w-[180px]"
+                role="menu"
+              >
                 {availableShells.map((shell) => (
                   <button
                     key={shell.value}
@@ -499,10 +580,15 @@ export function TerminalPanel() {
                         ? "bg-dalam-accent-subtle text-dalam-accent-primary"
                         : "text-dalam-text-primary hover:bg-dalam-bg-hover"
                     }`}
-                    onClick={() => { if (activeTabId) handleShellChange(activeTabId, shell.value); }}
+                    onClick={() => {
+                      if (activeTabId)
+                        handleShellChange(activeTabId, shell.value);
+                    }}
                     role="menuitem"
                   >
-                    <span className="text-sm w-5 text-center">{shell.icon}</span>
+                    <span className="text-sm w-5 text-center">
+                      {shell.icon}
+                    </span>
                     <span>{shell.label}</span>
                   </button>
                 ))}
@@ -539,7 +625,8 @@ export function TerminalPanel() {
               }
               // Also send clear command to the shell process
               const procId = procIdsRef.current.get(activeTabId);
-              if (procId) void createDalamAPI().terminal.writeInput(procId, "clear\r");
+              if (procId)
+                void createDalamAPI().terminal.writeInput(procId, "clear\r");
             }}
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -551,7 +638,9 @@ export function TerminalPanel() {
       {activeTab && (
         <div className="h-6 flex items-center gap-1.5 px-3 bg-dalam-bg-secondary border-b border-dalam-border-primary text-[11px] text-dalam-text-secondary flex-shrink-0 font-mono">
           <FolderOpen className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
-          <span className="truncate" title={activeTab.cwd}>{activeTab.cwd}</span>
+          <span className="truncate" title={activeTab.cwd}>
+            {activeTab.cwd}
+          </span>
         </div>
       )}
 
@@ -561,7 +650,9 @@ export function TerminalPanel() {
           <div className="flex-1 flex items-center justify-center h-full">
             <div className="text-center">
               <TerminalSquare className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/40" />
-              <p className="text-xs text-dalam-text-muted mb-3">No terminal open</p>
+              <p className="text-xs text-dalam-text-muted mb-3">
+                No terminal open
+              </p>
               {cwd && (
                 <button
                   onClick={() => ensureTabForCwd(cwd)}

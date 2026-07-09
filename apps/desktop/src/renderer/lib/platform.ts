@@ -15,12 +15,32 @@ function detectPlatform(): Platform {
   // fall back to `navigator.platform` / userAgent.
   if (typeof navigator === "undefined") return "other";
   const ua = (navigator.userAgent || "").toLowerCase();
-  const platform = ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform
-    || (navigator as Navigator).platform
-    || "").toLowerCase();
+  const platform = (
+    (navigator as Navigator & { userAgentData?: { platform?: string } })
+      .userAgentData?.platform ||
+    (navigator as Navigator).platform ||
+    ""
+  ).toLowerCase();
   if (platform.includes("mac") || ua.includes("mac")) return "mac";
-  if (platform.includes("win") || ua.includes("windows") || ua.includes("win32") || ua.includes("win64")) return "win";
-  if (platform.includes("linux") || ua.includes("linux") || ua.includes("ubuntu") || ua.includes("fedora") || ua.includes("debian") || ua.includes("arch") || ua.includes("manjaro") || ua.includes("nixos") || ua.includes("alpine")) return "linux";
+  if (
+    platform.includes("win") ||
+    ua.includes("windows") ||
+    ua.includes("win32") ||
+    ua.includes("win64")
+  )
+    return "win";
+  if (
+    platform.includes("linux") ||
+    ua.includes("linux") ||
+    ua.includes("ubuntu") ||
+    ua.includes("fedora") ||
+    ua.includes("debian") ||
+    ua.includes("arch") ||
+    ua.includes("manjaro") ||
+    ua.includes("nixos") ||
+    ua.includes("alpine")
+  )
+    return "linux";
   return "other";
 }
 
@@ -36,7 +56,6 @@ export function platform(): Platform {
 export function resetPlatformCache(): void {
   cachedPlatform = null;
 }
-
 
 /** The primary modifier for shortcuts: ⌘ on macOS, Ctrl elsewhere. */
 export function modKey(): "⌘" | "Ctrl" {
@@ -73,16 +92,25 @@ export function defaultShell(): string {
  * Wrap a command for execution on the current platform.
  * On Windows, wraps in powershell -Command. On Unix, wraps in bash -c.
  */
-export function wrapCommandForPlatform(command: string, shell?: string): { program: string; args: string[] } {
+export function wrapCommandForPlatform(
+  command: string,
+  shell?: string,
+): { program: string; args: string[] } {
   const s = shell || defaultShell();
   if (s === "powershell" || s === "pwsh") {
-    return { program: s, args: ["-NoProfile", "-NonInteractive", "-Command", command] };
+    return {
+      program: s,
+      args: ["-NoProfile", "-NonInteractive", "-Command", command],
+    };
   }
   return { program: s, args: ["-c", command] };
 }
 
 /** A short label like "⌘K" or "Ctrl K" — pass the non-modifier key. */
-export function shortcut(key: string, opts: { shift?: boolean; alt?: boolean } = {}): string {
+export function shortcut(
+  key: string,
+  opts: { shift?: boolean; alt?: boolean } = {},
+): string {
   const parts: string[] = [];
   if (opts.alt) parts.push(platform() === "mac" ? "⌥" : "Alt");
   if (opts.shift) parts.push(platform() === "mac" ? "⇧" : "Shift");

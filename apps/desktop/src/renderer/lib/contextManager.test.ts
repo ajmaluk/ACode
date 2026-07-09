@@ -21,10 +21,18 @@ import type { ChatMessage } from "@dalam/shared-types";
 // ─── Helpers ────────────────────────────────────────────────
 
 function userMsg(content: string): ChatMessage {
-  return { id: "u-" + Math.random().toString(36).slice(2), role: "user", content, timestamp: Date.now() };
+  return {
+    id: "u-" + Math.random().toString(36).slice(2),
+    role: "user",
+    content,
+    timestamp: Date.now(),
+  };
 }
 
-function assistantMsg(content: string, toolCalls?: ChatMessage["toolCalls"]): ChatMessage {
+function assistantMsg(
+  content: string,
+  toolCalls?: ChatMessage["toolCalls"],
+): ChatMessage {
   return {
     id: "a-" + Math.random().toString(36).slice(2),
     role: "assistant",
@@ -43,8 +51,6 @@ function toolResultMsg(toolName: string, result = "ok"): ChatMessage {
   };
 }
 
-
-
 // ─── Boundary Alignment Tests ───────────────────────────────
 
 describe("selectMessagesForCompaction — boundary alignment", () => {
@@ -54,7 +60,14 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
       const messages: ChatMessage[] = [
         userMsg("first user message"),
         userMsg("older user message"),
-        assistantMsg("I'll read the file", [{ id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" }]),
+        assistantMsg("I'll read the file", [
+          {
+            id: "tc-1",
+            name: "read_file",
+            args: { path: "/a" },
+            status: "pending",
+          },
+        ]),
         toolResultMsg("read_file", "file content"),
         userMsg("middle user message"),
         userMsg("another middle message"),
@@ -66,7 +79,9 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       // The assistant with toolCalls (index 2) should not be in toCompact
       // without also having its tool result (index 3) — or both should be compacted together
-      const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
+      const compactedIndices = new Set(
+        toCompact.map((m) => messages.indexOf(m)),
+      );
       const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
 
       // If assistant (2) is kept, tool result (3) must also be kept
@@ -84,26 +99,36 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
       const messages: ChatMessage[] = [
         userMsg("first user message"),
         userMsg("older user message"),
-        assistantMsg("I'll edit the file", [{ id: "tc-2", name: "edit_file", args: { path: "/b" }, status: "pending" }]),
+        assistantMsg("I'll edit the file", [
+          {
+            id: "tc-2",
+            name: "edit_file",
+            args: { path: "/b" },
+            status: "pending",
+          },
+        ]),
         toolResultMsg("edit_file", "edited"),
         userMsg("middle message 1"),
         userMsg("middle message 2"),
         userMsg("middle message 3"),
         userMsg("recent message 1"),
         userMsg("recent message 2"),
-      ];    const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
+      ];
+      const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-    const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
-    const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
+      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
+      const compactedIndices = new Set(
+        toCompact.map((m) => messages.indexOf(m)),
+      );
 
-    // Verify pairs are never split
-    if (keptIndices.has(3)) {
-      expect(keptIndices.has(2)).toBe(true);
-    }
-    if (compactedIndices.has(2)) {
-      expect(compactedIndices.has(3)).toBe(true);
-    }
-  });
+      // Verify pairs are never split
+      if (keptIndices.has(3)) {
+        expect(keptIndices.has(2)).toBe(true);
+      }
+      if (compactedIndices.has(2)) {
+        expect(compactedIndices.has(3)).toBe(true);
+      }
+    });
 
     it("compacts both assistant and tool results together when neither is protected", () => {
       // A long conversation where both the assistant(toolCalls) and tool results
@@ -111,10 +136,19 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
       const messages: ChatMessage[] = [
         userMsg("first user message"),
         userMsg("what is the status"),
-        assistantMsg("checking...", [{ id: "tc-3", name: "git_status", args: {}, status: "pending" }]),
+        assistantMsg("checking...", [
+          { id: "tc-3", name: "git_status", args: {}, status: "pending" },
+        ]),
         toolResultMsg("git_status", "On branch main"),
         userMsg("ok thanks"),
-        assistantMsg("reading file", [{ id: "tc-4", name: "read_file", args: { path: "/c" }, status: "pending" }]),
+        assistantMsg("reading file", [
+          {
+            id: "tc-4",
+            name: "read_file",
+            args: { path: "/c" },
+            status: "pending",
+          },
+        ]),
         toolResultMsg("read_file", "content here"),
         userMsg("middle message 1"),
         userMsg("middle message 2"),
@@ -125,7 +159,9 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
+      const compactedIndices = new Set(
+        toCompact.map((m) => messages.indexOf(m)),
+      );
       const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
 
       // Verify all pairs are together
@@ -151,7 +187,12 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
         userMsg("first user message"),
         userMsg("do both tasks"),
         assistantMsg("I'll do both", [
-          { id: "tc-a", name: "read_file", args: { path: "/a" }, status: "pending" },
+          {
+            id: "tc-a",
+            name: "read_file",
+            args: { path: "/a" },
+            status: "pending",
+          },
           { id: "tc-b", name: "git_status", args: {}, status: "pending" },
         ]),
         toolResultMsg("read_file", "file content"),
@@ -166,7 +207,9 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const compactedIndices = new Set(toCompact.map((m) => messages.indexOf(m)));
+      const compactedIndices = new Set(
+        toCompact.map((m) => messages.indexOf(m)),
+      );
       const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
 
       // Assistant(2), toolResult1(3), toolResult2(4) must all be in the same set
@@ -184,7 +227,14 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
         userMsg("do something"),
         assistantMsg("plain response"),
         userMsg("now do tool stuff"),
-        assistantMsg("calling tool", [{ id: "tc-5", name: "run_command", args: { cmd: "ls" }, status: "pending" }]),
+        assistantMsg("calling tool", [
+          {
+            id: "tc-5",
+            name: "run_command",
+            args: { cmd: "ls" },
+            status: "pending",
+          },
+        ]),
         toolResultMsg("run_command", "file1\nfile2"),
         userMsg("middle 1"),
         userMsg("middle 2"),
@@ -218,7 +268,7 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
     it("always protects the first user message", () => {
       const messages = Array.from({ length: 15 }, (_, i) =>
-        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`)
+        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
       );
 
       const { toKeep } = selectMessagesForCompaction(messages, 6);
@@ -227,7 +277,7 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
     it("protects recent user messages", () => {
       const messages = Array.from({ length: 15 }, (_, i) =>
-        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`)
+        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
       );
 
       const { toKeep } = selectMessagesForCompaction(messages, 6);
@@ -240,10 +290,15 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
     it("protects messages with file changes", () => {
       const messages = Array.from({ length: 15 }, (_, i) =>
-        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`)
+        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
       );
       // Add a message with file changes in the middle
-      messages[6] = { ...messages[6], fileChanges: [{ path: "/test.ts", action: "modified", additions: 1, deletions: 0 }] };
+      messages[6] = {
+        ...messages[6],
+        fileChanges: [
+          { path: "/test.ts", action: "modified", additions: 1, deletions: 0 },
+        ],
+      };
 
       const { toKeep } = selectMessagesForCompaction(messages, 6);
       expect(toKeep).toContain(messages[6]);
@@ -359,8 +414,10 @@ describe("parseContextWindow", () => {
   it("parses 128k", () => expect(parseContextWindow("128k")).toBe(128000));
   it("parses 200K", () => expect(parseContextWindow("200K")).toBe(200000));
   it("parses 1m", () => expect(parseContextWindow("1m")).toBe(1000000));
-  it("returns 128000 for undefined", () => expect(parseContextWindow(undefined)).toBe(128000));
-  it("returns 128000 for unparseable", () => expect(parseContextWindow("unknown")).toBe(128000));
+  it("returns 128000 for undefined", () =>
+    expect(parseContextWindow(undefined)).toBe(128000));
+  it("returns 128000 for unparseable", () =>
+    expect(parseContextWindow("unknown")).toBe(128000));
 });
 
 describe("estimateTokens", () => {
@@ -371,7 +428,7 @@ describe("estimateTokens", () => {
     expect(tokens).toBeLessThan(20);
   });
 
-// ============================================================================
+  // ============================================================================
 });
 
 // Edge case tests: TOOL ERROR pairs, empty toolCalls, long conversations, tier2
@@ -379,11 +436,15 @@ describe("estimateTokens", () => {
 
 describe("_isToolResult", () => {
   it("identifies TOOL RESULT messages", () => {
-    expect(_isToolResult(userMsg("[TOOL RESULT: read_file] output here"))).toBe(true);
+    expect(_isToolResult(userMsg("[TOOL RESULT: read_file] output here"))).toBe(
+      true,
+    );
   });
 
   it("identifies TOOL ERROR messages", () => {
-    expect(_isToolResult(userMsg("[TOOL ERROR: bash] command failed"))).toBe(true);
+    expect(_isToolResult(userMsg("[TOOL ERROR: bash] command failed"))).toBe(
+      true,
+    );
   });
 
   it("does not identify regular user messages", () => {
@@ -392,14 +453,21 @@ describe("_isToolResult", () => {
 
   it("does not identify assistant messages as tool results", () => {
     const msg: ChatMessage = {
-      id: "a-1", role: "assistant", content: "[TOOL RESULT: read_file] output",
+      id: "a-1",
+      role: "assistant",
+      content: "[TOOL RESULT: read_file] output",
       timestamp: Date.now(),
     };
     expect(_isToolResult(msg)).toBe(false);
   });
 
   it("returns false for empty content", () => {
-    const msg: ChatMessage = { id: "u-1", role: "user", content: "", timestamp: Date.now() };
+    const msg: ChatMessage = {
+      id: "u-1",
+      role: "user",
+      content: "",
+      timestamp: Date.now(),
+    };
     expect(_isToolResult(msg)).toBe(false);
   });
 });
@@ -408,12 +476,26 @@ describe("_alignBoundaryPairs — Case 2: tool result protected pulls assistant 
   it("pulls preceding assistant with toolCalls into keep set when tool result is protected", () => {
     const messages: ChatMessage[] = [
       userMsg("first"),
-      assistantMsg("", [{ id: "tc-1", name: "read_file", args: { path: "x.ts" }, status: "completed" }]),
+      assistantMsg("", [
+        {
+          id: "tc-1",
+          name: "read_file",
+          args: { path: "x.ts" },
+          status: "completed",
+        },
+      ]),
       toolResultMsg("read_file", "file content"),
       userMsg("what do you think?"),
       assistantMsg("looks good"),
       userMsg("now fix it"),
-      assistantMsg("fixing...", [{ id: "tc-2", name: "edit_file", args: { path: "x.ts" }, status: "completed" }]),
+      assistantMsg("fixing...", [
+        {
+          id: "tc-2",
+          name: "edit_file",
+          args: { path: "x.ts" },
+          status: "completed",
+        },
+      ]),
       toolResultMsg("edit_file", "done"),
       userMsg("thanks"),
       assistantMsg("you're welcome"),
@@ -429,7 +511,14 @@ describe("_alignBoundaryPairs — Case 2: tool result protected pulls assistant 
   it("pulls assistant back when a single tool result is protected in keep set", () => {
     const messages: ChatMessage[] = [
       userMsg("first"),
-      assistantMsg("", [{ id: "tc-1", name: "bash", args: { command: "ls" }, status: "completed" }]),
+      assistantMsg("", [
+        {
+          id: "tc-1",
+          name: "bash",
+          args: { command: "ls" },
+          status: "completed",
+        },
+      ]),
       toolResultMsg("bash", "file1.ts\nfile2.ts"),
       userMsg("list files"),
       assistantMsg("listed"),
@@ -448,12 +537,14 @@ describe("edge cases — empty toolCalls arrays", () => {
       userMsg("first"),
       assistantMsg("no tools used"),
       ...Array.from({ length: 12 }, (_, i) =>
-        i % 2 === 0 ? userMsg(`user ${i + 2}`) : assistantMsg(`assistant ${i + 2}`)
+        i % 2 === 0
+          ? userMsg(`user ${i + 2}`)
+          : assistantMsg(`assistant ${i + 2}`),
       ),
     ];
     const { toCompact, toKeep } = selectMessagesForCompaction(messages);
     // First user should always be protected
-    expect(toKeep.some(m => m.content === "first")).toBe(true);
+    expect(toKeep.some((m) => m.content === "first")).toBe(true);
     // Empty toolCalls should not cause alignment issues
     expect(toCompact.length).toBeGreaterThan(0);
   });
@@ -484,13 +575,13 @@ describe("edge cases — long conversations with mixed tool/non-tool messages", 
     }
     const { toCompact, toKeep } = selectMessagesForCompaction(messages);
     // First message should always be protected
-    expect(toKeep.some(m => m.content === "user 0")).toBe(true);
+    expect(toKeep.some((m) => m.content === "user 0")).toBe(true);
     // Last 6 non-tool-result user messages and last 3 assistants are protected
     // Tool results (indices 44, 47) are NOT directly protected unless aligned
-    expect(toKeep.some(m => m.content === 'user 45')).toBe(true);
-    expect(toKeep.some(m => m.content === 'assistant 46')).toBe(true);
-    expect(toKeep.some(m => m.content === 'user 48')).toBe(true);
-    expect(toKeep.some(m => m.content === 'assistant 49')).toBe(true);
+    expect(toKeep.some((m) => m.content === "user 45")).toBe(true);
+    expect(toKeep.some((m) => m.content === "assistant 46")).toBe(true);
+    expect(toKeep.some((m) => m.content === "user 48")).toBe(true);
+    expect(toKeep.some((m) => m.content === "assistant 49")).toBe(true);
     expect(toCompact.length).toBeGreaterThan(0);
   });
 
@@ -501,9 +592,16 @@ describe("edge cases — long conversations with mixed tool/non-tool messages", 
       messages.push(userMsg(`user ${i}`));
       if (i % 5 === 0 && i > 0) {
         // Assistant with tool calls
-        messages.push(assistantMsg(`tool use ${i}`, [
-          { id: `tc-${i}`, name: "read_file", args: { path: `file${i}.ts` }, status: "completed" as const },
-        ]));
+        messages.push(
+          assistantMsg(`tool use ${i}`, [
+            {
+              id: `tc-${i}`,
+              name: "read_file",
+              args: { path: `file${i}.ts` },
+              status: "completed" as const,
+            },
+          ]),
+        );
         messages.push(toolResultMsg("read_file", `content of file${i}.ts`));
       } else {
         messages.push(assistantMsg(`response ${i}`));
@@ -513,11 +611,14 @@ describe("edge cases — long conversations with mixed tool/non-tool messages", 
     // All tool results that are in toKeep should have their assistant also in toKeep
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
-      if (toKeep.some(k => k.id === msg.id) && _isToolResult(msg)) {
+      if (toKeep.some((k) => k.id === msg.id) && _isToolResult(msg)) {
         // Find the preceding assistant with toolCalls
         for (let j = i - 1; j >= 0; j--) {
-          if (messages[j].role === "assistant" && messages[j].toolCalls?.length) {
-            expect(toKeep.some(k => k.id === messages[j].id)).toBe(true);
+          if (
+            messages[j].role === "assistant" &&
+            messages[j].toolCalls?.length
+          ) {
+            expect(toKeep.some((k) => k.id === messages[j].id)).toBe(true);
             break;
           }
           if (messages[j].role === "user" && !_isToolResult(messages[j])) break;
@@ -549,7 +650,7 @@ describe("tier2PruneToolOutputs — pruning threshold", () => {
 
   it("prunes largest tool outputs first when above threshold", () => {
     const largeOutput = "x".repeat(50000); // ~12500 tokens
-    const smallOutput = "y".repeat(5000);  // ~1250 tokens
+    const smallOutput = "y".repeat(5000); // ~1250 tokens
     const messages = [
       userMsg("first"),
       toolResultMsg("read_file", largeOutput),
@@ -628,7 +729,7 @@ describe("getContextPressureRecommendation", () => {
 
 describe("getNextCheckpointTrigger", () => {
   it("returns 0.20 when no triggers have fired", () => {
-    expect(getNextCheckpointTrigger(0)).toBe(0.20);
+    expect(getNextCheckpointTrigger(0)).toBe(0.2);
   });
 
   it("returns 0.45 after 0.20 has fired", () => {
@@ -636,7 +737,7 @@ describe("getNextCheckpointTrigger", () => {
   });
 
   it("returns 0.70 after 0.45 has fired", () => {
-    expect(getNextCheckpointTrigger(0.50)).toBe(0.70);
+    expect(getNextCheckpointTrigger(0.5)).toBe(0.7);
   });
 
   it("returns null after all triggers have fired", () => {
@@ -645,7 +746,7 @@ describe("getNextCheckpointTrigger", () => {
   });
 
   it("handles negative firedUpToPercent", () => {
-    expect(getNextCheckpointTrigger(-1)).toBe(0.20);
+    expect(getNextCheckpointTrigger(-1)).toBe(0.2);
   });
 });
 
@@ -659,7 +760,14 @@ describe("estimateMessageTokens", () => {
   });
 
   it("adds overhead for tool calls", () => {
-    const msg = assistantMsg("checking", [{ id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" }]);
+    const msg = assistantMsg("checking", [
+      {
+        id: "tc-1",
+        name: "read_file",
+        args: { path: "/a" },
+        status: "pending",
+      },
+    ]);
     const tokens = estimateMessageTokens(msg);
     // content tokens + 4 (role) + 20 (tool call overhead)
     expect(tokens).toBeGreaterThan(20);
@@ -667,7 +775,9 @@ describe("estimateMessageTokens", () => {
 
   it("adds overhead for file changes", () => {
     const msg = userMsg("modified file");
-    msg.fileChanges = [{ path: "/x.ts", action: "modified", additions: 1, deletions: 0 }];
+    msg.fileChanges = [
+      { path: "/x.ts", action: "modified", additions: 1, deletions: 0 },
+    ];
     const tokens = estimateMessageTokens(msg);
     expect(tokens).toBeGreaterThan(10);
   });
@@ -692,7 +802,7 @@ describe("buildCompactionPrompt", () => {
     const messages = [userMsg("hello"), assistantMsg("hi")];
     const prompt = buildCompactionPrompt(messages);
     expect(prompt.length).toBeGreaterThan(0);
-    const userContent = prompt.find(p => p.role === "user")?.content || "";
+    const userContent = prompt.find((p) => p.role === "user")?.content || "";
     expect(userContent).toContain("structured summary");
     expect(userContent).toContain("Goal");
     expect(userContent).toContain("Blocked");
@@ -702,7 +812,7 @@ describe("buildCompactionPrompt", () => {
   it("prepends previous summary when provided", () => {
     const messages = [userMsg("hello"), assistantMsg("world")];
     const prompt = buildCompactionPrompt(messages, "Previous summary content");
-    const userMessages = prompt.filter(p => p.role === "user");
+    const userMessages = prompt.filter((p) => p.role === "user");
     // Should start with update instruction referencing previous summary
     const firstUserContent = userMessages[0]?.content || "";
     expect(firstUserContent).toContain("Update the anchored summary");
@@ -713,14 +823,14 @@ describe("buildCompactionPrompt", () => {
     const messages = [userMsg("hello"), assistantMsg("world")];
     const prompt = buildCompactionPrompt(messages);
     // Last messages should be the formatted conversation
-    const messageContents = prompt.map(p => p.content);
-    expect(messageContents.some(c => c.includes("hello"))).toBe(true);
-    expect(messageContents.some(c => c.includes("world"))).toBe(true);
+    const messageContents = prompt.map((p) => p.content);
+    expect(messageContents.some((c) => c.includes("hello"))).toBe(true);
+    expect(messageContents.some((c) => c.includes("world"))).toBe(true);
   });
 
   it("handles empty message array", () => {
     const prompt = buildCompactionPrompt([]);
-    const userContent = prompt.find(p => p.role === "user")?.content || "";
+    const userContent = prompt.find((p) => p.role === "user")?.content || "";
     expect(userContent).toContain("conversation compaction");
   });
 });
@@ -803,7 +913,9 @@ describe("estimateTokens", () => {
   });
 
   it("estimates tokens for plain english text", () => {
-    const tokens = estimateTokens("The quick brown fox jumps over the lazy dog");
+    const tokens = estimateTokens(
+      "The quick brown fox jumps over the lazy dog",
+    );
     expect(tokens).toBeGreaterThan(0);
     expect(tokens).toBeLessThan(20);
   });
@@ -890,11 +1002,21 @@ describe("computeContextStats", () => {
 
   it("provides nextCheckpointTrigger for various ratios", () => {
     // Low usage: ratio < 0.20, next trigger is 0.20
-    const stats1 = computeContextStats([userMsg("x".repeat(50))], 1000, 100, 100);
+    const stats1 = computeContextStats(
+      [userMsg("x".repeat(50))],
+      1000,
+      100,
+      100,
+    );
     expect(stats1.nextCheckpointTrigger).toBeDefined();
 
     // High usage: ratio > 0.70 (all triggers fired), next trigger is null
-    const stats2 = computeContextStats([userMsg("x".repeat(2500))], 1000, 100, 100);
+    const stats2 = computeContextStats(
+      [userMsg("x".repeat(2500))],
+      1000,
+      100,
+      100,
+    );
     expect(stats2.nextCheckpointTrigger).toBeNull();
   });
 });

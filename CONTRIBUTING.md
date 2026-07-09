@@ -2,6 +2,8 @@
 
 Thanks for your interest in contributing to Dalam! This guide will help you get set up and familiar with the project.
 
+Please note that by participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Development Setup
 
 ### Prerequisites

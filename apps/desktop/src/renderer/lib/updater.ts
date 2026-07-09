@@ -20,7 +20,9 @@ export interface UpdateInfo {
 export async function checkForUpdates(): Promise<UpdateInfo> {
   try {
     // Dynamic import — module may not be available in all environments
-    const updater = await import("@tauri-apps/plugin-updater") as { check: () => Promise<{ version: string; body?: string } | null> };
+    const updater = (await import("@tauri-apps/plugin-updater")) as {
+      check: () => Promise<{ version: string; body?: string } | null>;
+    };
     const update = await updater.check();
 
     if (update) {
@@ -42,13 +44,25 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
  * Download and install the latest update, then relaunch the app.
  */
 export async function installUpdate(
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
 ): Promise<void> {
   try {
-    const updater = await import("@tauri-apps/plugin-updater") as {
-      check: () => Promise<{ downloadAndInstall: (cb: (event: { data?: { event: string; contentLength?: number; data?: { chunkLength?: number } } }) => void) => Promise<void> } | null>;
+    const updater = (await import("@tauri-apps/plugin-updater")) as {
+      check: () => Promise<{
+        downloadAndInstall: (
+          cb: (event: {
+            data?: {
+              event: string;
+              contentLength?: number;
+              data?: { chunkLength?: number };
+            };
+          }) => void,
+        ) => Promise<void>;
+      } | null>;
     };
-    const process = await import("@tauri-apps/plugin-process") as { relaunch: () => Promise<void> };
+    const process = (await import("@tauri-apps/plugin-process")) as {
+      relaunch: () => Promise<void>;
+    };
 
     const update = await updater.check();
     if (!update) {
@@ -65,7 +79,10 @@ export async function installUpdate(
         const chunkLength = event.data.data?.chunkLength ?? 0;
         if (contentLength > 0) totalBytes = contentLength;
         downloadedBytes += chunkLength;
-        const percent = totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0;
+        const percent =
+          totalBytes > 0
+            ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
+            : 0;
         onProgress?.(percent);
       } else if (event.data && event.data.event === "Finished") {
         onProgress?.(100);

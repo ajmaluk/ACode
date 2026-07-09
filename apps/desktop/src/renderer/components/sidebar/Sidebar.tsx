@@ -53,15 +53,27 @@ function formatRelative(ts: number, now: number): string {
 }
 
 /** Status dot for sidebar session items */
-function StatusDot({ status, lastVisitedAt, lastActivityAt }: { status: string; lastVisitedAt?: number; lastActivityAt: number }) {
+function StatusDot({
+  status,
+  lastVisitedAt,
+  lastActivityAt,
+}: {
+  status: string;
+  lastVisitedAt?: number;
+  lastActivityAt: number;
+}) {
   // Don't show dot if user has visited since the last activity
   // But always show for "running" and "questioning" states
-  const userVisited = lastVisitedAt !== undefined && lastVisitedAt >= lastActivityAt;
+  const userVisited =
+    lastVisitedAt !== undefined && lastVisitedAt >= lastActivityAt;
 
   // Running state - animated loading indicator with breathing effect
   if (status === "running") {
     return (
-      <span className="relative flex h-2.5 w-2.5 flex-shrink-0" title="AI is working...">
+      <span
+        className="relative flex h-2.5 w-2.5 flex-shrink-0"
+        title="AI is working..."
+      >
         <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 status-dot-running" />
         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
       </span>
@@ -71,7 +83,10 @@ function StatusDot({ status, lastVisitedAt, lastActivityAt }: { status: string; 
   // Questioning state - animated yellow indicator with pulse effect
   if (status === "questioning") {
     return (
-      <span className="relative flex h-2.5 w-2.5 flex-shrink-0" title="AI is asking a question...">
+      <span
+        className="relative flex h-2.5 w-2.5 flex-shrink-0"
+        title="AI is asking a question..."
+      >
         <span className="absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75 status-dot-questioning" />
         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-yellow-500" />
       </span>
@@ -84,7 +99,10 @@ function StatusDot({ status, lastVisitedAt, lastActivityAt }: { status: string; 
   // Completed state - green dot with subtle glow
   if (status === "completed") {
     return (
-      <span className="relative flex h-2 w-2 flex-shrink-0" title="Task completed">
+      <span
+        className="relative flex h-2 w-2 flex-shrink-0"
+        title="Task completed"
+      >
         <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-50" />
         <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
       </span>
@@ -104,7 +122,10 @@ function StatusDot({ status, lastVisitedAt, lastActivityAt }: { status: string; 
   // Aborted state - orange dot
   if (status === "aborted") {
     return (
-      <span className="relative flex h-2 w-2 flex-shrink-0" title="Task aborted">
+      <span
+        className="relative flex h-2 w-2 flex-shrink-0"
+        title="Task aborted"
+      >
         <span className="absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-50" />
         <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500" />
       </span>
@@ -124,10 +145,21 @@ interface SessionRowProps {
   onShowVersions: () => void;
 }
 
-function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, onRemove, onRename, onShowVersions }: SessionRowProps) {
+function SessionRow({
+  session,
+  isActive,
+  isStreaming: _isStreaming,
+  onSelect,
+  onRemove,
+  onRename,
+  onShowVersions,
+}: SessionRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef(session.title);
   const [now, setNow] = useState(() => Date.now());
@@ -160,7 +192,7 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
       setDraft(session.title);
     }
   }, [session.title, editing]);
-  
+
   // Update timestamp periodically
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60000);
@@ -184,8 +216,19 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
       }`}
       role="listitem"
       tabIndex={0}
-      onClick={() => { if (!editing) { onSelect(); setMenuPosition(null); } }}
-      onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !editing) { e.preventDefault(); onSelect(); setMenuPosition(null); } }}
+      onClick={() => {
+        if (!editing) {
+          onSelect();
+          setMenuPosition(null);
+        }
+      }}
+      onKeyDown={(e) => {
+        if ((e.key === "Enter" || e.key === " ") && !editing) {
+          e.preventDefault();
+          onSelect();
+          setMenuPosition(null);
+        }
+      }}
       title={session.preview ?? session.title}
     >
       {editing ? (
@@ -196,7 +239,10 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
           onBlur={submit}
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
-            else if (e.key === "Escape") { setDraft(session.title); setEditing(false); }
+            else if (e.key === "Escape") {
+              setDraft(session.title);
+              setEditing(false);
+            }
           }}
           onClick={(e) => e.stopPropagation()}
           className="flex-1 min-w-0 text-xs px-1 py-0.5 rounded border border-dalam-border-primary bg-dalam-bg-primary text-dalam-text-primary outline-none focus:border-dalam-accent-primary"
@@ -204,9 +250,13 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
       ) : (
         <>
           <span className="flex-1 min-w-0 truncate text-[13px] text-dalam-text-secondary">
-             {session.title}
+            {session.title}
           </span>
-          <StatusDot status={session.status} lastVisitedAt={session.lastVisitedAt} lastActivityAt={session.lastActivityAt} />
+          <StatusDot
+            status={session.status}
+            lastVisitedAt={session.lastVisitedAt}
+            lastActivityAt={session.lastActivityAt}
+          />
           <span className="text-[10px] text-dalam-text-muted flex-shrink-0 tabular-nums mr-1">
             {formatRelative(session.lastActivityAt, now)}
           </span>
@@ -221,7 +271,7 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
                   const rect = e.currentTarget.getBoundingClientRect();
                   setMenuPosition({
                     top: rect.bottom + 4,
-                    left: rect.right - 160
+                    left: rect.right - 160,
                   });
                 }
               }}
@@ -230,7 +280,8 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
             >
               <MoreVertical className="w-3 h-3 text-dalam-text-muted" />
             </button>
-            {menuPosition && typeof document !== "undefined" &&
+            {menuPosition &&
+              typeof document !== "undefined" &&
               ReactDOM.createPortal(
                 <div
                   className="fixed bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1 w-40"
@@ -238,20 +289,46 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
                   data-session-menu
                   role="menu"
                 >
-                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" role="menuitem" onClick={(e) => { e.stopPropagation(); setEditing(true); setMenuPosition(null); }}>
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditing(true);
+                      setMenuPosition(null);
+                    }}
+                  >
                     <Pencil className="w-3 h-3" /> Rename
                   </button>
-                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2" role="menuitem" onClick={(e) => { e.stopPropagation(); onShowVersions(); setMenuPosition(null); }}>
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onShowVersions();
+                      setMenuPosition(null);
+                    }}
+                  >
                     <History className="w-3 h-3" /> Versions
                   </button>
-                  <div className="border-t border-dalam-border-primary my-1" role="separator" />
-                  <button className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2" role="menuitem" onClick={(e) => { e.stopPropagation(); onRemove(); setMenuPosition(null); }}>
+                  <div
+                    className="border-t border-dalam-border-primary my-1"
+                    role="separator"
+                  />
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemove();
+                      setMenuPosition(null);
+                    }}
+                  >
                     <Trash2 className="w-3 h-3" /> Delete
                   </button>
                 </div>,
-                document.body
-              )
-            }
+                document.body,
+              )}
           </div>
         </>
       )}
@@ -262,10 +339,14 @@ function SessionRow({ session, isActive, isStreaming: _isStreaming, onSelect, on
 // ─── Connectors Section ────────────────────────────────────
 function ConnectorsSection() {
   const [expanded, setExpanded] = useState(false);
-  const [configs, setConfigs] = useState<ConnectorConfig[]>(() => getConnectorConfigs());
+  const [configs, setConfigs] = useState<ConnectorConfig[]>(() =>
+    getConnectorConfigs(),
+  );
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState<"webhook" | "file-watcher" | "cron">("webhook");
+  const [newType, setNewType] = useState<"webhook" | "file-watcher" | "cron">(
+    "webhook",
+  );
 
   const handleAdd = () => {
     if (!newName.trim()) return;
@@ -276,7 +357,7 @@ function ConnectorsSection() {
       enabled: true,
       config: {},
     };
-    saveConnectorConfig(config);
+    void saveConnectorConfig(config);
     setConfigs(getConnectorConfigs());
     setNewName("");
     setShowAdd(false);
@@ -289,10 +370,14 @@ function ConnectorsSection() {
 
   const typeIcon = (type: string) => {
     switch (type) {
-      case "webhook": return <Webhook className="w-3 h-3" />;
-      case "file-watcher": return <FileText className="w-3 h-3" />;
-      case "cron": return <Clock className="w-3 h-3" />;
-      default: return <Zap className="w-3 h-3" />;
+      case "webhook":
+        return <Webhook className="w-3 h-3" />;
+      case "file-watcher":
+        return <FileText className="w-3 h-3" />;
+      case "cron":
+        return <Clock className="w-3 h-3" />;
+      default:
+        return <Zap className="w-3 h-3" />;
     }
   };
 
@@ -302,24 +387,42 @@ function ConnectorsSection() {
         className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
-        {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        {expanded ? (
+          <ChevronDown className="w-4 h-4" />
+        ) : (
+          <ChevronRight className="w-4 h-4" />
+        )}
         <Zap className="w-4 h-4" />
         <span>Connectors</span>
         {configs.length > 0 && (
-          <span className="ml-auto text-[10px] bg-dalam-bg-active rounded-full px-1.5 py-0.5 text-dalam-text-muted">{configs.length}</span>
+          <span className="ml-auto text-[10px] bg-dalam-bg-active rounded-full px-1.5 py-0.5 text-dalam-text-muted">
+            {configs.length}
+          </span>
         )}
       </button>
       {expanded && (
         <div className="ml-4 space-y-0.5">
           {configs.length === 0 && !showAdd && (
-            <div className="text-[11px] text-dalam-text-muted px-2 py-1">No connectors configured</div>
+            <div className="text-[11px] text-dalam-text-muted px-2 py-1">
+              No connectors configured
+            </div>
           )}
           {configs.map((c) => (
-            <div key={c.id} className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-dalam-bg-hover group text-xs">
+            <div
+              key={c.id}
+              className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-dalam-bg-hover group text-xs"
+            >
               {typeIcon(c.type)}
-              <span className="flex-1 truncate text-dalam-text-secondary">{c.name}</span>
-              <span className={`w-1.5 h-1.5 rounded-full ${c.enabled ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`} />
-              <button className="opacity-0 group-hover:opacity-100 p-0.5" onClick={() => handleRemove(c.id)}>
+              <span className="flex-1 truncate text-dalam-text-secondary">
+                {c.name}
+              </span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${c.enabled ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`}
+              />
+              <button
+                className="opacity-0 group-hover:opacity-100 p-0.5"
+                onClick={() => handleRemove(c.id)}
+              >
                 <XCircle className="w-3 h-3 text-dalam-text-muted hover:text-dalam-git-deleted" />
               </button>
             </div>
@@ -330,7 +433,10 @@ function ConnectorsSection() {
                 autoFocus
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); else if (e.key === "Escape") setShowAdd(false); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdd();
+                  else if (e.key === "Escape") setShowAdd(false);
+                }}
                 placeholder="Connector name..."
                 className="w-full text-xs px-2.5 py-1.5 rounded-md border border-dalam-border-primary bg-dalam-bg-input text-dalam-text-primary outline-none focus:border-dalam-accent-primary focus:ring-1 focus:ring-dalam-accent-primary transition-all"
               />
@@ -347,14 +453,14 @@ function ConnectorsSection() {
                 <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-dalam-text-muted pointer-events-none" />
               </div>
               <div className="flex gap-1.5 pt-0.5 justify-end">
-                <button 
-                  className="text-xs px-2.5 py-1 rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors font-medium" 
+                <button
+                  className="text-xs px-2.5 py-1 rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors font-medium"
                   onClick={() => setShowAdd(false)}
                 >
                   Cancel
                 </button>
-                <button 
-                  className="text-xs px-3 py-1 rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white font-medium transition-colors" 
+                <button
+                  className="text-xs px-3 py-1 rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white font-medium transition-colors"
                   onClick={handleAdd}
                 >
                   Add
@@ -376,30 +482,72 @@ function ConnectorsSection() {
 }
 
 export function Sidebar() {
-  const { openWorkspace, workspaces, setActiveWorkspace, removeWorkspace } = useWorkspace();
+  const { openWorkspace, workspaces, setActiveWorkspace, removeWorkspace } =
+    useWorkspace();
   const { open: openSettings } = useSettingsView();
-  const { newChat, chatSessions, activeSessionId, setActiveSession, isStreaming, removeSession, renameSession, sessionVersions, deleteVersion } = useChat();
+  const {
+    newChat,
+    chatSessions,
+    activeSessionId,
+    setActiveSession,
+    isStreaming,
+    removeSession,
+    renameSession,
+    sessionVersions,
+    deleteVersion,
+  } = useChat();
   const { cancel: cancelPermission } = usePermission();
   const { resolve: resolveQuestion } = useQuestion();
   const viewMode = useUI((s) => s.viewMode);
 
-  const [versionsSessionId, setVersionsSessionId] = useState<string | null>(null);
-  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(() => {
-    try { const v = localStorage.getItem("dalam.sidebar.collapsed"); return v ? new Set(JSON.parse(v)) : new Set(); } catch { return new Set(); }
-  });
+  const [versionsSessionId, setVersionsSessionId] = useState<string | null>(
+    null,
+  );
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(
+    () => {
+      try {
+        const v = localStorage.getItem("dalam.sidebar.collapsed");
+        return v ? new Set(JSON.parse(v)) : new Set();
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[Sidebar] Failed to parse collapsed workspaces:", e);
+        return new Set();
+      }
+    },
+  );
   const [showAll, setShowAll] = useState<Record<string, boolean>>(() => {
-    try { const v = localStorage.getItem("dalam.sidebar.showAll"); return v ? JSON.parse(v) : {}; } catch { return {}; }
+    try {
+      const v = localStorage.getItem("dalam.sidebar.showAll");
+      return v ? JSON.parse(v) : {};
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Sidebar] Failed to parse showAll state:", e);
+      return {};
+    }
   });
-  const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{ id: string; top: number; left: number } | null>(null);
+  const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState<{
+    id: string;
+    top: number;
+    left: number;
+  } | null>(null);
 
   // Persist collapsedWorkspaces to localStorage
   useEffect(() => {
-    try { localStorage.setItem("dalam.sidebar.collapsed", JSON.stringify([...collapsedWorkspaces])); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(
+        "dalam.sidebar.collapsed",
+        JSON.stringify([...collapsedWorkspaces]),
+      );
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Sidebar] Failed to persist collapsed workspaces:", e);
+    }
   }, [collapsedWorkspaces]);
 
   // Persist showAll to localStorage
   useEffect(() => {
-    try { localStorage.setItem("dalam.sidebar.showAll", JSON.stringify(showAll)); } catch { /* ignore */ }
+    try {
+      localStorage.setItem("dalam.sidebar.showAll", JSON.stringify(showAll));
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Sidebar] Failed to persist showAll state:", e);
+    }
   }, [showAll]);
 
   // Auto-collapse workspaces with no sessions
@@ -452,7 +600,9 @@ export function Sidebar() {
   const dragIdRef = useRef<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragPosition, setDragPosition] = useState<"above" | "below" | null>(null);
+  const [dragPosition, setDragPosition] = useState<"above" | "below" | null>(
+    null,
+  );
   const dragPositionRef = useRef<"above" | "below">("below");
 
   const handleDragStart = (e: React.DragEvent, wsId: string) => {
@@ -480,7 +630,7 @@ export function Sidebar() {
   const handleDragLeave = (e: React.DragEvent, wsId: string) => {
     const related = e.relatedTarget as HTMLElement | null;
     if (related && e.currentTarget.contains(related)) return;
-    setDragOverId((prev) => prev === wsId ? null : prev);
+    setDragOverId((prev) => (prev === wsId ? null : prev));
     setDragPosition(null);
   };
 
@@ -547,7 +697,9 @@ export function Sidebar() {
           >
             <Settings className="w-5 h-5 text-dalam-text-muted" />
             <span className="font-medium">Settings</span>
-            <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut(",")}</span>
+            <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">
+              {shortcut(",")}
+            </span>
           </button>
         </div>
       </aside>
@@ -557,7 +709,7 @@ export function Sidebar() {
   // Chat/agent mode: sidebar content
   return (
     <aside className="h-full flex flex-col bg-dalam-bg-secondary">
-        {/* Primary actions */}
+      {/* Primary actions */}
       <div className="px-3 py-2.5 flex flex-col gap-1 border-b border-dalam-border-primary flex-shrink-0">
         <button
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
@@ -572,14 +724,24 @@ export function Sidebar() {
         >
           <Plus className="w-4 h-4" />
           <span>New task</span>
-          <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut("N")}</span>
+          <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">
+            {shortcut("N")}
+          </span>
         </button>
-        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors" onClick={() => useCommandPalette.getState().toggle()}>
+        <button
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+          onClick={() => useCommandPalette.getState().toggle()}
+        >
           <Search className="w-4 h-4" />
           <span>Search</span>
-          <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut("K")}</span>
+          <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">
+            {shortcut("K")}
+          </span>
         </button>
-        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors" onClick={() => openSettings("skills")}>
+        <button
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
+          onClick={() => openSettings("skills")}
+        >
           <Sparkles className="w-4 h-4" />
           <span>Skills</span>
         </button>
@@ -589,14 +751,22 @@ export function Sidebar() {
       {/* Workspaces header */}
       <div className="flex items-center justify-between px-3 py-2.5 flex-shrink-0">
         <div className="flex items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-dalam-text-muted font-medium">Workspaces</span>
+          <span className="text-[11px] uppercase tracking-wider text-dalam-text-muted font-medium">
+            Workspaces
+          </span>
           <ChevronRight className="w-3 h-3 text-dalam-text-muted" />
         </div>
         <div className="flex items-center gap-0.5">
           {isDragging && (
-            <span className="text-[10px] text-dalam-accent-primary animate-pulse mr-2">Reordering...</span>
+            <span className="text-[10px] text-dalam-accent-primary animate-pulse mr-2">
+              Reordering...
+            </span>
           )}
-          <button className="btn-icon" onClick={openWorkspace} title="Add workspace">
+          <button
+            className="btn-icon"
+            onClick={openWorkspace}
+            title="Add workspace"
+          >
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -607,9 +777,13 @@ export function Sidebar() {
         {workspaces.map((ws) => {
           const wsSessions = sessionsByWorkspace.get(ws.path) ?? [];
           // When dragging, collapse all workspaces
-          const isExpanded = isDragging ? false : !collapsedWorkspaces.has(ws.id) && wsSessions.length > 0;
+          const isExpanded = isDragging
+            ? false
+            : !collapsedWorkspaces.has(ws.id) && wsSessions.length > 0;
           const showAllSessions = showAll[ws.id] ?? false;
-          const visibleSessions = showAllSessions ? wsSessions : wsSessions.slice(0, VISIBLE_LIMIT);
+          const visibleSessions = showAllSessions
+            ? wsSessions
+            : wsSessions.slice(0, VISIBLE_LIMIT);
           const hasMore = wsSessions.length > VISIBLE_LIMIT;
           const isDragOver = dragOverId === ws.id;
 
@@ -636,9 +810,7 @@ export function Sidebar() {
                 onDragStart={(e) => handleDragStart(e, ws.id)}
               >
                 {/* Drag handle visual indicator */}
-                <div
-                  className="absolute left-0 top-0 bottom-0 w-5 flex items-center justify-center opacity-0 group-hover/workspace:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
-                >
+                <div className="absolute left-0 top-0 bottom-0 w-5 flex items-center justify-center opacity-0 group-hover/workspace:opacity-100 transition-opacity cursor-grab active:cursor-grabbing">
                   <GripVertical className="w-3 h-3 text-dalam-text-muted/50" />
                 </div>
                 <button
@@ -661,61 +833,81 @@ export function Sidebar() {
                   ) : (
                     <Folder className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
                   )}
-                  <span className="truncate text-[13px] text-dalam-text-primary font-medium min-w-0">{ws.name}</span>
+                  <span className="truncate text-[13px] text-dalam-text-primary font-medium min-w-0">
+                    {ws.name}
+                  </span>
                   {wsSessions.length > 0 && (
-                    <span className="text-[10px] text-dalam-text-muted flex-shrink-0 ml-0.5">{wsSessions.length}</span>
+                    <span className="text-[10px] text-dalam-text-muted flex-shrink-0 ml-0.5">
+                      {wsSessions.length}
+                    </span>
                   )}
                 </button>
 
                 {/* Workspace action icons - visible on hover, positioned absolute */}
-                <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5 bg-dalam-bg-tertiary rounded px-0.5" draggable={false}>
+                <div
+                  className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover/workspace:flex items-center gap-0.5 bg-dalam-bg-tertiary rounded px-0.5"
+                  draggable={false}
+                >
                   <Tooltip content="Show files" side="top">
                     <button
-                       className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
-                       draggable={false}
-                        onClick={() => { setActiveWorkspace(ws.id); useWorkspace.getState().loadFileTree(ws.path); useUI.getState().setViewMode("editor"); }}
+                      className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                      draggable={false}
+                      onClick={() => {
+                        setActiveWorkspace(ws.id);
+                        void useWorkspace.getState().loadFileTree(ws.path);
+                        useUI.getState().setViewMode("editor");
+                      }}
                     >
                       <List className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                      <Tooltip content="New task" side="top">
-                        <button
-                          className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
-                          draggable={false}
-                         onClick={() => handleNewTask(ws.id)}
-                       >
+                  <Tooltip content="New task" side="top">
+                    <button
+                      className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                      draggable={false}
+                      onClick={() => handleNewTask(ws.id)}
+                    >
                       <MessageSquarePlus className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
                   </Tooltip>
-                    <div className="relative" data-workspace-menu>
-                      <Tooltip content="More" side="top">
-                        <button
-                          className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
-                          draggable={false}
-                          onClick={(e) => {
-                           e.stopPropagation();
-                           if (workspaceMenuPosition && workspaceMenuPosition.id === ws.id) {
-                             setWorkspaceMenuPosition(null);
-                           } else {
-                             const rect = e.currentTarget.getBoundingClientRect();
-                             setWorkspaceMenuPosition({
-                               id: ws.id,
-                               top: rect.bottom + 4,
-                               left: rect.right - 144
-                             });
-                           }
-                         }}
-                          aria-expanded={workspaceMenuPosition?.id === ws.id}
-                          aria-haspopup="menu"
-                        >
+                  <div className="relative" data-workspace-menu>
+                    <Tooltip content="More" side="top">
+                      <button
+                        className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
+                        draggable={false}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (
+                            workspaceMenuPosition &&
+                            workspaceMenuPosition.id === ws.id
+                          ) {
+                            setWorkspaceMenuPosition(null);
+                          } else {
+                            const rect =
+                              e.currentTarget.getBoundingClientRect();
+                            setWorkspaceMenuPosition({
+                              id: ws.id,
+                              top: rect.bottom + 4,
+                              left: rect.right - 144,
+                            });
+                          }
+                        }}
+                        aria-expanded={workspaceMenuPosition?.id === ws.id}
+                        aria-haspopup="menu"
+                      >
                         <MoreVertical className="w-3.5 h-3.5 text-dalam-text-muted" />
                       </button>
                     </Tooltip>
-                    {workspaceMenuPosition && workspaceMenuPosition.id === ws.id && typeof document !== "undefined" &&
+                    {workspaceMenuPosition &&
+                      workspaceMenuPosition.id === ws.id &&
+                      typeof document !== "undefined" &&
                       ReactDOM.createPortal(
                         <div
                           className="fixed bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 py-1 w-36"
-                          style={{ top: workspaceMenuPosition.top, left: workspaceMenuPosition.left }}
+                          style={{
+                            top: workspaceMenuPosition.top,
+                            left: workspaceMenuPosition.left,
+                          }}
                           data-workspace-menu
                           role="menu"
                         >
@@ -731,9 +923,8 @@ export function Sidebar() {
                             <Trash2 className="w-3.5 h-3.5" /> Remove
                           </button>
                         </div>,
-                        document.body
-                      )
-                    }
+                        document.body,
+                      )}
                   </div>
                 </div>
               </div>
@@ -757,7 +948,9 @@ export function Sidebar() {
                       {hasMore && !showAllSessions && (
                         <button
                           className="text-[10px] text-dalam-text-muted hover:text-dalam-text-secondary px-1.5 py-0.5 transition-colors"
-                          onClick={() => setShowAll((prev) => ({ ...prev, [ws.id]: true }))}
+                          onClick={() =>
+                            setShowAll((prev) => ({ ...prev, [ws.id]: true }))
+                          }
                         >
                           Show more ({wsSessions.length - VISIBLE_LIMIT})
                         </button>
@@ -765,7 +958,9 @@ export function Sidebar() {
                       {hasMore && showAllSessions && (
                         <button
                           className="text-[10px] text-dalam-text-muted hover:text-dalam-text-secondary px-1.5 py-0.5 transition-colors"
-                          onClick={() => setShowAll((prev) => ({ ...prev, [ws.id]: false }))}
+                          onClick={() =>
+                            setShowAll((prev) => ({ ...prev, [ws.id]: false }))
+                          }
                         >
                           Show less
                         </button>
@@ -777,7 +972,11 @@ export function Sidebar() {
                       <p className="text-[11px] text-dalam-text-muted/60 leading-snug">
                         No sessions yet.
                         <br />
-                        Press <span className="font-mono text-dalam-text-secondary">{modKey()}N</span> to start.
+                        Press{" "}
+                        <span className="font-mono text-dalam-text-secondary">
+                          {modKey()}N
+                        </span>{" "}
+                        to start.
                       </p>
                     </div>
                   )}
@@ -801,7 +1000,9 @@ export function Sidebar() {
         >
           <Settings className="w-5 h-5 text-dalam-text-muted" />
           <span className="font-medium">Settings</span>
-          <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">{shortcut(",")}</span>
+          <span className="ml-auto text-[10px] text-dalam-text-muted font-mono">
+            {shortcut(",")}
+          </span>
         </button>
       </div>
 
@@ -837,7 +1038,13 @@ function formatVersionDate(ts: number): string {
   return d.toLocaleDateString();
 }
 
-function VersionHistory({ sessionId: _sessionId, versions, onRestore, onDelete, onClose }: {
+function VersionHistory({
+  sessionId: _sessionId,
+  versions,
+  onRestore,
+  onDelete,
+  onClose,
+}: {
   sessionId: string;
   versions: ChatVersion[];
   onRestore: (versionId: string) => void;
@@ -870,26 +1077,51 @@ function VersionHistory({ sessionId: _sessionId, versions, onRestore, onDelete, 
         tabIndex={-1}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-dalam-border-primary">
-          <h3 id="version-history-title" className="text-sm font-semibold text-dalam-text-primary">Version History</h3>
-          <button className="btn-icon" onClick={onClose} aria-label="Close"><XCircle className="w-4 h-4" /></button>
+          <h3
+            id="version-history-title"
+            className="text-sm font-semibold text-dalam-text-primary"
+          >
+            Version History
+          </h3>
+          <button className="btn-icon" onClick={onClose} aria-label="Close">
+            <XCircle className="w-4 h-4" />
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
           {versions.length === 0 ? (
-            <div className="text-center text-xs text-dalam-text-muted py-8">No versions saved yet.</div>
+            <div className="text-center text-xs text-dalam-text-muted py-8">
+              No versions saved yet.
+            </div>
           ) : (
             <div className="space-y-1">
               {[...versions].reverse().map((v) => (
-                <div key={v.id} className="group flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-dalam-bg-hover transition-colors">
+                <div
+                  key={v.id}
+                  className="group flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-dalam-bg-hover transition-colors"
+                >
                   <div className="w-2 h-2 rounded-full bg-dalam-accent-primary/60 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs text-dalam-text-primary truncate">{v.label || "Untitled version"}</div>
-                    <div className="text-[10px] text-dalam-text-muted">{formatVersionDate(v.timestamp)} · {v.messages.length} message{v.messages.length !== 1 ? "s" : ""}</div>
+                    <div className="text-xs text-dalam-text-primary truncate">
+                      {v.label || "Untitled version"}
+                    </div>
+                    <div className="text-[10px] text-dalam-text-muted">
+                      {formatVersionDate(v.timestamp)} · {v.messages.length}{" "}
+                      message{v.messages.length !== 1 ? "s" : ""}
+                    </div>
                   </div>
                   <div className="hidden group-hover:flex items-center gap-1">
-                    <button className="btn-icon !p-1" title="Restore this version" onClick={() => onRestore(v.id)}>
+                    <button
+                      className="btn-icon !p-1"
+                      title="Restore this version"
+                      onClick={() => onRestore(v.id)}
+                    >
                       <Undo2 className="w-3.5 h-3.5" />
                     </button>
-                    <button className="btn-icon !p-1" title="Delete version" onClick={() => onDelete(v.id)}>
+                    <button
+                      className="btn-icon !p-1"
+                      title="Delete version"
+                      onClick={() => onDelete(v.id)}
+                    >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -903,6 +1135,6 @@ function VersionHistory({ sessionId: _sessionId, versions, onRestore, onDelete, 
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }

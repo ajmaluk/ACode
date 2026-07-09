@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { hookBus } from "./hookBus";
-import type {
-  PostToolUseEvent,
-  SessionStartEvent,
-} from "./hookBus";
+import type { PostToolUseEvent, SessionStartEvent } from "./hookBus";
 
 // Mock heavy dependencies that hookListeners imports
 vi.mock("./dalamAPI", () => ({
@@ -17,7 +14,9 @@ vi.mock("./dalamAPI", () => ({
 
 vi.mock("../store/useAppStore", () => ({
   useChat: { getState: vi.fn(() => ({ activeSessionId: null })) },
-  useWorkspace: { getState: vi.fn(() => ({ workspaces: [], activeWorkspaceId: null })) },
+  useWorkspace: {
+    getState: vi.fn(() => ({ workspaces: [], activeWorkspaceId: null })),
+  },
   useSettings: { getState: vi.fn(() => ({ settings: {} })) },
 }));
 
@@ -90,7 +89,7 @@ describe("hookListeners", () => {
       cleanup = result.unsubscribe;
 
       for (let i = 0; i < 5; i++) {
-        hookBus.emit("PostToolUse", {
+        void hookBus.emit("PostToolUse", {
           sessionId: "stats-session",
           toolName: "read_file",
           toolArgs: {},
@@ -107,7 +106,7 @@ describe("hookListeners", () => {
       const result = registerHookListeners();
       cleanup = result.unsubscribe;
 
-      hookBus.emit("PostToolUse", {
+      void hookBus.emit("PostToolUse", {
         sessionId: "error-session",
         toolName: "run_command",
         toolArgs: {},
@@ -117,7 +116,7 @@ describe("hookListeners", () => {
         timestamp: Date.now(),
       });
 
-      hookBus.emit("PostToolUse", {
+      void hookBus.emit("PostToolUse", {
         sessionId: "error-session",
         toolName: "run_command",
         toolArgs: {},
@@ -135,7 +134,7 @@ describe("hookListeners", () => {
       const result = registerHookListeners();
       cleanup = result.unsubscribe;
 
-      hookBus.emit("SessionStart", {
+      void hookBus.emit("SessionStart", {
         sessionId: "start-session",
         workspacePath: "/path/to/workspace",
         model: "gpt-4o",
@@ -152,7 +151,7 @@ describe("hookListeners", () => {
       const result = registerHookListeners();
       cleanup = result.unsubscribe;
 
-      hookBus.emit("Stop", {
+      void hookBus.emit("Stop", {
         sessionId: "stop-session",
         fullContent: "test content",
         messageCount: 10,
@@ -168,7 +167,7 @@ describe("hookListeners", () => {
       const result = registerHookListeners();
       cleanup = result.unsubscribe;
 
-      hookBus.emit("UserPromptSubmit", {
+      void hookBus.emit("UserPromptSubmit", {
         sessionId: "prompt-session",
         prompt: "Hello world",
         conversationHistory: [],
@@ -185,7 +184,7 @@ describe("hookListeners", () => {
       const result = registerHookListeners();
       cleanup = result.unsubscribe;
 
-      hookBus.emit("SessionEnd", {
+      void hookBus.emit("SessionEnd", {
         sessionId: "end-session",
         reason: "completed",
         messageCount: 10,
@@ -203,7 +202,7 @@ describe("hookListeners", () => {
       const result = registerHookListeners();
       cleanup = result.unsubscribe;
 
-      hookBus.emit("ContextPressure", {
+      void hookBus.emit("ContextPressure", {
         sessionId: "pressure-session",
         pressure: "high",
         pressureRatio: 0.8,

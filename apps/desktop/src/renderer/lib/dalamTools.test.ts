@@ -8,15 +8,21 @@ function parseAttributes(tagStr: string): Record<string, string> {
   const regex = /([a-zA-Z0-9_-]+)=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g;
   let match;
   while ((match = regex.exec(tagStr)) !== null) {
-    const val = match[2] !== undefined ? match[2] : (match[3] !== undefined ? match[3] : "");
+    const val =
+      match[2] !== undefined
+        ? match[2]
+        : match[3] !== undefined
+          ? match[3]
+          : "";
     attrs[match[1]] = val.replace(/\\(["'])/g, "$1");
   }
   return attrs;
 }
 
 // Re-implement parseToolCalls for testing (mirrors dalamAPI.ts logic)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseToolCalls(text: string): { name: string; args: Record<string, any> }[] {
+function parseToolCalls(
+  text: string,
+): { name: string; args: Record<string, unknown> }[] {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
 
   function extract(regex: RegExp, fn: (m: RegExpExecArray) => void): void {
@@ -28,18 +34,31 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
     calls.push({ name: "read_file", args: { path: m[1] } });
   });
 
-  extract(/<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi, (m) => {
-    calls.push({ name: "write_file", args: { path: m[1], content: m[2] } });
-  });
+  extract(
+    /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi,
+    (m) => {
+      calls.push({ name: "write_file", args: { path: m[1], content: m[2] } });
+    },
+  );
 
-  extract(/<edit_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/edit_file>/gi, (m) => {
-    const inner = m[2];
-    const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(inner);
-    const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(inner);
-    if (searchMatch && replaceMatch) {
-      calls.push({ name: "edit_file", args: { path: m[1], search: searchMatch[1], replace: replaceMatch[1] } });
-    }
-  });
+  extract(
+    /<edit_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/edit_file>/gi,
+    (m) => {
+      const inner = m[2];
+      const searchMatch = /<search>([\s\S]*?)<\/search>/i.exec(inner);
+      const replaceMatch = /<replace>([\s\S]*?)<\/replace>/i.exec(inner);
+      if (searchMatch && replaceMatch) {
+        calls.push({
+          name: "edit_file",
+          args: {
+            path: m[1],
+            search: searchMatch[1],
+            replace: replaceMatch[1],
+          },
+        });
+      }
+    },
+  );
 
   extract(/<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi, (m) => {
     calls.push({ name: "list_dir", args: { path: m[1] } });
@@ -48,14 +67,31 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
   extract(/<grep_file\s+([\s\S]*?)\/?>/gi, (m) => {
     const attrs = parseAttributes(m[0]);
     if (attrs.path && attrs.pattern) {
-      calls.push({ name: "grep_file", args: { path: attrs.path, pattern: attrs.pattern, regex: attrs.regex, max_results: attrs.max_results } });
+      calls.push({
+        name: "grep_file",
+        args: {
+          path: attrs.path,
+          pattern: attrs.pattern,
+          regex: attrs.regex,
+          max_results: attrs.max_results,
+        },
+      });
     }
   });
 
   extract(/<search_files\s+([\s\S]*?)\/?>/gi, (m) => {
     const attrs = parseAttributes(m[0]);
     if (attrs.pattern) {
-      calls.push({ name: "search_files", args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results } });
+      calls.push({
+        name: "search_files",
+        args: {
+          path: attrs.path,
+          pattern: attrs.pattern,
+          glob: attrs.glob,
+          regex: attrs.regex,
+          max_results: attrs.max_results,
+        },
+      });
     }
   });
 
@@ -86,7 +122,10 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
   extract(/<notify\s+([\s\S]*?)\/?>/gi, (m) => {
     const attrs = parseAttributes(m[0]);
     if (attrs.title) {
-      calls.push({ name: "notify", args: { title: attrs.title, body: attrs.body ?? "" } });
+      calls.push({
+        name: "notify",
+        args: { title: attrs.title, body: attrs.body ?? "" },
+      });
     }
   });
 
@@ -104,7 +143,10 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
   extract(/<launch_app\s+([\s\S]*?)\/?>/gi, (m) => {
     const attrs = parseAttributes(m[0]);
     if (attrs.name) {
-      calls.push({ name: "launch_app", args: { name: attrs.name, args: attrs.args, cwd: attrs.cwd } });
+      calls.push({
+        name: "launch_app",
+        args: { name: attrs.name, args: attrs.args, cwd: attrs.cwd },
+      });
     }
   });
 
@@ -137,13 +179,29 @@ function parseToolCalls(text: string): { name: string; args: Record<string, any>
 
   extract(/<memory_save\s+([\s\S]*?)>([\s\S]*?)<\/memory_save>/gi, (m) => {
     const attrs = parseAttributes(m[1]);
-    calls.push({ name: "memory_save", args: { category: attrs.category, tier: attrs.tier, summary: attrs.summary, tags: attrs.tags, content: m[2].trim() } });
+    calls.push({
+      name: "memory_save",
+      args: {
+        category: attrs.category,
+        tier: attrs.tier,
+        summary: attrs.summary,
+        tags: attrs.tags,
+        content: m[2].trim(),
+      },
+    });
   });
 
   extract(/<memory_search\s+([\s\S]*?)\/?>/gi, (m) => {
     const attrs = parseAttributes(m[0]);
     if (attrs.query) {
-      calls.push({ name: "memory_search", args: { query: attrs.query, category: attrs.category, limit: attrs.limit } });
+      calls.push({
+        name: "memory_search",
+        args: {
+          query: attrs.query,
+          category: attrs.category,
+          limit: attrs.limit,
+        },
+      });
     }
   });
 
@@ -198,7 +256,9 @@ describe("parseAttributes", () => {
   });
 
   it("handles special characters in values", () => {
-    const attrs = parseAttributes("path='src/index.ts' pattern='function\\(\\)'");
+    const attrs = parseAttributes(
+      "path='src/index.ts' pattern='function\\(\\)'",
+    );
     expect(attrs.path).toBe("src/index.ts");
     expect(attrs.pattern).toBe("function\\(\\)");
   });
@@ -209,7 +269,9 @@ describe("parseAttributes", () => {
   });
 
   it("handles nested quotes of the opposite type", () => {
-    const attrs = parseAttributes('command="echo \'hello\'" pattern=\'foo "bar"\'');
+    const attrs = parseAttributes(
+      "command=\"echo 'hello'\" pattern='foo \"bar\"'",
+    );
     expect(attrs.command).toBe("echo 'hello'");
     expect(attrs.pattern).toBe('foo "bar"');
   });
@@ -237,14 +299,18 @@ describe("parseToolCalls", () => {
     });
 
     it("parses multiple read_file calls", () => {
-      const calls = parseToolCalls("<read_file path='a.ts' /><read_file path='b.ts' />");
+      const calls = parseToolCalls(
+        "<read_file path='a.ts' /><read_file path='b.ts' />",
+      );
       expect(calls).toHaveLength(2);
     });
   });
 
   describe("write_file", () => {
     it("parses write with content", () => {
-      const calls = parseToolCalls("<write_file path='test.ts'>const x = 1;</write_file>");
+      const calls = parseToolCalls(
+        "<write_file path='test.ts'>const x = 1;</write_file>",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("write_file");
       expect(calls[0].args.content).toBe("const x = 1;");
@@ -252,7 +318,9 @@ describe("parseToolCalls", () => {
 
     it("handles multiline content", () => {
       const content = "line1\nline2\nline3";
-      const calls = parseToolCalls(`<write_file path='test.ts'>${content}</write_file>`);
+      const calls = parseToolCalls(
+        `<write_file path='test.ts'>${content}</write_file>`,
+      );
       expect(calls[0].args.content).toBe(content);
     });
 
@@ -263,14 +331,18 @@ describe("parseToolCalls", () => {
     });
 
     it("handles content with special chars", () => {
-      const calls = parseToolCalls("<write_file path='test.ts'>const x = \"hello\";</write_file>");
+      const calls = parseToolCalls(
+        "<write_file path='test.ts'>const x = \"hello\";</write_file>",
+      );
       expect(calls[0].args.content).toBe('const x = "hello";');
     });
   });
 
   describe("edit_file", () => {
     it("parses search and replace", () => {
-      const calls = parseToolCalls("<edit_file path='test.ts'><search>old</search><replace>new</replace></edit_file>");
+      const calls = parseToolCalls(
+        "<edit_file path='test.ts'><search>old</search><replace>new</replace></edit_file>",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("edit_file");
       expect(calls[0].args.search).toBe("old");
@@ -280,13 +352,17 @@ describe("parseToolCalls", () => {
     it("handles multiline search/replace", () => {
       const search = "function foo() {\n  return 1;\n}";
       const replace = "function foo() {\n  return 2;\n}";
-      const calls = parseToolCalls(`<edit_file path='test.ts'><search>${search}</search><replace>${replace}</replace></edit_file>`);
+      const calls = parseToolCalls(
+        `<edit_file path='test.ts'><search>${search}</search><replace>${replace}</replace></edit_file>`,
+      );
       expect(calls[0].args.search).toBe(search);
       expect(calls[0].args.replace).toBe(replace);
     });
 
     it("ignores edit_file without search/replace", () => {
-      const calls = parseToolCalls("<edit_file path='test.ts'>no tags</edit_file>");
+      const calls = parseToolCalls(
+        "<edit_file path='test.ts'>no tags</edit_file>",
+      );
       expect(calls).toHaveLength(0);
     });
   });
@@ -302,7 +378,9 @@ describe("parseToolCalls", () => {
 
   describe("grep_file", () => {
     it("parses grep with path and pattern", () => {
-      const calls = parseToolCalls("<grep_file path='test.ts' pattern='function' />");
+      const calls = parseToolCalls(
+        "<grep_file path='test.ts' pattern='function' />",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("grep_file");
       expect(calls[0].args.path).toBe("test.ts");
@@ -310,12 +388,16 @@ describe("parseToolCalls", () => {
     });
 
     it("parses grep with regex", () => {
-      const calls = parseToolCalls("<grep_file path='test.ts' pattern='func.*' regex='true' />");
+      const calls = parseToolCalls(
+        "<grep_file path='test.ts' pattern='func.*' regex='true' />",
+      );
       expect(calls[0].args.regex).toBe("true");
     });
 
     it("parses grep with max_results", () => {
-      const calls = parseToolCalls("<grep_file path='test.ts' pattern='x' max_results='10' />");
+      const calls = parseToolCalls(
+        "<grep_file path='test.ts' pattern='x' max_results='10' />",
+      );
       expect(calls[0].args.max_results).toBe("10");
     });
   });
@@ -329,12 +411,16 @@ describe("parseToolCalls", () => {
     });
 
     it("parses search with glob", () => {
-      const calls = parseToolCalls("<search_files pattern='TODO' glob='*.ts' />");
+      const calls = parseToolCalls(
+        "<search_files pattern='TODO' glob='*.ts' />",
+      );
       expect(calls[0].args.glob).toBe("*.ts");
     });
 
     it("parses search with path", () => {
-      const calls = parseToolCalls("<search_files path='src/' pattern='TODO' />");
+      const calls = parseToolCalls(
+        "<search_files path='src/' pattern='TODO' />",
+      );
       expect(calls[0].args.path).toBe("src/");
     });
   });
@@ -352,7 +438,9 @@ describe("parseToolCalls", () => {
     });
 
     it("handles command with shell operators", () => {
-      const calls = parseToolCalls("<run_command command='ls -la /tmp && echo done' />");
+      const calls = parseToolCalls(
+        "<run_command command='ls -la /tmp && echo done' />",
+      );
       expect(calls[0].args.command).toBe("ls -la /tmp && echo done");
     });
   });
@@ -385,19 +473,25 @@ describe("parseToolCalls", () => {
     });
 
     it("parses clipboard_write with content", () => {
-      const calls = parseToolCalls("<clipboard_write>text to copy</clipboard_write>");
+      const calls = parseToolCalls(
+        "<clipboard_write>text to copy</clipboard_write>",
+      );
       expect(calls[0].args.text).toBe("text to copy");
     });
 
     it("handles multiline clipboard content", () => {
-      const calls = parseToolCalls("<clipboard_write>line1\nline2</clipboard_write>");
+      const calls = parseToolCalls(
+        "<clipboard_write>line1\nline2</clipboard_write>",
+      );
       expect(calls[0].args.text).toBe("line1\nline2");
     });
   });
 
   describe("system tools", () => {
     it("parses notify with title and body", () => {
-      const calls = parseToolCalls("<notify title='Alert' body='Something happened' />");
+      const calls = parseToolCalls(
+        "<notify title='Alert' body='Something happened' />",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].args.title).toBe("Alert");
       expect(calls[0].args.body).toBe("Something happened");
@@ -421,7 +515,9 @@ describe("parseToolCalls", () => {
     });
 
     it("parses launch_app", () => {
-      const calls = parseToolCalls("<launch_app name='code' args='/workspace' />");
+      const calls = parseToolCalls(
+        "<launch_app name='code' args='/workspace' />",
+      );
       expect(calls[0].args.name).toBe("code");
       expect(calls[0].args.args).toBe("/workspace");
     });
@@ -465,7 +561,9 @@ describe("parseToolCalls", () => {
 
   describe("memory tools", () => {
     it("parses memory_save with content", () => {
-      const calls = parseToolCalls("<memory_save category='project' tier='high' summary='test'>Memory content here</memory_save>");
+      const calls = parseToolCalls(
+        "<memory_save category='project' tier='high' summary='test'>Memory content here</memory_save>",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("memory_save");
       expect(calls[0].args.category).toBe("project");
@@ -473,7 +571,9 @@ describe("parseToolCalls", () => {
     });
 
     it("parses memory_search", () => {
-      const calls = parseToolCalls("<memory_search query='build commands' limit='5' />");
+      const calls = parseToolCalls(
+        "<memory_search query='build commands' limit='5' />",
+      );
       expect(calls[0].args.query).toBe("build commands");
       expect(calls[0].args.limit).toBe("5");
     });
@@ -527,17 +627,25 @@ describe("parseToolCalls", () => {
       `;
       const calls = parseToolCalls(text);
       expect(calls).toHaveLength(3);
-      expect(calls.map(c => c.name)).toEqual(["read_file", "list_dir", "git_status"]);
+      expect(calls.map((c) => c.name)).toEqual([
+        "read_file",
+        "list_dir",
+        "git_status",
+      ]);
     });
 
     it("handles malformed XML gracefully", () => {
-      const calls = parseToolCalls("<read_file path='test.ts' /> incomplete <write_file path='b.ts'>content");
+      const calls = parseToolCalls(
+        "<read_file path='test.ts' /> incomplete <write_file path='b.ts'>content",
+      );
       expect(calls).toHaveLength(1); // only read_file parsed
       expect(calls[0].name).toBe("read_file");
     });
 
     it("handles nested angle brackets in content", () => {
-      const calls = parseToolCalls("<write_file path='test.ts'>const x = <div>hello</div>;</write_file>");
+      const calls = parseToolCalls(
+        "<write_file path='test.ts'>const x = <div>hello</div>;</write_file>",
+      );
       expect(calls).toHaveLength(1);
     });
 
@@ -552,7 +660,10 @@ describe("parseToolCalls", () => {
     });
 
     it("handles very long response", () => {
-      const longText = "x".repeat(100000) + "<read_file path='test.ts' />" + "y".repeat(100000);
+      const longText =
+        "x".repeat(100000) +
+        "<read_file path='test.ts' />" +
+        "y".repeat(100000);
       const calls = parseToolCalls(longText);
       expect(calls).toHaveLength(1);
     });
@@ -571,7 +682,21 @@ describe("parseToolCalls", () => {
 
   describe("JUNK_DIRS filtering", () => {
     it("includes common junk directories", () => {
-      const expectedJunk = [".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"];
+      const expectedJunk = [
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".next",
+        ".nuxt",
+        "dist",
+        "build",
+        ".turbo",
+        ".cache",
+        ".vscode",
+        ".idea",
+        "coverage",
+        ".output",
+      ];
       const junkSet = new Set(expectedJunk);
       // Verify essential directories are present (the set matches dalamAPI.ts JUNK_DIRS)
       expect(junkSet.has(".git")).toBe(true);
@@ -585,14 +710,18 @@ describe("parseToolCalls", () => {
 
   describe("Non-self-closing tag support (Llama 3.3 compatibility)", () => {
     it("parses list_dir without self-closing slash", () => {
-      const calls = parseToolCalls("<list_dir path='/Users/test/project'> </list_dir>");
+      const calls = parseToolCalls(
+        "<list_dir path='/Users/test/project'> </list_dir>",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("list_dir");
       expect(calls[0].args.path).toBe("/Users/test/project");
     });
 
     it("parses list_dir with content between tags", () => {
-      const calls = parseToolCalls("<list_dir path='/src'>some content</list_dir>");
+      const calls = parseToolCalls(
+        "<list_dir path='/src'>some content</list_dir>",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("list_dir");
     });
@@ -611,7 +740,9 @@ describe("parseToolCalls", () => {
     });
 
     it("parses run_command without self-closing slash", () => {
-      const calls = parseToolCalls("<run_command command='ls -la'></run_command>");
+      const calls = parseToolCalls(
+        "<run_command command='ls -la'></run_command>",
+      );
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("run_command");
       expect(calls[0].args.command).toBe("ls -la");
@@ -621,11 +752,17 @@ describe("parseToolCalls", () => {
   describe("Tool calls in code blocks (Llama 3.3 fix)", () => {
     it("extracts tool calls from xml code blocks", () => {
       // Re-implement extractToolCallsFromCodeBlocks for testing
-      const KNOWN_TOOL_NAMES = new Set(["list_dir", "read_file", "write_file", "run_command"]);
+      const KNOWN_TOOL_NAMES = new Set([
+        "list_dir",
+        "read_file",
+        "write_file",
+        "run_command",
+      ]);
 
       function extractToolCallsFromCodeBlocks(text: string) {
         const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
-        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        const codeBlockRegex =
+          /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
           const blockContent = blockMatch[1];
@@ -647,7 +784,8 @@ describe("parseToolCalls", () => {
         return toolCalls;
       }
 
-      const text = 'I will list the files.\n\n```xml\n<list_dir path="/Users/test/project" />\n```\n\nDone.';
+      const text =
+        'I will list the files.\n\n```xml\n<list_dir path="/Users/test/project" />\n```\n\nDone.';
       const calls = extractToolCallsFromCodeBlocks(text);
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe("list_dir");
@@ -655,11 +793,13 @@ describe("parseToolCalls", () => {
     });
 
     it("extracts multiple tool calls from code blocks", () => {
-      const text = 'Let me check the files.\n\n```xml\n<read_file path="src/index.ts" />\n<list_dir path="src" />\n```\n';
+      const text =
+        'Let me check the files.\n\n```xml\n<read_file path="src/index.ts" />\n<list_dir path="src" />\n```\n';
 
       function extractToolCallsFromCodeBlocks(text: string) {
         const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
-        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        const codeBlockRegex =
+          /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
           const blockContent = blockMatch[1];
@@ -688,11 +828,13 @@ describe("parseToolCalls", () => {
     });
 
     it("extracts tool calls from unlabeled code blocks", () => {
-      const text = 'Here is the command:\n\n```\n<run_command command="git status" />\n```\n';
+      const text =
+        'Here is the command:\n\n```\n<run_command command="git status" />\n```\n';
 
       function extractToolCallsFromCodeBlocks(text: string) {
         const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
-        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        const codeBlockRegex =
+          /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
           const blockContent = blockMatch[1];
@@ -725,7 +867,8 @@ describe("parseToolCalls", () => {
 
       function extractToolCallsFromCodeBlocks(text: string) {
         const toolCalls: { name: string; args: Record<string, unknown> }[] = [];
-        const codeBlockRegex = /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
+        const codeBlockRegex =
+          /```(?:xml|html|tool|[\w-]*)?\s*\n([\s\S]*?)```/gi;
         let blockMatch;
         while ((blockMatch = codeBlockRegex.exec(text)) !== null) {
           const blockContent = blockMatch[1];

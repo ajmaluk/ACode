@@ -65,7 +65,7 @@ export interface DiffRequirement {
  */
 export function buildDoneCriteria(config: Partial<DoneCriteria>): DoneCriteria {
   const cleaned = Object.fromEntries(
-    Object.entries(config).filter(([_, v]) => v !== undefined)
+    Object.entries(config).filter(([_, v]) => v !== undefined),
   ) as Partial<DoneCriteria>;
   return {
     expectedFiles: [],
@@ -81,13 +81,11 @@ export function buildDoneCriteria(config: Partial<DoneCriteria>): DoneCriteria {
  * Detect available verification commands from the project's package.json or
  * similar configuration files. Returns a list of commands that can be run.
  */
-export function detectVerificationCommands(
-  projectConfig: {
-    scripts?: Record<string, string>;
-    devDependencies?: Record<string, string>;
-    dependencies?: Record<string, string>;
-  }
-): VerificationCommand[] {
+export function detectVerificationCommands(projectConfig: {
+  scripts?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  dependencies?: Record<string, string>;
+}): VerificationCommand[] {
   const commands: VerificationCommand[] = [];
   const scripts = projectConfig.scripts ?? {};
 
@@ -100,7 +98,10 @@ export function detectVerificationCommands(
       required: true,
       checkType: "exit-code",
     });
-  } else if (projectConfig.devDependencies?.typescript || projectConfig.dependencies?.typescript) {
+  } else if (
+    projectConfig.devDependencies?.typescript ||
+    projectConfig.dependencies?.typescript
+  ) {
     commands.push({
       command: "pnpm typecheck",
       label: "TypeScript type check",
@@ -151,14 +152,21 @@ export function detectVerificationCommands(
  */
 export async function checkExpectedFiles(
   criteria: DoneCriteria,
-  actualChanges: Array<{ path: string; action: string; additions?: number; deletions?: number }>,
-  readFileFn?: (path: string) => Promise<string>
+  actualChanges: Array<{
+    path: string;
+    action: string;
+    additions?: number;
+    deletions?: number;
+  }>,
+  readFileFn?: (path: string) => Promise<string>,
 ): Promise<UnmetCriteria[]> {
   const unmet: UnmetCriteria[] = [];
 
   for (const expected of criteria.expectedFiles) {
     const match = actualChanges.find(
-      (c) => c.path === expected.path && (expected.action === "any" || c.action === expected.action)
+      (c) =>
+        c.path === expected.path &&
+        (expected.action === "any" || c.action === expected.action),
     );
 
     if (!match) {
@@ -171,7 +179,10 @@ export async function checkExpectedFiles(
     }
 
     // Check minAdditions
-    if (expected.minAdditions !== undefined && (match.additions ?? 0) < expected.minAdditions) {
+    if (
+      expected.minAdditions !== undefined &&
+      (match.additions ?? 0) < expected.minAdditions
+    ) {
       unmet.push({
         criteria: `Expected ≥${expected.minAdditions} additions in ${expected.path}`,
         status: "insufficient",
@@ -180,7 +191,10 @@ export async function checkExpectedFiles(
     }
 
     // Check minDeletions
-    if (expected.minDeletions !== undefined && (match.deletions ?? 0) < expected.minDeletions) {
+    if (
+      expected.minDeletions !== undefined &&
+      (match.deletions ?? 0) < expected.minDeletions
+    ) {
       unmet.push({
         criteria: `Expected ≥${expected.minDeletions} deletions in ${expected.path}`,
         status: "insufficient",
@@ -189,7 +203,13 @@ export async function checkExpectedFiles(
     }
 
     // Check contentPattern if provided and a file reader is available
-    if (expected.contentPattern && readFileFn && (expected.action === "modified" || expected.action === "created" || expected.action === "any")) {
+    if (
+      expected.contentPattern &&
+      readFileFn &&
+      (expected.action === "modified" ||
+        expected.action === "created" ||
+        expected.action === "any")
+    ) {
       // Skip content check for deleted files (even with action: "any")
       if (match.action === "deleted") continue;
       try {
@@ -202,7 +222,8 @@ export async function checkExpectedFiles(
             detail: `File content does not match expected pattern`,
           });
         }
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DoneCriteria] Failed to read file for content pattern check:", expected.path, e);
         unmet.push({
           criteria: `Content pattern /${expected.contentPattern}/ in ${expected.path}`,
           status: "failed",
@@ -224,9 +245,12 @@ export interface UnmetCriteria {
 /**
  * Summarize verification results for UI display.
  */
-export function summarizeVerification(
-  results: VerificationResult[]
-): { passed: number; failed: number; total: number; summary: string } {
+export function summarizeVerification(results: VerificationResult[]): {
+  passed: number;
+  failed: number;
+  total: number;
+  summary: string;
+} {
   const passed = results.filter((r) => r.passed).length;
   const failed = results.length - passed;
   const total = results.length;

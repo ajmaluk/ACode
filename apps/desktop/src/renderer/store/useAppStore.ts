@@ -282,7 +282,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       }));
       if (all.selectedModel) {
         // Use event bus instead of direct getState() call to avoid circular dependency
-        import("./events").then(({ eventBus }) => {
+        void import("./events").then(({ eventBus }) => {
           eventBus.emit("chat:model-selected", { modelId: all.selectedModel! });
         });
       }
@@ -364,7 +364,9 @@ function loadPersistedWorkspaces(): { workspaces: Workspace[]; activeId: string 
 function savePersistedWorkspaces(workspaces: Workspace[], activeId: string | null) {
   try {
     localStorage.setItem(WORKSPACES_STORAGE_KEY, JSON.stringify({ workspaces, activeId }));
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] localStorage.setItem(WORKSPACES_STORAGE_KEY, JSON.:", e);
+  }
 }
 
 type WorkspaceState = {
@@ -395,27 +397,14 @@ type WorkspaceState = {
 
 async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
   try {
-    const { mkdir } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists, scopeSafeMkdir } = await import("@/lib/dalamAPI");
     const dotDalam = joinPath(workspacePath, ".dalam");
-    // Scope-safe check: catch "forbidden path" errors from Tauri's scope system
-    let dotDalamExists = false;
-    try {
-      const { exists } = await import("@tauri-apps/plugin-fs");
-      dotDalamExists = await exists(dotDalam);
-    } catch (e) {
-      const msg = (e as Error)?.message ?? String(e);
-      if (!msg.includes("forbidden") && !msg.includes("scope")) throw e;
-    }
-    if (!dotDalamExists) {
-      try {
-        await mkdir(dotDalam, { recursive: true });
-      } catch (e) {
-        const msg = (e as Error)?.message ?? String(e);
-        if (msg.includes("forbidden") || msg.includes("scope")) {
-          console.warn("Cannot create .dalam directory — workspace path may not have filesystem scope:", workspacePath);
-          return;
-        }
-        throw e;
+
+    if (!(await scopeSafeExists(dotDalam))) {
+      const created = await scopeSafeMkdir(dotDalam, { recursive: true });
+      if (!created) {
+        if (import.meta.env.DEV) console.warn("[Store] Cannot create .dalam directory — workspace path may not have filesystem scope:", workspacePath);
+        return;
       }
     }
 
@@ -438,8 +427,8 @@ async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
     const memoryPath = joinPath(dotDalam, "memory.json");
     let memoryExists = false;
     try {
-      const { exists } = await import("@tauri-apps/plugin-fs");
-      memoryExists = await exists(memoryPath);
+      const { scopeSafeExists } = await import("@/lib/dalamAPI");
+      memoryExists = await scopeSafeExists(memoryPath);
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       if (!msg.includes("forbidden") && !msg.includes("scope")) throw e;
@@ -468,8 +457,8 @@ async function initWorkspaceMemory(api: DalamAPI, workspacePath: string) {
     const contextPath = joinPath(dotDalam, "context.json");
     let contextExists = false;
     try {
-      const { exists } = await import("@tauri-apps/plugin-fs");
-      contextExists = await exists(contextPath);
+      const { scopeSafeExists } = await import("@/lib/dalamAPI");
+      contextExists = await scopeSafeExists(contextPath);
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       if (!msg.includes("forbidden") && !msg.includes("scope")) throw e;
@@ -549,7 +538,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // Abort any active streaming session before switching
     // Use event bus to avoid circular dependency
     const ws = get().workspaces.find((w) => w.id === id);
-    import("./events").then(({ eventBus }) => {
+    void import("./events").then(({ eventBus }) => {
       eventBus.emit("workspace:switched", { workspaceId: id, path: ws?.path ?? "" });
     });
     // Clear all open tabs and file tree when switching projects (VS Code behavior)
@@ -596,7 +585,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       set({ activeFilePath: path });
       // Auto-switch to editor mode when opening a file
       // Use event bus to avoid circular dependency
-      import("./events").then(({ eventBus }) => {
+      void import("./events").then(({ eventBus }) => {
         eventBus.emit("workspace:file-opened", { path });
       });
       return;
@@ -611,7 +600,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           console.warn("Cannot open directory as file:", path);
           return;
         }
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[Store] stat(path);:", e);
         // stat failed — file might not exist, try reading anyway for a clearer error
       }
       const content = await api.fs.readFile(path);
@@ -628,7 +618,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }));
       // Auto-switch to editor mode when opening a file
       // Use event bus to avoid circular dependency
-      import("./events").then(({ eventBus }) => {
+      void import("./events").then(({ eventBus }) => {
         eventBus.emit("workspace:file-opened", { path });
       });
     } catch (err) {
@@ -776,7 +766,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 {
   let _viewModeListenerRegistered = false;
   try {
-    import("./events").then(({ eventBus }) => {
+    void import("./events").then(({ eventBus }) => {
       if (_viewModeListenerRegistered) return;
       _viewModeListenerRegistered = true;
       eventBus.on("ui:view-mode-changed", ({ mode }) => {
@@ -995,10 +985,17 @@ function loadPersistedSessionSummaries(): ChatSessionSummary[] {
   } catch (err) { console.warn("[useChat] Failed to load persisted data:", err); return []; }
 }
 
+const _pendingSummariesRef: { sessions: ChatSessionSummary[] } | null = null;
+let _saveSummariesTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function savePersistedSessionSummaries(sessions: ChatSessionSummary[]) {
-  try { localStorage.setItem(SESSION_SUMMARIES_KEY, JSON.stringify(sessions)); } catch (e) { console.warn("Failed to save session summaries:", e); }
-  _idbWriteThrough("sessions", { id: "all", data: sessions });
-  void saveWorkspaceData();
+  if (_saveSummariesTimer) clearTimeout(_saveSummariesTimer);
+  _saveSummariesTimer = setTimeout(() => {
+    _saveSummariesTimer = null;
+    try { localStorage.setItem(SESSION_SUMMARIES_KEY, JSON.stringify(sessions)); } catch (e) { console.warn("Failed to save session summaries:", e); }
+    _idbWriteThrough("sessions", { id: "all", data: sessions });
+    void saveWorkspaceData();
+  }, 300);
 }
 
 const COMPACTION_SUMMARIES_KEY = "dalam.compactionSummaries.v1";
@@ -1038,7 +1035,7 @@ const _antiThrashTimestamps: Record<string, number> = {}; // sessionId → times
 // ============================================================================
 // Safety Timer Helper — eliminates 3× duplicated timer logic in sendMessage/appendStream
 // ============================================================================
-const SAFETY_TIMEOUT_MS = 120_000;
+const SAFETY_TIMEOUT_MS = 300_000;
 const TOOL_APPROVAL_TIMEOUT_MS = 600_000; // 10 min during tool approval
 
 function _createSafetyTimer(
@@ -1059,7 +1056,7 @@ function _createSafetyTimer(
       role: "system",
       content: mode === "tool-approval"
         ? "Agent loop timed out — no activity for 10 minutes during tool approval."
-        : "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+        : "Stream timed out after 300 seconds of inactivity. The agent may have encountered an issue.",
       timestamp: Date.now(),
     };
     // Clear any pending auto-remove timers to prevent orphaned callbacks
@@ -1377,22 +1374,28 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
   const contextPath = joinPath(dotDalam, "context.json");
 
   try {
-    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists } = await import("@/lib/dalamAPI");
 
     // Check if workspace root is accessible before attempting .dalam operations
     try {
-      if (!(await exists(workspacePath))) return;
-    } catch {
+      if (!(await scopeSafeExists(workspacePath))) return;
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Store] Workspace path inaccessible:", e);
       // Path outside Tauri scope (forbidden) — silently skip this workspace
       return;
     }
 
     // Ensure .dalam directory exists before checking files inside it
     try {
-      if (!(await exists(dotDalam))) {
-        await mkdir(dotDalam, { recursive: true });
+      const { scopeSafeExists, scopeSafeMkdir } = await import("@/lib/dalamAPI");
+      if (!(await scopeSafeExists(dotDalam))) {
+        await scopeSafeMkdir(dotDalam, { recursive: true });
       }
-    } catch {
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!msg.includes("forbidden") && !msg.includes("scope") && import.meta.env.DEV) {
+        console.warn("[Store] Failed to ensure .dalam directory:", e);
+      }
       // .dalam dir may already exist, or path is outside Tauri scope — skip
       return;
     }
@@ -1415,7 +1418,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
     }
 
     // Load configuration
-    if (await exists(configPath)) {
+    if (await scopeSafeExists(configPath)) {
       try {
         const content = await api.fs.readFile(configPath);
         const projConfig = JSON.parse(content);
@@ -1513,7 +1516,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
     }
 
     // Load context
-    if (!(await exists(contextPath))) {
+    if (!(await scopeSafeExists(contextPath))) {
       try {
         const defaultContext = {
           pinnedFiles: [],
@@ -1526,7 +1529,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
     }
 
     // Load sessions
-    if (await exists(sessionsPath)) {
+    if (await scopeSafeExists(sessionsPath)) {
       try {
         const content = await api.fs.readFile(sessionsPath);
         const data = JSON.parse(content);
@@ -1600,11 +1603,15 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
           // Restore terminal state for the restored session
           try {
             useTerminal.getState().restoreForSession(lastSession.id);
-          } catch { /* terminal store may not be loaded yet */ }
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[Store] useTerminal.getState().restoreForSession(lastSessi:", e);
+          }
           // Clear diff view — it's per-session
           try {
             useDiffView.getState().close();
-          } catch { /* diff view store may not be loaded yet */ }
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[Store] useDiffView.getState().close();:", e);
+          }
         } else {
           useChat.setState({
             session: null,
@@ -1638,7 +1645,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
     }
     // Load editor state (open tabs, active file)
     const editorStatePath = joinPath(dotDalam, "editor.json");
-    if (await exists(editorStatePath)) {
+    if (await scopeSafeExists(editorStatePath)) {
       try {
         const content = await api.fs.readFile(editorStatePath);
         const editorData = JSON.parse(content);
@@ -1659,7 +1666,8 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
                     language: detectLanguage(tab.path),
                   });
                 }
-              } catch {
+              } catch (e) {
+                if (import.meta.env.DEV) console.warn("[Store] import(\"@tauri-apps/plugin-fs\");:", e);
                 // Skip files that can't be read
               }
             }
@@ -1715,12 +1723,16 @@ async function _doSaveWorkspaceData() {
   const configPath = joinPath(dotDalam, "config.json");
 
   try {
-    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists, scopeSafeMkdir } = await import("@/lib/dalamAPI");
     try {
-      if (!(await exists(dotDalam))) {
-        await mkdir(dotDalam, { recursive: true });
+      if (!(await scopeSafeExists(dotDalam))) {
+        await scopeSafeMkdir(dotDalam, { recursive: true });
       }
-    } catch {
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!msg.includes("forbidden") && !msg.includes("scope") && import.meta.env.DEV) {
+        console.warn("[Store] Failed to ensure .dalam directory:", e);
+      }
       // Path outside Tauri scope — skip saving for this workspace
       return;
     }
@@ -1754,10 +1766,17 @@ async function _doSaveWorkspaceData() {
     // Read existing config first to preserve alwaysAllowed and other fields
     let existingConfig: WorkspaceConfig = {};
     try {
-      if (await exists(configPath)) {
-        existingConfig = JSON.parse(await api.fs.readFile(configPath));
+      const { scopeSafeExists, scopeSafeReadFile } = await import("@/lib/dalamAPI");
+      if (await scopeSafeExists(configPath)) {
+        const raw = await scopeSafeReadFile(configPath);
+        if (raw) existingConfig = JSON.parse(raw);
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (!msg.includes("forbidden") && !msg.includes("scope") && import.meta.env.DEV) {
+        console.warn("[Store] Failed to read existing config:", e);
+      }
+    }
     const configData = {
       ...existingConfig,
       settings: {
@@ -2522,32 +2541,16 @@ export const useChat = create<ChatState>((set, get) => ({
         // handles XML tag stripping during its throttled performUpdate.
         // This eliminates the old 50ms store-level latency.
         set((s) => {
-          const newContent = s.streamingContent + event.content;
-          // Trim very long streams to prevent memory issues (keep last 200K chars)
-          if (newContent.length > 200000) {
-            const trimmed = newContent.slice(-200000);
-            // Find a safe break point that preserves XML tag and word boundaries:
-            // 1. Prefer a double-newline boundary for clean paragraph breaks
-            let breakIdx = trimmed.indexOf("\n\n");
-            if (breakIdx < 0 || breakIdx > trimmed.length * 0.3) {
-              // 2. Fall back to the end of the last complete XML closing tag
-              const lastCloseTag = trimmed.lastIndexOf(">");
-              const lastOpenTag = trimmed.lastIndexOf("<");
-              // If we're inside a tag (open < after close >), break before the tag
-              if (lastOpenTag > lastCloseTag) {
-                // Inside an opening tag — trim to before the < to avoid splitting mid-tag
-                // But also check if this is a self-closing tag ending with />
-                breakIdx = lastOpenTag > 0 ? lastOpenTag - 1 : 0;
-              } else if (lastCloseTag >= 0 && lastCloseTag > trimmed.length * 0.3) {
-                breakIdx = lastCloseTag + 1;
-              } else {
-                // 3. Fall back to space boundary
-                const spaceIdx = trimmed.indexOf(" ", 1);
-                breakIdx = spaceIdx > 0 && spaceIdx < 200 ? spaceIdx + 1 : 0;
-              }
-            }
-            const safeTrimmed = breakIdx > 0 ? trimmed.slice(breakIdx).trimStart() : trimmed;
-            return { streamingContent: safeTrimmed };
+          const MAX_STREAM = 200000;
+          const prev = s.streamingContent;
+          if (prev.length >= MAX_STREAM) {
+            // Already at cap — append and slice in one pass to avoid growing unboundedly
+            const newContent = prev.slice(prev.length - MAX_STREAM / 2) + event.content;
+            return { streamingContent: newContent.length > MAX_STREAM ? newContent.slice(-MAX_STREAM) : newContent };
+          }
+          const newContent = prev + event.content;
+          if (newContent.length > MAX_STREAM) {
+            return { streamingContent: newContent.slice(-MAX_STREAM) };
           }
           return { streamingContent: newContent };
         });
@@ -2667,7 +2670,9 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "message-end": {
-        const { messages, streamingContent, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = get();
+        const st = get();
+        const { messages, thinkingContent, _pendingChanges, todos, pendingToolCalls, pendingActivities, session: liveSession } = st;
+        const streamingContent = st.streamingContent;
 
         // Clear safety timeout if it exists — but ONLY when the turn is truly done.
         // During intermediate turns (tool calls just executed, agentic loop continues
@@ -2725,6 +2730,7 @@ export const useChat = create<ChatState>((set, get) => ({
             streamingContent: "",
             thinkingContent: "",
             _pendingChanges: [],
+            _sendInProgress: false,
           });
           if (sessionId) savePersistedMessages(newSessionMessages);
           break;
@@ -2932,7 +2938,7 @@ export const useChat = create<ChatState>((set, get) => ({
         // Question tools always auto-approved — they inherently require user interaction and show their own dialog
         if (tool.name === "question") {
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, tool] }));
-          get().resolveToolApproval(tool.id, "approved");
+          void get().resolveToolApproval(tool.id, "approved");
           break;
         }
         const permissionKey: PermissionKind = EDIT_TOOLS.has(tool.name)
@@ -2961,7 +2967,7 @@ export const useChat = create<ChatState>((set, get) => ({
           });
           const deniedTool = { ...tool, status: "failed" as const, result: "Denied by permission policy" };
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, deniedTool] }));
-          get().resolveToolApproval(tool.id, "denied", "Denied by permission policy");
+          void get().resolveToolApproval(tool.id, "denied", "Denied by permission policy");
           // Auto-remove denied tools from UI after a short delay
           const _autoRemoveTimer = setTimeout(() => {
             set((s) => ({ pendingToolCalls: s.pendingToolCalls.filter((tc) => tc.id !== tool.id) }));
@@ -2984,7 +2990,7 @@ export const useChat = create<ChatState>((set, get) => ({
             ...(commandStr ? { command: commandStr } : {}),
             ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
           }).then((decision) => {
-            get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied");
+            void get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied");
             // Log audit trail
             logPermission({
               timestamp: Date.now(),
@@ -3009,7 +3015,7 @@ export const useChat = create<ChatState>((set, get) => ({
           }).catch((err) => {
             if (import.meta.env.DEV) console.error("Permission dialog error:", err);
             // If the dialog was dismissed/closed, deny the tool to unblock waitForToolApproval
-            get().resolveToolApproval(tool.id, "denied");
+            void get().resolveToolApproval(tool.id, "denied");
           });
         } else {
           // Log audit trail for auto-allow
@@ -3021,7 +3027,7 @@ export const useChat = create<ChatState>((set, get) => ({
             decision: "allow",
             source: "auto",
           });
-          get().resolveToolApproval(tool.id, "approved");
+          void get().resolveToolApproval(tool.id, "approved");
         }
         break;
       }
@@ -3370,7 +3376,7 @@ export const useChat = create<ChatState>((set, get) => ({
           ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
         }).then((decision) => {
           if (event.toolCallId) {
-            get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied");
+            void get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied");
           }
           // Persist "always allow" so future tools of the same kind are auto-approved
           if (decision === "always") {
@@ -3388,7 +3394,7 @@ export const useChat = create<ChatState>((set, get) => ({
           if (import.meta.env.DEV) console.error("Permission dialog error:", err);
           // If the dialog was dismissed/closed, deny the tool to unblock the agent loop
           if (event.toolCallId) {
-            get().resolveToolApproval(event.toolCallId, "denied");
+            void get().resolveToolApproval(event.toolCallId, "denied");
           }
         });
         break;
@@ -3411,7 +3417,7 @@ export const useChat = create<ChatState>((set, get) => ({
           if (import.meta.env.DEV) console.error("ask-question error:", err);
           // Restore status on error so the UI doesn't get stuck
           if (questionSessionId) {
-            try { useChat.getState().setSessionStatus(questionSessionId, "running"); } catch { /* ignore */ }
+            try {              useChat.getState().setSessionStatus(questionSessionId, "running");} catch (e) { if (import.meta.env.DEV) console.warn("[Store] useChat.getState().setSessionStatus(questionSessio", e); }
           }
         });
         break;
@@ -3441,7 +3447,9 @@ export const useChat = create<ChatState>((set, get) => ({
               else if (json?.detail) friendly = String(json.detail);
               else if (json?.message) friendly = String(json.message);
               else if (typeof json?.error === "string") friendly = json.error;
-            } catch { /* not JSON — use raw */ }
+            } catch (e) {
+              if (import.meta.env.DEV) console.warn("[Store] JSON parse:", e);
+            }
             return `**Error**: ${friendly}\n\nCheck your provider settings and try again.`;
           })(),
           timestamp: Date.now(),
@@ -3495,7 +3503,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // Abort all in-flight operations to prevent stale writes
     const controllers = get()._abortControllers;
     for (const [, controller] of controllers) {
-      try { controller.abort(); } catch { /* ignore */ }
+      try {        controller.abort();} catch (e) { if (import.meta.env.DEV) console.warn("[Store] controller.abort();", e); }
     }
     // Clear compaction state
     const nextCompacting = new Set(get()._compactingSessions);
@@ -3674,10 +3682,8 @@ export const useChat = create<ChatState>((set, get) => ({
     if (timer) clearTimeout(timer);
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
-    _pendingResolutions.clear();
-    _toolCallResolvers.clear();
     // Wait for abort to complete before cleanup to avoid race conditions
-    try { await get().abort(id); } catch { /* abort may throw, that's ok */ }
+    try {      await get().abort(id);} catch (e) { if (import.meta.env.DEV) console.warn("[Store] await get().abort(id);", e); }
     void stopRecording(id).catch(() => {});
     // cleanupStream is handled inside abort()'s finally block
     // Clean all per-session caches to prevent memory leaks
@@ -3692,7 +3698,9 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       const { clearSessionToolCosts } = await import("../lib/toolExecutor");
       clearSessionToolCosts(id);
-    } catch { /* ignore */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Store] import(\"../lib/toolExecutor\");:", e);
+    }
     // Abort any in-progress compaction
     const nextCompacting = new Set(get()._compactingSessions);
     nextCompacting.delete(id);
@@ -3756,12 +3764,21 @@ export const useChat = create<ChatState>((set, get) => ({
     const ws = useWorkspace.getState().workspaces.find(w => w.id === useWorkspace.getState().activeWorkspaceId);
     if (messages && ws) {
       try {
-        const { exists, mkdir, writeFile } = await import("@tauri-apps/plugin-fs");
+        const { scopeSafeExists, scopeSafeMkdir, scopeSafeWriteFile } = await import("@/lib/dalamAPI");
         const archiveDir = joinPath(ws.path, ".dalam/archive");
-        if (!(await exists(archiveDir))) await mkdir(archiveDir, { recursive: true });
-        await writeFile(joinPath(archiveDir, `${id}.json`), new TextEncoder().encode(JSON.stringify(messages)));
+        if (!(await scopeSafeExists(archiveDir))) {
+          const created = await scopeSafeMkdir(archiveDir, { recursive: true });
+          if (!created) {
+            console.warn("[Session] Failed to create archive directory, keeping messages in active storage");
+            return;
+          }
+        }
+        await scopeSafeWriteFile(joinPath(archiveDir, `${id}.json`), JSON.stringify(messages));
       } catch (err) {
-        console.warn("[Session] Failed to archive messages, keeping messages in active storage:", err);
+        const msg = (err as Error)?.message ?? String(err);
+        if (!msg.includes("forbidden") && !msg.includes("scope")) {
+          console.warn("[Session] Failed to archive messages, keeping messages in active storage:", err);
+        }
         // Don't remove from active storage if archive fails
         return;
       }
@@ -3790,12 +3807,13 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!ws) return;
 
     // Load archived messages
-    void import("@tauri-apps/plugin-fs").then(async ({ exists, readFile, remove }) => {
+    void import("@/lib/dalamAPI").then(async ({ scopeSafeExists, scopeSafeReadFile }) => {
       const archivePath = joinPath(ws.path, ".dalam/archive", `${id}.json`);
       try {
-        if (await exists(archivePath)) {
-          const content = await readFile(archivePath);
-          const messages = JSON.parse(new TextDecoder().decode(content));
+        if (await scopeSafeExists(archivePath)) {
+          const content = await scopeSafeReadFile(archivePath);
+          if (!content) return;
+          const messages = JSON.parse(content);
 
           // Unarchive session
           const updatedSessions = get().chatSessions.map(cs =>
@@ -3808,10 +3826,19 @@ export const useChat = create<ChatState>((set, get) => ({
           });
           savePersistedSessionSummaries(updatedSessions);
           savePersistedMessagesImmediate({ ...get().sessionMessages, [id]: messages });
-          await remove(archivePath);
+          // Best-effort cleanup of archive file
+          try {
+            const { remove } = await import("@tauri-apps/plugin-fs");
+            await remove(archivePath);
+          } catch {
+            // Ignore cleanup errors
+          }
         }
       } catch (err) {
-        console.warn("[Session] Failed to restore archived session:", err);
+        const msg = (err as Error)?.message ?? String(err);
+        if (!msg.includes("forbidden") && !msg.includes("scope")) {
+          console.warn("[Session] Failed to restore archived session:", err);
+        }
       }
     });
   },
@@ -4412,10 +4439,10 @@ export const useChat = create<ChatState>((set, get) => ({
     });
   },
 
-  newChat() {
+  async newChat() {
     const { session } = get();
     // Abort first to stop any in-progress streaming before clearing state
-    if (session) void get().abort(session.id).catch(() => {});
+    if (session) await get().abort(session.id).catch(() => {});
     // Re-read state after abort — abort's finally block may have modified chatSessions
     const latestSession = get().session;
     const latestMessages = get().messages;
@@ -4556,9 +4583,9 @@ export const useChat = create<ChatState>((set, get) => ({
 }));
 
 // Subscribe to model selection events from settings
-import("./events").then(({ eventBus }) => {
+void import("./events").then(({ eventBus }) => {
   eventBus.on("chat:model-selected", ({ modelId }) => {
-    useChat.getState().setSelectedModel(modelId);
+    void useChat.getState().setSelectedModel(modelId);
   });
   // Handle workspace switching - abort streaming when workspace changes
   eventBus.on("workspace:switched", ({ workspaceId: _workspaceId }) => {
@@ -4718,7 +4745,9 @@ function loadMcpServers(): McpServer[] {
   try {
     const raw = localStorage.getItem(MCP_STORAGE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const raw = localStorage.getItem(MCP_STORAGE_KEY);:", e);
+  }
   return [];
 }
 
@@ -4735,7 +4764,9 @@ function loadSkills(): Skill[] {
     if (raw) {
       loadedBundledStates = { ...defaultBundledStates, ...JSON.parse(raw) };
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const raw = localStorage.getItem(BUNDLED_SKILLS_ST:", e);
+  }
 
   const mappedRegistrySkills: Skill[] = registrySkills.map((rs) => {
     const isBundled = rs.source === "bundled";
@@ -4756,7 +4787,9 @@ function loadSkills(): Skill[] {
     if (raw) {
       userSkills = JSON.parse(raw);
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const raw = localStorage.getItem(USER_SKILLS_STORA:", e);
+  }
 
   const merged = [...mappedRegistrySkills];
   for (const us of userSkills) {
@@ -4797,7 +4830,8 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
             resolve(parsed.result?.tools || parsed.tools);
             outputBuffer = "";
           }
-        } catch {
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[Store] JSON parse:", e);
           // Incomplete JSON — wait for more data
         }
       }
@@ -4876,9 +4910,9 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
     const server = get().mcpServers.find((m) => m.name === name);
     if (server) {
       if (server.enabled) {
-        get().connectMcpServer(name);
+        void get().connectMcpServer(name);
       } else {
-        get().disconnectMcpServer(name);
+        void get().disconnectMcpServer(name);
       }
     }
   },
@@ -4912,7 +4946,7 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
       return { mcpServers: [...s.mcpServers, newServer] };
     });
     saveMcpServers(get().mcpServers);
-    get().connectMcpServer(server.name);
+    void get().connectMcpServer(server.name);
   },
   removeMcpServer(name) {
     set((s) => ({
@@ -5029,7 +5063,9 @@ function loadProviders(): ModelProvider[] {
   try {
     const raw = localStorage.getItem(PROVIDERS_STORAGE_KEY);
     if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const raw = localStorage.getItem(PROVIDERS_STORAGE:", e);
+  }
   return DEFAULT_PROVIDERS;
 }
 
@@ -5312,7 +5348,8 @@ function deriveTitleFromUrl(url: string): string {
       return q ? `Google — ${q}` : "Google";
     }
     return u.hostname.replace(/^www\./, "") + (u.pathname !== "/" ? u.pathname : "");
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const u = new URL(url);:", e);
     return url;
   }
 }
@@ -5339,7 +5376,9 @@ function isPrivateHost(hostname: string): boolean {
       const testUrl = new URL(`http://${hostname}`);
       const normalized = testUrl.hostname;
       if (normalized !== hostname) return isPrivateHost(normalized);
-    } catch { /* not parseable as host */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Store] const testUrl = new URL(`http://${hostname}`);:", e);
+    }
   } else if (/^0x[0-9a-f]+$/i.test(hostname)) {
     // Hex IP representations like 0x7f000001 → 127.0.0.1
     return true;
@@ -5363,7 +5402,8 @@ function normalizeBrowserUrl(input: string): string | null {
       const url = new URL(raw);
       if (isPrivateHost(url.hostname)) return null;
       return url.href;
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Store] const url = new URL(raw);:", e);
       return null;
     }
   }
@@ -5372,7 +5412,9 @@ function normalizeBrowserUrl(input: string): string | null {
   try {
     const testUrl = new URL(`https://${raw}`);
     if (isPrivateHost(testUrl.hostname)) return null;
-  } catch { /* not a valid hostname — treat as search query */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const testUrl = new URL(`https://${raw}`);:", e);
+  }
 
   if (/\s/.test(raw)) return "https://www.google.com/search?q=" + encodeURIComponent(raw);
   return "https://" + raw.replace(/^https?:\/\//i, "");
@@ -5405,7 +5447,7 @@ export const useUI = create<UIState>((set, get) => ({
     // Use event bus for cross-store communication instead of direct getState() calls
     // This breaks the circular dependency between useUI and useWorkspace
     if (prevMode !== mode) {
-      import("./events").then(({ eventBus }) => {
+      void import("./events").then(({ eventBus }) => {
         eventBus.emit("ui:view-mode-changed", { mode });
       });
     }
@@ -5528,7 +5570,7 @@ export const useUI = create<UIState>((set, get) => ({
 }));
 
 // Subscribe to workspace file opened events to switch to editor mode
-import("./events").then(({ eventBus }) => {
+void import("./events").then(({ eventBus }) => {
   eventBus.on("workspace:file-opened", () => {
     useUI.getState().setViewMode("editor");
   });
@@ -5571,11 +5613,14 @@ function loadAlwaysAllowed(): Record<string, true> {
       if (v === true) result[k] = true;
     }
     return result;
-  } catch { return {}; }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Store] const raw = localStorage.getItem(ALWAYS_ALLOWED_KE:", e);
+    return {};
+  }
 }
 
 function saveAlwaysAllowed(data: Record<string, true>) {
-  try { localStorage.setItem(ALWAYS_ALLOWED_KEY, JSON.stringify(data)); } catch { /* ignore */ }
+  try {    localStorage.setItem(ALWAYS_ALLOWED_KEY, JSON.stringify(data));} catch (e) { if (import.meta.env.DEV) console.warn("[Store] localStorage.setItem(ALWAYS_ALLOWED_KEY, JSON.stri", e); }
   // Also persist to .dalam/config.json for project-level persistence
   void persistAlwaysAllowedToDisk(data);
 }
@@ -5585,20 +5630,28 @@ async function persistAlwaysAllowedToDisk(data: Record<string, true>) {
     const ws = useWorkspace.getState();
     const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
     if (!activeWs) return;
-    const api = createDalamAPI();
-    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists, scopeSafeMkdir, scopeSafeReadFile, scopeSafeWriteFile } = await import("@/lib/dalamAPI");
     const dotDalam = joinPath(activeWs.path, ".dalam");
-    if (!(await exists(dotDalam))) await mkdir(dotDalam, { recursive: true });
+    if (!(await scopeSafeExists(dotDalam))) {
+      const created = await scopeSafeMkdir(dotDalam, { recursive: true });
+      if (!created) return;
+    }
     const configPath = joinPath(dotDalam, "config.json");
     let existing: WorkspaceConfig = {};
     try {
-      if (await exists(configPath)) {
-        existing = JSON.parse(await api.fs.readFile(configPath));
-      }
-    } catch { /* ignore */ }
+      const raw = await scopeSafeReadFile(configPath);
+      if (raw) existing = JSON.parse(raw);
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Store] Failed to read existing config:", e);
+    }
     existing.alwaysAllowed = data;
-    await api.fs.writeFile(configPath, JSON.stringify(existing, null, 2));
-  } catch (e) { console.warn("Failed to persist alwaysAllowed to disk:", e); }
+    await scopeSafeWriteFile(configPath, JSON.stringify(existing, null, 2));
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (!msg.includes("forbidden") && !msg.includes("scope")) {
+      console.warn("[Store] Failed to persist alwaysAllowed to disk:", e);
+    }
+  }
 }
 
 async function loadAlwaysAllowedFromDisk(): Promise<Record<string, true>> {
@@ -5606,15 +5659,21 @@ async function loadAlwaysAllowedFromDisk(): Promise<Record<string, true>> {
     const ws = useWorkspace.getState();
     const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
     if (!activeWs) return {};
-    const api = createDalamAPI();
-    const { exists } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists, scopeSafeReadFile } = await import("@/lib/dalamAPI");
     const configPath = joinPath(activeWs.path, ".dalam", "config.json");
-    if (await exists(configPath)) {
-      const content = await api.fs.readFile(configPath);
-      const config = JSON.parse(content);
-      return config.alwaysAllowed || {};
+    if (await scopeSafeExists(configPath)) {
+      const content = await scopeSafeReadFile(configPath);
+      if (content) {
+        const config = JSON.parse(content);
+        return config.alwaysAllowed || {};
+      }
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    if (!msg.includes("forbidden") && !msg.includes("scope") && import.meta.env.DEV) {
+      console.warn("[Store] Failed to load alwaysAllowed from disk:", e);
+    }
+  }
   return {};
 }
 
@@ -5785,7 +5844,9 @@ export const useQuestion = create<QuestionState>((set, _get) => {
         if (activeSessionId) {
           useChat.getState().setSessionStatus(activeSessionId, "running");
         }
-      } catch { /* store may be resetting */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[Store] const activeSessionId = useChat.getState().activeS:", e);
+      }
     },
   };
 });

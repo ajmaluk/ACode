@@ -17,7 +17,8 @@ export async function setupNativeMenus(): Promise<void> {
   if (platform() !== "mac") return;
 
   try {
-    const { Menu, Submenu, MenuItem, PredefinedMenuItem } = await import("@tauri-apps/api/menu");
+    const { Menu, Submenu, MenuItem, PredefinedMenuItem } =
+      await import("@tauri-apps/api/menu");
 
     // App menu (macOS standard — includes Quit)
     const appMenu = await Submenu.new({
@@ -121,7 +122,6 @@ export async function setupNativeMenus(): Promise<void> {
     const viewMenu = await Submenu.new({
       text: "View",
       items: [
-
         await MenuItem.new({
           id: "view.toggle-right-panel",
           text: "Toggle Right Panel",
@@ -253,13 +253,23 @@ export async function setupNativeMenus(): Promise<void> {
 
     // Build the full menu (on macOS, Menu can only contain Submenus)
     const menu = await Menu.new({
-      items: [appMenu, fileMenu, editMenu, viewMenu, goMenu, terminalMenu, windowMenu, helpMenu],
+      items: [
+        appMenu,
+        fileMenu,
+        editMenu,
+        viewMenu,
+        goMenu,
+        terminalMenu,
+        windowMenu,
+        helpMenu,
+      ],
     });
 
     await menu.setAsAppMenu();
     menuInitialized = true;
   } catch (err) {
-    if (import.meta.env.DEV) console.error("[NativeMenu] Failed to set up native menus:", err);
+    if (import.meta.env.DEV)
+      console.error("[NativeMenu] Failed to set up native menus:", err);
   }
 }
 
@@ -268,5 +278,7 @@ export async function setupNativeMenus(): Promise<void> {
  * This bridges native menu clicks to the React app.
  */
 function emitMenuAction(actionId: string): void {
-  window.dispatchEvent(new CustomEvent("native-menu-action", { detail: { actionId } }));
+  window.dispatchEvent(
+    new CustomEvent("native-menu-action", { detail: { actionId } }),
+  );
 }

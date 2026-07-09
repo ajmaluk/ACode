@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resetSafetyTimer, extendSafetyTimerForApproval, SAFETY_TIMEOUT_MS, TOOL_APPROVAL_TIMEOUT_MS } from "../safetyTimer";
+import {
+  resetSafetyTimer,
+  extendSafetyTimerForApproval,
+  SAFETY_TIMEOUT_MS,
+  TOOL_APPROVAL_TIMEOUT_MS,
+} from "../safetyTimer";
 import type { ChatSessionSummary, ChatMessage } from "@dalam/shared-types";
 
 vi.stubGlobal("crypto", {
@@ -100,7 +105,9 @@ describe("safetyTimer", () => {
     });
 
     it("triggers timeout when stream is active after timeout period", () => {
-      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const consoleWarn = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
       const { get, set } = createDefaultState();
 
       resetSafetyTimer(get, set);
@@ -110,7 +117,9 @@ describe("safetyTimer", () => {
     });
 
     it("does NOT trigger timeout when streaming stops", () => {
-      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const consoleWarn = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
       let isStreaming = true;
 
       const stateGetter = (): MutableTimerState => ({
@@ -139,7 +148,9 @@ describe("safetyTimer", () => {
 
   describe("extendSafetyTimerForApproval", () => {
     it("creates a timer with 10min timeout for tool-approval mode", () => {
-      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const consoleWarn = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
       const { get, set } = createDefaultState();
 
       extendSafetyTimerForApproval(get, set);
@@ -147,7 +158,9 @@ describe("safetyTimer", () => {
       vi.advanceTimersByTime(SAFETY_TIMEOUT_MS + 1000);
       expect(consoleWarn).not.toHaveBeenCalled();
 
-      vi.advanceTimersByTime(TOOL_APPROVAL_TIMEOUT_MS - SAFETY_TIMEOUT_MS + 1000);
+      vi.advanceTimersByTime(
+        TOOL_APPROVAL_TIMEOUT_MS - SAFETY_TIMEOUT_MS + 1000,
+      );
       expect(consoleWarn).toHaveBeenCalled();
       expect(consoleWarn.mock.calls[0][0]).toContain("tool-approval");
     });
@@ -193,7 +206,9 @@ describe("safetyTimer", () => {
 
       vi.advanceTimersByTime(SAFETY_TIMEOUT_MS + 1000);
 
-      expect(lastMessages.some((m) => m.content.includes("Stream timed out"))).toBe(true);
+      expect(
+        lastMessages.some((m) => m.content.includes("Stream timed out")),
+      ).toBe(true);
     });
 
     it("replaces old timer with new one on subsequent resets", () => {
@@ -235,7 +250,7 @@ describe("safetyTimer", () => {
 
       const systemMsg = capturedMessages.find((m) => m.role === "system");
       expect(systemMsg).toBeDefined();
-      expect(systemMsg!.content).toContain("120 seconds");
+      expect(systemMsg!.content).toContain("300 seconds");
     });
 
     it("clears pending tool calls and activities on timeout", () => {

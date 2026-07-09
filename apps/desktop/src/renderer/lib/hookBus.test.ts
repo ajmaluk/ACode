@@ -56,7 +56,9 @@ describe("hookBus", () => {
   });
 
   it("catches handler errors without throwing", async () => {
-    const failingHandler = () => { throw new Error("boom"); };
+    const failingHandler = () => {
+      throw new Error("boom");
+    };
     const goodHandler = vi.fn();
     const unsub1 = hookBus.on("PostToolUse", failingHandler);
     const unsub2 = hookBus.on("PostToolUse", goodHandler);

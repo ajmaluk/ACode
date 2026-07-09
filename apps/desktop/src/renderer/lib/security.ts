@@ -29,7 +29,9 @@ export function isPrivateHost(hostname: string): boolean {
       const testUrl = new URL(`http://${hostname}`);
       const normalized = testUrl.hostname;
       if (normalized !== hostname) return isPrivateHost(normalized);
-    } catch { /* not parseable as host */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Security] Failed to parse hostname for SSRF check:", hostname, e);
+    }
   } else if (/^0x[0-9a-f]+$/i.test(hostname)) {
     return true; // Hex IP like 0x7f000001
   } else if (/^\d+$/.test(hostname)) {
@@ -46,8 +48,9 @@ export function validateMcpUrl(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
-  } catch {
-    throw new Error("Invalid MCP server URL");
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Security] Invalid URL for MCP validation:", url, e);
+    throw new Error("Invalid MCP server URL", { cause: e });
   }
 
   if (!["http:", "https:"].includes(parsed.protocol)) {
@@ -85,7 +88,7 @@ export function logPermission(entry: PermissionAuditEntry): void {
 /** Get the audit log, optionally filtered by session ID. */
 export function getAuditLog(sessionId?: string): PermissionAuditEntry[] {
   if (sessionId) {
-    return _auditLog.filter(e => e.sessionId === sessionId);
+    return _auditLog.filter((e) => e.sessionId === sessionId);
   }
   return [..._auditLog];
 }

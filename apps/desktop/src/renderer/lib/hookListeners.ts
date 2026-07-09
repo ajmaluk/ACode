@@ -16,7 +16,7 @@
  */
 
 import { hookBus } from "./hookBus";
-import { createDalamAPI, getActiveProvider, corsFetch } from "./dalamAPI";
+import { getActiveProvider, corsFetch } from "./dalamAPI";
 import type {
   SessionStartEvent,
   UserPromptSubmitEvent,
@@ -71,7 +71,7 @@ function cleanupStaleStats(): void {
     const stats = sessionStats.get(sessionId);
     if (!stats) continue;
     // Session is stale if no activity for >10 minutes
-    const isIdle = (now - stats.lastActivityAt) > STALE_THRESHOLD_MS;
+    const isIdle = now - stats.lastActivityAt > STALE_THRESHOLD_MS;
     if (isIdle) {
       sessionStats.delete(sessionId);
     }
@@ -102,7 +102,11 @@ function onPostToolUse(event: PostToolUseEvent): void {
   toolStats.totalMs += event.durationMs;
   if (event.error) toolStats.errors++;
 
-  if (import.meta.env.DEV) console.log(`[ToolUse] ${event.toolName} | ${event.durationMs}ms | session: ${event.sessionId.slice(0, 8)}` + (event.error ? ` | ERROR: ${event.error}` : ""));
+  if (import.meta.env.DEV)
+    console.log(
+      `[ToolUse] ${event.toolName} | ${event.durationMs}ms | session: ${event.sessionId.slice(0, 8)}` +
+        (event.error ? ` | ERROR: ${event.error}` : ""),
+    );
 }
 
 // ─── 2. Auto-Save Context on SessionEnd ───
@@ -122,14 +126,15 @@ async function persistSessionStats(event: SessionEndEvent): Promise<void> {
 
   try {
     const { useWorkspace } = await import("../store/useAppStore");
-    const workspace = useWorkspace.getState().workspaces.find(
-      (w) => w.id === useWorkspace.getState().activeWorkspaceId
-    );
+    const workspace = useWorkspace
+      .getState()
+      .workspaces.find(
+        (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+      );
     if (!workspace) return;
 
-    const api = createDalamAPI();
+    const { scopeSafeExists, scopeSafeReadFile, scopeSafeWriteFile } = await import("./dalamAPI");
     const summaryPath = `${workspace.path}/.dalam/session-history.json`;
-    const { exists } = await import("@tauri-apps/plugin-fs");
 
     let history: Array<{
       sessionId: string;
@@ -141,11 +146,13 @@ async function persistSessionStats(event: SessionEndEvent): Promise<void> {
       toolErrors: number;
     }> = [];
 
-    if (await exists(summaryPath)) {
+    if (await scopeSafeExists(summaryPath)) {
       try {
-        const raw = await api.fs.readFile(summaryPath);
-        history = JSON.parse(raw);
-      } catch { /* start fresh */ }
+        const raw = await scopeSafeReadFile(summaryPath);
+        if (raw) history = JSON.parse(raw);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[HookListener] Failed to read existing session history:", e);
+      }
     }
 
     history.push({
@@ -159,9 +166,12 @@ async function persistSessionStats(event: SessionEndEvent): Promise<void> {
     });
 
     history = history.slice(-50);
-    await api.fs.writeFile(summaryPath, JSON.stringify(history, null, 2));
+    await scopeSafeWriteFile(summaryPath, JSON.stringify(history, null, 2));
   } catch (e) {
-    console.warn("[HookListener] Failed to persist session summary:", e);
+    const msg = (e as Error)?.message ?? String(e);
+    if (!msg.includes("forbidden") && !msg.includes("scope")) {
+      console.warn("[HookListener] Failed to persist session summary:", e);
+    }
   }
 
   sessionStats.delete(event.sessionId);
@@ -174,7 +184,8 @@ async function persistSessionStats(event: SessionEndEvent): Promise<void> {
 async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
   try {
     const { useChat, useWorkspace } = await import("../store/useAppStore");
-    const { extractMemoriesFromExchange, extractMemoriesWithLLM, saveMemory } = await import("./memoryStore");
+    const { extractMemoriesFromExchange, extractMemoriesWithLLM, saveMemory } =
+      await import("./memoryStore");
 
     const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
     if (!sessionMessages || sessionMessages.length < 2) return;
@@ -182,14 +193,20 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
     // Find the last user message
     let lastUserIdx = -1;
     for (let i = sessionMessages.length - 1; i >= 0; i--) {
-      if (sessionMessages[i].role === "user") { lastUserIdx = i; break; }
+      if (sessionMessages[i].role === "user") {
+        lastUserIdx = i;
+        break;
+      }
     }
     if (lastUserIdx < 0) return;
 
     // Find the assistant message after it
     let assistantIdx = -1;
     for (let i = lastUserIdx + 1; i < sessionMessages.length; i++) {
-      if (sessionMessages[i].role === "assistant") { assistantIdx = i; break; }
+      if (sessionMessages[i].role === "assistant") {
+        assistantIdx = i;
+        break;
+      }
     }
     if (assistantIdx < 0) return;
 
@@ -198,9 +215,11 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
 
     if (userInput.length + assistantResponse.length < 200) return;
 
-    const workspace = useWorkspace.getState().workspaces.find(
-      (w) => w.id === useWorkspace.getState().activeWorkspaceId
-    );
+    const workspace = useWorkspace
+      .getState()
+      .workspaces.find(
+        (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+      );
     if (!workspace) return;
 
     let entries = extractMemoriesFromExchange(userInput, assistantResponse, {
@@ -213,8 +232,12 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
         const { settings, config } = getActiveProvider();
         const isAnthropic = config.apiFormat === "anthropic";
         const fetchLLM = async (prompt: string): Promise<string> => {
-          const url = config.baseUrl.replace(/\/+$/, "") + (isAnthropic ? "/v1/messages" : "/chat/completions");
-          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          const url =
+            config.baseUrl.replace(/\/+$/, "") +
+            (isAnthropic ? "/v1/messages" : "/chat/completions");
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+          };
           if (isAnthropic) {
             headers["x-api-key"] = config.apiKey;
             headers["anthropic-version"] = "2023-06-01";
@@ -222,28 +245,63 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
             headers["Authorization"] = `Bearer ${config.apiKey}`;
           }
           const body = isAnthropic
-            ? { model: settings.selectedModel, system: "You are a memory extraction assistant.", messages: [{ role: "user", content: prompt }], max_tokens: 1000 }
-            : { model: settings.selectedModel, messages: [{ role: "system", content: "You are a memory extraction assistant." }, { role: "user", content: prompt }], max_tokens: 1000 };
-          const resp = await corsFetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-          if (!resp.ok) throw new Error(`LLM extraction failed: HTTP ${resp.status}`);
+            ? {
+                model: settings.selectedModel,
+                system: "You are a memory extraction assistant.",
+                messages: [{ role: "user", content: prompt }],
+                max_tokens: 1000,
+              }
+            : {
+                model: settings.selectedModel,
+                messages: [
+                  {
+                    role: "system",
+                    content: "You are a memory extraction assistant.",
+                  },
+                  { role: "user", content: prompt },
+                ],
+                max_tokens: 1000,
+              };
+          const resp = await corsFetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+          if (!resp.ok)
+            throw new Error(`LLM extraction failed: HTTP ${resp.status}`);
           const json = await resp.json();
-          return isAnthropic ? (json.content?.[0]?.text || "") : (json.choices?.[0]?.message?.content || "");
+          return isAnthropic
+            ? json.content?.[0]?.text || ""
+            : json.choices?.[0]?.message?.content || "";
         };
-        const llmResult = await extractMemoriesWithLLM(userInput, assistantResponse, fetchLLM, {
-          sessionId: event.sessionId, maxEntries: 3, workspacePath: workspace.path,
-        });
+        const llmResult = await extractMemoriesWithLLM(
+          userInput,
+          assistantResponse,
+          fetchLLM,
+          {
+            sessionId: event.sessionId,
+            maxEntries: 3,
+            workspacePath: workspace.path,
+          },
+        );
         // LLM extraction already saved entries when workspacePath was provided,
         // so only track the count — don't double-save via the outer loop.
         if (llmResult.saved > 0) return;
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[HookListener] LLM memory extraction failed, falling back to heuristic:", e);
         entries = extractMemoriesFromExchange(userInput, assistantResponse, {
-          sessionId: event.sessionId, maxEntries: 3,
+          sessionId: event.sessionId,
+          maxEntries: 3,
         });
       }
     }
 
     for (const entry of entries) {
-      try { await saveMemory(entry, workspace.path); } catch { /* skip */ }
+      try {
+        await saveMemory(entry, workspace.path);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[HookListener] Failed to save extracted memory:", e);
+      }
     }
   } catch (e) {
     console.warn("[HookListener] Failed to auto-extract memories:", e);
@@ -255,11 +313,15 @@ async function autoExtractMemories(event: SessionEndEvent): Promise<void> {
  */
 async function runMemoryMaintenanceIfNeeded(): Promise<void> {
   maintenanceCounter++;
-  if (maintenanceCounter >= CTX.MEMORY_MAINTAIN_INTERVAL && !maintenanceRunning) {
+  if (
+    maintenanceCounter >= CTX.MEMORY_MAINTAIN_INTERVAL &&
+    !maintenanceRunning
+  ) {
     maintenanceCounter = 0;
     maintenanceRunning = true;
     try {
-      const { runMaintenance, processPendingWrites } = await import("./memoryStore");
+      const { runMaintenance, processPendingWrites } =
+        await import("./memoryStore");
       await processPendingWrites(); // Retry failed markdown writes
       await runMaintenance();
     } catch (e) {
@@ -274,25 +336,37 @@ async function runMemoryMaintenanceIfNeeded(): Promise<void> {
  * Auto-crystallize a skill from the session content.
  * Non-blocking — fires and forgets.
  */
-async function triggerSkillCrystallization(event: SessionEndEvent): Promise<void> {
+async function triggerSkillCrystallization(
+  event: SessionEndEvent,
+): Promise<void> {
   try {
     const { useWorkspace } = await import("../store/useAppStore");
-    const workspace = useWorkspace.getState().workspaces.find(
-      (w) => w.id === useWorkspace.getState().activeWorkspaceId
-    );
+    const workspace = useWorkspace
+      .getState()
+      .workspaces.find(
+        (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+      );
     if (!workspace) return;
 
     const { proposeSkillFromSession } = await import("./skillCrystallizer");
     const { useToasts } = await import("../components/ui/toastStore");
     const pushToast = useToasts.getState().push;
     proposeSkillFromSession(
-      event.sessionId, workspace.path, false,
-      (t: Parameters<typeof pushToast>[0]) => pushToast(t)
+      event.sessionId,
+      workspace.path,
+      false,
+      (t: Parameters<typeof pushToast>[0]) => pushToast(t),
     ).catch((err: unknown) => {
-      console.warn("[HookListener] Background skill crystallization failed:", err);
+      console.warn(
+        "[HookListener] Background skill crystallization failed:",
+        err,
+      );
     });
   } catch (e) {
-    console.warn("[HookListener] Failed to assess session for skill crystallization:", e);
+    console.warn(
+      "[HookListener] Failed to assess session for skill crystallization:",
+      e,
+    );
   }
 }
 
@@ -305,7 +379,15 @@ async function runGeneReflection(event: SessionEndEvent): Promise<void> {
     const messages = useChat.getState().sessionMessages[event.sessionId] || [];
     if (messages.length < 4) return;
 
-    const { reflectOnSession, loadGenePool, addGene, saveGenePool, evolveGenes, createGeneId, migrateLocalStorageGenes } = await import("./genes");
+    const {
+      reflectOnSession,
+      loadGenePool,
+      addGene,
+      saveGenePool,
+      evolveGenes,
+      createGeneId,
+      migrateLocalStorageGenes,
+    } = await import("./genes");
 
     // Migrate any legacy localStorage genes on first run
     await migrateLocalStorageGenes();
@@ -366,12 +448,13 @@ async function onSessionEnd(event: SessionEndEvent): Promise<void> {
 function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
   const historySize = event.conversationHistory.length;
   const hasAttachments = event.attachments.length > 0;
-  if (import.meta.env.DEV) console.log(
-    `[Prompt] ${event.sessionId.slice(0, 8)} | ` +
-    `${event.prompt.length} chars | ` +
-    `${historySize} msgs` +
-    (hasAttachments ? ` | ${event.attachments.length} attachment(s)` : "")
-  );
+  if (import.meta.env.DEV)
+    console.log(
+      `[Prompt] ${event.sessionId.slice(0, 8)} | ` +
+        `${event.prompt.length} chars | ` +
+        `${historySize} msgs` +
+        (hasAttachments ? ` | ${event.attachments.length} attachment(s)` : ""),
+    );
 }
 
 // ─── 4. Session Start Tracking (SessionStart) ───
@@ -379,10 +462,11 @@ function onUserPromptSubmit(event: UserPromptSubmitEvent): void {
  * Logs when a new session begins with context about the workspace and model.
  */
 function onSessionStart(event: SessionStartEvent): void {
-  if (import.meta.env.DEV) console.log(
-    `[SessionStart] ${event.sessionId.slice(0, 8)} | ` +
-    `model: ${event.model} | agent: ${event.agentName} | mode: ${event.mode}`
-  );
+  if (import.meta.env.DEV)
+    console.log(
+      `[SessionStart] ${event.sessionId.slice(0, 8)} | ` +
+        `model: ${event.model} | agent: ${event.agentName} | mode: ${event.mode}`,
+    );
 }
 
 // ─── 5. Stop Event (Turn Complete) ───
@@ -390,11 +474,12 @@ function onSessionStart(event: SessionStartEvent): void {
  * Logs when an LLM turn completes, with tool call counts.
  */
 function onStop(event: StopEvent): void {
-  if (import.meta.env.DEV) console.log(
-    `[TurnStop] ${event.sessionId} | ` +
-    `${event.messageCount} msgs | ` +
-    `${event.toolCallsExecuted} tool call(s)`
-  );
+  if (import.meta.env.DEV)
+    console.log(
+      `[TurnStop] ${event.sessionId} | ` +
+        `${event.messageCount} msgs | ` +
+        `${event.toolCallsExecuted} tool call(s)`,
+    );
 }
 
 // ─── 6. Session Title Generation ───
@@ -411,7 +496,10 @@ function generateSessionTitle(firstUserMessage: string): string {
   let title = firstUserMessage.split("\n")[0].trim();
 
   // Remove common prefixes
-  title = title.replace(/^(please|can you|could you|help me|I need to|I want to|fix|add|update|change|remove|delete|implement|create|write|build|refactor|debug|test|optimize|improve)\s+/i, "");
+  title = title.replace(
+    /^(please|can you|could you|help me|I need to|I want to|fix|add|update|change|remove|delete|implement|create|write|build|refactor|debug|test|optimize|improve)\s+/i,
+    "",
+  );
 
   // If still too long, truncate at word boundary
   if (title.length > MAX_TITLE_LENGTH) {
@@ -436,11 +524,13 @@ async function autoGenerateSessionTitle(event: SessionEndEvent): Promise<void> {
     if (!messages || messages.length < 2) return;
 
     // Find the first user message
-    const firstUserMsg = messages.find(m => m.role === "user");
+    const firstUserMsg = messages.find((m) => m.role === "user");
     if (!firstUserMsg) return;
 
     // Check if session already has a custom title
-    const session = useChat.getState().chatSessions.find(s => s.id === event.sessionId);
+    const session = useChat
+      .getState()
+      .chatSessions.find((s) => s.id === event.sessionId);
     if (session?.title && session.title !== "Untitled session") return;
 
     // Generate title from first user message
@@ -472,7 +562,8 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
 
   try {
     const { useChat, useWorkspace } = await import("../store/useAppStore");
-    const { extractMemoriesFromExchange, saveMemory } = await import("./memoryStore");
+    const { extractMemoriesFromExchange, saveMemory } =
+      await import("./memoryStore");
 
     const sessionMessages = useChat.getState().sessionMessages[event.sessionId];
     if (!sessionMessages || sessionMessages.length < 4) return;
@@ -480,13 +571,19 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
     // Get the last user-assistant exchange
     let lastUserIdx = -1;
     for (let i = sessionMessages.length - 1; i >= 0; i--) {
-      if (sessionMessages[i].role === "user") { lastUserIdx = i; break; }
+      if (sessionMessages[i].role === "user") {
+        lastUserIdx = i;
+        break;
+      }
     }
     if (lastUserIdx < 0) return;
 
     let assistantIdx = -1;
     for (let i = lastUserIdx + 1; i < sessionMessages.length; i++) {
-      if (sessionMessages[i].role === "assistant") { assistantIdx = i; break; }
+      if (sessionMessages[i].role === "assistant") {
+        assistantIdx = i;
+        break;
+      }
     }
     if (assistantIdx < 0) return;
 
@@ -495,9 +592,11 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
 
     if (userInput.length + assistantResponse.length < 200) return;
 
-    const workspace = useWorkspace.getState().workspaces.find(
-      (w) => w.id === useWorkspace.getState().activeWorkspaceId
-    );
+    const workspace = useWorkspace
+      .getState()
+      .workspaces.find(
+        (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+      );
     if (!workspace) return;
 
     // Extract memories using heuristics (no LLM call for speed)
@@ -509,13 +608,16 @@ async function onContextPressure(event: ContextPressureEvent): Promise<void> {
     for (const entry of entries) {
       try {
         await saveMemory(entry, workspace.path);
-      } catch { /* skip individual failures */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[HookListener] Failed to save context pressure memory:", e);
+      }
     }
 
     if (entries.length > 0) {
-      if (import.meta.env.DEV) console.log(
-        `[ContextPressure] Auto-saved ${entries.length} memory entries at ${Math.round(event.pressureRatio * 100)}% pressure`
-      );
+      if (import.meta.env.DEV)
+        console.log(
+          `[ContextPressure] Auto-saved ${entries.length} memory entries at ${Math.round(event.pressureRatio * 100)}% pressure`,
+        );
     }
   } catch (e) {
     console.warn("[ContextPressure] Failed to auto-save memories:", e);
@@ -546,5 +648,3 @@ export function registerHookListeners(): {
     },
   };
 }
-
-

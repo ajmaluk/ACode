@@ -2,7 +2,10 @@ import { CheckCircle2, XCircle, AlertTriangle, Info, X } from "lucide-react";
 import type { ToastKind } from "./toastTypes";
 import { useToasts } from "./toastStore";
 
-const KIND_STYLES: Record<ToastKind, { ring: string; text: string; icon: React.ReactNode; bar: string }> = {
+const KIND_STYLES: Record<
+  ToastKind,
+  { ring: string; text: string; icon: React.ReactNode; bar: string }
+> = {
   success: {
     ring: "border-l-dalam-git-added",
     text: "text-dalam-git-added",
@@ -33,7 +36,10 @@ export function Toaster() {
   const { toasts, dismiss } = useToasts();
 
   return (
-    <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 pointer-events-none" aria-live="polite">
+    <div
+      className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 pointer-events-none"
+      aria-live="polite"
+    >
       {toasts.map((t) => {
         const style = KIND_STYLES[t.kind];
         return (
@@ -61,11 +67,15 @@ export function Toaster() {
                           act.variant === "primary"
                             ? "bg-dalam-accent-primary text-white hover:bg-opacity-90"
                             : act.variant === "danger"
-                            ? "bg-dalam-git-deleted text-white hover:bg-opacity-90"
-                            : "bg-dalam-bg-hover text-dalam-text-primary hover:bg-opacity-80"
+                              ? "bg-dalam-git-deleted text-white hover:bg-opacity-90"
+                              : "bg-dalam-bg-hover text-dalam-text-primary hover:bg-opacity-80"
                         }`}
                         onClick={() => {
-                          try { act.onClick(); } catch { /* swallow */ }
+                          try {
+                            act.onClick();
+                          } catch (e) {
+                            if (import.meta.env.DEV) console.warn("[Toaster] Action onClick failed:", e);
+                          }
                           dismiss(t.id);
                         }}
                       >
@@ -75,15 +85,21 @@ export function Toaster() {
                   </div>
                 )}
               </div>
-              <button className="btn-icon" onClick={() => dismiss(t.id)} aria-label="Dismiss notification">
+              <button
+                className="btn-icon"
+                onClick={() => dismiss(t.id)}
+                aria-label="Dismiss notification"
+              >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className={`h-0.5 ${style.bar} animate-progress`} style={{ animationDuration: `${t.durationMs ?? 3500}ms` }} />
+            <div
+              className={`h-0.5 ${style.bar} animate-progress`}
+              style={{ animationDuration: `${t.durationMs ?? 3500}ms` }}
+            />
           </div>
         );
       })}
     </div>
   );
 }
-

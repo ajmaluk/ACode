@@ -77,10 +77,26 @@ function openDB(): Promise<IDBDatabase> {
  */
 async function migrateFromLocalStorage(): Promise<void> {
   const keys = [
-    { lsKey: "dalam.chatSessions.v1", storeName: "sessions" as ObjectStoreName, transform: (v: unknown) => ({ id: "all", data: v }) },
-    { lsKey: "dalam.sessionMessages.v1", storeName: "messages" as ObjectStoreName, transform: (v: unknown) => ({ id: "all", data: v }) },
-    { lsKey: "dalam.sessionVersions.v1", storeName: "versions" as ObjectStoreName, transform: (v: unknown) => ({ id: "all", data: v }) },
-    { lsKey: "dalam.compactionSummaries.v1", storeName: "compaction" as ObjectStoreName, transform: (v: unknown) => ({ sessionId: "all", data: v }) },
+    {
+      lsKey: "dalam.chatSessions.v1",
+      storeName: "sessions" as ObjectStoreName,
+      transform: (v: unknown) => ({ id: "all", data: v }),
+    },
+    {
+      lsKey: "dalam.sessionMessages.v1",
+      storeName: "messages" as ObjectStoreName,
+      transform: (v: unknown) => ({ id: "all", data: v }),
+    },
+    {
+      lsKey: "dalam.sessionVersions.v1",
+      storeName: "versions" as ObjectStoreName,
+      transform: (v: unknown) => ({ id: "all", data: v }),
+    },
+    {
+      lsKey: "dalam.compactionSummaries.v1",
+      storeName: "compaction" as ObjectStoreName,
+      transform: (v: unknown) => ({ sessionId: "all", data: v }),
+    },
   ];
 
   const db = await openDB();
@@ -134,7 +150,10 @@ async function ensureDB(): Promise<IDBDatabase> {
  * Returns null for both "not found" and errors (backward compatible).
  * Logs warnings for actual errors to aid debugging.
  */
-export async function idbGet(storeName: ObjectStoreName, key: string): Promise<unknown> {
+export async function idbGet(
+  storeName: ObjectStoreName,
+  key: string,
+): Promise<unknown> {
   try {
     const db = await ensureDB();
     return new Promise((resolve) => {
@@ -143,12 +162,18 @@ export async function idbGet(storeName: ObjectStoreName, key: string): Promise<u
       const request = store.get(key);
       request.onsuccess = () => resolve(request.result ?? null);
       request.onerror = () => {
-        console.warn(`[IndexedDB] Error reading key "${key}" from ${storeName}:`, request.error);
+        console.warn(
+          `[IndexedDB] Error reading key "${key}" from ${storeName}:`,
+          request.error,
+        );
         resolve(null);
       };
     });
   } catch (err) {
-    console.warn(`[Storage] IndexedDB read failed for ${storeName}/${key}:`, err);
+    console.warn(
+      `[Storage] IndexedDB read failed for ${storeName}/${key}:`,
+      err,
+    );
     return null;
   }
 }
@@ -169,18 +194,35 @@ export async function idbPut(
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
       store.put(value);
-      tx.oncomplete = () => { if (!settled) { settled = true; resolve(); } };
+      tx.oncomplete = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
       tx.onerror = () => {
-        console.warn(`[IndexedDB] Transaction error writing to ${storeName}:`, tx.error);
-        if (!settled) { settled = true; reject(tx.error); }
+        console.warn(
+          `[IndexedDB] Transaction error writing to ${storeName}:`,
+          tx.error,
+        );
+        if (!settled) {
+          settled = true;
+          reject(tx.error);
+        }
       };
       tx.onabort = () => {
         console.warn(`[IndexedDB] Transaction aborted writing to ${storeName}`);
-        if (!settled) { settled = true; reject(new Error(`Transaction aborted for ${storeName}`)); }
+        if (!settled) {
+          settled = true;
+          reject(new Error(`Transaction aborted for ${storeName}`));
+        }
       };
     } catch (e) {
       console.warn(`[IndexedDB] Failed to write to ${storeName}:`, e);
-      if (!settled) { settled = true; reject(e); }
+      if (!settled) {
+        settled = true;
+        reject(e);
+      }
     }
   });
 }
@@ -219,11 +261,16 @@ export async function getStorageUsage(): Promise<{
   usage: number;
   quota: number;
 } | null> {
-  if (typeof navigator !== "undefined" && "storage" in navigator && "estimate" in navigator.storage) {
+  if (
+    typeof navigator !== "undefined" &&
+    "storage" in navigator &&
+    "estimate" in navigator.storage
+  ) {
     try {
       const estimate = await navigator.storage.estimate();
       return { usage: estimate.usage ?? 0, quota: estimate.quota ?? 0 };
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Storage] Failed to estimate storage usage:", e);
       return null;
     }
   }

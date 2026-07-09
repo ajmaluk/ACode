@@ -25,11 +25,16 @@ export function GoToLine({ maxLine, onGoToLine, onClose }: GoToLineProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
+      onClick={onClose}
+    >
       <div
         className="w-72 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl overflow-hidden animate-fade-in"
         onClick={(e) => e.stopPropagation()}
-        role="dialog" aria-modal="true" aria-label="Go to line"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Go to line"
       >
         <div className="flex items-center gap-2 px-3 py-2 border-b border-dalam-border-primary">
           <Hash className="w-4 h-4 text-dalam-text-muted flex-shrink-0" />
@@ -47,7 +52,10 @@ export function GoToLine({ maxLine, onGoToLine, onClose }: GoToLineProps) {
             min={1}
             max={maxLine}
           />
-          <button onClick={onClose} className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors">
+          <button
+            onClick={onClose}
+            className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>

@@ -24,21 +24,21 @@
 // ─── Proposal Types ──────────────────────────────────────────
 
 export type DreamProposalType =
-  | "purge-stale"          // Hard-delete already-flagged stale memories
-  | "mark-stale"           // Mark memories stale because source files missing
-  | "date-adjust"          // Rewrite relative dates to absolute dates
-  | "deduplicate-merge"    // Merge two similar memories via LLM
-  | "consolidate-skill"    // Merge overlapping skill files
-  | "re-score"             // Promote/demote memories based on access patterns
-  | "budget-prune";        // Prune low-quality memories to stay under budget
+  | "purge-stale" // Hard-delete already-flagged stale memories
+  | "mark-stale" // Mark memories stale because source files missing
+  | "date-adjust" // Rewrite relative dates to absolute dates
+  | "deduplicate-merge" // Merge two similar memories via LLM
+  | "consolidate-skill" // Merge overlapping skill files
+  | "re-score" // Promote/demote memories based on access patterns
+  | "budget-prune"; // Prune low-quality memories to stay under budget
 
 export type DreamProposalStatus =
-  | "pending"      // Created but not yet scored
-  | "scored"       // Scored, awaiting action decision
-  | "auto-accept"  // High-score, will be auto-applied
-  | "user-review"  // Medium-score, queued for user decision
-  | "rejected"     // Low-score or user-declined
-  | "applied";     // Changes have been applied
+  | "pending" // Created but not yet scored
+  | "scored" // Scored, awaiting action decision
+  | "auto-accept" // High-score, will be auto-applied
+  | "user-review" // Medium-score, queued for user decision
+  | "rejected" // Low-score or user-declined
+  | "applied"; // Changes have been applied
 
 export interface DreamProposal {
   id: string;
@@ -98,14 +98,15 @@ export function scoreProposal(
     avgAccessCount?: number;
     /** Total number of entries in the category (for impact ratio) */
     totalInCategory?: number;
-  } = {}
+  } = {},
 ): number {
   let score = 5; // Baseline
 
   // ── Impact score ────────────────────────────────────────────
-  const impactRatio = context.totalInCategory && context.totalInCategory > 0
-    ? affectedCount / context.totalInCategory
-    : 0;
+  const impactRatio =
+    context.totalInCategory && context.totalInCategory > 0
+      ? affectedCount / context.totalInCategory
+      : 0;
 
   if (type === "purge-stale") {
     // Purging already-flagged stale entries is always safe and beneficial
@@ -141,7 +142,10 @@ export function scoreProposal(
 
   // ── Freshness adjustment ────────────────────────────────────
   if (context.avgAccessCount !== undefined) {
-    score += context.avgAccessCount >= 3 ? WEIGHTS.FRESHNESS_HIGH : WEIGHTS.FRESHNESS_LOW;
+    score +=
+      context.avgAccessCount >= 3
+        ? WEIGHTS.FRESHNESS_HIGH
+        : WEIGHTS.FRESHNESS_LOW;
   }
 
   return Math.max(0, Math.min(10, Math.round(score)));
@@ -150,7 +154,7 @@ export function scoreProposal(
 // ─── Decision function ───────────────────────────────────────
 
 export function decideProposalAction(
-  score: number
+  score: number,
 ): "auto-accept" | "user-review" | "reject" {
   if (score >= SCORE_THRESHOLDS.AUTO_ACCEPT) return "auto-accept";
   if (score >= SCORE_THRESHOLDS.USER_REVIEW) return "user-review";
@@ -171,7 +175,7 @@ export function createProposal(
     avgAgeDays?: number;
     avgAccessCount?: number;
     totalInCategory?: number;
-  }
+  },
 ): DreamProposal {
   _proposalCounter++;
   const id = `dp-${Date.now().toString(36)}-${_proposalCounter}`;
@@ -184,7 +188,12 @@ export function createProposal(
     description,
     details,
     score,
-    status: action === "auto-accept" ? "auto-accept" : action === "user-review" ? "user-review" : "rejected",
+    status:
+      action === "auto-accept"
+        ? "auto-accept"
+        : action === "user-review"
+          ? "user-review"
+          : "rejected",
     createdAt: Date.now(),
     affectedCount,
   };
@@ -209,7 +218,7 @@ export interface PipelineResult {
 export async function processProposals(
   proposals: DreamProposal[],
   applyFn: (proposal: DreamProposal) => Promise<void>,
-  notifyFn?: (proposal: DreamProposal) => void
+  notifyFn?: (proposal: DreamProposal) => void,
 ): Promise<PipelineResult> {
   const result: PipelineResult = {
     autoAccepted: [],
@@ -226,7 +235,10 @@ export async function processProposals(
           proposal.appliedAt = Date.now();
           result.autoAccepted.push(proposal);
         } catch (err) {
-          console.warn(`[DreamProposal] Auto-apply failed for ${proposal.id}:`, err);
+          console.warn(
+            `[DreamProposal] Auto-apply failed for ${proposal.id}:`,
+            err,
+          );
           proposal.status = "rejected";
           result.rejected.push(proposal);
         }
@@ -258,20 +270,32 @@ export function formatPipelineSummary(result: PipelineResult): string {
 
   if (result.autoAccepted.length > 0) {
     const summaries = result.autoAccepted
-      .map(p => `  ✓ ${p.description} (score: ${p.score}, ${p.affectedCount} items)`)
+      .map(
+        (p) =>
+          `  ✓ ${p.description} (score: ${p.score}, ${p.affectedCount} items)`,
+      )
       .join("\n");
-    parts.push(`Auto-applied ${result.autoAccepted.length} proposal(s):\n${summaries}`);
+    parts.push(
+      `Auto-applied ${result.autoAccepted.length} proposal(s):\n${summaries}`,
+    );
   }
 
   if (result.queuedForReview.length > 0) {
     const summaries = result.queuedForReview
-      .map(p => `  ? ${p.description} (score: ${p.score}, ${p.affectedCount} items)`)
+      .map(
+        (p) =>
+          `  ? ${p.description} (score: ${p.score}, ${p.affectedCount} items)`,
+      )
       .join("\n");
-    parts.push(`Queued ${result.queuedForReview.length} proposal(s) for review:\n${summaries}`);
+    parts.push(
+      `Queued ${result.queuedForReview.length} proposal(s) for review:\n${summaries}`,
+    );
   }
 
   if (result.rejected.length > 0) {
-    parts.push(`Rejected ${result.rejected.length} low-scoring proposal(s) silently.`);
+    parts.push(
+      `Rejected ${result.rejected.length} low-scoring proposal(s) silently.`,
+    );
   }
 
   return parts.join("\n\n") || "No proposals generated.";

@@ -7,7 +7,10 @@
  * We only use `execute()` and `close()` from the driver.
  */
 interface SqlDatabase {
-  execute(sql: string, bindValues?: unknown[]): Promise<{ rowsAffected: number }>;
+  execute(
+    sql: string,
+    bindValues?: unknown[],
+  ): Promise<{ rowsAffected: number }>;
   select(sql: string, bindValues?: unknown[]): Promise<unknown[]>;
   close(): Promise<void>;
 }
@@ -160,7 +163,9 @@ export function normalizeDbPath(workspacePath: string): string {
  * The database file is stored at <workspacePath>/.dalam/project.db.
  * This file should be gitignored — it's a local cache.
  */
-export async function initDatabase(workspacePath: string): Promise<SqlDatabase | null> {
+export async function initDatabase(
+  workspacePath: string,
+): Promise<SqlDatabase | null> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
   // Prevent concurrent init calls from leaking connections
   // Only await if the same workspace is being initialized
@@ -181,9 +186,14 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
 
   let Database: { load(path: string): Promise<SqlDatabase> };
   try {
-    Database = (await import("@tauri-apps/plugin-sql")).default as unknown as { load(path: string): Promise<SqlDatabase> };
+    Database = (await import("@tauri-apps/plugin-sql")).default as unknown as {
+      load(path: string): Promise<SqlDatabase>;
+    };
   } catch (e) {
-    console.warn("[Database] SQLite plugin not available, memory search disabled:", e);
+    console.warn(
+      "[Database] SQLite plugin not available, memory search disabled:",
+      e,
+    );
     return null;
   }
 
@@ -191,18 +201,28 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
 
   // Ensure .dalam directory exists before opening database
   try {
-    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists, scopeSafeMkdir } = await import("./dalamAPI");
     // Use normalizeDbPath's internal logic: backslash -> /, then strip the sqlite: prefix
     // to get the canonical path for filesystem operations
     const dbPathForDir = normalizeDbPath(workspacePath).replace(/^sqlite:/, "");
     const dotDalam = dbPathForDir.replace(/\/project\.db$/, "");
-    if (!(await exists(dotDalam))) {
-      await mkdir(dotDalam, { recursive: true });
+    if (!(await scopeSafeExists(dotDalam))) {
+      const created = await scopeSafeMkdir(dotDalam, { recursive: true });
+      if (!created) {
+        console.debug(
+          "[Database] Workspace inaccessible, memory disabled:",
+          workspacePath,
+        );
+        return null;
+      }
     }
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     if (msg.includes("forbidden") || msg.includes("scope")) {
-      console.debug("[Database] Workspace inaccessible, memory disabled:", workspacePath);
+      console.debug(
+        "[Database] Workspace inaccessible, memory disabled:",
+        workspacePath,
+      );
       return null;
     }
     // mkdir may fail if already exists or permissions — proceed anyway
@@ -215,7 +235,9 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     } catch (e) {
       const errMsg = (e as Error)?.message ?? String(e);
       if (errMsg.includes("No database driver") || errMsg.includes("driver")) {
-        console.warn("[Database] SQLite driver not enabled. Add `features = [\"sqlite\"]` to tauri-plugin-sql in Cargo.toml.");
+        console.warn(
+          '[Database] SQLite driver not enabled. Add `features = ["sqlite"]` to tauri-plugin-sql in Cargo.toml.',
+        );
       } else {
         console.warn("[Database] Failed to load database at", dbPath, ":", e);
       }
@@ -253,12 +275,24 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
     `);
 
     // Create indexes individually
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_category ON memories(category);`);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_tier     ON memories(tier);`);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_stale    ON memories(stale);`);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_genes_workspace ON genes(workspace_id);`);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_genes_confidence ON genes(confidence);`);
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_mem_category ON memories(category);`,
+    );
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_mem_tier     ON memories(tier);`,
+    );
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_mem_stale    ON memories(stale);`,
+    );
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`,
+    );
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_genes_workspace ON genes(workspace_id);`,
+    );
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_genes_confidence ON genes(confidence);`,
+    );
 
     // Code index triggers
     await db.execute(`
@@ -281,8 +315,12 @@ export async function initDatabase(workspacePath: string): Promise<SqlDatabase |
         VALUES (new.rowid, new.id, new.file_path, new.file_name, new.content, new.language);
       END;
     `);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_code_path ON code_index(file_path);`);
-    await db.execute(`CREATE INDEX IF NOT EXISTS idx_code_lang ON code_index(language);`);
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_code_path ON code_index(file_path);`,
+    );
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_code_lang ON code_index(language);`,
+    );
 
     return db;
   };
@@ -335,8 +373,8 @@ export async function closeDatabase(): Promise<void> {
   if (dbInstance) {
     try {
       await dbInstance.close();
-    } catch {
-      // close() may not exist on older plugin versions
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Database] Failed to close database (may not exist on older plugin versions):", e);
     }
     dbInstance = null;
     currentWorkspacePath = null;

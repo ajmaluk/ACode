@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { modKey, isWindows, isMac, isLinux, defaultShell, wrapCommandForPlatform, shortcut, resetPlatformCache } from "../platform";
+import {
+  modKey,
+  isWindows,
+  isMac,
+  isLinux,
+  defaultShell,
+  wrapCommandForPlatform,
+  shortcut,
+  resetPlatformCache,
+} from "../platform";
 
 // Mock navigator
 function setPlatform(mockPlatform: string, mockUa?: string) {
@@ -52,7 +61,10 @@ describe("platform detection", () => {
     beforeEach(() => resetPlatformCache());
 
     it("returns true on Windows", () => {
-      setPlatform("Win32", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+      setPlatform(
+        "Win32",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      );
       expect(isWindows()).toBe(true);
     });
 

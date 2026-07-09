@@ -18,7 +18,9 @@ export function getCachedRegex(pattern: string, flags?: string): RegExp | null {
 
   // Enforce max pattern length to prevent ReDoS
   if (pattern.length > 200) {
-    console.warn(`[RegexCache] Pattern too long (${pattern.length} chars), skipping`);
+    console.warn(
+      `[RegexCache] Pattern too long (${pattern.length} chars), skipping`,
+    );
     return null;
   }
 
@@ -31,7 +33,8 @@ export function getCachedRegex(pattern: string, flags?: string): RegExp | null {
     }
     _cache.set(key, regex);
     return regex;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[RegexCache] Invalid regex pattern:", pattern, e);
     return null;
   }
 }

@@ -2,8 +2,10 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useUI, useChat, useTerminal, useWorkspace } from "@/store/useAppStore";
 import { TerminalPanel } from "./TerminalPanel";
 import {
-  TerminalSquare, PanelBottomClose,
-  AlertTriangle, Info,
+  TerminalSquare,
+  PanelBottomClose,
+  AlertTriangle,
+  Info,
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { modKey } from "@/lib/platform";
@@ -31,16 +33,24 @@ function OutputTab() {
   return (
     <div className="h-full overflow-auto p-3 font-mono text-xs text-dalam-text-secondary">
       {output.length === 0 ? (
-        <p className="text-dalam-text-muted">No output yet. Build output will appear here.</p>
+        <p className="text-dalam-text-muted">
+          No output yet. Build output will appear here.
+        </p>
       ) : (
-        output.map((line, i) => <div key={i} className="whitespace-pre-wrap">{line}</div>)
+        output.map((line, i) => (
+          <div key={i} className="whitespace-pre-wrap">
+            {line}
+          </div>
+        ))
       )}
     </div>
   );
 }
 
 function ProblemsTab() {
-  const [problems, setProblems] = useState<Array<{ severity: string; message: string; file?: string; line?: number }>>([]);
+  const [problems, setProblems] = useState<
+    Array<{ severity: string; message: string; file?: string; line?: number }>
+  >([]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -54,15 +64,29 @@ function ProblemsTab() {
   return (
     <div className="h-full overflow-auto">
       {problems.length === 0 ? (
-        <div className="p-3 text-xs text-dalam-text-muted">No problems detected.</div>
+        <div className="p-3 text-xs text-dalam-text-muted">
+          No problems detected.
+        </div>
       ) : (
         problems.map((p, i) => (
-          <div key={i} className="flex items-start gap-2 px-3 py-1.5 text-xs hover:bg-dalam-bg-hover border-b border-dalam-border-primary/30">
-            <span className={p.severity === "error" ? "text-red-400" : "text-yellow-400"}>
+          <div
+            key={i}
+            className="flex items-start gap-2 px-3 py-1.5 text-xs hover:bg-dalam-bg-hover border-b border-dalam-border-primary/30"
+          >
+            <span
+              className={
+                p.severity === "error" ? "text-red-400" : "text-yellow-400"
+              }
+            >
               {p.severity === "error" ? "✕" : "⚠"}
             </span>
             <span className="text-dalam-text-primary flex-1">{p.message}</span>
-            {p.file && <span className="text-dalam-text-muted flex-shrink-0">{p.file}{p.line ? `:${p.line}` : ""}</span>}
+            {p.file && (
+              <span className="text-dalam-text-muted flex-shrink-0">
+                {p.file}
+                {p.line ? `:${p.line}` : ""}
+              </span>
+            )}
           </div>
         ))
       )}
@@ -71,53 +95,70 @@ function ProblemsTab() {
 }
 
 export function BottomPanel() {
-  const { bottomPanelTab: tab, setBottomPanelTab: setTab, setBottomPanelOpen } = useUI();
+  const {
+    bottomPanelTab: tab,
+    setBottomPanelTab: setTab,
+    setBottomPanelOpen,
+  } = useUI();
   const { session } = useChat();
   const [height, setHeight] = useState(() => {
     try {
       const saved = localStorage.getItem("dalam.bottomPanelHeight");
       return saved ? parseInt(saved, 10) || 220 : 220;
-    } catch { return 220; }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[BottomPanel] Failed to read saved height:", e);
+      return 220;
+    }
   });
   const draggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    draggingRef.current = true;
-    startYRef.current = e.clientY;
-    startHeightRef.current = height;
-    let rafId: number | null = null;
-    let lastHeight = height;
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      draggingRef.current = true;
+      startYRef.current = e.clientY;
+      startHeightRef.current = height;
+      let rafId: number | null = null;
+      let lastHeight = height;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!draggingRef.current) return;
-      const delta = startYRef.current - e.clientY;
-      lastHeight = Math.max(100, Math.min(startHeightRef.current + delta, window.innerHeight * 0.5));
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        setHeight(lastHeight);
-      });
-    };
+      const handleMouseMove = (e: MouseEvent) => {
+        if (!draggingRef.current) return;
+        const delta = startYRef.current - e.clientY;
+        lastHeight = Math.max(
+          100,
+          Math.min(startHeightRef.current + delta, window.innerHeight * 0.5),
+        );
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          setHeight(lastHeight);
+        });
+      };
 
-    const handleMouseUp = () => {
-      draggingRef.current = false;
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-      moveHandlerRef.current = null;
-      upHandlerRef.current = null;
-      // Persist height once on mouseup instead of every mousemove
-      try { localStorage.setItem("dalam.bottomPanelHeight", String(lastHeight)); } catch { /* ignore */ }
-    };
+      const handleMouseUp = () => {
+        draggingRef.current = false;
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        moveHandlerRef.current = null;
+        upHandlerRef.current = null;
+        // Persist height once on mouseup instead of every mousemove
+        try {
+          localStorage.setItem("dalam.bottomPanelHeight", String(lastHeight));
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[BottomPanel] Failed to persist panel height:", e);
+        }
+      };
 
-    moveHandlerRef.current = handleMouseMove;
-    upHandlerRef.current = handleMouseUp;
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  }, [height]);
+      moveHandlerRef.current = handleMouseMove;
+      upHandlerRef.current = handleMouseUp;
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    },
+    [height],
+  );
 
   // Cleanup drag listeners on unmount to prevent leaks
   const moveHandlerRef = useRef<((e: MouseEvent) => void) | null>(null);
@@ -140,7 +181,11 @@ export function BottomPanel() {
 
   // Auto-open terminal tab when bottom panel opens with a workspace
   useEffect(() => {
-    const ws = useWorkspace.getState().workspaces.find((w) => w.id === useWorkspace.getState().activeWorkspaceId);
+    const ws = useWorkspace
+      .getState()
+      .workspaces.find(
+        (w) => w.id === useWorkspace.getState().activeWorkspaceId,
+      );
     const cwd = session?.workspacePath ?? ws?.path;
     if (cwd && useTerminal.getState().tabs.length === 0) {
       useTerminal.getState().ensureTabForCwd(cwd);

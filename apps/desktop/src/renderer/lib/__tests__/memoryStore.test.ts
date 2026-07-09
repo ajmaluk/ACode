@@ -5,10 +5,18 @@ const localStorageMock = (() => {
   let store: Record<string, string> = {};
   return {
     getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { store = {}; },
-    get length() { return Object.keys(store).length; },
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+    get length() {
+      return Object.keys(store).length;
+    },
     key: (i: number) => Object.keys(store)[i] ?? null,
   };
 })();
@@ -107,20 +115,31 @@ describe("scoreMemory", () => {
   const DAY = 86_400_000;
 
   it("critical tier gets highest base score", () => {
-    const critical = makeEntry({ tier: "critical", createdAt: Date.now() - DAY * 30 });
+    const critical = makeEntry({
+      tier: "critical",
+      createdAt: Date.now() - DAY * 30,
+    });
     const low = makeEntry({ tier: "low", createdAt: Date.now() - DAY * 30 });
     expect(scoreMemory(critical)).toBeGreaterThan(scoreMemory(low));
   });
 
   it("higher access count increases score", () => {
-    const frequentlyAccessed = makeEntry({ accessCount: 50, lastAccessedAt: Date.now() });
+    const frequentlyAccessed = makeEntry({
+      accessCount: 50,
+      lastAccessedAt: Date.now(),
+    });
     const neverAccessed = makeEntry({ accessCount: 0, lastAccessedAt: 0 });
-    expect(scoreMemory(frequentlyAccessed)).toBeGreaterThan(scoreMemory(neverAccessed));
+    expect(scoreMemory(frequentlyAccessed)).toBeGreaterThan(
+      scoreMemory(neverAccessed),
+    );
   });
 
   it("recently accessed memories score higher", () => {
     const recent = makeEntry({ accessCount: 1, lastAccessedAt: Date.now() });
-    const old = makeEntry({ accessCount: 1, lastAccessedAt: Date.now() - DAY * 30 });
+    const old = makeEntry({
+      accessCount: 1,
+      lastAccessedAt: Date.now() - DAY * 30,
+    });
     expect(scoreMemory(recent)).toBeGreaterThan(scoreMemory(old));
   });
 
@@ -148,7 +167,7 @@ describe("extractMemoriesFromExchange", () => {
   it("detects rule patterns (always, never, must)", () => {
     const entries = extractMemoriesFromExchange(
       "User asks about testing",
-      "You should always run tests before committing code changes to the repository"
+      "You should always run tests before committing code changes to the repository",
     );
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.some((e) => e.category === "user")).toBe(true);
@@ -157,7 +176,7 @@ describe("extractMemoriesFromExchange", () => {
   it("detects file path references", () => {
     const entries = extractMemoriesFromExchange(
       "Check the config",
-      "Look at the file src/config.ts for the settings"
+      "Look at the file src/config.ts for the settings",
     );
     expect(entries.some((e) => e.category === "reference")).toBe(true);
   });
@@ -165,7 +184,7 @@ describe("extractMemoriesFromExchange", () => {
   it("detects build commands", () => {
     const entries = extractMemoriesFromExchange(
       "How to build?",
-      "Run pnpm run build to compile the project"
+      "Run pnpm run build to compile the project",
     );
     expect(entries.some((e) => e.category === "project")).toBe(true);
   });
@@ -173,7 +192,7 @@ describe("extractMemoriesFromExchange", () => {
   it("detects tech stack decisions", () => {
     const entries = extractMemoriesFromExchange(
       "What framework?",
-      "This project is built with React and TypeScript"
+      "This project is built with React and TypeScript",
     );
     expect(entries.some((e) => e.tags.length > 0)).toBe(true);
   });
@@ -187,7 +206,7 @@ describe("extractMemoriesFromExchange", () => {
     const entries = extractMemoriesFromExchange(
       "User says",
       "Always use TypeScript. Never use var. Must follow ESLint rules. Should use Prettier. Prefer functional components.",
-      { maxEntries: 2 }
+      { maxEntries: 2 },
     );
     expect(entries.length).toBeLessThanOrEqual(2);
   });
@@ -245,7 +264,7 @@ describe("parseMarkdownMemory", () => {
       'source_file: "src/main.ts"',
       "---",
       "",
-      "Always use functional components with standard TypeScript typings."
+      "Always use functional components with standard TypeScript typings.",
     ].join("\n");
 
     const entry = parseMarkdownMemory(fileContent);
@@ -260,7 +279,9 @@ describe("parseMarkdownMemory", () => {
     expect(entry!.stale).toBe(false);
     expect(entry!.sourceSession).toBe("session99");
     expect(entry!.sourceFile).toBe("src/main.ts");
-    expect(entry!.content).toBe("Always use functional components with standard TypeScript typings.");
+    expect(entry!.content).toBe(
+      "Always use functional components with standard TypeScript typings.",
+    );
   });
 
   it("handles CRLF carriage return line endings", () => {
@@ -269,7 +290,7 @@ describe("parseMarkdownMemory", () => {
       'id: "mem123"',
       'category: "project"',
       "---",
-      "Some content"
+      "Some content",
     ].join("\r\n");
 
     const entry = parseMarkdownMemory(fileContent);
@@ -286,13 +307,13 @@ describe("parseMarkdownMemory", () => {
       'summary: "This is \\"quoted\\" context with \\\\ backslash"',
       'source_file: "src\\\\components\\\\Toaster.tsx"',
       "---",
-      "Content"
+      "Content",
     ].join("\n");
 
     const entry = parseMarkdownMemory(fileContent);
     expect(entry).not.toBeNull();
     expect(entry!.summary).toBe('This is "quoted" context with \\ backslash');
-    expect(entry!.sourceFile).toBe('src\\components\\Toaster.tsx');
+    expect(entry!.sourceFile).toBe("src\\components\\Toaster.tsx");
   });
 
   it("returns null for malformed frontmatter", () => {
@@ -307,7 +328,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       'tags: ["tag1", "tag2", "tag3"]',
       "---",
-      "content"
+      "content",
     ].join("\n");
     const entry = parseMarkdownMemory(fileContent);
     expect(entry).not.toBeNull();
@@ -321,7 +342,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       "tags: tag1, tag2, tag3",
       "---",
-      "content"
+      "content",
     ].join("\n");
     const entry = parseMarkdownMemory(fileContent);
     expect(entry).not.toBeNull();
@@ -335,7 +356,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       "stale: true",
       "---",
-      "body"
+      "body",
     ].join("\n");
     expect(parseMarkdownMemory(content)!.stale).toBe(true);
   });
@@ -347,7 +368,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       "stale: 1",
       "---",
-      "body"
+      "body",
     ].join("\n");
     expect(parseMarkdownMemory(content)!.stale).toBe(true);
   });
@@ -358,7 +379,7 @@ describe("parseMarkdownMemory", () => {
       'id: "mem1"',
       'category: "project"',
       "---",
-      "body"
+      "body",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
@@ -366,12 +387,7 @@ describe("parseMarkdownMemory", () => {
   });
 
   it("defaults category to 'project' when missing", () => {
-    const content = [
-      "---",
-      'id: "mem1"',
-      "---",
-      "body"
-    ].join("\n");
+    const content = ["---", 'id: "mem1"', "---", "body"].join("\n");
     expect(parseMarkdownMemory(content)!.category).toBe("project");
   });
 
@@ -381,7 +397,7 @@ describe("parseMarkdownMemory", () => {
       'id: "mem1"',
       'category: "project"',
       "---",
-      "body"
+      "body",
     ].join("\n");
     expect(parseMarkdownMemory(content)!.tier).toBe("medium");
   });
@@ -396,7 +412,7 @@ describe("parseMarkdownMemory", () => {
       "Line 1 of content",
       "Line 2 of content",
       "",
-      "Line 4 with trailing newline"
+      "Line 4 with trailing newline",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
@@ -410,7 +426,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       "tags: []",
       "---",
-      "body"
+      "body",
     ].join("\n");
     expect(parseMarkdownMemory(content)!.tags).toEqual([]);
   });
@@ -422,7 +438,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       "tags: ['a', 'b']",
       "---",
-      "body"
+      "body",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
@@ -439,7 +455,7 @@ describe("parseMarkdownMemory", () => {
       "  - tag-a",
       "  - tag-b",
       "---",
-      "body"
+      "body",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
@@ -448,12 +464,7 @@ describe("parseMarkdownMemory", () => {
   });
 
   it("returns null when id is missing", () => {
-    const content = [
-      "---",
-      'category: "project"',
-      "---",
-      "body"
-    ].join("\n");
+    const content = ["---", 'category: "project"', "---", "body"].join("\n");
     expect(parseMarkdownMemory(content)).toBeNull();
   });
 
@@ -463,7 +474,7 @@ describe("parseMarkdownMemory", () => {
       'id: "mem1"\r',
       'category: "project"\r',
       "---\r",
-      "body"
+      "body",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
@@ -478,7 +489,7 @@ describe("parseMarkdownMemory", () => {
       'category: "project"',
       'summary: "Rule: always use TypeScript"',
       "---",
-      "body"
+      "body",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
@@ -491,11 +502,13 @@ describe("parseMarkdownMemory", () => {
       'id: "mem1"',
       'category: "project"',
       "---",
-      "This is a longer body content that should be used as the summary fallback since no summary field is provided"
+      "This is a longer body content that should be used as the summary fallback since no summary field is provided",
     ].join("\n");
     const entry = parseMarkdownMemory(content);
     expect(entry).not.toBeNull();
-    expect(entry!.summary).toBe("This is a longer body content that should be used as the summary fallback since no summary field is provided");
+    expect(entry!.summary).toBe(
+      "This is a longer body content that should be used as the summary fallback since no summary field is provided",
+    );
   });
 });
 
@@ -531,7 +544,12 @@ describe("scoreMemory edge cases", () => {
   });
 
   it("non-zero score for brand new low-tier entry", () => {
-    const entry = makeEntry({ tier: "low", createdAt: Date.now(), accessCount: 0, lastAccessedAt: 0 });
+    const entry = makeEntry({
+      tier: "low",
+      createdAt: Date.now(),
+      accessCount: 0,
+      lastAccessedAt: 0,
+    });
     expect(scoreMemory(entry)).toBeGreaterThanOrEqual(0);
   });
 });
@@ -543,23 +561,29 @@ describe("extractMemoriesFromExchange edge cases", () => {
   it("ignores node_modules in file references", () => {
     const entries = extractMemoriesFromExchange(
       "Check the config",
-      "Look at node_modules/some-package/index.ts"
+      "Look at node_modules/some-package/index.ts",
     );
-    expect(entries.some((e) => e.content?.includes("node_modules"))).toBe(false);
+    expect(entries.some((e) => e.content?.includes("node_modules"))).toBe(
+      false,
+    );
   });
 
   it("extracts npm build commands", () => {
     const entries = extractMemoriesFromExchange(
       "How to build?",
-      "Run npm run build to compile"
+      "Run npm run build to compile",
     );
-    expect(entries.some((e) => e.category === "project" && e.content?.includes("npm"))).toBe(true);
+    expect(
+      entries.some(
+        (e) => e.category === "project" && e.content?.includes("npm"),
+      ),
+    ).toBe(true);
   });
 
   it("extracts cargo build commands", () => {
     const entries = extractMemoriesFromExchange(
       "Build rust",
-      "Use cargo build --release"
+      "Use cargo build --release",
     );
     expect(entries.some((e) => e.tags?.includes("cargo"))).toBe(true);
   });
@@ -567,7 +591,7 @@ describe("extractMemoriesFromExchange edge cases", () => {
   it("extracts docker commands", () => {
     const entries = extractMemoriesFromExchange(
       "Run container",
-      "Use docker compose up"
+      "Use docker compose up",
     );
     expect(entries.some((e) => e.tags?.includes("docker"))).toBe(true);
   });
@@ -575,15 +599,17 @@ describe("extractMemoriesFromExchange edge cases", () => {
   it("detects tech stack decision with 'built with'", () => {
     const entries = extractMemoriesFromExchange(
       "What framework?",
-      "This project is built with Next.js and Tailwind"
+      "This project is built with Next.js and Tailwind",
     );
-    expect(entries.some((e) => e.content?.includes("built with Next"))).toBe(true);
+    expect(entries.some((e) => e.content?.includes("built with Next"))).toBe(
+      true,
+    );
   });
 
   it("detects tech stack decision with 'migrating to'", () => {
     const entries = extractMemoriesFromExchange(
       "Migration",
-      "We are migrating to PostgreSQL"
+      "We are migrating to PostgreSQL",
     );
     expect(entries.some((e) => e.content?.includes("migrating to"))).toBe(true);
   });
@@ -591,17 +617,25 @@ describe("extractMemoriesFromExchange edge cases", () => {
   it("detects 'prefer' pattern for preferences", () => {
     const entries = extractMemoriesFromExchange(
       "Style guide",
-      "I prefer using functional components over class components in this project"
+      "I prefer using functional components over class components in this project",
     );
-    expect(entries.some((e) => e.category === "user" && e.content?.includes("prefer"))).toBe(true);
+    expect(
+      entries.some(
+        (e) => e.category === "user" && e.content?.includes("prefer"),
+      ),
+    ).toBe(true);
   });
 
   it("detects 'stick to' pattern", () => {
     const entries = extractMemoriesFromExchange(
       "Testing",
-      "Let's stick to vitest for unit tests"
+      "Let's stick to vitest for unit tests",
     );
-    expect(entries.some((e) => e.category === "user" && e.content?.includes("stick to"))).toBe(true);
+    expect(
+      entries.some(
+        (e) => e.category === "user" && e.content?.includes("stick to"),
+      ),
+    ).toBe(true);
   });
 
   it("copes with very long inputs", () => {
@@ -615,7 +649,7 @@ describe("extractMemoriesFromExchange edge cases", () => {
   it("handles special characters in exchange", () => {
     const entries = extractMemoriesFromExchange(
       "How to use unicode? 🎉",
-      "Always use UTF-8 encoding for strings: 日本語"
+      "Always use UTF-8 encoding for strings: 日本語",
     );
     expect(Array.isArray(entries)).toBe(true);
   });
@@ -623,50 +657,55 @@ describe("extractMemoriesFromExchange edge cases", () => {
   it("extracts multiple rule patterns from a single exchange", () => {
     const entries = extractMemoriesFromExchange(
       "Project setup",
-      "Always use TypeScript. Never use any. Must use strict mode. Should format with Prettier."
+      "Always use TypeScript. Never use any. Must use strict mode. Should format with Prettier.",
     );
     expect(entries.length).toBeGreaterThanOrEqual(3);
   });
 
   it("skips short rule patterns (< 15 chars)", () => {
-    const entries = extractMemoriesFromExchange(
-      "Quick tip",
-      "Must do it"
-    );
+    const entries = extractMemoriesFromExchange("Quick tip", "Must do it");
     expect(entries).toHaveLength(0);
   });
 
   it("skips long rule patterns (> 200 chars)", () => {
     const entries = extractMemoriesFromExchange(
       "Very long",
-      `Always ${'x'.repeat(250)}`
+      `Always ${"x".repeat(250)}`,
     );
-    const longEntries = entries.filter(e => e.content?.length > 200);
+    const longEntries = entries.filter((e) => e.content?.length > 200);
     expect(longEntries).toHaveLength(0);
   });
 
   it("extracts file paths with backtick formatting", () => {
     const entries = extractMemoriesFromExchange(
       "Check the config",
-      "Look at the file `src/config.ts` for settings"
+      "Look at the file `src/config.ts` for settings",
     );
-    expect(entries.some((e) => e.category === "reference" && e.summary?.includes("config.ts"))).toBe(true);
+    expect(
+      entries.some(
+        (e) => e.category === "reference" && e.summary?.includes("config.ts"),
+      ),
+    ).toBe(true);
   });
 
   it("extracts file paths with double-quote formatting", () => {
     const entries = extractMemoriesFromExchange(
       "Find file",
-      'The configuration is in "config/settings.json"'
+      'The configuration is in "config/settings.json"',
     );
-    expect(entries.some((e) => e.summary?.includes("settings.json"))).toBe(true);
+    expect(entries.some((e) => e.summary?.includes("settings.json"))).toBe(
+      true,
+    );
   });
 
   it("extracts file paths with single-quote formatting", () => {
     const entries = extractMemoriesFromExchange(
       "Find file",
-      "The configuration is in 'config/settings.yaml'"
+      "The configuration is in 'config/settings.yaml'",
     );
-    expect(entries.some((e) => e.summary?.includes("settings.yaml"))).toBe(true);
+    expect(entries.some((e) => e.summary?.includes("settings.yaml"))).toBe(
+      true,
+    );
   });
 });
 
@@ -681,7 +720,10 @@ describe("buildExtractionPrompt edge cases", () => {
   });
 
   it("handles special characters in inputs", () => {
-    const prompt = buildExtractionPrompt("<script>alert('xss')</script>", "const x = 1\nconst y = 2;");
+    const prompt = buildExtractionPrompt(
+      "<script>alert('xss')</script>",
+      "const x = 1\nconst y = 2;",
+    );
     expect(prompt).toContain("xss");
     expect(prompt).toContain("x = 1");
   });
@@ -723,7 +765,10 @@ describe("jaccardSimilarity edge cases", () => {
   });
 
   it("handles code-like strings with dots and slashes", () => {
-    const sim = jaccardSimilarity("src/components/Button.tsx", "src/components/Input.tsx");
+    const sim = jaccardSimilarity(
+      "src/components/Button.tsx",
+      "src/components/Input.tsx",
+    );
     expect(sim).toBeGreaterThan(0);
     // Should match "src", "components" but differ on "Button" vs "Input"
     expect(sim).toBeGreaterThan(0.3);

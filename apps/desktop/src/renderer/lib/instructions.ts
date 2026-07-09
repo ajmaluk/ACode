@@ -154,7 +154,8 @@ export async function loadInstructions(
         layers.global = await fsAdapter.readFile(globalPath);
         loadedPaths.push(globalPath);
       }
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Instructions] fsAdapter.getHomeDir();:", e);
       // Global dir may not exist — not an error
     }
   }
@@ -166,7 +167,8 @@ export async function loadInstructions(
       layers.org = await fsAdapter.readFile(orgPath);
       loadedPaths.push(orgPath);
     }
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Instructions] const orgPath = joinPath(workspacePath, \".dalam\", :", e);
     // Not an error if org DALAM.md doesn't exist
   }
 
@@ -177,7 +179,8 @@ export async function loadInstructions(
       layers.project = await fsAdapter.readFile(projectPath);
       loadedPaths.push(projectPath);
     }
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Instructions] const projectPath = joinPath(workspacePath, \"DALAM:", e);
     // Not an error if project DALAM.md doesn't exist
   }
 
@@ -197,7 +200,8 @@ export async function loadInstructions(
           break; // first match wins
         }
       }
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Instructions] const legacyPaths = [:", e);
       // Not an error
     }
   }
@@ -209,7 +213,8 @@ export async function loadInstructions(
       layers.local = await fsAdapter.readFile(localPath);
       loadedPaths.push(localPath);
     }
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Instructions] const localPath = joinPath(workspacePath, \".dalam\":", e);
     // Not an error
   }
 
@@ -404,7 +409,8 @@ function matchSingleGlob(normalizedGlob: string, normalizedPath: string): boolea
   try {
     const regex = new RegExp(regexStr);
     return regex.test(normalizedPath);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Instructions] const regex = new RegExp(regexStr);:", e);
     return false;
   }
 }

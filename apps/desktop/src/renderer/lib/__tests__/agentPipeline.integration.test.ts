@@ -9,7 +9,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 describe("XML Tool Call Parsing", () => {
   it("parses simple self-closing tool calls", async () => {
     const { parseXmlToolCalls } = await import("@/store/useAppStore");
-    const content = "Let me check the file structure.\n<list_dir path=\"/src\"/>\n";
+    const content =
+      'Let me check the file structure.\n<list_dir path="/src"/>\n';
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("list_dir");
@@ -19,7 +20,8 @@ describe("XML Tool Call Parsing", () => {
 
   it("parses tool calls with content body", async () => {
     const { parseXmlToolCalls } = await import("@/store/useAppStore");
-    const content = "Creating a new file:\n<write_file path=\"/src/hello.ts\">\nconst greeting = \"Hello World\";\nexport default greeting;\n</write_file>\nDone.";
+    const content =
+      'Creating a new file:\n<write_file path="/src/hello.ts">\nconst greeting = "Hello World";\nexport default greeting;\n</write_file>\nDone.';
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("write_file");
@@ -32,9 +34,9 @@ describe("XML Tool Call Parsing", () => {
     const { parseXmlToolCalls } = await import("@/store/useAppStore");
     const content = [
       "I'll check the files:",
-      "<list_dir path=\"/src\"/>",
-      "<read_file path=\"/src/index.ts\"/>",
-      "<grep_file path=\"/src\" pattern=\"function\"/>",
+      '<list_dir path="/src"/>',
+      '<read_file path="/src/index.ts"/>',
+      '<grep_file path="/src" pattern="function"/>',
       "Here's what I found.",
     ].join("\n");
     const result = parseXmlToolCalls(content);
@@ -63,17 +65,20 @@ describe("XML Tool Call Parsing", () => {
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("bash");
-    expect(result.toolCalls[0].args).toHaveProperty("command", "npm run test -- --coverage");
+    expect(result.toolCalls[0].args).toHaveProperty(
+      "command",
+      "npm run test -- --coverage",
+    );
   });
 
   it("strips all XML tags from cleaned content", async () => {
     const { parseXmlToolCalls } = await import("@/store/useAppStore");
     const content = [
       "I'll help you with that.",
-      "<read_file path=\"/src/app.ts\"/>",
-      "<list_dir path=\"/\"/>",
+      '<read_file path="/src/app.ts"/>',
+      '<list_dir path="/"/>',
       "Here is the content.",
-      "<write_file path=\"/src/new.ts\">\nconst x = 1;\n</write_file>",
+      '<write_file path="/src/new.ts">\nconst x = 1;\n</write_file>',
     ].join("\n");
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(3);
@@ -87,7 +92,7 @@ describe("XML Tool Call Parsing", () => {
   it("handles unknown tags gracefully without breaking", async () => {
     const { parseXmlToolCalls } = await import("@/store/useAppStore");
     // Unknown tags with attributes pass through (handled downstream as unknown tools)
-    const content = "<unknown_tag param=\"value\"/>";
+    const content = '<unknown_tag param="value"/>';
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("unknown_tag");
@@ -119,14 +124,28 @@ describe("Complex Task Management", () => {
       "task-6: Configure CI/CD pipeline",
     ].join("\n");
 
-    const tasks = planText.split("\n").filter(Boolean).map((line: string) => {
-      const match = line.match(/^([\w.-]+):\s*(.+)$/);
-      return match ? { id: match[1], title: match[2].trim(), status: "pending" as const } : null;
-    }).filter(Boolean);
+    const tasks = planText
+      .split("\n")
+      .filter(Boolean)
+      .map((line: string) => {
+        const match = line.match(/^([\w.-]+):\s*(.+)$/);
+        return match
+          ? { id: match[1], title: match[2].trim(), status: "pending" as const }
+          : null;
+      })
+      .filter(Boolean);
 
     expect(tasks).toHaveLength(6);
-    expect(tasks[0]).toMatchObject({ id: "task-1", title: "Initialize the project structure", status: "pending" });
-    expect(tasks[5]).toMatchObject({ id: "task-6", title: "Configure CI/CD pipeline", status: "pending" });
+    expect(tasks[0]).toMatchObject({
+      id: "task-1",
+      title: "Initialize the project structure",
+      status: "pending",
+    });
+    expect(tasks[5]).toMatchObject({
+      id: "task-6",
+      title: "Configure CI/CD pipeline",
+      status: "pending",
+    });
   });
 
   it("merges task plans correctly (preserves running state)", async () => {
@@ -139,8 +158,8 @@ describe("Complex Task Management", () => {
       { id: "t2", title: "Build", status: "pending" as const },
       { id: "t3", title: "Deploy", status: "pending" as const },
     ];
-    const existingMap = new Map(existing.map(t => [t.id, t]));
-    const merged = incoming.map(t => existingMap.get(t.id) ?? t);
+    const existingMap = new Map(existing.map((t) => [t.id, t]));
+    const merged = incoming.map((t) => existingMap.get(t.id) ?? t);
     expect(merged[0].status).toBe("running"); // preserved
     expect(merged[1].status).toBe("pending");
     expect(merged[2].status).toBe("pending");
@@ -154,17 +173,22 @@ describe("Complex Task Management", () => {
       { id: "t3", title: "Test", status: "pending" as const },
       { id: "t4", title: "Deploy", status: "pending" as const },
     ];
-    const exhausted = tasks.map(t => (t.status === "pending" || t.status === "running") ? { ...t, status: "failed" as const } : t);
+    const exhausted = tasks.map((t) =>
+      t.status === "pending" || t.status === "running"
+        ? { ...t, status: "failed" as const }
+        : t,
+    );
     expect(exhausted[0].status).toBe("completed"); // unchanged
-    expect(exhausted[1].status).toBe("failed");    // was running
-    expect(exhausted[2].status).toBe("failed");    // was pending
-    expect(exhausted[3].status).toBe("failed");    // was pending
+    expect(exhausted[1].status).toBe("failed"); // was running
+    expect(exhausted[2].status).toBe("failed"); // was pending
+    expect(exhausted[3].status).toBe("failed"); // was pending
   });
 });
 
 describe("Agent Runtime State Machine", () => {
   it("transitions through the full agent lifecycle", async () => {
-    const { agentReducer, createInitialRuntimeState } = await import("@/lib/agentRuntimeContract");
+    const { agentReducer, createInitialRuntimeState } =
+      await import("@/lib/agentRuntimeContract");
     let state = createInitialRuntimeState();
     expect(state.phase).toBe("idle");
 
@@ -173,11 +197,18 @@ describe("Agent Runtime State Machine", () => {
     expect(state.phase).toBe("streaming");
 
     // streaming → tool-call registered
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc-1", toolName: "read_file" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc-1",
+      toolName: "read_file",
+    });
     expect(state.phase).toBe("streaming");
 
     // streaming → tool-waiting-approval
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc-1" });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc-1",
+    });
     expect(state.phase).toBe("tool-waiting-approval");
 
     // tool-waiting-approval → tool-running
@@ -185,7 +216,11 @@ describe("Agent Runtime State Machine", () => {
     expect(state.phase).toBe("tool-running");
 
     // tool-running → tool-results
-    state = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc-1", success: true });
+    state = agentReducer(state, {
+      type: "TOOL_RESULT_RECEIVED",
+      toolCallId: "tc-1",
+      success: true,
+    });
     expect(state.phase).toBe("tool-results");
 
     // tool-results → streaming (agent continues)
@@ -202,15 +237,20 @@ describe("Agent Runtime State Machine", () => {
   });
 
   it("rejects invalid transitions", async () => {
-    const { agentReducer, createInitialRuntimeState } = await import("@/lib/agentRuntimeContract");
+    const { agentReducer, createInitialRuntimeState } =
+      await import("@/lib/agentRuntimeContract");
     const state = createInitialRuntimeState();
     // Can't go from idle to tool-running directly
-    const nextState = agentReducer(state, { type: "TOOL_RUNNING", toolCallId: "tc-1" });
+    const nextState = agentReducer(state, {
+      type: "TOOL_RUNNING",
+      toolCallId: "tc-1",
+    });
     expect(nextState).toBe(state); // same reference = rejected
   });
 
   it("handles abort from any phase", async () => {
-    const { agentReducer, createInitialRuntimeState } = await import("@/lib/agentRuntimeContract");
+    const { agentReducer, createInitialRuntimeState } =
+      await import("@/lib/agentRuntimeContract");
     let state = createInitialRuntimeState();
     state = agentReducer(state, { type: "STREAM_START", messageId: "msg-1" });
     state = agentReducer(state, { type: "ABORT", sessionId: "sess-1" });
@@ -218,30 +258,64 @@ describe("Agent Runtime State Machine", () => {
   });
 
   it("supports multi-turn tool loop", async () => {
-    const { agentReducer, createInitialRuntimeState } = await import("@/lib/agentRuntimeContract");
+    const { agentReducer, createInitialRuntimeState } =
+      await import("@/lib/agentRuntimeContract");
     let state = createInitialRuntimeState();
 
     // Round 1: read_file
     state = agentReducer(state, { type: "STREAM_START", messageId: "m1" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc1", toolName: "read_file" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc1" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc1",
+      toolName: "read_file",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc1",
+    });
     state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc1" });
-    state = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc1", success: true });
+    state = agentReducer(state, {
+      type: "TOOL_RESULT_RECEIVED",
+      toolCallId: "tc1",
+      success: true,
+    });
 
     // Round 2: write_file (after reading, agent writes)
     state = agentReducer(state, { type: "STREAM_START", messageId: "m2" });
     expect(state.phase).toBe("streaming");
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc2", toolName: "write_file" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc2" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc2",
+      toolName: "write_file",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc2",
+    });
     state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc2" });
-    state = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc2", success: true });
+    state = agentReducer(state, {
+      type: "TOOL_RESULT_RECEIVED",
+      toolCallId: "tc2",
+      success: true,
+    });
 
     // Round 3: bash (after writing, agent tests)
     state = agentReducer(state, { type: "STREAM_START", messageId: "m3" });
-    state = agentReducer(state, { type: "TOOL_CALL", toolCallId: "tc3", toolName: "bash" });
-    state = agentReducer(state, { type: "TOOL_APPROVAL_REQUESTED", toolCallId: "tc3" });
+    state = agentReducer(state, {
+      type: "TOOL_CALL",
+      toolCallId: "tc3",
+      toolName: "bash",
+    });
+    state = agentReducer(state, {
+      type: "TOOL_APPROVAL_REQUESTED",
+      toolCallId: "tc3",
+    });
     state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc3" });
-    state = agentReducer(state, { type: "TOOL_RESULT_RECEIVED", toolCallId: "tc3", success: true });
+    state = agentReducer(state, {
+      type: "TOOL_RESULT_RECEIVED",
+      toolCallId: "tc3",
+      success: true,
+    });
 
     state = agentReducer(state, { type: "FINALIZING", messageId: "m3" });
     state = agentReducer(state, { type: "COMPLETE", sessionId: "sess-1" });
@@ -255,9 +329,9 @@ describe("Complex XML Tool Call Scenarios", () => {
     const conversation = [
       "I'll analyze your codebase and make improvements.",
       "",
-      "<list_dir path=\"/src/components\"/>",
+      '<list_dir path="/src/components"/>',
       "I found the components. Let me check the main one:",
-      "<read_file path=\"/src/components/App.tsx\"/>",
+      '<read_file path="/src/components/App.tsx"/>',
       "I see the issue. Let me fix it:",
       '<edit_file path="/src/components/App.tsx">',
       "<search>",
@@ -281,7 +355,9 @@ describe("Complex XML Tool Call Scenarios", () => {
     expect(result.toolCalls[2].name).toBe("edit_file");
     expect(result.toolCalls[3].name).toBe("bash");
     expect(result.cleanedContent).toContain("I'll analyze your codebase");
-    expect(result.cleanedContent).toContain("All tests pass! The fix is complete.");
+    expect(result.cleanedContent).toContain(
+      "All tests pass! The fix is complete.",
+    );
     expect(result.cleanedContent).not.toContain("<list_dir");
     expect(result.cleanedContent).not.toContain("<edit_file");
   });
@@ -324,9 +400,14 @@ describe.runIf(RUN_NVIDIA_TESTS)("NVIDIA API Integration", () => {
         NVIDIA_API_KEY,
         "openai",
         "meta/llama-3.1-8b-instruct",
-        [{ role: "user", content: "Say 'Hello from Dalam test' and nothing else" }],
+        [
+          {
+            role: "user",
+            content: "Say 'Hello from Dalam test' and nothing else",
+          },
+        ],
         abortController.signal,
-        200
+        200,
       );
 
       for await (const event of generator) {
@@ -361,11 +442,19 @@ describe.runIf(RUN_NVIDIA_TESTS)("NVIDIA API Integration", () => {
         "openai",
         "meta/llama-3.1-70b-instruct",
         [
-          { role: "system", content: "You are a coding assistant. Use <read_file path=\"...\"/> to read files and <list_dir path=\"...\"/> to list directories." },
-          { role: "user", content: "Show me how to read the main.tsx file in the current directory using your tools, then describe what you'd see." },
+          {
+            role: "system",
+            content:
+              'You are a coding assistant. Use <read_file path="..."/> to read files and <list_dir path="..."/> to list directories.',
+          },
+          {
+            role: "user",
+            content:
+              "Show me how to read the main.tsx file in the current directory using your tools, then describe what you'd see.",
+          },
         ],
         abortController.signal,
-        500
+        500,
       );
 
       for await (const event of generator) {

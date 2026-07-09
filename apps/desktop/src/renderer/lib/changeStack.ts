@@ -39,7 +39,10 @@ function getStack(sessionId?: string): ChangeRecord[] {
 /**
  * Record a file change for potential undo.
  */
-export function recordChange(change: Omit<ChangeRecord, "timestamp">, sessionId?: string): void {
+export function recordChange(
+  change: Omit<ChangeRecord, "timestamp">,
+  sessionId?: string,
+): void {
   const stack = getStack(sessionId);
   const entry: ChangeRecord = {
     ...change,
@@ -92,7 +95,9 @@ export function getChangeStackSize(sessionId?: string): number {
  * Writes the beforeContent back to the file and removes the record.
  * Returns a description of what was undone, or null if stack is empty.
  */
-export async function applyUndo(sessionId?: string): Promise<{ filePath: string; restoredContent: string } | null> {
+export async function applyUndo(
+  sessionId?: string,
+): Promise<{ filePath: string; restoredContent: string } | null> {
   const change = popChange(sessionId);
   if (!change) return null;
 

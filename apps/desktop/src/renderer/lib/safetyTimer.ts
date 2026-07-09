@@ -18,14 +18,14 @@
 import type { ChatMessage, ChatSessionSummary } from "@dalam/shared-types";
 import { createDalamAPI } from "./dalamAPI";
 
-export const SAFETY_TIMEOUT_MS = 120_000;
+export const SAFETY_TIMEOUT_MS = 300_000;
 export const TOOL_APPROVAL_TIMEOUT_MS = 600_000;
 
 /**
  * Minimal interface matching the subset of ChatState that the timer needs.
  * Avoids circular imports with useAppStore.
  */
-interface TimerState {
+export interface TimerState {
   isStreaming: boolean;
   _sendInProgress: boolean;
   _safetyTimer: ReturnType<typeof setTimeout> | null;
@@ -54,7 +54,8 @@ export function resetSafetyTimer(
 ) {
   const existing = get()._safetyTimer;
   if (existing) clearTimeout(existing);
-  const timeout = mode === "tool-approval" ? TOOL_APPROVAL_TIMEOUT_MS : SAFETY_TIMEOUT_MS;
+  const timeout =
+    mode === "tool-approval" ? TOOL_APPROVAL_TIMEOUT_MS : SAFETY_TIMEOUT_MS;
   // Capture the streaming start time when this timer is created.
   // If a new stream starts, streamingStartedAt changes and this timer is stale.
   const timerCreatedAt = Date.now();
@@ -63,9 +64,12 @@ export function resetSafetyTimer(
     if (!state.isStreaming) return;
     // Guard: if streaming was restarted (new stream) after this timer was created,
     // this timer is stale — don't kill the new stream.
-    const streamStartedAt = (state as unknown as Record<string, unknown>).streamingStartedAt as number | null;
+    const streamStartedAt = (state as unknown as Record<string, unknown>)
+      .streamingStartedAt as number | null;
     if (streamStartedAt && streamStartedAt > timerCreatedAt) return;
-    console.warn(`[Chat] Safety timeout triggered (${mode}) — no stream events for ${timeout / 1000}s`);
+    console.warn(
+      `[Chat] Safety timeout triggered (${mode}) — no stream events for ${timeout / 1000}s`,
+    );
     const api = createDalamAPI();
     const sid = state.activeSessionId;
     if (sid) api.agent.cleanupStream(sid);
@@ -75,7 +79,7 @@ export function resetSafetyTimer(
       content:
         mode === "tool-approval"
           ? "Agent loop timed out — no activity for 10 minutes during tool approval."
-          : "Stream timed out after 120 seconds of inactivity. The agent may have encountered an issue.",
+          : "Stream timed out after 300 seconds of inactivity. The agent may have encountered an issue.",
       timestamp: Date.now(),
     };
     // Clear only auto-remove timers associated with the current session,
@@ -92,7 +96,11 @@ export function resetSafetyTimer(
       chatSessions: state.session
         ? state.chatSessions.map((cs) =>
             cs.id === state.session!.id
-              ? { ...cs, status: "completed" as const, lastActivityAt: Date.now() }
+              ? {
+                  ...cs,
+                  status: "completed" as const,
+                  lastActivityAt: Date.now(),
+                }
               : cs,
           )
         : state.chatSessions,

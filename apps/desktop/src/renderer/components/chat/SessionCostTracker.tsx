@@ -34,7 +34,7 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   "gemini-2.5-pro": { input: 0.00125, output: 0.01 },
   "gemini-2.5-flash": { input: 0.00015, output: 0.0006 },
   // Default fallback
-  "default": { input: 0.003, output: 0.015 },
+  default: { input: 0.003, output: 0.015 },
 };
 
 interface SessionCostTrackerProps {
@@ -51,7 +51,9 @@ export function SessionCostTracker({
   const { sessionMessages, activeSessionId } = useChat();
 
   const costData = useMemo(() => {
-    const messages = activeSessionId ? sessionMessages[activeSessionId] || [] : [];
+    const messages = activeSessionId
+      ? sessionMessages[activeSessionId] || []
+      : [];
     let inputTokens = 0;
     let outputTokens = 0;
     let toolCallCount = 0;
@@ -107,7 +109,9 @@ export function SessionCostTracker({
   if (costData.totalTokens === 0) return null;
 
   return (
-    <div className={`group relative flex items-center gap-3 text-[11px] text-dalam-text-muted ${className}`}>
+    <div
+      className={`group relative flex items-center gap-3 text-[11px] text-dalam-text-muted ${className}`}
+    >
       {/* Total cost */}
       <div className="flex items-center gap-1" title="Estimated total cost">
         <DollarSign className="w-3 h-3" />
@@ -131,8 +135,14 @@ export function SessionCostTracker({
       {/* Detailed breakdown (toggle) */}
       {showBreakdown && (
         <div className="hidden group-hover:block absolute bottom-full left-0 mb-2 p-2 bg-dalam-bg rounded shadow-lg border border-dalam-border text-[10px] whitespace-nowrap z-50">
-          <div>Input: {formatTokens(costData.inputTokens)} ({formatCost(costData.inputCost)})</div>
-          <div>Output: {formatTokens(costData.outputTokens)} ({formatCost(costData.outputCost)})</div>
+          <div>
+            Input: {formatTokens(costData.inputTokens)} (
+            {formatCost(costData.inputCost)})
+          </div>
+          <div>
+            Output: {formatTokens(costData.outputTokens)} (
+            {formatCost(costData.outputCost)})
+          </div>
           {costData.toolCallCount > 0 && (
             <div>Cost/tool: {formatCost(costData.costPerToolCall)}</div>
           )}

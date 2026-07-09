@@ -52,7 +52,7 @@ export const InterruptBar: React.FC = () => {
     }
     // Extra wait to ensure state is fully settled
     await new Promise((r) => setTimeout(r, 50));
-    sendMessage(text);
+    void sendMessage(text);
   };
 
   if (!isStreaming || !activeSessionId) return null;
@@ -63,7 +63,9 @@ export const InterruptBar: React.FC = () => {
         <div className="flex items-center gap-2 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm">
           <div className="flex items-center gap-2">
             <span className="inline-block w-2 h-2 bg-dalam-accent-primary rounded-full animate-pulse" />
-            <span className="text-sm text-dalam-text-secondary">Agent is working…</span>
+            <span className="text-sm text-dalam-text-secondary">
+              Agent is working…
+            </span>
           </div>
           <div className="h-4 w-px bg-dalam-border-primary" />
           <button

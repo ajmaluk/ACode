@@ -61,7 +61,9 @@ export function ShortcutsCheatsheet() {
   const sections = getSections();
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, setOpen]);
@@ -69,7 +71,9 @@ export function ShortcutsCheatsheet() {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-8 animate-fade-in"
-      role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
       onClick={() => setOpen(false)}
     >
       <div
@@ -93,7 +97,10 @@ export function ShortcutsCheatsheet() {
               </h3>
               <div className="space-y-1.5">
                 {s.shortcuts.map((sc) => (
-                  <div key={sc.desc} className="flex items-center justify-between gap-3 text-sm">
+                  <div
+                    key={sc.desc}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
                     <span className="text-dalam-text-secondary">{sc.desc}</span>
                     <span className="flex items-center gap-1 flex-shrink-0">
                       {sc.keys.map((k, i) => (
@@ -112,7 +119,8 @@ export function ShortcutsCheatsheet() {
           ))}
         </div>
         <footer className="border-t border-dalam-border-primary px-4 py-2 text-[11px] text-dalam-text-muted">
-          Press <kbd className="px-1 bg-dalam-bg-tertiary rounded">?</kbd> anywhere to reopen this.
+          Press <kbd className="px-1 bg-dalam-bg-tertiary rounded">?</kbd>{" "}
+          anywhere to reopen this.
         </footer>
       </div>
     </div>

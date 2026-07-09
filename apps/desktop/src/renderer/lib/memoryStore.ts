@@ -146,7 +146,8 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
           const ws = useWorkspace.getState();
           const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
           wsPath = activeWs?.path;
-        } catch {
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[Memory] import(\"@/store/useAppStore\");:", e);
           // Store not available (e.g. during module-level cleanup) — skip markdown cleanup
         }
       }
@@ -170,11 +171,14 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
                   break;
                 }
               }
-            } catch { /* best-effort scan */ }
+            } catch (e) {
+              if (import.meta.env.DEV) console.warn("[Memory] import(\"@tauri-apps/plugin-fs\");:", e);
+            }
           }
         }
       }
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Memory] import(\"@tauri-apps/plugin-fs\");:", e);
       // Markdown cleanup is best-effort
     }
   }
@@ -295,7 +299,8 @@ export async function getCriticalMemories(limit = 10): Promise<MemoryEntry[]> {
       [limit]
     ) as MemoryEntryRow[];
     return rows.map(parseRow);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] const db = getDb();:", e);
     return [];
   }
 }
@@ -312,7 +317,8 @@ export async function getAllMemories(opts: { excludeStale?: boolean } = {}): Pro
       : `SELECT * FROM memories ORDER BY updated_at DESC`;
     const rows = await db.select(sql) as MemoryEntryRow[];
     return rows.map(parseRow);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] const db = getDb();:", e);
     return [];
   }
 }
@@ -468,7 +474,8 @@ export async function processPendingWrites(): Promise<void> {
 
     try {
       await writeMemoryMarkdown(write.workspacePath, write.entry);
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Memory] writeMemoryMarkdown(write.workspacePath, write.ent:", e);
       stillPending.push({
         ...write,
         retries: write.retries + 1,
@@ -627,13 +634,14 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
         if (Array.isArray(parsed)) {
           return parsed.map((t: string) => String(t).trim()).filter(Boolean);
         }
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[Memory] JSON parse:", e);
         // not JSON, fall through to comma split
       }
       return fields.tags.split(/,\s*/).map((t: string) => t.trim().replace(/^"|"$/g, "")).filter(Boolean);
     })(),
-    createdAt: (fields.created_at ? parseInt(fields.created_at, 10) : Date.now()),
-    updatedAt: (fields.updated_at ? parseInt(fields.updated_at, 10) : Date.now()),
+    createdAt: (fields.created_at ? (parseInt(fields.created_at, 10) || Date.now()) : Date.now()),
+    updatedAt: (fields.updated_at ? (parseInt(fields.updated_at, 10) || Date.now()) : Date.now()),
     accessCount: 0,
     lastAccessedAt: 0,
     verified: false,
@@ -858,7 +866,9 @@ export async function extractMemoriesWithLLM(
         try {
           const result = await saveMemory(entry, workspacePath);
           if (result.action === "add" || result.action === "update") saved++;
-        } catch { /* skip individual failures */ }
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[Memory] saveMemory(entry, workspacePath);:", e);
+        }
       }
     }
 
@@ -900,7 +910,8 @@ function parseRow(row: MemoryEntryRow): MemoryEntry {
   let tags: string[];
   try {
     tags = typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] JSON parse:", e);
     tags = [];
   }
   return {
@@ -1076,7 +1087,8 @@ export async function detectStaleMemories(): Promise<string[]> {
     staleIds.push(...neverAccessed.map((r: MemoryEntryRow) => r.id));
 
     return [...new Set(staleIds)];
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] const db = getDb();:", e);
     return [];
   }
 }
@@ -1098,7 +1110,8 @@ export async function autoMarkStale(): Promise<number> {
       [now, ...staleIds]
     );
     return staleIds.length;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] detectStaleMemories();:", e);
     return 0;
   }
 }
@@ -1142,7 +1155,8 @@ export async function enforceMemoryBudget(
     );
 
     return toPrune.length;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] operation:", e);
     return 0;
   }
 }
@@ -1210,7 +1224,8 @@ export function parseLLMJson<T>(response: string): T | null {
     }
     // Try raw parse
     return JSON.parse(cleaned) as T;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Memory] const cleaned = response.replace(/^```json\\s*/i, \":", e);
     return null;
   }
 }

@@ -3,7 +3,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // Mock database module
 vi.mock("./database", () => ({
   isDatabaseReady: () => false,
-  getDb: () => { throw new Error("Database not available in tests"); },
+  getDb: () => {
+    throw new Error("Database not available in tests");
+  },
 }));
 
 import {
@@ -60,14 +62,24 @@ describe("genes", () => {
     });
 
     it("saves and loads pool", async () => {
-      const pool: GenePool = { genes: [makeGene()], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [makeGene()],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       await saveGenePool(pool);
       // Note: In test env with mocked DB, loadGenePool returns empty
       // This test verifies the save function doesn't throw
     });
 
     it("addGene deduplicates by name", async () => {
-      let pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      let pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       pool = await addGene(pool, makeGene({ name: "dup" }));
       pool = await addGene(pool, makeGene({ name: "dup" }));
       expect(pool.genes).toHaveLength(1);
@@ -75,23 +87,41 @@ describe("genes", () => {
     });
 
     it("addGene deduplicates by trigger", async () => {
-      let pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      let pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       pool = await addGene(pool, makeGene({ name: "a", trigger: "same" }));
       pool = await addGene(pool, makeGene({ name: "b", trigger: "same" }));
       expect(pool.genes).toHaveLength(1);
     });
 
     it("addGene caps pool at 50", async () => {
-      let pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      let pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       for (let i = 0; i < 60; i++) {
-        pool = await addGene(pool, makeGene({ name: `gene-${i}`, trigger: `trigger-${i}` }));
+        pool = await addGene(
+          pool,
+          makeGene({ name: `gene-${i}`, trigger: `trigger-${i}` }),
+        );
       }
       expect(pool.genes.length).toBeLessThanOrEqual(50);
     });
 
     it("removeGene works", async () => {
       const gene = makeGene({ id: "test-123" });
-      let pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      let pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       pool = await removeGene(pool, "test-123");
       expect(pool.genes).toHaveLength(0);
     });
@@ -145,7 +175,13 @@ describe("genes", () => {
 
     it("limits to top 3 matches", async () => {
       const pool: GenePool = {
-        genes: Array.from({ length: 5 }, (_, i) => makeGene({ name: `g${i}`, trigger: "test", confidence: 0.1 * (i + 1) })),
+        genes: Array.from({ length: 5 }, (_, i) =>
+          makeGene({
+            name: `g${i}`,
+            trigger: "test",
+            confidence: 0.1 * (i + 1),
+          }),
+        ),
         version: 1,
         lastEvolution: 0,
         totalActivations: 0,
@@ -183,12 +219,15 @@ describe("genes", () => {
       ];
       const result = reflectOnSession(msgs, "test");
       expect(result.patterns.length).toBeGreaterThan(0);
-      expect(result.patterns.some(p => p.type === "failure")).toBe(true);
+      expect(result.patterns.some((p) => p.type === "failure")).toBe(true);
     });
 
     it("creates recovery genes for repeated errors", () => {
       const msgs = Array.from({ length: 6 }, (_, i) =>
-        makeMsg("user", i % 2 === 0 ? `[TOOL ERROR: bash]\nPermission denied` : "ok")
+        makeMsg(
+          "user",
+          i % 2 === 0 ? `[TOOL ERROR: bash]\nPermission denied` : "ok",
+        ),
       );
       const result = reflectOnSession(msgs, "test");
       expect(result.suggestedGenes.length).toBeGreaterThan(0);
@@ -217,16 +256,23 @@ describe("genes", () => {
 
     it("detects file edit patterns", () => {
       const msgs = Array.from({ length: 7 }, (_, i) =>
-        makeMsg("user", i % 2 === 0 ? "File edited successfully" : "ok")
+        makeMsg("user", i % 2 === 0 ? "File edited successfully" : "ok"),
       );
       const result = reflectOnSession(msgs, "test");
-      expect(result.suggestedGenes.some(g => g.name === "batch-file-operations")).toBe(true);
+      expect(
+        result.suggestedGenes.some((g) => g.name === "batch-file-operations"),
+      ).toBe(true);
     });
   });
 
   describe("Solidification", () => {
     it("validates gene before adding", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const result = await solidifyGene(pool, {
         name: "test",
         description: "test",
@@ -244,7 +290,12 @@ describe("genes", () => {
     });
 
     it("rejects invalid regex", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const result = await solidifyGene(pool, {
         name: "test",
         description: "test",
@@ -261,7 +312,12 @@ describe("genes", () => {
     });
 
     it("rejects duplicate names", async () => {
-      const pool: GenePool = { genes: [makeGene({ name: "dup" })], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [makeGene({ name: "dup" })],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const result = await solidifyGene(pool, {
         name: "dup",
         description: "test",
@@ -281,7 +337,9 @@ describe("genes", () => {
   describe("Evolution", () => {
     it("boosts confidence of successful genes", async () => {
       const pool: GenePool = {
-        genes: [makeGene({ confidence: 0.5, activationCount: 10, successCount: 8 })],
+        genes: [
+          makeGene({ confidence: 0.5, activationCount: 10, successCount: 8 }),
+        ],
         version: 1,
         lastEvolution: 0,
         totalActivations: 0,
@@ -292,7 +350,13 @@ describe("genes", () => {
 
     it("removes very low confidence unused genes", async () => {
       const pool: GenePool = {
-        genes: [makeGene({ confidence: 0.05, activationCount: 0, createdAt: Date.now() - 60 * 24 * 60 * 60 * 1000 })],
+        genes: [
+          makeGene({
+            confidence: 0.05,
+            activationCount: 0,
+            createdAt: Date.now() - 60 * 24 * 60 * 60 * 1000,
+          }),
+        ],
         version: 1,
         lastEvolution: 0,
         totalActivations: 0,
@@ -323,7 +387,9 @@ describe("genes", () => {
     });
 
     it("formatGenesForPrompt formats genes", () => {
-      const result = formatGenesForPrompt([makeGene({ name: "test", trigger: "when X", action: "do Y" })]);
+      const result = formatGenesForPrompt([
+        makeGene({ name: "test", trigger: "when X", action: "do Y" }),
+      ]);
       expect(result).toContain("test");
       expect(result).toContain("when X");
       expect(result).toContain("do Y");
@@ -335,20 +401,35 @@ describe("genes", () => {
   describe("recordGeneSuccess", () => {
     it("increments successCount for matching gene", async () => {
       const gene = makeGene({ id: "g1", successCount: 3, activationCount: 5 });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const updated = await recordGeneSuccess(pool, "g1");
       expect(updated.genes[0].successCount).toBe(4);
     });
 
     it("ignores non-existent gene ID", async () => {
       const gene = makeGene({ id: "g1" });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const updated = await recordGeneSuccess(pool, "nonexistent");
       expect(updated.genes[0].successCount).toBe(0); // unchanged
     });
 
     it("handles empty pool gracefully", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const updated = await recordGeneSuccess(pool, "g1");
       expect(updated.genes).toHaveLength(0);
     });
@@ -357,13 +438,23 @@ describe("genes", () => {
   describe("removeGene edge cases", () => {
     it("removing non-existent ID returns unchanged pool", async () => {
       const gene = makeGene({ id: "g1" });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const updated = await removeGene(pool, "nonexistent");
       expect(updated.genes).toHaveLength(1);
     });
 
     it("removing from empty pool returns empty", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const updated = await removeGene(pool, "g1");
       expect(updated.genes).toHaveLength(0);
     });
@@ -371,23 +462,47 @@ describe("genes", () => {
 
   describe("evolveGenes boundary conditions", () => {
     it("handles empty pool", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const evolved = await evolveGenes(pool);
       expect(evolved.version).toBe(2);
       expect(evolved.genes).toHaveLength(0);
     });
 
     it("does not boost confidence when activation count <= 5", async () => {
-      const gene = makeGene({ confidence: 0.5, activationCount: 3, successCount: 3, lastActivatedAt: Date.now() });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const gene = makeGene({
+        confidence: 0.5,
+        activationCount: 3,
+        successCount: 3,
+        lastActivatedAt: Date.now(),
+      });
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const evolved = await evolveGenes(pool);
       // Confidence should not change because activationCount < 5
       expect(evolved.genes[0].confidence).toBe(0.5);
     });
 
     it("keeps gene with low confidence but activations > 0", async () => {
-      const gene = makeGene({ confidence: 0.05, activationCount: 1, lastActivatedAt: Date.now() });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const gene = makeGene({
+        confidence: 0.05,
+        activationCount: 1,
+        lastActivatedAt: Date.now(),
+      });
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const evolved = await evolveGenes(pool);
       // Should be kept because activationCount > 0, even though confidence < 0.1
       expect(evolved.genes).toHaveLength(1);
@@ -400,7 +515,12 @@ describe("genes", () => {
         createdAt: Date.now() - 60 * 24 * 60 * 60 * 1000, // 60 days old
         lastActivatedAt: 0,
       });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const evolved = await evolveGenes(pool);
       // Should be removed: confidence < 0.1 AND activationCount === 0
       expect(evolved.genes).toHaveLength(0);
@@ -412,7 +532,12 @@ describe("genes", () => {
         activationCount: 1,
         lastActivatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000, // 31 days ago (stale)
       });
-      const pool: GenePool = { genes: [gene], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [gene],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const evolved = await evolveGenes(pool);
       // Confidence should reduce because it was last activated >30 days ago
       // but it had activations, so it should stay
@@ -422,7 +547,12 @@ describe("genes", () => {
 
   describe("expressGenes edge cases", () => {
     it("handles empty pool", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const matched = await expressGenes(pool, "test", []);
       expect(matched).toHaveLength(0);
     });
@@ -430,7 +560,9 @@ describe("genes", () => {
     it("handles trigger with special regex characters gracefully", async () => {
       const pool: GenePool = {
         genes: [makeGene({ trigger: "(test)" })],
-        version: 1, lastEvolution: 0, totalActivations: 0,
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
       };
       const matched = await expressGenes(pool, "test", []);
       expect(matched).toHaveLength(1);
@@ -439,7 +571,9 @@ describe("genes", () => {
     it("handles trigger with unicode characters", async () => {
       const pool: GenePool = {
         genes: [makeGene({ trigger: "日本語" })],
-        version: 1, lastEvolution: 0, totalActivations: 0,
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
       };
       const matched = await expressGenes(pool, "日本語 test", []);
       expect(matched).toHaveLength(1);
@@ -448,7 +582,9 @@ describe("genes", () => {
     it("matches by recent content when prompt doesn't match", async () => {
       const pool: GenePool = {
         genes: [makeGene({ trigger: "error" })],
-        version: 1, lastEvolution: 0, totalActivations: 0,
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
       };
       const msgs = [makeMsg("assistant", "I found an error in your code")];
       const matched = await expressGenes(pool, "hello", msgs);
@@ -458,7 +594,12 @@ describe("genes", () => {
 
   describe("solidifyGene edge cases", () => {
     it("rejects empty name", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const result = await solidifyGene(pool, {
         name: "",
         description: "test",
@@ -476,7 +617,12 @@ describe("genes", () => {
     });
 
     it("rejects empty trigger", async () => {
-      const pool: GenePool = { genes: [], version: 1, lastEvolution: 0, totalActivations: 0 };
+      const pool: GenePool = {
+        genes: [],
+        version: 1,
+        lastEvolution: 0,
+        totalActivations: 0,
+      };
       const result = await solidifyGene(pool, {
         name: "test",
         description: "test",

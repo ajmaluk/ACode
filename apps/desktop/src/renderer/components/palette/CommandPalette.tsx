@@ -1,6 +1,13 @@
 import { useMemo } from "react";
 import { Command } from "cmdk";
-import { useCommandPalette, useSettingsView, useWorkspace, useShortcuts, useChat, useUI } from "@/store/useAppStore";
+import {
+  useCommandPalette,
+  useSettingsView,
+  useWorkspace,
+  useShortcuts,
+  useChat,
+  useUI,
+} from "@/store/useAppStore";
 import { basename } from "@/lib/pathUtils";
 import { modKey, shortcut } from "@/lib/platform";
 import {
@@ -91,7 +98,8 @@ export function CommandPalette() {
         shortcut: shortcut("N"),
         perform: () => {
           useChat.getState().newChat();
-          if (useUI.getState().viewMode !== "chat") useUI.getState().setViewMode("chat");
+          if (useUI.getState().viewMode !== "chat")
+            useUI.getState().setViewMode("chat");
           setOpen(false);
         },
       },
@@ -101,7 +109,13 @@ export function CommandPalette() {
         group: "View",
         icon: <TerminalSquare className="w-3.5 h-3.5" />,
         shortcut: `${modKey()}\``,
-        perform: () => { const ui = useUI.getState(); if (ui.viewMode !== "editor") ui.setViewMode("editor"); ui.setBottomPanelTab("terminal"); ui.setBottomPanelOpen(true); setOpen(false); },
+        perform: () => {
+          const ui = useUI.getState();
+          if (ui.viewMode !== "editor") ui.setViewMode("editor");
+          ui.setBottomPanelTab("terminal");
+          ui.setBottomPanelOpen(true);
+          setOpen(false);
+        },
       },
       {
         id: "search-files",
@@ -109,7 +123,10 @@ export function CommandPalette() {
         group: "View",
         icon: <Search className="w-3.5 h-3.5" />,
         shortcut: shortcut("P"),
-        perform: () => { window.dispatchEvent(new CustomEvent("editor:quick-open")); setOpen(false); },
+        perform: () => {
+          window.dispatchEvent(new CustomEvent("editor:quick-open"));
+          setOpen(false);
+        },
       },
       {
         id: "go-symbol",
@@ -117,15 +134,23 @@ export function CommandPalette() {
         group: "View",
         icon: <Code2 className="w-3.5 h-3.5" />,
         shortcut: shortcut("O", { shift: true }),
-        perform: () => { window.dispatchEvent(new CustomEvent("editor:go-to-line")); setOpen(false); },
+        perform: () => {
+          window.dispatchEvent(new CustomEvent("editor:go-to-line"));
+          setOpen(false);
+        },
       },
     ],
-    [setOpen, openSettings, openWorkspace, loadWorkspace, toggleShortcuts]
+    [setOpen, openSettings, openWorkspace, loadWorkspace, toggleShortcuts],
   );
 
   const fileItems = useMemo<Item[]>(() => {
     const out: Item[] = [];
-    const visit = (n: { name: string; path: string; type: string; children?: typeof fileTree }) => {
+    const visit = (n: {
+      name: string;
+      path: string;
+      type: string;
+      children?: typeof fileTree;
+    }) => {
       if (n.type === "file") {
         out.push({
           id: n.path,
@@ -159,7 +184,7 @@ export function CommandPalette() {
           setOpen(false);
         },
       })),
-    [recent, openFile, setOpen]
+    [recent, openFile, setOpen],
   );
 
   if (!open) return null;
@@ -167,7 +192,9 @@ export function CommandPalette() {
   return (
     <div
       className="fixed inset-0 z-50 bg-black/55 dark:bg-black/55 backdrop-blur-sm flex items-start justify-center pt-[12vh] animate-fade-in"
-      role="dialog" aria-modal="true" aria-label="Command palette"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
       onClick={() => setOpen(false)}
     >
       <div
@@ -200,22 +227,30 @@ export function CommandPalette() {
           <Command.List className="max-h-[55vh] overflow-y-auto py-2 scrollbar-thin">
             <Command.Empty className="px-3 py-8 text-center text-sm text-dalam-text-muted">
               <p>No results for "{query}"</p>
-              <p className="text-[11px] mt-1">Try a different search or check the help (?)</p>
+              <p className="text-[11px] mt-1">
+                Try a different search or check the help (?)
+              </p>
             </Command.Empty>
 
             {recentItems.length > 0 && !query && (
               <Command.Group heading="Recent" className="px-1">
-                {recentItems.slice(0, 5).map((i) => <Row key={i.id} item={i} />)}
+                {recentItems.slice(0, 5).map((i) => (
+                  <Row key={i.id} item={i} />
+                ))}
               </Command.Group>
             )}
 
             <Command.Group heading="Commands" className="px-1">
-              {items.map((i) => <Row key={i.id} item={i} />)}
+              {items.map((i) => (
+                <Row key={i.id} item={i} />
+              ))}
             </Command.Group>
 
             {fileItems.length > 0 && (
               <Command.Group heading="Files" className="px-1">
-                {fileItems.slice(0, 30).map((i) => <Row key={i.id} item={i} />)}
+                {fileItems.slice(0, 30).map((i) => (
+                  <Row key={i.id} item={i} />
+                ))}
               </Command.Group>
             )}
           </Command.List>
@@ -223,13 +258,15 @@ export function CommandPalette() {
           <div className="border-t border-dalam-border-primary px-3 py-1.5 flex items-center justify-between text-[10px] text-dalam-text-muted bg-dalam-bg-tertiary/30">
             <div className="flex items-center gap-2">
               <span className="flex items-center gap-1">
-                <kbd className="px-1 bg-dalam-bg-tertiary rounded">↑↓</kbd> navigate
+                <kbd className="px-1 bg-dalam-bg-tertiary rounded">↑↓</kbd>{" "}
+                navigate
               </span>
               <span className="flex items-center gap-1">
                 <kbd className="px-1 bg-dalam-bg-tertiary rounded">↵</kbd> open
               </span>
               <span className="flex items-center gap-1">
-                <kbd className="px-1 bg-dalam-bg-tertiary rounded">esc</kbd> close
+                <kbd className="px-1 bg-dalam-bg-tertiary rounded">esc</kbd>{" "}
+                close
               </span>
             </div>
             <span className="flex items-center gap-1 text-dalam-accent-primary">
@@ -250,10 +287,16 @@ function Row({ item }: { item: Item }) {
       onSelect={item.perform}
       className="group flex items-center gap-2 px-2 py-1.5 mx-1 rounded cursor-pointer text-sm aria-selected:bg-dalam-accent-subtle data-[selected=true]:bg-dalam-accent-subtle"
     >
-      <span className="text-dalam-text-secondary flex-shrink-0">{item.icon}</span>
-      <span className="flex-1 text-dalam-text-primary truncate">{item.label}</span>
+      <span className="text-dalam-text-secondary flex-shrink-0">
+        {item.icon}
+      </span>
+      <span className="flex-1 text-dalam-text-primary truncate">
+        {item.label}
+      </span>
       {item.hint && (
-        <span className="text-[10px] text-dalam-text-secondary truncate max-w-[200px]">{item.hint}</span>
+        <span className="text-[10px] text-dalam-text-secondary truncate max-w-[200px]">
+          {item.hint}
+        </span>
       )}
       {item.shortcut && (
         <kbd className="text-[10px] text-dalam-text-secondary px-1.5 py-0.5 bg-dalam-bg-tertiary rounded flex-shrink-0">

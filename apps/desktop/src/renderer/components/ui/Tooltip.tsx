@@ -8,7 +8,12 @@ interface TooltipProps {
   delay?: number;
 }
 
-export function Tooltip({ content, children, side = "top", delay = 100 }: TooltipProps) {
+export function Tooltip({
+  content,
+  children,
+  side = "top",
+  delay = 100,
+}: TooltipProps) {
   const [visible, setVisible] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLDivElement>(null);
@@ -17,10 +22,10 @@ export function Tooltip({ content, children, side = "top", delay = 100 }: Toolti
   const updateCoords = () => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    
+
     let top = 0;
     let left = 0;
-    
+
     if (side === "top") {
       top = rect.top + window.scrollY;
       left = rect.left + rect.width / 2 + window.scrollX;
@@ -34,7 +39,7 @@ export function Tooltip({ content, children, side = "top", delay = 100 }: Toolti
       top = rect.top + rect.height / 2 + window.scrollY;
       left = rect.right + window.scrollX;
     }
-    
+
     setCoords({ top, left });
   };
 
@@ -97,7 +102,9 @@ export function Tooltip({ content, children, side = "top", delay = 100 }: Toolti
       onBlur={hide}
     >
       {children}
-      {visible && content && typeof document !== "undefined" &&
+      {visible &&
+        content &&
+        typeof document !== "undefined" &&
         ReactDOM.createPortal(
           <div
             style={{
@@ -110,7 +117,7 @@ export function Tooltip({ content, children, side = "top", delay = 100 }: Toolti
           >
             {content}
           </div>,
-          document.body
+          document.body,
         )}
     </div>
   );

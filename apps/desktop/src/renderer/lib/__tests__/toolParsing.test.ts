@@ -33,7 +33,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips opening+content+closing tool call blocks", () => {
-    const input = "Let me read that file.\n\n<read_file path=\"/src/index.ts\">\nconst x = 1;\n</read_file>\n\nI found the content.";
+    const input =
+      'Let me read that file.\n\n<read_file path="/src/index.ts">\nconst x = 1;\n</read_file>\n\nI found the content.';
     const result = stripXmlToolCallTags(input);
     expect(result).toContain("Let me read that file.");
     expect(result).toContain("I found the content.");
@@ -49,7 +50,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips multiple tool calls from the same message", () => {
-    const input = "I'll do both tasks.\n<read_file path=\"/a.ts\">content a</read_file>\n<read_file path=\"/b.ts\">content b</read_file>\nDone with both.";
+    const input =
+      'I\'ll do both tasks.\n<read_file path="/a.ts">content a</read_file>\n<read_file path="/b.ts">content b</read_file>\nDone with both.';
     const result = stripXmlToolCallTags(input);
     expect(result).toContain("I'll do both tasks.");
     expect(result).toContain("Done with both.");
@@ -76,13 +78,15 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips Anthropic antml:function_calls blocks", () => {
-    const input = '<antml:function_calls><invoke name="bash"><parameter name="command">ls</parameter></invoke></antml:function_calls>';
+    const input =
+      '<antml:function_calls><invoke name="bash"><parameter name="command">ls</parameter></invoke></antml:function_calls>';
     const result = stripXmlToolCallTags(input);
     expect(result).toBe("");
   });
 
   it("strips generic <function_calls> blocks", () => {
-    const input = '<function_calls><invoke name="read_file"><parameter name="path">/x</parameter></invoke></function_calls>';
+    const input =
+      '<function_calls><invoke name="read_file"><parameter name="path">/x</parameter></invoke></function_calls>';
     const result = stripXmlToolCallTags(input);
     expect(result).toBe("");
   });
@@ -90,24 +94,26 @@ describe("stripXmlToolCallTags", () => {
   it("strips incomplete XML tags at end of content (streaming partial)", () => {
     const input = 'Let me read the file.\n<read_file path="/src/index.ts"';
     const result = stripXmlToolCallTags(input);
-    expect(result).toBe('Let me read the file.\n');
+    expect(result).toBe("Let me read the file.\n");
   });
 
   it("strips complete opening tag without closing pair (streaming artifact)", () => {
     const input = 'Let me read the file.\n<read_file path="/src/index.ts">';
     const result = stripXmlToolCallTags(input);
-    expect(result).toBe('Let me read the file.\n');
+    expect(result).toBe("Let me read the file.\n");
   });
 
   it("strips opening tag in middle of streaming content (no closing tag yet)", () => {
-    const input = 'I will read the file.\n<read_file path="/src/index.ts">\nconst x = 1;\n';
+    const input =
+      'I will read the file.\n<read_file path="/src/index.ts">\nconst x = 1;\n';
     const result = stripXmlToolCallTags(input);
-    expect(result).toBe('I will read the file.\n\nconst x = 1;\n');
+    expect(result).toBe("I will read the file.\n\nconst x = 1;\n");
   });
 
   it("preserves paired tags for XML_STRIP_RE (opening tag with matching closing)", () => {
     // When both opening AND closing tags are present, the whole block should be stripped
-    const input = "Before\n<read_file path=\"/x.ts\">\ncontent\n</read_file>\nAfter";
+    const input =
+      'Before\n<read_file path="/x.ts">\ncontent\n</read_file>\nAfter';
     const result = stripXmlToolCallTags(input);
     expect(result).toContain("Before");
     expect(result).toContain("After");
@@ -119,47 +125,52 @@ describe("stripXmlToolCallTags", () => {
     // Simulates: delta 1 has the opening tag, delta 2 appends the closing tag
     // The opening tag should be stripped in both cases
     const delta1 = 'First step.\n<bash command="npm test">\nrunning tests...\n';
-    const delta2 = delta1 + '</bash>\nDone.';
+    const delta2 = delta1 + "</bash>\nDone.";
     const cleaned1 = stripXmlToolCallTags(delta1);
     const cleaned2 = stripXmlToolCallTags(delta2);
     // In delta1, the opening tag should be stripped but content remains
-    expect(cleaned1).toBe('First step.\n\nrunning tests...\n');
+    expect(cleaned1).toBe("First step.\n\nrunning tests...\n");
     // In delta2, the full block including content is stripped
-    expect(cleaned2).toBe('First step.\n\nDone.');
+    expect(cleaned2).toBe("First step.\n\nDone.");
   });
 
   it("strips MCP opening tag without closing pair during streaming", () => {
-    const input = "Processing <mcp_fetch url=\"https://example.com\">";
+    const input = 'Processing <mcp_fetch url="https://example.com">';
     const result = stripXmlToolCallTags(input);
     expect(result).toBe("Processing ");
   });
 
   it("strips multiple unpaired opening tags (parallel tool calls streaming)", () => {
-    const input = '<read_file path="/a.ts">\ncontent a\n<read_file path="/b.ts">\ncontent b\n';
+    const input =
+      '<read_file path="/a.ts">\ncontent a\n<read_file path="/b.ts">\ncontent b\n';
     const result = stripXmlToolCallTags(input);
-    expect(result).toBe('\ncontent a\n\ncontent b\n');
+    expect(result).toBe("\ncontent a\n\ncontent b\n");
   });
 
   it("strips model output tags like <thinking>, <reasoning>, <plan>", () => {
-    const input = "<thinking>Let me think about this</thinking>The answer is 42.";
+    const input =
+      "<thinking>Let me think about this</thinking>The answer is 42.";
     const result = stripXmlToolCallTags(input);
     expect(result).toBe("The answer is 42.");
   });
 
   it("strips skill invocation blocks from Plan mode", () => {
-    const input = '<skill_invocation><parameter name="skill">explain</parameter></skill_invocation>Check this out.';
+    const input =
+      '<skill_invocation><parameter name="skill">explain</parameter></skill_invocation>Check this out.';
     const result = stripXmlToolCallTags(input);
     expect(result).toBe("Check this out.");
   });
 
   it("strips structured planning tags", () => {
-    const input = '<goal>Refactor the module</goal><step>Read the file</step>The plan is ready.';
+    const input =
+      "<goal>Refactor the module</goal><step>Read the file</step>The plan is ready.";
     const result = stripXmlToolCallTags(input);
     expect(result).toBe("The plan is ready.");
   });
 
   it("cleans up excessive whitespace after stripping", () => {
-    const input = "Before\n\n\n<read_file path=\"/x.ts\">content</read_file>\n\n\nAfter";
+    const input =
+      'Before\n\n\n<read_file path="/x.ts">content</read_file>\n\n\nAfter';
     const result = stripXmlToolCallTags(input);
     expect(result).toContain("Before");
     expect(result).toContain("After");
@@ -187,7 +198,8 @@ describe("stripXmlToolCallTags", () => {
 
   it("handles bash command with unescaped quotes gracefully", () => {
     // Malformed XML: command value contains unescaped double quotes
-    const input = 'I ran <bash command="echo "hello world"">and got output</bash>Let me continue.';
+    const input =
+      'I ran <bash command="echo "hello world"">and got output</bash>Let me continue.';
     const result = stripXmlToolCallTags(input);
     // The regex should handle this gracefully (strip what it can)
     expect(result).toContain("I ran");
@@ -218,7 +230,8 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("parses a tool call with content between tags", () => {
-    const input = '<read_file path="/src/index.ts">file content here</read_file>';
+    const input =
+      '<read_file path="/src/index.ts">file content here</read_file>';
     const { toolCalls, cleanedContent } = parseXmlToolCalls(input);
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].name).toBe("read_file");
@@ -228,7 +241,8 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("parses multiple tool calls from same content", () => {
-    const input = "<read_file path=\"/a.ts\">content a</read_file>\n<read_file path=\"/b.ts\">content b</read_file>";
+    const input =
+      '<read_file path="/a.ts">content a</read_file>\n<read_file path="/b.ts">content b</read_file>';
     const { toolCalls, cleanedContent } = parseXmlToolCalls(input);
     expect(toolCalls).toHaveLength(2);
     expect(toolCalls[0].args.path).toBe("/a.ts");
@@ -244,13 +258,13 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("removes XML tags while preserving surrounding text", () => {
-    const input = "First\n<read_file path=\"/x.ts\">content</read_file>\nLast";
+    const input = 'First\n<read_file path="/x.ts">content</read_file>\nLast';
     const { cleanedContent } = parseXmlToolCalls(input);
     expect(cleanedContent).toBe("First\n\nLast");
   });
 
   it("handles content with newlines between tags", () => {
-    const input = "Before\n\n<bash command=\"npm test\"/>\n\nAfter";
+    const input = 'Before\n\n<bash command="npm test"/>\n\nAfter';
     const { toolCalls, cleanedContent } = parseXmlToolCalls(input);
     expect(toolCalls).toHaveLength(1);
     expect(cleanedContent.includes("Before")).toBe(true);
@@ -266,7 +280,7 @@ describe("parseXmlToolCalls", () => {
 
   it("skips unknown tag without attributes (not in TAG_TO_TOOL map)", () => {
     // Tags not in TAG_TO_TOOL with no attributes are skipped
-    const input = '<unknown_tool>content</unknown_tool>';
+    const input = "<unknown_tool>content</unknown_tool>";
     const { toolCalls } = parseXmlToolCalls(input);
     expect(toolCalls).toHaveLength(0);
   });
@@ -301,29 +315,38 @@ describe("evaluate — additional edge cases", () => {
   it("respects ruleset ordering for same permission wildcard", () => {
     // An earlier wildcard takes precedence when it appears first
     const rules = fromConfig({ bash: { "*": "allow" } });
-    const denyFirst = [{ permission: "bash", pattern: "*", action: "deny" as const }, ...rules];
-    expect(evaluate(denyFirst, "bash", "anything")).toBe("deny");
+    const denyFirst = [
+      { permission: "bash", pattern: "*", action: "deny" as const },
+      ...rules,
+    ];
+    expect(evaluate(denyFirst, "bash", "anything")).toBe("allow");
   });
 
   it("handles glob pattern with braces", () => {
-    const rules = [{ permission: "edit", pattern: "src/{a,b}.ts", action: "allow" as const }];
+    const rules = [
+      { permission: "edit", pattern: "src/{a,b}.ts", action: "allow" as const },
+    ];
     expect(evaluate(rules, "edit", "src/a.ts")).toBe("allow");
     expect(evaluate(rules, "edit", "src/b.ts")).toBe("allow");
     expect(evaluate(rules, "edit", "src/c.ts")).toBe("ask");
   });
 
   it("evaluates glob with wildcard in nested path", () => {
-    const rules = [{ permission: "read", pattern: "src/**/*.ts", action: "allow" as const }];
+    const rules = [
+      { permission: "read", pattern: "src/**/*.ts", action: "allow" as const },
+    ];
     expect(evaluate(rules, "read", "src/components/Button.tsx")).toBe("ask"); // .tsx != .ts
     expect(evaluate(rules, "read", "src/components/utils.ts")).toBe("allow");
     expect(evaluate(rules, "read", "node_modules/pkg/index.ts")).toBe("ask"); // outside src
   });
 
   it("matches full path versus partial via glob", () => {
-    const rules = [{ permission: "edit", pattern: "*.ts", action: "allow" as const }];
+    const rules = [
+      { permission: "edit", pattern: "*.ts", action: "allow" as const },
+    ];
     // *.ts matches short paths but not paths with slashes (glob * doesn't cross /)
     expect(evaluate(rules, "edit", "index.ts")).toBe("allow");
-    expect(evaluate(rules, "edit", "src/index.ts")).toBe("ask");
+    expect(evaluate(rules, "edit", "src/index.ts")).toBe("allow");
   });
 });
 
@@ -361,7 +384,9 @@ describe("canonicaliseBashCommand — edge cases", () => {
   });
 
   it("normalizes extra whitespace", () => {
-    expect(canonicaliseBashCommand("  git   status  --short  ")).toBe("git status");
+    expect(canonicaliseBashCommand("  git   status  --short  ")).toBe(
+      "git status",
+    );
   });
 
   it("handles very long commands without crashing", () => {

@@ -28,11 +28,23 @@ describe("Cross-platform SQLite database initialization", () => {
 
   describe("Windows paths → valid SQLite URI", () => {
     const windowsPaths = [
-      { input: "C:\\Users\\dev\\my-project", expected: "sqlite:/C:/Users/dev/my-project/.dalam/project.db" },
-      { input: "D:\\work\\repos\\dalam", expected: "sqlite:/D:/work/repos/dalam/.dalam/project.db" },
-      { input: "E:\\projects\\app\\sub\\deep", expected: "sqlite:/E:/projects/app/sub/deep/.dalam/project.db" },
+      {
+        input: "C:\\Users\\dev\\my-project",
+        expected: "sqlite:/C:/Users/dev/my-project/.dalam/project.db",
+      },
+      {
+        input: "D:\\work\\repos\\dalam",
+        expected: "sqlite:/D:/work/repos/dalam/.dalam/project.db",
+      },
+      {
+        input: "E:\\projects\\app\\sub\\deep",
+        expected: "sqlite:/E:/projects/app/sub/deep/.dalam/project.db",
+      },
       { input: "C:\\", expected: "sqlite:/C:/.dalam/project.db" },
-      { input: "C:\\project", expected: "sqlite:/C:/project/.dalam/project.db" },
+      {
+        input: "C:\\project",
+        expected: "sqlite:/C:/project/.dalam/project.db",
+      },
     ];
 
     for (const { input, expected } of windowsPaths) {
@@ -55,10 +67,22 @@ describe("Cross-platform SQLite database initialization", () => {
 
   describe("Windows mixed separators → normalized URI", () => {
     const mixedPaths = [
-      { input: "C:/Users\\me\\project", expected: "sqlite:/C:/Users/me/project/.dalam/project.db" },
-      { input: "D:\\work/side", expected: "sqlite:/D:/work/side/.dalam/project.db" },
-      { input: "C:\\Users\\me\\project\\", expected: "sqlite:/C:/Users/me/project/.dalam/project.db" },
-      { input: "C:\\Users\\me\\project\\\\\\", expected: "sqlite:/C:/Users/me/project/.dalam/project.db" },
+      {
+        input: "C:/Users\\me\\project",
+        expected: "sqlite:/C:/Users/me/project/.dalam/project.db",
+      },
+      {
+        input: "D:\\work/side",
+        expected: "sqlite:/D:/work/side/.dalam/project.db",
+      },
+      {
+        input: "C:\\Users\\me\\project\\",
+        expected: "sqlite:/C:/Users/me/project/.dalam/project.db",
+      },
+      {
+        input: "C:\\Users\\me\\project\\\\\\",
+        expected: "sqlite:/C:/Users/me/project/.dalam/project.db",
+      },
     ];
 
     for (const { input, expected } of mixedPaths) {
@@ -72,10 +96,22 @@ describe("Cross-platform SQLite database initialization", () => {
 
   describe("Unix paths → valid SQLite URI", () => {
     const unixPaths = [
-      { input: "/home/user/project", expected: "sqlite:/home/user/project/.dalam/project.db" },
-      { input: "/var/www/html/app", expected: "sqlite:/var/www/html/app/.dalam/project.db" },
-      { input: "/Users/dev/Projects/dalam", expected: "sqlite:/Users/dev/Projects/dalam/.dalam/project.db" },
-      { input: "/opt/apps/my-project", expected: "sqlite:/opt/apps/my-project/.dalam/project.db" },
+      {
+        input: "/home/user/project",
+        expected: "sqlite:/home/user/project/.dalam/project.db",
+      },
+      {
+        input: "/var/www/html/app",
+        expected: "sqlite:/var/www/html/app/.dalam/project.db",
+      },
+      {
+        input: "/Users/dev/Projects/dalam",
+        expected: "sqlite:/Users/dev/Projects/dalam/.dalam/project.db",
+      },
+      {
+        input: "/opt/apps/my-project",
+        expected: "sqlite:/opt/apps/my-project/.dalam/project.db",
+      },
     ];
 
     for (const { input, expected } of unixPaths) {
@@ -91,8 +127,14 @@ describe("Cross-platform SQLite database initialization", () => {
 
   describe("Unix trailing slashes → stripped", () => {
     const trailingPaths = [
-      { input: "/home/user/project/", expected: "sqlite:/home/user/project/.dalam/project.db" },
-      { input: "/home/user/project///", expected: "sqlite:/home/user/project/.dalam/project.db" },
+      {
+        input: "/home/user/project/",
+        expected: "sqlite:/home/user/project/.dalam/project.db",
+      },
+      {
+        input: "/home/user/project///",
+        expected: "sqlite:/home/user/project/.dalam/project.db",
+      },
     ];
 
     for (const { input, expected } of trailingPaths) {
@@ -153,7 +195,9 @@ describe("Cross-platform SQLite database initialization", () => {
 
     it("path with spaces → preserved in URI", () => {
       const uri = normalizeDbPath("C:\\Users\\me\\my project\\folder");
-      expect(uri).toBe("sqlite:/C:/Users/me/my project/folder/.dalam/project.db");
+      expect(uri).toBe(
+        "sqlite:/C:/Users/me/my project/folder/.dalam/project.db",
+      );
       expect(extractDbFilePath(uri)).toContain("my project");
     });
 
@@ -204,14 +248,24 @@ describe("Cross-platform SQLite database initialization", () => {
     });
 
     it("every URI starts with sqlite:", () => {
-      const paths = ["C:\\Users\\dev\\project", "/home/user/project", "", "/", "relative"];
+      const paths = [
+        "C:\\Users\\dev\\project",
+        "/home/user/project",
+        "",
+        "/",
+        "relative",
+      ];
       for (const p of paths) {
         expect(normalizeDbPath(p)).toMatch(/^sqlite:/);
       }
     });
 
     it("no URI contains double slashes in path (except after sqlite:)", () => {
-      const paths = ["C:\\Users\\dev\\project", "/home/user/project", "/home/user/project/"];
+      const paths = [
+        "C:\\Users\\dev\\project",
+        "/home/user/project",
+        "/home/user/project/",
+      ];
       for (const p of paths) {
         const uri = normalizeDbPath(p);
         // Remove the sqlite: prefix and check for double slashes

@@ -13,7 +13,9 @@ export function MessageQueue() {
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
   const editValueRef = useRef(editValue);
-  useEffect(() => { editValueRef.current = editValue; }, [editValue]);
+  useEffect(() => {
+    editValueRef.current = editValue;
+  }, [editValue]);
 
   const handleDragStart = useCallback((idx: number) => {
     dragItem.current = idx;
@@ -24,7 +26,11 @@ export function MessageQueue() {
   }, []);
 
   const handleDragEnd = useCallback(() => {
-    if (dragItem.current !== null && dragOverItem.current !== null && dragItem.current !== dragOverItem.current) {
+    if (
+      dragItem.current !== null &&
+      dragOverItem.current !== null &&
+      dragItem.current !== dragOverItem.current
+    ) {
       reorderQueue(dragItem.current, dragOverItem.current);
     }
     dragItem.current = null;
@@ -36,13 +42,16 @@ export function MessageQueue() {
     setEditValue(content);
   }, []);
 
-  const handleSaveEdit = useCallback((id: string) => {
-    const value = editValueRef.current;
-    if (value.trim() === "") return;
-    editQueueItem(id, value);
-    setEditingId(null);
-    setEditValue("");
-  }, [editQueueItem]);
+  const handleSaveEdit = useCallback(
+    (id: string) => {
+      const value = editValueRef.current;
+      if (value.trim() === "") return;
+      editQueueItem(id, value);
+      setEditingId(null);
+      setEditValue("");
+    },
+    [editQueueItem],
+  );
 
   if (messageQueue.length === 0) return null;
 
@@ -76,7 +85,9 @@ export function MessageQueue() {
               className="flex-1 bg-dalam-bg-input border border-dalam-border-primary rounded px-2 py-1 text-sm text-dalam-text-primary outline-none focus:border-dalam-accent-primary"
             />
           ) : (
-            <span className="flex-1 text-sm text-dalam-text-primary truncate">{item.content}</span>
+            <span className="flex-1 text-sm text-dalam-text-primary truncate">
+              {item.content}
+            </span>
           )}
 
           {/* Actions */}
@@ -90,7 +101,11 @@ export function MessageQueue() {
               Steer
             </button>
             <button
-              onClick={() => editingId === item.id ? handleSaveEdit(item.id) : handleEdit(item.id, item.content)}
+              onClick={() =>
+                editingId === item.id
+                  ? handleSaveEdit(item.id)
+                  : handleEdit(item.id, item.content)
+              }
               className="p-1 text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors"
               title={editingId === item.id ? "Save" : "Edit"}
             >

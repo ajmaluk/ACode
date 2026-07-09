@@ -58,12 +58,20 @@ const activeDreams = new Set<string>();
  */
 export async function runDreamCycle(
   workspacePath: string,
-  notifyFn?: (proposal: DreamProposal) => void
+  notifyFn?: (proposal: DreamProposal) => void,
 ): Promise<DreamCycleResult> {
   if (activeDreams.has(workspacePath)) {
-    if (import.meta.env.DEV) console.log(`[DreamAgent] Dream cycle already running for ${workspacePath}, skipping.`);
+    if (import.meta.env.DEV)
+      console.log(
+        `[DreamAgent] Dream cycle already running for ${workspacePath}, skipping.`,
+      );
     return {
-      report: { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 },
+      report: {
+        purgedCount: 0,
+        deduplicatedCount: 0,
+        dateAdjustedCount: 0,
+        validatedCount: 0,
+      },
       proposals: { autoAccepted: [], queuedForReview: [], rejected: [] },
     };
   }
@@ -74,9 +82,16 @@ export async function runDreamCycle(
     const model = useSettings.getState().settings.selectedModel;
 
     if (!model) {
-      console.warn("[DreamAgent] No active model configured, skipping dream cycle.");
+      console.warn(
+        "[DreamAgent] No active model configured, skipping dream cycle.",
+      );
       return {
-        report: { purgedCount: 0, deduplicatedCount: 0, dateAdjustedCount: 0, validatedCount: 0 },
+        report: {
+          purgedCount: 0,
+          deduplicatedCount: 0,
+          dateAdjustedCount: 0,
+          validatedCount: 0,
+        },
         proposals: { autoAccepted: [], queuedForReview: [], rejected: [] },
       };
     }
@@ -89,26 +104,29 @@ export async function runDreamCycle(
     let staleCountForProposal = 0;
     try {
       const db = getDb();
-      const staleRows = await db.select(
-        `SELECT COUNT(*) as count FROM memories WHERE stale=1`
-      ) as { count: number }[];
+      const staleRows = (await db.select(
+        `SELECT COUNT(*) as count FROM memories WHERE stale=1`,
+      )) as { count: number }[];
       staleCountForProposal = staleRows[0]?.count ?? 0;
       if (staleCountForProposal > 0) {
-        const totalRows = await db.select(
-          `SELECT COUNT(*) as count FROM memories WHERE stale=0`
-        ) as { count: number }[];
+        const totalRows = (await db.select(
+          `SELECT COUNT(*) as count FROM memories WHERE stale=0`,
+        )) as { count: number }[];
         const totalActive = totalRows[0]?.count ?? 0;
         const purgeProposal = createProposal(
           "purge-stale",
           `Purge ${staleCountForProposal} stale memory entr${staleCountForProposal === 1 ? "y" : "ies"}`,
           { staleCount: staleCountForProposal, totalActive },
           staleCountForProposal,
-          { totalInCategory: totalActive + staleCountForProposal }
+          { totalInCategory: totalActive + staleCountForProposal },
         );
         allProposals.push(purgeProposal);
       }
     } catch (err) {
-      console.warn("[DreamAgent] Failed to check stale memory count, skipping purge:", err);
+      console.warn(
+        "[DreamAgent] Failed to check stale memory count, skipping purge:",
+        err,
+      );
     }
 
     // 2. Validate file references (parallelized)
@@ -134,7 +152,7 @@ export async function runDreamCycle(
             console.warn("[DreamAgent] Failed to check memory file:", err);
             return null;
           }
-        })
+        }),
       );
       for (const result of results) {
         if (result.status === "fulfilled" && result.value) {
@@ -146,13 +164,13 @@ export async function runDreamCycle(
 
     // Create proposal for file validation marks
     if (staleIds.length > 0) {
-      const totalWithFiles = memories.filter(m => m.sourceFile).length;
+      const totalWithFiles = memories.filter((m) => m.sourceFile).length;
       const validateProposal = createProposal(
         "mark-stale",
         `Mark ${staleIds.length} memor${staleIds.length === 1 ? "y" : "ies"} stale — source files no longer exist`,
         { staleIds, totalChecked: memories.length, totalWithFiles },
         staleIds.length,
-        { totalInCategory: totalWithFiles || 1 }
+        { totalInCategory: totalWithFiles || 1 },
       );
       allProposals.push(validateProposal);
     }
@@ -165,35 +183,52 @@ export async function runDreamCycle(
       const db = getDb();
       const allMemories = await getAllMemories({ excludeStale: true });
 
-      const tierUpgrade: Record<string, string> = { low: "medium", medium: "high", high: "critical" };
-      const tierDowngrade: Record<string, string> = { critical: "high", high: "medium", medium: "low" };
+      const tierUpgrade: Record<string, string> = {
+        low: "medium",
+        medium: "high",
+        high: "critical",
+      };
+      const tierDowngrade: Record<string, string> = {
+        critical: "high",
+        high: "medium",
+        medium: "low",
+      };
 
       // Promote frequently accessed low/medium tier memories
       const promoteCandidates = allMemories.filter(
-        m => m.tier !== "critical" && m.accessCount >= 5
+        (m) => m.tier !== "critical" && m.accessCount >= 5,
       );
       for (const mem of promoteCandidates) {
         const newTier = tierUpgrade[mem.tier];
         if (newTier) {
-          await db.execute(
-            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-            [newTier, Date.now(), mem.id]
-          ).catch(() => {});
+          await db
+            .execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
+              newTier,
+              Date.now(),
+              mem.id,
+            ])
+            .catch(() => {});
           reScoredPromoted++;
         }
       }
 
       // Demote rarely accessed high-tier memories older than 30 days
       const demoteCandidates = allMemories.filter(
-        m => m.tier === "high" && m.accessCount <= 1 && (Date.now() - m.createdAt) > 30 * 86400000
+        (m) =>
+          m.tier === "high" &&
+          m.accessCount <= 1 &&
+          Date.now() - m.createdAt > 30 * 86400000,
       );
       for (const mem of demoteCandidates) {
         const newTier = tierDowngrade[mem.tier];
         if (newTier) {
-          await db.execute(
-            `UPDATE memories SET tier=?, updated_at=? WHERE id=?`,
-            [newTier, Date.now(), mem.id]
-          ).catch(() => {});
+          await db
+            .execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
+              newTier,
+              Date.now(),
+              mem.id,
+            ])
+            .catch(() => {});
           reScoredDemoted++;
         }
       }
@@ -203,14 +238,21 @@ export async function runDreamCycle(
         const reScoreProposal = createProposal(
           "re-score",
           `Re-scored ${totalCandidates} memor${totalCandidates === 1 ? "y" : "ies"} based on access patterns (${reScoredPromoted} promote, ${reScoredDemoted} demote)`,
-          { promoteCount: reScoredPromoted, demoteCount: reScoredDemoted, totalMemories: allMemories.length },
+          {
+            promoteCount: reScoredPromoted,
+            demoteCount: reScoredDemoted,
+            totalMemories: allMemories.length,
+          },
           totalCandidates,
-          { avgAccessCount: 5 }
+          { avgAccessCount: 5 },
         );
         reScoreProposal.status = "applied";
         reScoreProposal.appliedAt = Date.now();
         allProposals.push(reScoreProposal);
-        if (import.meta.env.DEV) console.log(`[DreamAgent] Re-scored memories: ${reScoredPromoted} promoted, ${reScoredDemoted} demoted`);
+        if (import.meta.env.DEV)
+          console.log(
+            `[DreamAgent] Re-scored memories: ${reScoredPromoted} promoted, ${reScoredDemoted} demoted`,
+          );
       }
     } catch (err) {
       console.warn("[DreamAgent] Memory re-scoring failed:", err);
@@ -224,21 +266,30 @@ export async function runDreamCycle(
     // Batching is not feasible here because the prompt includes memory-specific timestamps and
     // content that must be processed independently to produce accurate absolute date replacements.
     let dateAdjustedCount = 0;
-    const relativeTimeWords = /\b(recently|yesterday|last week|currently|now|tomorrow|ago|earlier today|this morning|a few days ago|last night|the other day)\b/i;
+    const relativeTimeWords =
+      /\b(recently|yesterday|last week|currently|now|tomorrow|ago|earlier today|this morning|a few days ago|last night|the other day)\b/i;
     const MAX_LLM_DATE_ADJUSTMENTS = 20; // Cap API calls per dream cycle
 
     // Count candidates first for proposal creation
-    const dateCandidates = activeMemories.filter(m => relativeTimeWords.test(m.content));
+    const dateCandidates = activeMemories.filter((m) =>
+      relativeTimeWords.test(m.content),
+    );
     if (dateCandidates.length > 0) {
       const dateProposal = createProposal(
         "date-adjust",
         `Adjust relative dates in ${Math.min(dateCandidates.length, MAX_LLM_DATE_ADJUSTMENTS)} memor${dateCandidates.length === 1 ? "y" : "ies"}`,
-        { candidateCount: dateCandidates.length, maxAdjustments: MAX_LLM_DATE_ADJUSTMENTS },
+        {
+          candidateCount: dateCandidates.length,
+          maxAdjustments: MAX_LLM_DATE_ADJUSTMENTS,
+        },
         Math.min(dateCandidates.length, MAX_LLM_DATE_ADJUSTMENTS),
-        { totalInCategory: activeMemories.length }
+        { totalInCategory: activeMemories.length },
       );
 
-      if (dateProposal.status === "auto-accept" || dateProposal.status === "user-review") {
+      if (
+        dateProposal.status === "auto-accept" ||
+        dateProposal.status === "user-review"
+      ) {
         if (dateProposal.status === "auto-accept") {
           // Batch date adjustments: send up to 10 memories per LLM call
           const BATCH_SIZE = 10;
@@ -247,16 +298,29 @@ export async function runDreamCycle(
           for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
             const batch = toProcess.slice(i, i + BATCH_SIZE);
             try {
-              const memoryList = batch.map((m, idx) =>
-                `[${idx}] Created: ${new Date(m.createdAt).toISOString()}\nContent: ${m.content}`
-              ).join('\n\n');
+              const memoryList = batch
+                .map(
+                  (m, idx) =>
+                    `[${idx}] Created: ${new Date(m.createdAt).toISOString()}\nContent: ${m.content}`,
+                )
+                .join("\n\n");
 
               const responseText = await api.agent.summarizeMessages(model, [
-                { role: "system", content: "You are a memory cleaning assistant. Return only a raw JSON array." },
-                { role: "user", content: `Current date: ${new Date().toISOString()}\n\nFor each memory below, replace relative time references (recently, yesterday, last week, currently, now, tomorrow, ago, earlier today, this morning, a few days ago, last night, the other day) with absolute dates.\n\nMemories:\n${memoryList}\n\nReturn a JSON array where each item is: { "id": index, "content": "updated content" }\nKeep the index matching the input order. If no relative time expressions, return the original content.` }
+                {
+                  role: "system",
+                  content:
+                    "You are a memory cleaning assistant. Return only a raw JSON array.",
+                },
+                {
+                  role: "user",
+                  content: `Current date: ${new Date().toISOString()}\n\nFor each memory below, replace relative time references (recently, yesterday, last week, currently, now, tomorrow, ago, earlier today, this morning, a few days ago, last night, the other day) with absolute dates.\n\nMemories:\n${memoryList}\n\nReturn a JSON array where each item is: { "id": index, "content": "updated content" }\nKeep the index matching the input order. If no relative time expressions, return the original content.`,
+                },
               ]);
 
-              const parsed = parseLLMJson<Array<{ id: number; content: string }>>(responseText);
+              const parsed =
+                parseLLMJson<Array<{ id: number; content: string }>>(
+                  responseText,
+                );
               if (Array.isArray(parsed)) {
                 for (const item of parsed) {
                   if (item.id >= 0 && item.id < batch.length) {
@@ -266,12 +330,12 @@ export async function runDreamCycle(
                       const now = Date.now();
                       await db.execute(
                         `UPDATE memories SET content=?, updated_at=? WHERE id=?`,
-                        [item.content, now, mem.id]
+                        [item.content, now, mem.id],
                       );
                       await writeMemoryMarkdown(workspacePath, {
                         ...mem,
                         content: item.content,
-                        updatedAt: now
+                        updatedAt: now,
                       });
                       dateAdjustedCount++;
                     }
@@ -299,7 +363,9 @@ export async function runDreamCycle(
     // This reduces O(n²) pairwise comparisons to O(n) clustering.
     let totalLLMRequests = 0;
     let deduplicatedCount = 0;
-    const categories = Array.from(new Set(freshMemories.map(m => m.category)));
+    const categories = Array.from(
+      new Set(freshMemories.map((m) => m.category)),
+    );
     const MAX_LLM_MERGES_PER_CYCLE = 10;
     const MAX_TOTAL_LLM_REQUESTS = 30;
     let llmMergeCount = 0;
@@ -313,17 +379,27 @@ export async function runDreamCycle(
     const assigned = new Set<string>();
 
     for (const category of categories) {
-      const catMemories = freshMemories.filter(m => m.category === category && !m.stale);
+      const catMemories = freshMemories.filter(
+        (m) => m.category === category && !m.stale,
+      );
       for (const mem of catMemories) {
         if (assigned.has(mem.id)) continue;
-        const cluster: MemoryCluster = { members: [mem], totalAccess: mem.accessCount };
+        const cluster: MemoryCluster = {
+          members: [mem],
+          totalAccess: mem.accessCount,
+        };
         assigned.add(mem.id);
 
         for (const other of catMemories) {
           if (assigned.has(other.id) || mem.id === other.id) continue;
           // Quick pre-filter: same category already guaranteed, check tag overlap first
-          const tagOverlap = mem.tags.filter(t => other.tags.includes(t)).length;
-          if (tagOverlap > 0 && jaccardSimilarity(mem.content, other.content) > 0.55) {
+          const tagOverlap = mem.tags.filter((t) =>
+            other.tags.includes(t),
+          ).length;
+          if (
+            tagOverlap > 0 &&
+            jaccardSimilarity(mem.content, other.content) > 0.55
+          ) {
             cluster.members.push(other);
             cluster.totalAccess += other.accessCount;
             assigned.add(other.id);
@@ -337,22 +413,35 @@ export async function runDreamCycle(
     }
 
     // Sort clusters by importance: member count × total access (most important first)
-    clusters.sort((a, b) => (b.members.length * b.totalAccess) - (a.members.length * a.totalAccess));
+    clusters.sort(
+      (a, b) =>
+        b.members.length * b.totalAccess - a.members.length * a.totalAccess,
+    );
 
-    const totalCandidatePairs = clusters.reduce((sum, c) => sum + c.members.length - 1, 0);
+    const totalCandidatePairs = clusters.reduce(
+      (sum, c) => sum + c.members.length - 1,
+      0,
+    );
 
     let dedupProposal: DreamProposal | null = null;
     if (totalCandidatePairs > 0) {
       dedupProposal = createProposal(
         "deduplicate-merge",
         `Merge up to ${Math.min(clusters.length, MAX_LLM_MERGES_PER_CYCLE)} memory cluster${clusters.length === 1 ? "" : "s"} via LLM`,
-        { candidatePairs: totalCandidatePairs, maxMerges: MAX_LLM_MERGES_PER_CYCLE, categories: categories.length },
+        {
+          candidatePairs: totalCandidatePairs,
+          maxMerges: MAX_LLM_MERGES_PER_CYCLE,
+          categories: categories.length,
+        },
         Math.min(totalCandidatePairs, MAX_LLM_MERGES_PER_CYCLE),
-        { similarity: 0.65 }
+        { similarity: 0.65 },
       );
     }
 
-    const shouldRunDedup = dedupProposal !== null && (dedupProposal.status === "auto-accept" || dedupProposal.status === "user-review");
+    const shouldRunDedup =
+      dedupProposal !== null &&
+      (dedupProposal.status === "auto-accept" ||
+        dedupProposal.status === "user-review");
 
     if (shouldRunDedup && dedupProposal !== null) {
       if (dedupProposal.status === "auto-accept") {
@@ -361,33 +450,55 @@ export async function runDreamCycle(
           if (llmMergeCount >= MAX_LLM_MERGES_PER_CYCLE) break;
           if (totalLLMRequests >= MAX_TOTAL_LLM_REQUESTS) break;
 
-          const memberList = cluster.members.map((m, idx) =>
-            `[${idx}] Tier: ${m.tier}, Created: ${new Date(m.createdAt).toISOString()}\nSummary: ${m.summary}\nContent: ${m.content}\nTags: ${m.tags.join(", ")}`
-          ).join('\n\n');
+          const memberList = cluster.members
+            .map(
+              (m, idx) =>
+                `[${idx}] Tier: ${m.tier}, Created: ${new Date(m.createdAt).toISOString()}\nSummary: ${m.summary}\nContent: ${m.content}\nTags: ${m.tags.join(", ")}`,
+            )
+            .join("\n\n");
 
           try {
             totalLLMRequests++;
             const responseText = await api.agent.summarizeMessages(model, [
-              { role: "system", content: "You are a memory consolidation assistant. Return only a raw JSON block." },
-              { role: "user", content: `Merge these related memories into one comprehensive entry.\n\nMemories:\n${memberList}\n\nInstructions:\n1. Combine factual details. Do not lose key facts.\n2. Prefer newer information on contradictions.\n3. Output JSON: { "summary": "short summary", "content": "detailed content", "tags": ["tags"], "tier": "tier" }\nReturn ONLY this JSON object.` }
+              {
+                role: "system",
+                content:
+                  "You are a memory consolidation assistant. Return only a raw JSON block.",
+              },
+              {
+                role: "user",
+                content: `Merge these related memories into one comprehensive entry.\n\nMemories:\n${memberList}\n\nInstructions:\n1. Combine factual details. Do not lose key facts.\n2. Prefer newer information on contradictions.\n3. Output JSON: { "summary": "short summary", "content": "detailed content", "tags": ["tags"], "tier": "tier" }\nReturn ONLY this JSON object.`,
+              },
             ]);
 
-            const parsed = parseLLMJson<{ summary?: string; content?: string; tier?: string; tags?: string[] }>(responseText);
+            const parsed = parseLLMJson<{
+              summary?: string;
+              content?: string;
+              tier?: string;
+              tags?: string[];
+            }>(responseText);
 
             if (parsed?.summary && parsed.content) {
               const validTiers = ["critical", "high", "medium", "low"] as const;
-              const mergedTier = parsed.tier && validTiers.includes(parsed.tier as typeof validTiers[number])
-                ? parsed.tier as typeof validTiers[number]
-                : cluster.members[0].tier;
-              await saveMemory({
-                category: cluster.members[0].category,
-                tier: mergedTier,
-                summary: parsed.summary,
-                content: parsed.content,
-                tags: parsed.tags || Array.from(new Set(cluster.members.flatMap(m => m.tags))),
-                sourceSession: cluster.members[0].sourceSession,
-                sourceFile: cluster.members[0].sourceFile
-              }, workspacePath);
+              const mergedTier =
+                parsed.tier &&
+                validTiers.includes(parsed.tier as (typeof validTiers)[number])
+                  ? (parsed.tier as (typeof validTiers)[number])
+                  : cluster.members[0].tier;
+              await saveMemory(
+                {
+                  category: cluster.members[0].category,
+                  tier: mergedTier,
+                  summary: parsed.summary,
+                  content: parsed.content,
+                  tags:
+                    parsed.tags ||
+                    Array.from(new Set(cluster.members.flatMap((m) => m.tags))),
+                  sourceSession: cluster.members[0].sourceSession,
+                  sourceFile: cluster.members[0].sourceFile,
+                },
+                workspacePath,
+              );
 
               // Mark originals stale
               for (const member of cluster.members) {
@@ -420,12 +531,19 @@ export async function runDreamCycle(
 
     // Run skill consolidation optimization (Refactoring redundant workspace skills)
     try {
-      const skillProposals = await executeWorkspaceDreamOptimization(workspacePath, allProposals, notifyFn);
+      const skillProposals = await executeWorkspaceDreamOptimization(
+        workspacePath,
+        allProposals,
+        notifyFn,
+      );
       if (skillProposals) {
         allProposals.push(...skillProposals);
       }
     } catch (err) {
-      console.warn("[DreamAgent] Failed to consolidate skills during dream cycle:", err);
+      console.warn(
+        "[DreamAgent] Failed to consolidate skills during dream cycle:",
+        err,
+      );
     }
 
     // Update MEMORY.md index
@@ -433,9 +551,9 @@ export async function runDreamCycle(
 
     // Process all collected proposals through the pipeline
     const pipelineResult: PipelineResult = {
-      autoAccepted: allProposals.filter(p => p.status === "applied"),
-      queuedForReview: allProposals.filter(p => p.status === "user-review"),
-      rejected: allProposals.filter(p => p.status === "rejected"),
+      autoAccepted: allProposals.filter((p) => p.status === "applied"),
+      queuedForReview: allProposals.filter((p) => p.status === "user-review"),
+      rejected: allProposals.filter((p) => p.status === "rejected"),
     };
 
     return {
@@ -443,7 +561,7 @@ export async function runDreamCycle(
         purgedCount,
         deduplicatedCount,
         dateAdjustedCount,
-        validatedCount
+        validatedCount,
       },
       proposals: pipelineResult,
     };
@@ -466,7 +584,10 @@ export function cancelDreamCycle(workspacePath: string): void {
   if (timeoutId !== undefined) {
     clearTimeout(timeoutId);
     activeDreamTimeouts.delete(workspacePath);
-    if (import.meta.env.DEV) console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${workspacePath}`);
+    if (import.meta.env.DEV)
+      console.log(
+        `[DreamAgent] Cancelled pending dream cycle for workspace: ${workspacePath}`,
+      );
   }
 }
 
@@ -476,7 +597,10 @@ export function cancelDreamCycle(workspacePath: string): void {
 export function cancelAllDreamCycles(): void {
   for (const [path, timeoutId] of activeDreamTimeouts) {
     clearTimeout(timeoutId);
-    if (import.meta.env.DEV) console.log(`[DreamAgent] Cancelled pending dream cycle for workspace: ${path}`);
+    if (import.meta.env.DEV)
+      console.log(
+        `[DreamAgent] Cancelled pending dream cycle for workspace: ${path}`,
+      );
   }
   activeDreamTimeouts.clear();
 }
@@ -489,12 +613,13 @@ async function getLastDreamTime(workspacePath: string): Promise<number> {
   if (!isDatabaseReady()) return 0;
   try {
     const db = getDb();
-    const result = await db.select(
+    const result = (await db.select(
       "SELECT value FROM kv_store WHERE key = ?",
-      [`lastDreamTime.${workspacePath}`]
-    ) as { value: string }[];
+      [`lastDreamTime.${workspacePath}`],
+    )) as { value: string }[];
     return result.length > 0 ? parseInt(result[0].value, 10) : 0;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[DreamAgent] Failed to get last dream time:", e);
     return 0;
   }
 }
@@ -502,13 +627,16 @@ async function getLastDreamTime(workspacePath: string): Promise<number> {
 /**
  * Set last dream time in SQLite kv_store.
  */
-async function setLastDreamTime(workspacePath: string, time: number): Promise<void> {
+async function setLastDreamTime(
+  workspacePath: string,
+  time: number,
+): Promise<void> {
   if (!isDatabaseReady()) return;
   try {
     const db = getDb();
     await db.execute(
       "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
-      [`lastDreamTime.${workspacePath}`, time.toString()]
+      [`lastDreamTime.${workspacePath}`, time.toString()],
     );
   } catch (err) {
     console.warn("[DreamAgent] Failed to save dream time:", err);
@@ -521,37 +649,41 @@ async function setLastDreamTime(workspacePath: string, time: number): Promise<vo
  */
 export function triggerDreamCycleIfNeeded(
   workspacePath: string,
-  dreamNotifyFn?: (proposal: DreamProposal) => void
+  dreamNotifyFn?: (proposal: DreamProposal) => void,
 ): () => void {
   // Check dream timing asynchronously via SQLite
-  getLastDreamTime(workspacePath).then((lastDream) => {
-    const now = Date.now();
-    if (lastDream > 0) {
-      const minMs = 24 * 60 * 60 * 1000; // 24 hours
-      if (now - lastDream < minMs) {
-        return; // Not enough time passed
+  getLastDreamTime(workspacePath)
+    .then((lastDream) => {
+      const now = Date.now();
+      if (lastDream > 0) {
+        const minMs = 24 * 60 * 60 * 1000; // 24 hours
+        if (now - lastDream < minMs) {
+          return; // Not enough time passed
+        }
       }
-    }
 
-    // Cancel any existing pending dream for this workspace
-    cancelDreamCycle(workspacePath);
+      // Cancel any existing pending dream for this workspace
+      cancelDreamCycle(workspacePath);
 
-    // Run dream cycle in background with cancellation support
-    const timeoutId = setTimeout(() => {
-      activeDreamTimeouts.delete(workspacePath);
-      void runDreamCycle(workspacePath, dreamNotifyFn)
-        .then(() => {
-          void setLastDreamTime(workspacePath, Date.now());
-        })
-        .catch(err => {
-          if (import.meta.env.DEV) console.error("[DreamAgent] Background dream cycle failed:", err);
-        });
-    }, 5000); // 5s deferral to not block application startup
+      // Run dream cycle in background with cancellation support
+      const timeoutId = setTimeout(() => {
+        activeDreamTimeouts.delete(workspacePath);
+        void runDreamCycle(workspacePath, dreamNotifyFn)
+          .then(() => {
+            void setLastDreamTime(workspacePath, Date.now());
+          })
+          .catch((err) => {
+            if (import.meta.env.DEV)
+              console.error("[DreamAgent] Background dream cycle failed:", err);
+          });
+      }, 5000); // 5s deferral to not block application startup
 
-    activeDreamTimeouts.set(workspacePath, timeoutId);
-  }).catch(err => {
-    if (import.meta.env.DEV) console.warn("[DreamAgent] Failed to check dream timing:", err);
-  });
+      activeDreamTimeouts.set(workspacePath, timeoutId);
+    })
+    .catch((err) => {
+      if (import.meta.env.DEV)
+        console.warn("[DreamAgent] Failed to check dream timing:", err);
+    });
 
   // Return a cancel function for the caller
   return () => {
@@ -572,26 +704,35 @@ if (typeof window !== "undefined") {
 export async function executeWorkspaceDreamOptimization(
   workspacePath: string,
   existingAllProposals?: DreamProposal[],
-  existingNotifyFn?: (proposal: DreamProposal) => void
+  existingNotifyFn?: (proposal: DreamProposal) => void,
 ): Promise<DreamProposal[]> {
   const skillProposals: DreamProposal[] = [];
   const skillsPath = joinPath(workspacePath, ".dalam/skills");
   const api = createDalamAPI();
-  
+
   try {
-    const { readDir, readFile, writeFile, remove } = await import("@tauri-apps/plugin-fs");
+    const { readDir, readFile, writeFile, remove } =
+      await import("@tauri-apps/plugin-fs");
     const skillDirs = await readDir(skillsPath);
-    const discoveredSkills: { name: string; rawContent: string; fullPath: string }[] = [];
-    
+    const discoveredSkills: {
+      name: string;
+      rawContent: string;
+      fullPath: string;
+    }[] = [];
+
     for (const dir of skillDirs) {
       if (!dir.name) continue;
       const fileLoc = joinPath(skillsPath, dir.name, "SKILL.md");
       try {
         const dataBytes = await readFile(fileLoc);
         const rawContent = new TextDecoder().decode(dataBytes);
-        discoveredSkills.push({ name: dir.name, rawContent, fullPath: fileLoc });
-      } catch {
-        // Skill file might not exist or be unreadable
+        discoveredSkills.push({
+          name: dir.name,
+          rawContent,
+          fullPath: fileLoc,
+        });
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn(`[DreamAgent] Failed to read skill file ${fileLoc}:`, e);
       }
     }
 
@@ -603,11 +744,14 @@ export async function executeWorkspaceDreamOptimization(
         if (removedIndices.has(j)) continue;
         const skillA = discoveredSkills[i]!;
         const skillB = discoveredSkills[j]!;
-        
+
         // Use jaccardSimilarity directly (no thin wrapper)
-        const similarityScore = jaccardSimilarity(skillA.rawContent, skillB.rawContent);
+        const similarityScore = jaccardSimilarity(
+          skillA.rawContent,
+          skillB.rawContent,
+        );
         if (similarityScore <= 0.65) continue;
-        
+
         const consolidationPrompt = `You are a background compilation refactoring process.
 We found two highly similar, overlapping procedural instructions files inside our local project workspace configuration.
 Your task is to merge these two structural documents into a single comprehensive SKILL.md document.
@@ -620,22 +764,30 @@ ${skillB.rawContent}
 
 Generate an elegant unified version. Output the result in clean markdown with appropriate YAML headers.`;
 
-        const model = useSettings.getState().settings.selectedModel || "gpt-4o-mini";
+        const model =
+          useSettings.getState().settings.selectedModel || "gpt-4o-mini";
         const response = await api.agent.summarizeMessages(model, [
-          { role: "user", content: consolidationPrompt }
+          { role: "user", content: consolidationPrompt },
         ]);
 
         // Validate LLM output contains valid YAML frontmatter before overwriting
         const hasFrontmatter = /^---\s*\n[\s\S]*?\n---\s*\n/.test(response);
         if (!hasFrontmatter || response.length < 50) {
-          console.warn(`[DreamAgent] LLM consolidation output for ${skillA.name} missing valid frontmatter — skipping write`);
+          console.warn(
+            `[DreamAgent] LLM consolidation output for ${skillA.name} missing valid frontmatter — skipping write`,
+          );
           continue;
         }
 
         // Backup skill A before modification for rollback on failure
-        const backupDir = joinPath(workspacePath, ".dalam/skills-backup", Date.now().toString());
+        const backupDir = joinPath(
+          workspacePath,
+          ".dalam/skills-backup",
+          Date.now().toString(),
+        );
         try {
-          const { mkdir, readFile: readFileFs } = await import("@tauri-apps/plugin-fs");
+          const { mkdir, readFile: readFileFs } =
+            await import("@tauri-apps/plugin-fs");
           await mkdir(backupDir, { recursive: true });
           const backupA = joinPath(backupDir, `${skillA.name}.md`);
           await writeFile(backupA, await readFileFs(skillA.fullPath));
@@ -655,8 +807,11 @@ Generate an elegant unified version. Output the result in clean markdown with ap
             const { readFile: readFs } = await import("@tauri-apps/plugin-fs");
             const restored = await readFs(backupA);
             await writeFile(skillA.fullPath, restored);
-          } catch {
-            console.error(`[DreamAgent] Failed to rollback skill ${skillA.name} after consolidation error`);
+          } catch (e) {
+            if (import.meta.env.DEV) console.error(
+              `[DreamAgent] Failed to rollback skill ${skillA.name} after consolidation error:`,
+              e,
+            );
           }
           throw writeErr;
         }
@@ -679,9 +834,13 @@ Generate an elegant unified version. Output the result in clean markdown with ap
         const skillConsolidateProposal = createProposal(
           "consolidate-skill",
           `Merged skill "${skillA.name}" with overlapping "${skillB.name}"`,
-          { keptName: skillA.name, removedName: skillB.name, similarity: similarityScore },
+          {
+            keptName: skillA.name,
+            removedName: skillB.name,
+            similarity: similarityScore,
+          },
           2,
-          { similarity: similarityScore }
+          { similarity: similarityScore },
         );
         if (skillConsolidateProposal.status === "auto-accept") {
           skillConsolidateProposal.status = "applied";

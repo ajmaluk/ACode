@@ -8,7 +8,12 @@
  * - useCommandPalette: Zustand store for command palette state
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { stripXmlToolCallTags, parseXmlToolCalls, useGit, useCommandPalette } from "../../store/useAppStore";
+import {
+  stripXmlToolCallTags,
+  parseXmlToolCalls,
+  useGit,
+  useCommandPalette,
+} from "../../store/useAppStore";
 
 // ============================================================================
 // stripXmlToolCallTags
@@ -25,22 +30,23 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips self-closing tool tags", () => {
-    const content = "Some text <read_file path=\"/src/index.ts\"/> more text";
+    const content = 'Some text <read_file path="/src/index.ts"/> more text';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("Some text  more text");
   });
 
   it("strips opening+closing tool tags with content", () => {
-    const content = "Text <write_file path=\"test.txt\">file content</write_file> end";
+    const content =
+      'Text <write_file path="test.txt">file content</write_file> end';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("Text  end");
   });
 
   it("strips multiple tool tags", () => {
     const content = [
-      "<read_file path=\"a.ts\"/>",
+      '<read_file path="a.ts"/>',
       "some content",
-      "<write_file path=\"b.ts\">data</write_file>",
+      '<write_file path="b.ts">data</write_file>',
     ].join("\n");
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("\nsome content\n");
@@ -53,7 +59,7 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips MCP tool tags with server prefix", () => {
-    const content = "text <mcp_server_tool arg=\"val\"/> end";
+    const content = 'text <mcp_server_tool arg="val"/> end';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("text  end");
   });
@@ -71,7 +77,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips nested think inside write_file content", () => {
-    const content = "<write_file path=\"x.ts\">// <thinking>not real</thinking></write_file>";
+    const content =
+      '<write_file path="x.ts">// <thinking>not real</thinking></write_file>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
@@ -83,19 +90,20 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips incomplete tags at end of content (streaming)", () => {
-    const content = "Some text <run_command command=\"ls -la";
+    const content = 'Some text <run_command command="ls -la';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("Some text ");
   });
 
   it("strips <invoke> and <function_calls> blocks", () => {
-    const content = "<invoke name=\"test\"><parameter>val</parameter></invoke>";
+    const content = '<invoke name="test"><parameter>val</parameter></invoke>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
 
   it("strips <function_calls> blocks", () => {
-    const content = "<function_calls><invoke name=\"tool\"></invoke></function_calls>";
+    const content =
+      '<function_calls><invoke name="tool"></invoke></function_calls>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
@@ -122,7 +130,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips skill invocation XML blocks", () => {
-    const content = "<skill_invocation><parameter name=\"prompt\">do it</parameter></skill_invocation>";
+    const content =
+      '<skill_invocation><parameter name="prompt">do it</parameter></skill_invocation>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
@@ -135,19 +144,19 @@ describe("stripXmlToolCallTags", () => {
 
   it("collapses 3+ newlines into 2 after tool tags are stripped", () => {
     // Note: newline collapsing only runs when XML tags are present (fast path)
-    const content = "a\n\n\n\nb<read_file path=\"x.ts\"/>";
+    const content = 'a\n\n\n\nb<read_file path="x.ts"/>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("a\n\nb");
   });
 
   it("returns empty string when only tool calls remain", () => {
-    const content = "<read_file path=\"x.ts\"/>";
+    const content = '<read_file path="x.ts"/>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
 
   it("returns empty string when only whitespace and stripped tags remain", () => {
-    const content = "<read_file path=\"x.ts\"/>  \n  \n  ";
+    const content = '<read_file path="x.ts"/>  \n  \n  ';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
@@ -159,7 +168,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips edit_file with search/replace content", () => {
-    const content = '<edit_file path="file.ts"><search>old</search><replace>new</replace></edit_file>';
+    const content =
+      '<edit_file path="file.ts"><search>old</search><replace>new</replace></edit_file>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
@@ -171,7 +181,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("handles content with no angle brackets efficiently", () => {
-    const content = "This is plain text with no XML at all. Just normal characters.";
+    const content =
+      "This is plain text with no XML at all. Just normal characters.";
     const result = stripXmlToolCallTags(content);
     expect(result).toBe(content);
   });
@@ -190,7 +201,8 @@ describe("stripXmlToolCallTags", () => {
   });
 
   it("strips memory tool tags", () => {
-    const content = '<memory_save category="user" tier="high">Important fact</memory_save>';
+    const content =
+      '<memory_save category="user" tier="high">Important fact</memory_save>';
     const result = stripXmlToolCallTags(content);
     expect(result).toBe("");
   });
@@ -235,7 +247,8 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("extracts a tool call with content body", () => {
-    const content = '<write_file path="test.txt">file content here</write_file>';
+    const content =
+      '<write_file path="test.txt">file content here</write_file>';
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("write_file");
@@ -255,11 +268,12 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("extracts edit_file and captures search/replace as content body", () => {
-    const content = '<edit_file path="file.ts"><search>old code</search><replace>new code</replace></edit_file>';
+    const content =
+      '<edit_file path="file.ts"><search>old code</search><replace>new code</replace></edit_file>';
     const result = parseXmlToolCalls(content);
     // edit_file is parsed as 1 tool call; <search>/<replace> are inner content
     expect(result.toolCalls.length).toBeGreaterThanOrEqual(1);
-    const editCall = result.toolCalls.find(tc => tc.name === "edit_file");
+    const editCall = result.toolCalls.find((tc) => tc.name === "edit_file");
     expect(editCall).toBeDefined();
     expect(editCall!.args.path).toBe("file.ts");
     expect(editCall!.args.content).toContain("old code");
@@ -309,7 +323,8 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("handles tool calls with multiple attributes", () => {
-    const content = '<grep_file path="/src" pattern="TODO" regex="false" max_results="20"/>';
+    const content =
+      '<grep_file path="/src" pattern="TODO" regex="false" max_results="20"/>';
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].args.path).toBe("/src");
@@ -317,7 +332,8 @@ describe("parseXmlToolCalls", () => {
   });
 
   it("handles mixed content with text and tool calls", () => {
-    const content = "First, let me read the file.\n<read_file path=\"index.ts\"/>\nNow I can see the contents.";
+    const content =
+      'First, let me read the file.\n<read_file path="index.ts"/>\nNow I can see the contents.';
     const result = parseXmlToolCalls(content);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.cleanedContent).toContain("First");
@@ -375,7 +391,15 @@ describe("useGit store", () => {
   it("resets loading and error when status is set", () => {
     useGit.setState({ loading: true, error: "some error" });
     useGit.setState({
-      status: { branch: "main", added: [], deleted: [], modified: [], untracked: [], ahead: 0, behind: 0 },
+      status: {
+        branch: "main",
+        added: [],
+        deleted: [],
+        modified: [],
+        untracked: [],
+        ahead: 0,
+        behind: 0,
+      },
       loading: false,
       error: null,
     });

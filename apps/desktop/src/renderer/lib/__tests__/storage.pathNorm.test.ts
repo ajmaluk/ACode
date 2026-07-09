@@ -47,7 +47,11 @@ function deriveMemoriesDir(workspacePath: string): string {
   return joinPath(workspacePath, ".dalam", "memories");
 }
 
-function deriveMemoryFilePath(workspacePath: string, category: string, id: string): string {
+function deriveMemoryFilePath(
+  workspacePath: string,
+  category: string,
+  id: string,
+): string {
   return joinPath(workspacePath, ".dalam", "memories", `${category}-${id}.md`);
 }
 
@@ -55,8 +59,16 @@ function deriveTrajectoryDir(workspacePath: string): string {
   return joinPath(workspacePath, ".dalam", "trajectories");
 }
 
-function deriveTrajectoryFilePath(workspacePath: string, sessionId: string): string {
-  return joinPath(workspacePath, ".dalam", "trajectories", `trajectory-${sessionId}.jsonl`);
+function deriveTrajectoryFilePath(
+  workspacePath: string,
+  sessionId: string,
+): string {
+  return joinPath(
+    workspacePath,
+    ".dalam",
+    "trajectories",
+    `trajectory-${sessionId}.jsonl`,
+  );
 }
 
 function deriveSkillsDir(workspacePath: string): string {
@@ -92,7 +104,10 @@ describe("Storage path normalization — cross-platform consistency", () => {
 
   describe("deriveStorageKey", () => {
     it("Windows and Unix paths produce the same key", () => {
-      const winKey = deriveStorageKey("dalam.session", "C:\\Users\\dev\\project");
+      const winKey = deriveStorageKey(
+        "dalam.session",
+        "C:\\Users\\dev\\project",
+      );
       const unixKey = deriveStorageKey("dalam.session", "/Users/dev/project");
       expect(winKey).toBe(unixKey);
     });
@@ -125,7 +140,7 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const winPath = deriveDbDirPath("C:\\Users\\dev\\project");
       const unixPath = deriveDbDirPath("/Users/dev/project");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
 
@@ -150,7 +165,7 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const winPath = deriveDbFilePath("C:\\Users\\dev\\project");
       const unixPath = deriveDbFilePath("/Users/dev/project");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
@@ -169,24 +184,40 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const winPath = deriveMemoriesDir("C:\\Users\\dev\\project");
       const unixPath = deriveMemoriesDir("/Users/dev/project");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
 
   describe("deriveMemoryFilePath — consistent across platforms", () => {
     it("both end with .dalam/memories/<category>-<id>.md", () => {
-      const winPath = deriveMemoryFilePath("C:\\Users\\dev\\project", "project", "abc12345");
-      const unixPath = deriveMemoryFilePath("/Users/dev/project", "project", "abc12345");
+      const winPath = deriveMemoryFilePath(
+        "C:\\Users\\dev\\project",
+        "project",
+        "abc12345",
+      );
+      const unixPath = deriveMemoryFilePath(
+        "/Users/dev/project",
+        "project",
+        "abc12345",
+      );
       expect(winPath).toMatch(/\.dalam\/memories\/project-abc12345\.md$/);
       expect(unixPath).toMatch(/\.dalam\/memories\/project-abc12345\.md$/);
     });
 
     it("have the same relative suffix", () => {
-      const winPath = deriveMemoryFilePath("C:\\Users\\dev\\project", "project", "abc12345");
-      const unixPath = deriveMemoryFilePath("/Users/dev/project", "project", "abc12345");
+      const winPath = deriveMemoryFilePath(
+        "C:\\Users\\dev\\project",
+        "project",
+        "abc12345",
+      );
+      const unixPath = deriveMemoryFilePath(
+        "/Users/dev/project",
+        "project",
+        "abc12345",
+      );
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
@@ -205,24 +236,40 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const winPath = deriveTrajectoryDir("C:\\Users\\dev\\project");
       const unixPath = deriveTrajectoryDir("/Users/dev/project");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
 
   describe("deriveTrajectoryFilePath — consistent across platforms", () => {
     it("both end with .dalam/trajectories/trajectory-<id>.jsonl", () => {
-      const winPath = deriveTrajectoryFilePath("C:\\Users\\dev\\project", "sess-123");
-      const unixPath = deriveTrajectoryFilePath("/Users/dev/project", "sess-123");
-      expect(winPath).toMatch(/\.dalam\/trajectories\/trajectory-sess-123\.jsonl$/);
-      expect(unixPath).toMatch(/\.dalam\/trajectories\/trajectory-sess-123\.jsonl$/);
+      const winPath = deriveTrajectoryFilePath(
+        "C:\\Users\\dev\\project",
+        "sess-123",
+      );
+      const unixPath = deriveTrajectoryFilePath(
+        "/Users/dev/project",
+        "sess-123",
+      );
+      expect(winPath).toMatch(
+        /\.dalam\/trajectories\/trajectory-sess-123\.jsonl$/,
+      );
+      expect(unixPath).toMatch(
+        /\.dalam\/trajectories\/trajectory-sess-123\.jsonl$/,
+      );
     });
 
     it("have the same relative suffix", () => {
-      const winPath = deriveTrajectoryFilePath("C:\\Users\\dev\\project", "sess-123");
-      const unixPath = deriveTrajectoryFilePath("/Users/dev/project", "sess-123");
+      const winPath = deriveTrajectoryFilePath(
+        "C:\\Users\\dev\\project",
+        "sess-123",
+      );
+      const unixPath = deriveTrajectoryFilePath(
+        "/Users/dev/project",
+        "sess-123",
+      );
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
@@ -241,24 +288,30 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const winPath = deriveSkillsDir("C:\\Users\\dev\\project");
       const unixPath = deriveSkillsDir("/Users/dev/project");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
 
   describe("deriveSkillFilePath — consistent across platforms", () => {
     it("both end with .dalam/skills/<name>/SKILL.md", () => {
-      const winPath = deriveSkillFilePath("C:\\Users\\dev\\project", "my-skill");
+      const winPath = deriveSkillFilePath(
+        "C:\\Users\\dev\\project",
+        "my-skill",
+      );
       const unixPath = deriveSkillFilePath("/Users/dev/project", "my-skill");
       expect(winPath).toMatch(/\.dalam\/skills\/my-skill\/SKILL\.md$/);
       expect(unixPath).toMatch(/\.dalam\/skills\/my-skill\/SKILL\.md$/);
     });
 
     it("have the same relative suffix", () => {
-      const winPath = deriveSkillFilePath("C:\\Users\\dev\\project", "my-skill");
+      const winPath = deriveSkillFilePath(
+        "C:\\Users\\dev\\project",
+        "my-skill",
+      );
       const unixPath = deriveSkillFilePath("/Users/dev/project", "my-skill");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
@@ -277,7 +330,7 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const winPath = deriveMemoryIndexPath("C:\\Users\\dev\\project");
       const unixPath = deriveMemoryIndexPath("/Users/dev/project");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\project")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/project")
+        relativeSuffix(unixPath, "/Users/dev/project"),
       );
     });
   });
@@ -296,7 +349,11 @@ describe("Storage path normalization — cross-platform consistency", () => {
     });
 
     it("extracts correct basename from memory file path", () => {
-      const path = deriveMemoryFilePath("C:\\Users\\dev\\project", "project", "abc12345");
+      const path = deriveMemoryFilePath(
+        "C:\\Users\\dev\\project",
+        "project",
+        "abc12345",
+      );
       expect(basename(path)).toBe("project-abc12345.md");
     });
 
@@ -314,7 +371,11 @@ describe("Storage path normalization — cross-platform consistency", () => {
     });
 
     it("extracts correct dirname from memory file path", () => {
-      const path = deriveMemoryFilePath("C:\\Users\\dev\\project", "project", "abc12345");
+      const path = deriveMemoryFilePath(
+        "C:\\Users\\dev\\project",
+        "project",
+        "abc12345",
+      );
       const dir = dirname(path);
       expect(dir).toMatch(/\.dalam\/memories$/);
     });
@@ -354,7 +415,7 @@ describe("Storage path normalization — cross-platform consistency", () => {
       expect(winPath).toContain("my project");
       expect(unixPath).toContain("my project");
       expect(relativeSuffix(winPath, "C:\\Users\\me\\my project\\folder")).toBe(
-        relativeSuffix(unixPath, "/Users/me/my project/folder")
+        relativeSuffix(unixPath, "/Users/me/my project/folder"),
       );
     });
 
@@ -363,7 +424,7 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const unixPath = deriveDbDirPath("/Users/dev/app-v2.0 (copy)");
       expect(winPath).toContain("app-v2.0 (copy)");
       expect(relativeSuffix(winPath, "C:\\Users\\dev\\app-v2.0 (copy)")).toBe(
-        relativeSuffix(unixPath, "/Users/dev/app-v2.0 (copy)")
+        relativeSuffix(unixPath, "/Users/dev/app-v2.0 (copy)"),
       );
     });
 
@@ -372,7 +433,7 @@ describe("Storage path normalization — cross-platform consistency", () => {
       const unixPath = deriveDbFilePath("/a/b/c/d/e/f/g/project");
       expect(winPath).toMatch(/\.dalam\/project\.db$/);
       expect(relativeSuffix(winPath, "C:\\a\\b\\c\\d\\e\\f\\g\\project")).toBe(
-        relativeSuffix(unixPath, "/a/b/c/d/e/f/g/project")
+        relativeSuffix(unixPath, "/a/b/c/d/e/f/g/project"),
       );
     });
 

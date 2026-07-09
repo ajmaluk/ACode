@@ -1,7 +1,15 @@
 import { useState, useEffect } from "react";
 import { useWorkspace, useSettings, useSkillsMcp } from "@/store/useAppStore";
 import { useToasts } from "@/components/ui/toastStore";
-import { Sparkles, FolderOpen, Zap, Code2, Brain, ArrowRight, X } from "lucide-react";
+import {
+  Sparkles,
+  FolderOpen,
+  Zap,
+  Code2,
+  Brain,
+  ArrowRight,
+  X,
+} from "lucide-react";
 import { modKey } from "@/lib/platform";
 
 function getSteps() {
@@ -67,7 +75,11 @@ export function WelcomeScreen() {
       setStep((s) => s + 1);
     } else {
       await loadWorkspace();
-      toast({ kind: "success", title: "Workspace ready", description: "Workspace loaded — explore away." });
+      toast({
+        kind: "success",
+        title: "Workspace ready",
+        description: "Workspace loaded — explore away.",
+      });
       close();
     }
   };
@@ -78,7 +90,12 @@ export function WelcomeScreen() {
   const isLast = step === steps.length - 1;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-8 animate-fade-in" role="dialog" aria-modal="true" aria-label="Welcome">
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-8 animate-fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Welcome"
+    >
       <div className="w-[640px] max-w-[96vw] surface shadow-2xl overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-dalam-accent-primary via-dalam-accent-hover to-dalam-accent-primary" />
         <div className="p-8">
@@ -103,9 +120,23 @@ export function WelcomeScreen() {
 
           <div className="bg-dalam-bg-primary border border-dalam-border-primary rounded-lg p-3 my-6">
             <div className="grid grid-cols-3 gap-3 text-center">
-              <Stat label="Skills enabled" value={skills.filter((s) => s.enabled).length} />
-              <Stat label="MCP servers" value={mcpServers.filter((m) => m.enabled).length} />
-              <Stat label="Default model" value={settings.selectedModel ? settings.selectedModel.split("-")[0] : "None"} small />
+              <Stat
+                label="Skills enabled"
+                value={skills.filter((s) => s.enabled).length}
+              />
+              <Stat
+                label="MCP servers"
+                value={mcpServers.filter((m) => m.enabled).length}
+              />
+              <Stat
+                label="Default model"
+                value={
+                  settings.selectedModel
+                    ? settings.selectedModel.split("-")[0]
+                    : "None"
+                }
+                small
+              />
             </div>
           </div>
 
@@ -115,7 +146,9 @@ export function WelcomeScreen() {
                 <div
                   key={i}
                   className={`h-1 rounded-full transition-all ${
-                    i === step ? "w-6 bg-dalam-accent-primary" : "w-1.5 bg-dalam-bg-tertiary"
+                    i === step
+                      ? "w-6 bg-dalam-accent-primary"
+                      : "w-1.5 bg-dalam-bg-tertiary"
                   }`}
                 />
               ))}
@@ -151,10 +184,20 @@ export function WelcomeScreen() {
   );
 }
 
-function Stat({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
+function Stat({
+  label,
+  value,
+  small,
+}: {
+  label: string;
+  value: string | number;
+  small?: boolean;
+}) {
   return (
     <div>
-      <div className={`font-semibold text-dalam-text-primary ${small ? "text-xs" : "text-lg"}`}>
+      <div
+        className={`font-semibold text-dalam-text-primary ${small ? "text-xs" : "text-lg"}`}
+      >
         {value}
       </div>
       <div className="text-[10px] text-dalam-text-muted uppercase tracking-wider">

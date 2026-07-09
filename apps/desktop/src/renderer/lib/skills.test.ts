@@ -13,7 +13,8 @@ import type { SkillInfo } from "@dalam/shared-types";
 describe("skills", () => {
   describe("parseFrontmatter", () => {
     it("parses YAML frontmatter", () => {
-      const input = "---\nname: my-skill\ndescription: A test\n---\n\nBody content";
+      const input =
+        "---\nname: my-skill\ndescription: A test\n---\n\nBody content";
       const { frontmatter, body } = parseFrontmatter(input);
       expect(frontmatter.name).toBe("my-skill");
       expect(frontmatter.description).toBe("A test");
@@ -41,7 +42,12 @@ describe("skills", () => {
 
   describe("skillInfoFromParsed", () => {
     it("creates SkillInfo from valid frontmatter", () => {
-      const info = skillInfoFromParsed({ name: "test" }, "body", "/path", "bundled");
+      const info = skillInfoFromParsed(
+        { name: "test" },
+        "body",
+        "/path",
+        "bundled",
+      );
       expect(info).not.toBeNull();
       expect(info!.name).toBe("test");
       expect(info!.content).toBe("body");
@@ -53,7 +59,12 @@ describe("skills", () => {
     });
 
     it("defaults description to name", () => {
-      const info = skillInfoFromParsed({ name: "test" }, "body", "/path", "bundled");
+      const info = skillInfoFromParsed(
+        { name: "test" },
+        "body",
+        "/path",
+        "bundled",
+      );
       expect(info!.description).toBe("test");
     });
   });
@@ -138,7 +149,7 @@ describe("skills", () => {
     });
 
     it("handles frontmatter with unicode values", () => {
-      const input = '---\nname: スキル\ndescription: テスト\n---\n\nBody';
+      const input = "---\nname: スキル\ndescription: テスト\n---\n\nBody";
       const { frontmatter } = parseFrontmatter(input);
       expect(frontmatter.name).toBe("スキル");
       expect(frontmatter.description).toBe("テスト");
@@ -152,7 +163,8 @@ describe("skills", () => {
     });
 
     it("handles values with trailing spaces", () => {
-      const input = "---\nname:  my-skill  \ndescription:  a test  \n---\n\nBody";
+      const input =
+        "---\nname:  my-skill  \ndescription:  a test  \n---\n\nBody";
       const { frontmatter } = parseFrontmatter(input);
       // Parser trims the value after stripping quotes
       expect(frontmatter.name).toBe("my-skill");
@@ -168,7 +180,7 @@ describe("skills", () => {
         "description: desc",
         "---",
         "",
-        "Body"
+        "Body",
       ].join("\n");
       const { frontmatter } = parseFrontmatter(input);
       expect(frontmatter.name).toBe("my-skill");
@@ -183,7 +195,7 @@ describe("skills", () => {
         "description: desc",
         "---",
         "",
-        "Body"
+        "Body",
       ].join("\n");
       const { frontmatter } = parseFrontmatter(input);
       expect(frontmatter.name).toBe("my-skill");
@@ -199,17 +211,32 @@ describe("skills", () => {
 
   describe("skillInfoFromParsed edge cases", () => {
     it("returns null when name is empty", () => {
-      const info = skillInfoFromParsed({ name: "" }, "body", "/path", "bundled");
+      const info = skillInfoFromParsed(
+        { name: "" },
+        "body",
+        "/path",
+        "bundled",
+      );
       expect(info).toBeNull();
     });
 
     it("returns null when name is whitespace-only", () => {
-      const info = skillInfoFromParsed({ name: "   " }, "body", "/path", "bundled");
+      const info = skillInfoFromParsed(
+        { name: "   " },
+        "body",
+        "/path",
+        "bundled",
+      );
       expect(info).toBeNull();
     });
 
     it("uses name as description when description missing", () => {
-      const info = skillInfoFromParsed({ name: "test" }, "body", "/path", "project");
+      const info = skillInfoFromParsed(
+        { name: "test" },
+        "body",
+        "/path",
+        "project",
+      );
       expect(info!.description).toBe("test");
       expect(info!.source).toBe("project");
     });
@@ -218,17 +245,38 @@ describe("skills", () => {
   describe("matchSkillInvocation edge cases", () => {
     it("prefers explicit $skill-name over word match", () => {
       const skills = [
-        { name: "plan", description: "Plan skill", content: "body", location: "", source: "bundled" as const },
-        { name: "explain", description: "Explain skill", content: "body", location: "", source: "bundled" as const },
+        {
+          name: "plan",
+          description: "Plan skill",
+          content: "body",
+          location: "",
+          source: "bundled" as const,
+        },
+        {
+          name: "explain",
+          description: "Explain skill",
+          content: "body",
+          location: "",
+          source: "bundled" as const,
+        },
       ];
       // The fallback word-match should NOT trigger for long prompts
-      const result = matchSkillInvocation("I need you to explain this code to me in detail", skills);
+      const result = matchSkillInvocation(
+        "I need you to explain this code to me in detail",
+        skills,
+      );
       expect(result).toBeNull();
     });
 
     it("matches $skill-name at start of text", () => {
       const skills = [
-        { name: "refactor", description: "Refactor", content: "body", location: "", source: "bundled" as const },
+        {
+          name: "refactor",
+          description: "Refactor",
+          content: "body",
+          location: "",
+          source: "bundled" as const,
+        },
       ];
       const result = matchSkillInvocation("$refactor this component", skills);
       expect(result).not.toBeNull();
@@ -238,16 +286,31 @@ describe("skills", () => {
 
     it("matches $skill-name in middle of text", () => {
       const skills = [
-        { name: "debug", description: "Debug", content: "body", location: "", source: "bundled" as const },
+        {
+          name: "debug",
+          description: "Debug",
+          content: "body",
+          location: "",
+          source: "bundled" as const,
+        },
       ];
-      const result = matchSkillInvocation("please $debug this function", skills);
+      const result = matchSkillInvocation(
+        "please $debug this function",
+        skills,
+      );
       expect(result).not.toBeNull();
       expect(result!.skill.name).toBe("debug");
     });
 
     it("returns args as empty string when $skill has no args", () => {
       const skills = [
-        { name: "plan", description: "Plan", content: "body", location: "", source: "bundled" as const },
+        {
+          name: "plan",
+          description: "Plan",
+          content: "body",
+          location: "",
+          source: "bundled" as const,
+        },
       ];
       const result = matchSkillInvocation("$plan", skills);
       expect(result).not.toBeNull();
@@ -256,7 +319,13 @@ describe("skills", () => {
 
     it("matches skill names with hyphens", () => {
       const skills = [
-        { name: "code-review", description: "Review", content: "body", location: "", source: "bundled" as const },
+        {
+          name: "code-review",
+          description: "Review",
+          content: "body",
+          location: "",
+          source: "bundled" as const,
+        },
       ];
       const result = matchSkillInvocation("$code-review this PR", skills);
       expect(result).not.toBeNull();
@@ -266,8 +335,20 @@ describe("skills", () => {
 
   describe("skillRegistry edge cases", () => {
     it("add skill creates backup when overwriting", () => {
-      skillRegistry.add({ name: "overwrite-test", description: "v1", content: "old content", location: "test", source: "bundled" });
-      skillRegistry.add({ name: "overwrite-test", description: "v2", content: "new content", location: "test", source: "project" });
+      skillRegistry.add({
+        name: "overwrite-test",
+        description: "v1",
+        content: "old content",
+        location: "test",
+        source: "bundled",
+      });
+      skillRegistry.add({
+        name: "overwrite-test",
+        description: "v2",
+        content: "new content",
+        location: "test",
+        source: "project",
+      });
       const backups = skillRegistry.getBackups("overwrite-test");
       expect(backups.length).toBeGreaterThanOrEqual(1);
       expect(backups[0].skill.description).toBe("v1");
@@ -276,10 +357,25 @@ describe("skills", () => {
     });
 
     it("restoreFromBackup restores the correct version", () => {
-      skillRegistry.add({ name: "restore-test", description: "v1", content: "old", location: "", source: "bundled" });
-      skillRegistry.add({ name: "restore-test", description: "v2", content: "new", location: "", source: "project" });
+      skillRegistry.add({
+        name: "restore-test",
+        description: "v1",
+        content: "old",
+        location: "",
+        source: "bundled",
+      });
+      skillRegistry.add({
+        name: "restore-test",
+        description: "v2",
+        content: "new",
+        location: "",
+        source: "project",
+      });
       const backups = skillRegistry.getBackups("restore-test");
-      const restored = skillRegistry.restoreFromBackup("restore-test", backups[0].timestamp);
+      const restored = skillRegistry.restoreFromBackup(
+        "restore-test",
+        backups[0].timestamp,
+      );
       expect(restored).toBeDefined();
       expect(restored!.description).toBe("v1");
       skillRegistry.remove("restore-test");
@@ -298,25 +394,43 @@ describe("skills", () => {
       const enabled = new Set(["explain", "plan"]);
       const result = skillRegistry.enabled(enabled);
       expect(result.length).toBeGreaterThanOrEqual(2);
-      expect(result.every(s => enabled.has(s.name))).toBe(true);
+      expect(result.every((s) => enabled.has(s.name))).toBe(true);
     });
   });
 
   describe("loadSkillContent", () => {
     it("returns content immediately when already loaded", async () => {
-      const skill: SkillInfo = { name: "test", description: "test", content: "existing", location: "", source: "bundled" };
+      const skill: SkillInfo = {
+        name: "test",
+        description: "test",
+        content: "existing",
+        location: "",
+        source: "bundled",
+      };
       const content = await loadSkillContent(skill);
       expect(content).toBe("existing");
     });
 
     it("returns empty string for bundled skill without content", async () => {
-      const skill: SkillInfo = { name: "test", description: "test", content: "", location: "bundled://test/SKILL.md", source: "bundled" };
+      const skill: SkillInfo = {
+        name: "test",
+        description: "test",
+        content: "",
+        location: "bundled://test/SKILL.md",
+        source: "bundled",
+      };
       const content = await loadSkillContent(skill);
       expect(content).toBe("");
     });
 
     it("returns empty string when no fsAdapter provided", async () => {
-      const skill: SkillInfo = { name: "test", description: "test", content: "", location: "/custom/path/SKILL.md", source: "project" };
+      const skill: SkillInfo = {
+        name: "test",
+        description: "test",
+        content: "",
+        location: "/custom/path/SKILL.md",
+        source: "project",
+      };
       const content = await loadSkillContent(skill);
       expect(content).toBe("");
     });

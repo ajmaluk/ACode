@@ -18,18 +18,22 @@ export async function copyToClipboard(
     console.warn("[Editor] Tauri clipboard failed:", err);
     try {
       await navigator.clipboard.writeText(text);
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Editor] Browser clipboard API failed:", e);
       toast.error("Copy failed", "Unable to access clipboard");
       return;
     }
   }
-  const display = truncatedMsg ?? (text.length > 60 ? text.slice(0, 57) + "…" : text);
+  const display =
+    truncatedMsg ?? (text.length > 60 ? text.slice(0, 57) + "…" : text);
   toast.success("Copied to clipboard", display);
 }
 
 /** Open the OS file manager and reveal the given path. */
 export function revealInFinder(path: string): void {
-  void createDalamAPI().system.revealInFinder(path).catch(() => {});
+  void createDalamAPI()
+    .system.revealInFinder(path)
+    .catch(() => {});
 }
 
 /** Open a terminal tab scoped to the given directory. */

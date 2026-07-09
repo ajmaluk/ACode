@@ -115,9 +115,13 @@ export async function indexWorkspace(
         if (!(await exists(fullPath))) {
           await db.execute(`DELETE FROM code_index WHERE file_path = ?`, [row.file_path]);
         }
-      } catch { /* ignore */ }
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[CodeIndex] exists(fullPath))) {:", e);
+      }
     }
-  } catch { /* best-effort cleanup */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[CodeIndex] exists(fullPath))) {:", e);
+  }
 
   async function walkDir(dir: string, depth = 0): Promise<void> {
     if (depth > 20 || indexed + skipped >= MAX_INDEX_FILES) return;
@@ -125,7 +129,8 @@ export async function indexWorkspace(
     let entries;
     try {
       entries = await readDir(dir);
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[CodeIndex] readDir(dir);:", e);
       return; // Permission denied or not a directory
     }
 
@@ -178,7 +183,8 @@ export async function indexWorkspace(
 
         indexed++;
         onProgress?.(indexed, indexed + skipped);
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[CodeIndex] operation:", e);
         errors++;
       }
     }
@@ -241,7 +247,8 @@ export async function searchCodeIndex(
       score: -row.rank, // FTS5 rank is negative (lower = better)
       language: row.language,
     }));
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[CodeIndex] operation:", e);
     return [];
   }
 }
@@ -274,7 +281,8 @@ export async function getCodeIndexStats(): Promise<{
     }
 
     return { totalFiles, totalSize, languages };
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[CodeIndex] db.select(\"SELECT COUNT(*) as count FROM code_inde:", e);
     return { totalFiles: 0, totalSize: 0, languages: {} };
   }
 }
@@ -287,7 +295,8 @@ export async function clearCodeIndex(): Promise<void> {
     if (!isDatabaseReady()) return;
     const db = getDb();
     await db.execute("DELETE FROM code_index");
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[CodeIndex] if (!isDatabaseReady()) return;:", e);
     // Silently ignore — index will be rebuilt on next scan
   }
 }

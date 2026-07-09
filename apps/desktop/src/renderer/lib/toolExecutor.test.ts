@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+vi.mock("@tauri-apps/plugin-fs", () => ({
+  readTextFile: vi.fn().mockResolvedValue(""),
+}));
 import {
   canRunInParallel,
   groupToolCallsForExecution,
@@ -23,14 +26,22 @@ describe("toolExecutor", () => {
     });
 
     it("prevents write tools from running in parallel", () => {
-      const t1: ToolCall = { name: "write_file", args: { path: "/a" }, raw: "" };
+      const t1: ToolCall = {
+        name: "write_file",
+        args: { path: "/a" },
+        raw: "",
+      };
       const t2: ToolCall = { name: "edit_file", args: { path: "/b" }, raw: "" };
       expect(canRunInParallel(t1, t2)).toBe(false);
     });
 
     it("prevents read+write from running in parallel", () => {
       const t1: ToolCall = { name: "read_file", args: { path: "/a" }, raw: "" };
-      const t2: ToolCall = { name: "write_file", args: { path: "/b" }, raw: "" };
+      const t2: ToolCall = {
+        name: "write_file",
+        args: { path: "/b" },
+        raw: "",
+      };
       expect(canRunInParallel(t1, t2)).toBe(false);
     });
 
@@ -79,7 +90,12 @@ describe("toolExecutor", () => {
   describe("formatToolResults", () => {
     it("formats successful results", () => {
       const results: ToolResult[] = [
-        { toolName: "read_file", result: "file content", success: true, durationMs: 100 },
+        {
+          toolName: "read_file",
+          result: "file content",
+          success: true,
+          durationMs: 100,
+        },
       ];
       const formatted = formatToolResults(results);
       expect(formatted).toContain("read_file");
@@ -88,7 +104,12 @@ describe("toolExecutor", () => {
 
     it("formats failed results", () => {
       const results: ToolResult[] = [
-        { toolName: "write_file", result: "Error: permission denied", success: false, durationMs: 50 },
+        {
+          toolName: "write_file",
+          result: "Error: permission denied",
+          success: false,
+          durationMs: 50,
+        },
       ];
       const formatted = formatToolResults(results);
       expect(formatted).toContain("Error");
@@ -97,7 +118,13 @@ describe("toolExecutor", () => {
 
     it("includes retry count", () => {
       const results: ToolResult[] = [
-        { toolName: "run_command", result: "output", success: true, durationMs: 200, retries: 2 },
+        {
+          toolName: "run_command",
+          result: "output",
+          success: true,
+          durationMs: 200,
+          retries: 2,
+        },
       ];
       const formatted = formatToolResults(results);
       expect(formatted).toContain("retried 2 times");
@@ -108,7 +135,13 @@ describe("toolExecutor", () => {
     it("calculates stats correctly", () => {
       const results: ToolResult[] = [
         { toolName: "a", result: "", success: true, durationMs: 100 },
-        { toolName: "b", result: "", success: true, durationMs: 200, retries: 1 },
+        {
+          toolName: "b",
+          result: "",
+          success: true,
+          durationMs: 200,
+          retries: 1,
+        },
         { toolName: "c", result: "", success: false, durationMs: 50 },
       ];
       const stats = getToolStats(results);
@@ -131,7 +164,8 @@ describe("toolExecutor", () => {
   });
 
   describe("validateToolArgs integration", () => {
-    const mockExecuteFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>();
+    const mockExecuteFn =
+      vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>();
 
     beforeEach(() => {
       mockExecuteFn.mockReset();
@@ -147,7 +181,9 @@ describe("toolExecutor", () => {
         };
         const result = await executeToolWithRetry(tc, mockExecuteFn);
         expect(result.success).toBe(true);
-        expect(mockExecuteFn).toHaveBeenCalledWith("read_file", { path: "/workspace/file.ts" });
+        expect(mockExecuteFn).toHaveBeenCalledWith("read_file", {
+          path: "/workspace/file.ts",
+        });
       });
 
       it("passes validated (default-applied) write_file args to executeFn", async () => {
@@ -345,7 +381,10 @@ describe("toolExecutor", () => {
           args: {},
           raw: "",
         };
-        const invalidResult = await executeToolWithRetry(invalidTc, mockExecuteFn);
+        const invalidResult = await executeToolWithRetry(
+          invalidTc,
+          mockExecuteFn,
+        );
         expect(invalidResult.success).toBe(false);
         expect(mockExecuteFn).not.toHaveBeenCalled();
 
@@ -379,7 +418,9 @@ describe("toolExecutor", () => {
         expect(results[1].result).toContain("requires a 'path' argument");
         // Only the valid tool should have been executed
         expect(mockExecuteFn).toHaveBeenCalledTimes(1);
-        expect(mockExecuteFn).toHaveBeenCalledWith("read_file", { path: "/workspace/a.ts" });
+        expect(mockExecuteFn).toHaveBeenCalledWith("read_file", {
+          path: "/workspace/a.ts",
+        });
       });
     });
 
@@ -406,7 +447,12 @@ describe("toolExecutor", () => {
         const tools: ToolCall[] = [
           { name: "read_file", args: { path: "/workspace/a.ts" }, raw: "" },
         ];
-        const results = await executeToolCalls(tools, mockExecuteFn, undefined, abortController.signal);
+        const results = await executeToolCalls(
+          tools,
+          mockExecuteFn,
+          undefined,
+          abortController.signal,
+        );
         expect(results[0].success).toBe(false);
         expect(results[0].result).toContain("Aborted");
         expect(mockExecuteFn).not.toHaveBeenCalled();
@@ -416,13 +462,19 @@ describe("toolExecutor", () => {
     describe("retry logic", () => {
       it("retries on ECONNRESET error", async () => {
         let callCount = 0;
-        const retryFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+        const retryFn = vi.fn<
+          (name: string, args: Record<string, unknown>) => Promise<string>
+        >(async () => {
           callCount++;
           if (callCount === 1) throw new Error("ECONNRESET: connection reset");
           return "success on retry";
         });
 
-        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const tc: ToolCall = {
+          name: "read_file",
+          args: { path: "/workspace/file.ts" },
+          raw: "",
+        };
         const result = await executeToolWithRetry(tc, retryFn);
         expect(result.success).toBe(true);
         expect(result.result).toBe("success on retry");
@@ -432,24 +484,36 @@ describe("toolExecutor", () => {
 
       it("retries on HTTP 429 error", async () => {
         let callCount = 0;
-        const retryFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+        const retryFn = vi.fn<
+          (name: string, args: Record<string, unknown>) => Promise<string>
+        >(async () => {
           callCount++;
           if (callCount <= 2) throw new Error("HTTP 429: rate limited");
           return "success after 2 retries";
         });
 
-        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const tc: ToolCall = {
+          name: "read_file",
+          args: { path: "/workspace/file.ts" },
+          raw: "",
+        };
         const result = await executeToolWithRetry(tc, retryFn);
         expect(result.success).toBe(true);
         expect(result.retries).toBe(2);
       });
 
       it("does not retry on non-retryable errors", async () => {
-        const noRetryFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+        const noRetryFn = vi.fn<
+          (name: string, args: Record<string, unknown>) => Promise<string>
+        >(async () => {
           throw new Error("Permission denied: access denied");
         });
 
-        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const tc: ToolCall = {
+          name: "read_file",
+          args: { path: "/workspace/file.ts" },
+          raw: "",
+        };
         const result = await executeToolWithRetry(tc, noRetryFn);
         expect(result.success).toBe(false);
         expect(result.retries).toBe(0);
@@ -457,11 +521,17 @@ describe("toolExecutor", () => {
       });
 
       it("gives up after max retries", async () => {
-        const alwaysFailFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(async () => {
+        const alwaysFailFn = vi.fn<
+          (name: string, args: Record<string, unknown>) => Promise<string>
+        >(async () => {
           throw new Error("ETIMEDOUT: operation timed out");
         });
 
-        const tc: ToolCall = { name: "read_file", args: { path: "/workspace/file.ts" }, raw: "" };
+        const tc: ToolCall = {
+          name: "read_file",
+          args: { path: "/workspace/file.ts" },
+          raw: "",
+        };
         const result = await executeToolWithRetry(tc, alwaysFailFn);
         expect(result.success).toBe(false);
         expect(result.retries).toBe(2); // MAX_RETRIES = 2
@@ -474,7 +544,9 @@ describe("toolExecutor", () => {
         vi.useFakeTimers();
         try {
           // slowFn never resolves — it hangs until timeout
-          const slowFn = vi.fn<(name: string, args: Record<string, unknown>) => Promise<string>>(() => new Promise(() => {}));
+          const slowFn = vi.fn<
+            (name: string, args: Record<string, unknown>) => Promise<string>
+          >(() => new Promise(() => {}));
           const tc: ToolCall = { name: "clipboard_read", args: {}, raw: "" };
           const resultPromise = executeToolWithRetry(tc, slowFn);
           // Advance timers past the 5s clipboard_read timeout
@@ -519,9 +591,33 @@ describe("toolExecutor", () => {
     });
 
     it("aggregates multiple costs", () => {
-      recordToolCost({ toolCallId: "c1", sessionId: "test-session", name: "read_file", durationMs: 100, retries: 0, success: true, timestamp: Date.now() });
-      recordToolCost({ toolCallId: "c2", sessionId: "test-session", name: "read_file", durationMs: 200, retries: 1, success: true, timestamp: Date.now() });
-      recordToolCost({ toolCallId: "c3", sessionId: "test-session", name: "write_file", durationMs: 50, retries: 0, success: true, timestamp: Date.now() });
+      recordToolCost({
+        toolCallId: "c1",
+        sessionId: "test-session",
+        name: "read_file",
+        durationMs: 100,
+        retries: 0,
+        success: true,
+        timestamp: Date.now(),
+      });
+      recordToolCost({
+        toolCallId: "c2",
+        sessionId: "test-session",
+        name: "read_file",
+        durationMs: 200,
+        retries: 1,
+        success: true,
+        timestamp: Date.now(),
+      });
+      recordToolCost({
+        toolCallId: "c3",
+        sessionId: "test-session",
+        name: "write_file",
+        durationMs: 50,
+        retries: 0,
+        success: true,
+        timestamp: Date.now(),
+      });
 
       const stats = getSessionToolCosts("test-session");
       expect(stats.totalCalls).toBe(3);
@@ -532,7 +628,15 @@ describe("toolExecutor", () => {
     });
 
     it("clears session costs", () => {
-      recordToolCost({ toolCallId: "c1", sessionId: "test-session", name: "read_file", durationMs: 100, retries: 0, success: true, timestamp: Date.now() });
+      recordToolCost({
+        toolCallId: "c1",
+        sessionId: "test-session",
+        name: "read_file",
+        durationMs: 100,
+        retries: 0,
+        success: true,
+        timestamp: Date.now(),
+      });
       clearSessionToolCosts("test-session");
 
       const stats = getSessionToolCosts("test-session");

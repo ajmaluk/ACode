@@ -41,7 +41,18 @@ function setupChatState() {
               filePath: "/test/src/index.ts",
               oldContent: "old",
               newContent: "new",
-              hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [{ type: "remove", content: "old", oldLineNumber: 1 }, { type: "add", content: "new", newLineNumber: 1 }] }],
+              hunks: [
+                {
+                  oldStart: 1,
+                  oldLines: 1,
+                  newStart: 1,
+                  newLines: 1,
+                  lines: [
+                    { type: "remove", content: "old", oldLineNumber: 1 },
+                    { type: "add", content: "new", newLineNumber: 1 },
+                  ],
+                },
+              ],
               createdAt: Date.now(),
             },
             diffId: "diff-1",
@@ -56,7 +67,17 @@ function setupChatState() {
               filePath: "/test/src/new.ts",
               oldContent: "",
               newContent: "new content",
-              hunks: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: [{ type: "add", content: "new content", newLineNumber: 1 }] }],
+              hunks: [
+                {
+                  oldStart: 0,
+                  oldLines: 0,
+                  newStart: 1,
+                  newLines: 1,
+                  lines: [
+                    { type: "add", content: "new content", newLineNumber: 1 },
+                  ],
+                },
+              ],
               createdAt: Date.now(),
             },
             diffId: "diff-2",
@@ -80,7 +101,12 @@ function setupChatState() {
       } as const,
     ],
     _pendingChanges: [
-      { path: "/test/src/another.ts", action: "modified" as const, additions: 5, deletions: 0 },
+      {
+        path: "/test/src/another.ts",
+        action: "modified" as const,
+        additions: 5,
+        deletions: 0,
+      },
     ],
     restoredVersionId: "ver-123",
     preRestoreMessages: [
@@ -385,7 +411,7 @@ describe("saveVersion", () => {
     const savedVersion = versions[versions.length - 1];
 
     // Verify essential tool call properties are preserved
-    const savedMsg = savedVersion.messages.find(m => m.toolCalls);
+    const savedMsg = savedVersion.messages.find((m) => m.toolCalls);
     expect(savedMsg).toBeDefined();
 
     for (const tc of savedMsg!.toolCalls!) {
@@ -420,9 +446,11 @@ describe("saveVersion", () => {
     expect(savedVersion.messages.length).toBe(2);
 
     // Verify the plain message is preserved exactly
-    const plainMsg = savedVersion.messages.find(m => m.id === "msg-plain");
+    const plainMsg = savedVersion.messages.find((m) => m.id === "msg-plain");
     expect(plainMsg).toBeDefined();
-    expect(plainMsg!.content).toBe("This is a plain message without tool calls.");
+    expect(plainMsg!.content).toBe(
+      "This is a plain message without tool calls.",
+    );
     expect(plainMsg!.role).toBe("user");
   });
 

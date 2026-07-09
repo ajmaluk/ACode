@@ -17,7 +17,9 @@ export function toPosix(p: string): string {
 
 /** Split a path into segments using either separator. */
 export function splitPath(p: string): string[] {
-  return toPosix(p).split("/").filter((s) => s.length > 0);
+  return toPosix(p)
+    .split("/")
+    .filter((s) => s.length > 0);
 }
 
 /** Return the last segment of the path (file or folder name). */
@@ -39,7 +41,8 @@ export function dirname(p: string): string {
   }
   if (idx === 0) return "/";
   const result = posix.slice(0, idx);
-  const trimmed = result.endsWith("/") && result !== "/" ? result.slice(0, -1) : result;
+  const trimmed =
+    result.endsWith("/") && result !== "/" ? result.slice(0, -1) : result;
   // Preserve drive letter prefix
   if (hasDriveLetter(posix) && !hasDriveLetter(trimmed)) {
     return getDriveLetter(posix) + trimmed;
@@ -99,7 +102,10 @@ export function joinPath(...segments: string[]): string {
   const resolved: string[] = [];
   for (const part of pathParts) {
     if (part === "." || (part === "" && resolved.length > 0)) continue;
-    if (part === "..") { resolved.pop(); continue; }
+    if (part === "..") {
+      resolved.pop();
+      continue;
+    }
     resolved.push(part);
   }
 
@@ -126,13 +132,20 @@ export function shortPath(p: string, segmentsToShow = 3): string {
   const posix = toPosix(p);
   const drivePrefix = hasDriveLetter(posix) ? getDriveLetter(posix) : "";
   const leadingSlash = posix.startsWith("/") ? "/" : "";
-  return drivePrefix + leadingSlash + "…/" + parts.slice(-segmentsToShow).join("/");
+  return (
+    drivePrefix + leadingSlash + "…/" + parts.slice(-segmentsToShow).join("/")
+  );
 }
 
 /** Used by tests */
 /** True when two paths point to the same file, ignoring case on Windows/macOS. */
-export function pathsEqual(a: string, b: string, caseInsensitive = false): boolean {
-  const stripTrailing = (p: string) => p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+export function pathsEqual(
+  a: string,
+  b: string,
+  caseInsensitive = false,
+): boolean {
+  const stripTrailing = (p: string) =>
+    p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
   const aa = stripTrailing(toPosix(a));
   const bb = stripTrailing(toPosix(b));
   if (caseInsensitive) return aa.toLowerCase() === bb.toLowerCase();
@@ -144,43 +157,76 @@ export function pathsEqual(a: string, b: string, caseInsensitive = false): boole
 // ============================================================================
 
 const LANGUAGE_MAP: Record<string, string> = {
-  ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
-  js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-  json: "json", jsonc: "json",
-  md: "markdown", mdx: "markdown",
-  py: "python", pyi: "python",
+  ts: "typescript",
+  tsx: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  json: "json",
+  jsonc: "json",
+  md: "markdown",
+  mdx: "markdown",
+  py: "python",
+  pyi: "python",
   rs: "rust",
   go: "go",
   java: "java",
   rb: "ruby",
   php: "php",
   swift: "swift",
-  kt: "kotlin", kts: "kotlin",
+  kt: "kotlin",
+  kts: "kotlin",
   cs: "csharp",
-  cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
-  c: "c", h: "c",
-  hcl: "hcl", tf: "hcl",
-  css: "css", scss: "scss", less: "less",
-  html: "html", htm: "html", vue: "html", astro: "html",
-  xml: "xml", svg: "xml",
+  cpp: "cpp",
+  cc: "cpp",
+  cxx: "cpp",
+  hpp: "cpp",
+  c: "c",
+  h: "c",
+  hcl: "hcl",
+  tf: "hcl",
+  css: "css",
+  scss: "scss",
+  less: "less",
+  html: "html",
+  htm: "html",
+  vue: "html",
+  astro: "html",
+  xml: "xml",
+  svg: "xml",
   sql: "sql",
-  sh: "shell", bash: "shell", zsh: "shell", fish: "shell", ksh: "shell",
+  sh: "shell",
+  bash: "shell",
+  zsh: "shell",
+  fish: "shell",
+  ksh: "shell",
   ps1: "powershell",
-  yaml: "yaml", yml: "yaml",
+  yaml: "yaml",
+  yml: "yaml",
   toml: "toml",
-  ini: "ini", cfg: "ini", conf: "ini",
-  graphql: "graphql", gql: "graphql",
+  ini: "ini",
+  cfg: "ini",
+  conf: "ini",
+  graphql: "graphql",
+  gql: "graphql",
   sol: "solidity",
   dart: "dart",
   lua: "lua",
   r: "r",
-  ex: "elixir", exs: "elixir",
+  ex: "elixir",
+  exs: "elixir",
   erl: "erlang",
   hs: "haskell",
-  ml: "ocaml", mli: "ocaml",
+  ml: "ocaml",
+  mli: "ocaml",
   zig: "zig",
   nim: "nim",
-  v: "verilog", sv: "verilog", vhdl: "vhdl",
+  v: "verilog",
+  sv: "verilog",
+  vhdl: "vhdl",
 };
 
 /** Detect the editor language / Monaco language ID from a file path. */
@@ -191,10 +237,12 @@ export function detectLanguage(path: string | null): string {
 
   // Special filenames
   if (fileName === "Makefile" || fileName === "makefile") return "makefile";
-  if (fileName === "Dockerfile" || fileName.startsWith("Dockerfile.")) return "dockerfile";
+  if (fileName === "Dockerfile" || fileName.startsWith("Dockerfile."))
+    return "dockerfile";
   if (fileName === "CMakeLists.txt") return "cmake";
   if (fileName === "Cargo.toml") return "toml";
-  if (fileName === ".gitignore" || fileName === ".dockerignore") return "ignore";
+  if (fileName === ".gitignore" || fileName === ".dockerignore")
+    return "ignore";
   if (fileName === "Jenkinsfile") return "groovy";
   if (fileName === "Gemfile") return "ruby";
   if (fileName === "Podfile") return "ruby";
@@ -207,9 +255,11 @@ export function detectLanguage(path: string | null): string {
  * Recursively find the first file node in a FileNode tree (skipping .gitignore).
  * Useful for 'Open First File' actions in editor and chat views.
  */
-export function findFirstFile(nodes: import('@dalam/shared-types').FileNode[]): string | null {
+export function findFirstFile(
+  nodes: import("@dalam/shared-types").FileNode[],
+): string | null {
   for (const n of nodes) {
-    if (n.type === 'file' && n.name !== '.gitignore') return n.path;
+    if (n.type === "file" && n.name !== ".gitignore") return n.path;
     if (n.children) {
       const inner = findFirstFile(n.children);
       if (inner) return inner;
@@ -217,4 +267,3 @@ export function findFirstFile(nodes: import('@dalam/shared-types').FileNode[]): 
   }
   return null;
 }
-

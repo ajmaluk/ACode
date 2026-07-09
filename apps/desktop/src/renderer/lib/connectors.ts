@@ -52,7 +52,14 @@ export interface ConnectorConfig {
   /** Display name */
   name: string;
   /** Connector type */
-  type: "webhook" | "websocket" | "file-watcher" | "cron" | "telegram" | "whatsapp" | "custom";
+  type:
+    | "webhook"
+    | "websocket"
+    | "file-watcher"
+    | "cron"
+    | "telegram"
+    | "whatsapp"
+    | "custom";
   /** Whether this connector is enabled */
   enabled: boolean;
   /** Type-specific configuration */
@@ -93,7 +100,11 @@ const connectors: Map<string, Connector> = new Map();
  */
 export function registerConnector(connector: Connector): void {
   connectors.set(connector.id, connector);
-  if (import.meta.env.DEV) console.log("Connector", `Registered connector: ${connector.name} (${connector.type})`);
+  if (import.meta.env.DEV)
+    console.log(
+      "Connector",
+      `Registered connector: ${connector.name} (${connector.type})`,
+    );
 }
 
 /**
@@ -122,7 +133,13 @@ export class WebhookConnector implements Connector {
   private path: string;
   private authToken?: string;
 
-  constructor(config: { id: string; name: string; port?: number; path?: string; authToken?: string }) {
+  constructor(config: {
+    id: string;
+    name: string;
+    port?: number;
+    path?: string;
+    authToken?: string;
+  }) {
     this.id = config.id;
     this.name = config.name;
     this.port = config.port ?? 3847;
@@ -134,10 +151,16 @@ export class WebhookConnector implements Connector {
     this.events = events;
     // Webhook server implementation would go here
     // For now, mark as connected (actual HTTP server requires runtime environment)
-    console.warn("[WebhookConnector] Webhook server is a stub — actual HTTP server requires runtime environment. Marking as connected.");
+    console.warn(
+      "[WebhookConnector] Webhook server is a stub — actual HTTP server requires runtime environment. Marking as connected.",
+    );
     this.connected = true;
     events.onStatusChange("connected");
-    if (import.meta.env.DEV) console.log("Webhook", `Started webhook listener on port ${this.port}${this.path}`);
+    if (import.meta.env.DEV)
+      console.log(
+        "Webhook",
+        `Started webhook listener on port ${this.port}${this.path}`,
+      );
   }
 
   async stop(): Promise<void> {
@@ -202,7 +225,12 @@ export class FileWatcherConnector implements Connector {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastSnapshots: Map<string, string> = new Map();
 
-  constructor(config: { id: string; name: string; paths?: string[]; pollIntervalMs?: number }) {
+  constructor(config: {
+    id: string;
+    name: string;
+    paths?: string[];
+    pollIntervalMs?: number;
+  }) {
     this.id = config.id;
     this.name = config.name;
     this.watchPaths = config.paths ?? [];
@@ -222,7 +250,11 @@ export class FileWatcherConnector implements Connector {
     }
 
     events.onStatusChange("connected");
-    if (import.meta.env.DEV) console.log("FileWatcher", `Started watching ${this.watchPaths.length} paths (poll every ${this.pollIntervalMs}ms)`);
+    if (import.meta.env.DEV)
+      console.log(
+        "FileWatcher",
+        `Started watching ${this.watchPaths.length} paths (poll every ${this.pollIntervalMs}ms)`,
+      );
   }
 
   private async poll(): Promise<void> {
@@ -232,7 +264,10 @@ export class FileWatcherConnector implements Connector {
       for (const watchPath of this.watchPaths) {
         try {
           const content = await readFile(watchPath);
-          const text = typeof content === "string" ? content : new TextDecoder().decode(content);
+          const text =
+            typeof content === "string"
+              ? content
+              : new TextDecoder().decode(content);
           const prev = this.lastSnapshots.get(watchPath);
           if (prev !== undefined && prev !== text) {
             this.events.onMessage({
@@ -243,7 +278,13 @@ export class FileWatcherConnector implements Connector {
               platform: "file-watcher",
               timestamp: Date.now(),
               channelId: "file-watcher",
-              attachments: [{ name: watchPath.split("/").pop() || watchPath, mimeType: "text/plain", content: text }],
+              attachments: [
+                {
+                  name: watchPath.split("/").pop() || watchPath,
+                  mimeType: "text/plain",
+                  content: text,
+                },
+              ],
             });
           }
           this.lastSnapshots.set(watchPath, text);
@@ -267,7 +308,9 @@ export class FileWatcherConnector implements Connector {
   }
 
   async sendMessage(_channelId: string, _content: string): Promise<void> {
-    console.warn("[FileWatcherConnector] sendMessage not supported — this connector is receive-only");
+    console.warn(
+      "[FileWatcherConnector] sendMessage not supported — this connector is receive-only",
+    );
   }
 
   getStatus(): { connected: boolean; error?: string } {
@@ -310,7 +353,11 @@ export class CronConnector implements Connector {
       if (job.enabled) this.scheduleJob(job);
     }
 
-    if (import.meta.env.DEV) console.log("Cron", `Started with ${this.jobs.filter(j => j.enabled).length} active jobs`);
+    if (import.meta.env.DEV)
+      console.log(
+        "Cron",
+        `Started with ${this.jobs.filter((j) => j.enabled).length} active jobs`,
+      );
   }
 
   async stop(): Promise<void> {
@@ -325,7 +372,9 @@ export class CronConnector implements Connector {
   }
 
   async sendMessage(_channelId: string, _content: string): Promise<void> {
-    console.warn("[CronConnector] sendMessage not supported — this connector is receive-only");
+    console.warn(
+      "[CronConnector] sendMessage not supported — this connector is receive-only",
+    );
   }
 
   getStatus(): { connected: boolean; error?: string } {
@@ -338,9 +387,12 @@ export class CronConnector implements Connector {
   }
 
   removeJob(jobId: string): void {
-    this.jobs = this.jobs.filter(j => j.id !== jobId);
+    this.jobs = this.jobs.filter((j) => j.id !== jobId);
     const timer = this.timers.get(jobId);
-    if (timer) { clearTimeout(timer); this.timers.delete(jobId); }
+    if (timer) {
+      clearTimeout(timer);
+      this.timers.delete(jobId);
+    }
   }
 
   private scheduleJob(job: CronJob): void {
@@ -348,7 +400,10 @@ export class CronConnector implements Connector {
     // Supports: "* * * * *", "30 9 * * 1-5" (weekdays 9:30), "0 12 * * 0" (Sundays noon)
     const parts = job.schedule.split(" ");
     if (parts.length !== 5) {
-      console.warn("Cron", `Invalid cron expression for job ${job.name}: ${job.schedule}`);
+      console.warn(
+        "Cron",
+        `Invalid cron expression for job ${job.name}: ${job.schedule}`,
+      );
       return;
     }
 
@@ -407,7 +462,10 @@ export class CronConnector implements Connector {
       }
 
       // Check day-of-month
-      if (dayOfMonth !== "*" && !cronFieldMatches(dayOfMonth, target.getDate())) {
+      if (
+        dayOfMonth !== "*" &&
+        !cronFieldMatches(dayOfMonth, target.getDate())
+      ) {
         target.setDate(target.getDate() + 1);
         if (hourVal !== undefined) target.setHours(hourVal);
         target.setMinutes(minuteVal);
@@ -477,7 +535,13 @@ export class TelegramConnector implements Connector {
   private allowedUsers: number[];
   private webhookUrl?: string;
 
-  constructor(config: { id: string; name: string; botToken: string; allowedUsers?: number[]; webhookUrl?: string }) {
+  constructor(config: {
+    id: string;
+    name: string;
+    botToken: string;
+    allowedUsers?: number[];
+    webhookUrl?: string;
+  }) {
     this.id = config.id;
     this.name = config.name;
     this.botToken = config.botToken;
@@ -494,10 +558,13 @@ export class TelegramConnector implements Connector {
     }
     // Validate bot token by calling getMe
     try {
-      const resp = await fetch(`https://api.telegram.org/bot${this.botToken}/getMe`);
+      const resp = await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getMe`,
+      );
       const data = await resp.json();
       if (!data.ok) throw new Error(data.description || "Invalid token");
-      if (import.meta.env.DEV) console.log("Telegram", `Connected as @${data.result.username}`);
+      if (import.meta.env.DEV)
+        console.log("Telegram", `Connected as @${data.result.username}`);
       this.connected = true;
       events.onStatusChange("connected");
       // Start polling for updates
@@ -505,17 +572,23 @@ export class TelegramConnector implements Connector {
       void this.poll(); // immediate first poll
     } catch (err) {
       events.onStatusChange("error");
-      if (import.meta.env.DEV) console.error("Telegram", "Failed to connect", { error: String(err) });
+      if (import.meta.env.DEV)
+        console.error("Telegram", "Failed to connect", { error: String(err) });
     }
   }
 
   async stop(): Promise<void> {
     this.connected = false;
-    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
     this.events?.onStatusChange("disconnected");
   }
 
-  isConnected(): boolean { return this.connected; }
+  isConnected(): boolean {
+    return this.connected;
+  }
 
   getStatus(): { connected: boolean; error?: string } {
     return { connected: this.connected };
@@ -534,7 +607,10 @@ export class TelegramConnector implements Connector {
         }),
       });
     } catch (err) {
-      if (import.meta.env.DEV) console.error("Telegram", "Failed to send message", { error: String(err) });
+      if (import.meta.env.DEV)
+        console.error("Telegram", "Failed to send message", {
+          error: String(err),
+        });
     }
   }
 
@@ -550,7 +626,11 @@ export class TelegramConnector implements Connector {
         const msg = update.message;
         if (!msg?.text) continue;
         // Access control: skip messages from unauthorized users
-        if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(msg.from?.id)) continue;
+        if (
+          this.allowedUsers.length > 0 &&
+          !this.allowedUsers.includes(msg.from?.id)
+        )
+          continue;
         const message: ConnectorMessage = {
           platformMessageId: String(msg.message_id),
           senderName: msg.from?.first_name ?? "telegram-user",
@@ -558,7 +638,9 @@ export class TelegramConnector implements Connector {
           content: msg.text,
           platform: "telegram",
           timestamp: msg.date * 1000,
-          replyTo: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
+          replyTo: msg.reply_to_message
+            ? String(msg.reply_to_message.message_id)
+            : undefined,
           channelId: String(msg.chat.id),
         };
         this.events.onMessage(message);
@@ -586,7 +668,13 @@ export class WhatsAppConnector implements Connector {
   private authToken?: string;
   private allowedUsers: string[];
 
-  constructor(config: { id: string; name: string; bridgeUrl: string; authToken?: string; allowedUsers?: string[] }) {
+  constructor(config: {
+    id: string;
+    name: string;
+    bridgeUrl: string;
+    authToken?: string;
+    allowedUsers?: string[];
+  }) {
     this.id = config.id;
     this.name = config.name;
     this.bridgeUrl = config.bridgeUrl.replace(/\/+$/, "");
@@ -615,17 +703,25 @@ export class WhatsAppConnector implements Connector {
       void this.poll();
     } catch (err) {
       events.onStatusChange("error");
-      if (import.meta.env.DEV) console.error("WhatsApp", "Failed to connect to bridge", { error: String(err) });
+      if (import.meta.env.DEV)
+        console.error("WhatsApp", "Failed to connect to bridge", {
+          error: String(err),
+        });
     }
   }
 
   async stop(): Promise<void> {
     this.connected = false;
-    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
     this.events?.onStatusChange("disconnected");
   }
 
-  isConnected(): boolean { return this.connected; }
+  isConnected(): boolean {
+    return this.connected;
+  }
 
   getStatus(): { connected: boolean; error?: string } {
     return { connected: this.connected };
@@ -633,7 +729,9 @@ export class WhatsAppConnector implements Connector {
 
   async sendMessage(chatId: string, content: string): Promise<void> {
     try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
       if (this.authToken) headers["Authorization"] = `Bearer ${this.authToken}`;
       await fetch(`${this.bridgeUrl}/send`, {
         method: "POST",
@@ -641,7 +739,10 @@ export class WhatsAppConnector implements Connector {
         body: JSON.stringify({ chatId, content }),
       });
     } catch (err) {
-      if (import.meta.env.DEV) console.error("WhatsApp", "Failed to send message", { error: String(err) });
+      if (import.meta.env.DEV)
+        console.error("WhatsApp", "Failed to send message", {
+          error: String(err),
+        });
     }
   }
 
@@ -650,17 +751,30 @@ export class WhatsAppConnector implements Connector {
     try {
       const headers: Record<string, string> = {};
       if (this.authToken) headers["Authorization"] = `Bearer ${this.authToken}`;
-      const resp = await fetch(`${this.bridgeUrl}/messages?since=${this.lastMessageTimestamp}`, { headers });
+      const resp = await fetch(
+        `${this.bridgeUrl}/messages?since=${this.lastMessageTimestamp}`,
+        { headers },
+      );
       if (!resp.ok) return;
-      const data = await resp.json() as { messages?: Array<{
-        id: string; from: string; fromName?: string; body: string;
-        timestamp: number; chatId: string;
-      }> };
+      const data = (await resp.json()) as {
+        messages?: Array<{
+          id: string;
+          from: string;
+          fromName?: string;
+          body: string;
+          timestamp: number;
+          chatId: string;
+        }>;
+      };
       for (const msg of data.messages ?? []) {
         if (msg.timestamp <= this.lastMessageTimestamp) continue;
         this.lastMessageTimestamp = msg.timestamp;
         // Access control
-        if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(msg.from)) continue;
+        if (
+          this.allowedUsers.length > 0 &&
+          !this.allowedUsers.includes(msg.from)
+        )
+          continue;
         const message: ConnectorMessage = {
           platformMessageId: msg.id,
           senderName: msg.fromName ?? msg.from,
@@ -709,15 +823,17 @@ function saveConnectorConfigs(configs: ConnectorConfig[]): void {
 /**
  * Create a connector instance from a config.
  */
-function createConnectorFromConfig(
-  config: ConnectorConfig
-): Connector | null {
+function createConnectorFromConfig(config: ConnectorConfig): Connector | null {
   switch (config.type) {
     case "webhook":
       return new WebhookConnector({
         id: config.id,
         name: config.name,
-        ...(config.config as { port?: number; path?: string; authToken?: string }),
+        ...(config.config as {
+          port?: number;
+          path?: string;
+          authToken?: string;
+        }),
       });
     case "file-watcher":
       return new FileWatcherConnector({
@@ -735,13 +851,21 @@ function createConnectorFromConfig(
       return new TelegramConnector({
         id: config.id,
         name: config.name,
-        ...(config.config as { botToken: string; allowedUsers?: number[]; webhookUrl?: string }),
+        ...(config.config as {
+          botToken: string;
+          allowedUsers?: number[];
+          webhookUrl?: string;
+        }),
       });
     case "whatsapp":
       return new WhatsAppConnector({
         id: config.id,
         name: config.name,
-        ...(config.config as { bridgeUrl: string; authToken?: string; allowedUsers?: string[] }),
+        ...(config.config as {
+          bridgeUrl: string;
+          authToken?: string;
+          allowedUsers?: string[];
+        }),
       });
     default:
       console.warn("Connector", `Unknown connector type: ${config.type}`);
@@ -783,7 +907,10 @@ export async function initializeConnectors(
     try {
       await initializeSingleConnector(config, onMessage, onStatusChange);
     } catch (err) {
-      if (import.meta.env.DEV) console.error("Connector", `Failed to start connector ${config.name}`, { error: String(err) });
+      if (import.meta.env.DEV)
+        console.error("Connector", `Failed to start connector ${config.name}`, {
+          error: String(err),
+        });
     }
   }
 }
@@ -797,7 +924,7 @@ export async function shutdownConnectors(): Promise<void> {
     promises.push(
       connector.stop().catch((err) => {
         console.warn(`[Connectors] Failed to stop ${name}:`, err);
-      })
+      }),
     );
   }
   await Promise.allSettled(promises);
@@ -813,7 +940,7 @@ export async function saveConnectorConfig(
   onStatusChange?: (connectorId: string, status: string) => void,
 ): Promise<void> {
   const configs = loadConnectorConfigs();
-  const idx = configs.findIndex(c => c.id === config.id);
+  const idx = configs.findIndex((c) => c.id === config.id);
   if (idx >= 0) {
     configs[idx] = config;
   } else {
@@ -825,7 +952,11 @@ export async function saveConnectorConfig(
   const connector = connectors.get(config.id);
   if (connector) {
     connectors.delete(config.id);
-    try { await connector.stop(); } catch { /* ignore */ }
+    try {
+      await connector.stop();
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn(`[Connectors] Failed to stop connector ${config.id}:`, e);
+    }
   }
 
   // Re-initialize if enabled and callbacks are provided
@@ -842,7 +973,7 @@ export async function saveConnectorConfig(
  * Remove a connector config.
  */
 export function removeConnectorConfig(id: string): void {
-  const configs = loadConnectorConfigs().filter(c => c.id !== id);
+  const configs = loadConnectorConfigs().filter((c) => c.id !== id);
   saveConnectorConfigs(configs);
   const connector = connectors.get(id);
   if (connector) {

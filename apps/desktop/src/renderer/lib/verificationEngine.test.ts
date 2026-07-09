@@ -197,9 +197,7 @@ describe("verificationEngine", () => {
 
     it('accepts "any" action type', async () => {
       const criteria: DoneCriteria = {
-        expectedFiles: [
-          { path: "src/foo.ts", action: "any" },
-        ],
+        expectedFiles: [{ path: "src/foo.ts", action: "any" }],
         verificationCommands: [],
         requiredDiffProperties: [],
         checklist: [],

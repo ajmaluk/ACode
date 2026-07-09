@@ -98,18 +98,29 @@ export async function startRecording(
   if (buffers.has(sessionId)) return; // Already recording
 
   buffers.set(sessionId, { turns: [], lastFlush: Date.now(), workspacePath });
-  if (import.meta.env.DEV) console.log("Trajectory", `Started recording session ${sessionId}`, { workspacePath });
+  if (import.meta.env.DEV)
+    console.log("Trajectory", `Started recording session ${sessionId}`, {
+      workspacePath,
+    });
 
   // Ensure trajectory directory exists — create .dalam first, then trajectories
   try {
-    const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { scopeSafeExists, scopeSafeMkdir } = await import("./dalamAPI");
     const dalamDir = joinPath(workspacePath, ".dalam");
     const trajDir = joinPath(dalamDir, TRAJECTORY_DIR);
-    if (!(await exists(dalamDir))) {
-      await mkdir(dalamDir, { recursive: true });
+    if (!(await scopeSafeExists(dalamDir))) {
+      const created = await scopeSafeMkdir(dalamDir, { recursive: true });
+      if (!created) {
+        recordingDisabled = true;
+        return;
+      }
     }
-    if (!(await exists(trajDir))) {
-      await mkdir(trajDir, { recursive: true });
+    if (!(await scopeSafeExists(trajDir))) {
+      const created = await scopeSafeMkdir(trajDir, { recursive: true });
+      if (!created) {
+        recordingDisabled = true;
+        return;
+      }
     }
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
@@ -117,7 +128,9 @@ export async function startRecording(
       recordingDisabled = true;
       return; // Don't start flush timer if we can't write
     } else {
-      console.warn("Trajectory", "Failed to create trajectory directory", { error: String(e) });
+      console.warn("Trajectory", "Failed to create trajectory directory", {
+        error: String(e),
+      });
     }
   }
 
@@ -147,10 +160,14 @@ export async function stopRecording(sessionId: string): Promise<void> {
     if (!afterFlush || afterFlush.turns.length === 0) {
       buffers.delete(sessionId);
     } else {
-      console.warn("Trajectory", `Session ${sessionId} has ${afterFlush.turns.length} unsent turns after stopRecording — keeping buffer for retry`);
+      console.warn(
+        "Trajectory",
+        `Session ${sessionId} has ${afterFlush.turns.length} unsent turns after stopRecording — keeping buffer for retry`,
+      );
     }
 
-    if (import.meta.env.DEV) console.log("Trajectory", `Stopped recording session ${sessionId}`);
+    if (import.meta.env.DEV)
+      console.log("Trajectory", `Stopped recording session ${sessionId}`);
 
     // Stop timer if no more sessions
     if (buffers.size === 0 && flushTimer) {
@@ -158,7 +175,8 @@ export async function stopRecording(sessionId: string): Promise<void> {
       flushTimer = null;
     }
   } catch (err) {
-    if (import.meta.env.DEV) console.warn("[Trajectory] Error stopping recording:", err);
+    if (import.meta.env.DEV)
+      console.warn("[Trajectory] Error stopping recording:", err);
   }
 }
 
@@ -166,10 +184,7 @@ export async function stopRecording(sessionId: string): Promise<void> {
  * Record a conversation turn in the trajectory.
  * This is the main entry point called from the store.
  */
-export function recordTurn(
-  sessionId: string,
-  turn: TrajectoryTurn,
-): void {
+export function recordTurn(sessionId: string, turn: TrajectoryTurn): void {
   const buffer = buffers.get(sessionId);
   if (!buffer) return; // Not recording
 
@@ -218,10 +233,7 @@ export function recordAssistantMessage(
 /**
  * Record a system message.
  */
-export function recordSystemMessage(
-  sessionId: string,
-  content: string,
-): void {
+export function recordSystemMessage(sessionId: string, content: string): void {
   recordTurn(sessionId, {
     from: "system",
     value: content,
@@ -279,7 +291,9 @@ async function flushBuffer(sessionId: string): Promise<void> {
     const workspacePath = buffer.workspacePath;
 
     if (!workspacePath) {
-      console.warn("Trajectory", "No workspace path, cannot flush", { sessionId });
+      console.warn("Trajectory", "No workspace path, cannot flush", {
+        sessionId,
+      });
       // Restore turns so they aren't lost
       buffer.turns = [...turns, ...buffer.turns];
       return;
@@ -362,10 +376,11 @@ async function flushBuffer(sessionId: string): Promise<void> {
       buffer._appendedContent = fullContent;
       writeSucceeded = true;
     } catch (e) {
-      if (import.meta.env.DEV) console.error("Trajectory", "Failed to write trajectory", {
-        sessionId,
-        error: String(e),
-      });
+      if (import.meta.env.DEV)
+        console.error("Trajectory", "Failed to write trajectory", {
+          sessionId,
+          error: String(e),
+        });
     }
 
     if (!writeSucceeded) {
@@ -378,7 +393,10 @@ async function flushBuffer(sessionId: string): Promise<void> {
         buf._appendedContent = undefined;
       }
     }
-    console.debug("Trajectory", `Flushed ${turns.length} turns for session ${sessionId}`);
+    console.debug(
+      "Trajectory",
+      `Flushed ${turns.length} turns for session ${sessionId}`,
+    );
   } finally {
     flushing.delete(sessionId);
   }
@@ -393,7 +411,8 @@ export async function readTrajectories(
   workspacePath: string,
 ): Promise<TrajectoryRecord[]> {
   try {
-    const { exists, readTextFile, readDir } = await import("@tauri-apps/plugin-fs");
+    const { exists, readTextFile, readDir } =
+      await import("@tauri-apps/plugin-fs");
     const trajDir = joinPath(workspacePath, ".dalam", TRAJECTORY_DIR);
 
     if (!(await exists(trajDir))) return [];
@@ -419,10 +438,13 @@ export async function readTrajectories(
     }
 
     return records.sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
     );
   } catch (e) {
-    console.warn("Trajectory", "Failed to read trajectories", { error: String(e) });
+    console.warn("Trajectory", "Failed to read trajectories", {
+      error: String(e),
+    });
     return [];
   }
 }
@@ -451,10 +473,15 @@ export async function exportTrajectories(
     // Delay revocation to ensure the download has started reading the blob
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-    if (import.meta.env.DEV) console.log("Trajectory", `Exported ${records.length} trajectory records`);
+    if (import.meta.env.DEV)
+      console.log(
+        "Trajectory",
+        `Exported ${records.length} trajectory records`,
+      );
     return link.download;
   } catch (e) {
-    if (import.meta.env.DEV) console.error("Trajectory", "Export failed", { error: String(e) });
+    if (import.meta.env.DEV)
+      console.error("Trajectory", "Export failed", { error: String(e) });
     return null;
   }
 }
@@ -462,9 +489,7 @@ export async function exportTrajectories(
 /**
  * Get trajectory statistics for a workspace.
  */
-export async function getTrajectoryStats(
-  workspacePath: string,
-): Promise<{
+export async function getTrajectoryStats(workspacePath: string): Promise<{
   totalSessions: number;
   totalTurns: number;
   completedSessions: number;
@@ -501,19 +526,35 @@ if (typeof window !== "undefined") {
     }
     // Synchronous best-effort: persist any remaining buffered turns
     for (const [sessionId, buffer] of buffers) {
-      if (buffer.turns.length > 0 && buffer.workspacePath && !flushing.has(sessionId)) {
+      if (
+        buffer.turns.length > 0 &&
+        buffer.workspacePath &&
+        !flushing.has(sessionId)
+      ) {
         const api = createDalamAPI();
-        const filePath = joinPath(buffer.workspacePath, ".dalam", TRAJECTORY_DIR, `trajectory-${sessionId}.jsonl`);
-        const newLines = buffer.turns.map(t => JSON.stringify(t)).join("\n") + "\n";
+        const filePath = joinPath(
+          buffer.workspacePath,
+          ".dalam",
+          TRAJECTORY_DIR,
+          `trajectory-${sessionId}.jsonl`,
+        );
+        const newLines =
+          buffer.turns.map((t) => JSON.stringify(t)).join("\n") + "\n";
         // Read existing + append new, fire-and-forget
-        api.fs.readFile(filePath).then(existing => {
-          return api.fs.writeFile(filePath, existing + newLines);
-        }).catch((_err) => {
-          // File may not exist yet — try write-only
-          api.fs.writeFile(filePath, newLines).catch((writeErr) => {
-            console.warn("[trajectory] Failed to flush trajectory on unload:", writeErr);
+        api.fs
+          .readFile(filePath)
+          .then((existing) => {
+            return api.fs.writeFile(filePath, existing + newLines);
+          })
+          .catch((_err) => {
+            // File may not exist yet — try write-only
+            api.fs.writeFile(filePath, newLines).catch((writeErr) => {
+              console.warn(
+                "[trajectory] Failed to flush trajectory on unload:",
+                writeErr,
+              );
+            });
           });
-        });
         buffer.turns = [];
       }
     }

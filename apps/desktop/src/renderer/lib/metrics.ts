@@ -19,7 +19,12 @@ export const metrics = {
   toolCalls: new Map<string, ToolMetrics>(),
   tokenUsage: { input: 0, output: 0 },
   compactions: { count: 0, totalMs: 0, errors: 0 } as Counter,
-  memoryExtractions: { count: 0, totalMs: 0, errors: 0, gated: 0 } as Counter & { gated: number },
+  memoryExtractions: {
+    count: 0,
+    totalMs: 0,
+    errors: 0,
+    gated: 0,
+  } as Counter & { gated: number },
 };
 
 /**
@@ -38,7 +43,7 @@ export function recordToolCall(
   toolName: string,
   durationMs: number,
   retries = 0,
-  error = false
+  error = false,
 ): void {
   let tool = metrics.toolCalls.get(toolName);
   if (!tool) {
@@ -67,22 +72,24 @@ export function formatMetrics(): string {
 
   lines.push(
     `\nLLM Calls: ${metrics.llmCalls.count} | ` +
-    `Avg: ${metrics.llmCalls.count > 0 ? Math.round(metrics.llmCalls.totalMs / metrics.llmCalls.count) : 0}ms | ` +
-    `Errors: ${metrics.llmCalls.errors}`
+      `Avg: ${metrics.llmCalls.count > 0 ? Math.round(metrics.llmCalls.totalMs / metrics.llmCalls.count) : 0}ms | ` +
+      `Errors: ${metrics.llmCalls.errors}`,
   );
 
   lines.push(
-    `Tokens: ${metrics.tokenUsage.input.toLocaleString()} in / ${metrics.tokenUsage.output.toLocaleString()} out`
+    `Tokens: ${metrics.tokenUsage.input.toLocaleString()} in / ${metrics.tokenUsage.output.toLocaleString()} out`,
   );
 
   if (metrics.toolCalls.size > 0) {
     lines.push("\nTool Calls:");
-    const sorted = [...metrics.toolCalls.entries()].sort((a, b) => b[1].count - a[1].count);
+    const sorted = [...metrics.toolCalls.entries()].sort(
+      (a, b) => b[1].count - a[1].count,
+    );
     for (const [name, data] of sorted.slice(0, 15)) {
       lines.push(
         `  ${name}: ${data.count} calls | ` +
-        `Avg: ${Math.round(data.totalMs / data.count)}ms | ` +
-        `Retries: ${data.retries} | Errors: ${data.errors}`
+          `Avg: ${Math.round(data.totalMs / data.count)}ms | ` +
+          `Retries: ${data.retries} | Errors: ${data.errors}`,
       );
     }
   }
@@ -90,7 +97,7 @@ export function formatMetrics(): string {
   if (metrics.compactions.count > 0) {
     lines.push(
       `\nCompactions: ${metrics.compactions.count} | ` +
-      `Avg: ${Math.round(metrics.compactions.totalMs / metrics.compactions.count)}ms`
+        `Avg: ${Math.round(metrics.compactions.totalMs / metrics.compactions.count)}ms`,
     );
   }
 

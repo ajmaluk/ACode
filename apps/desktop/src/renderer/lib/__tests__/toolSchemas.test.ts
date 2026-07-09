@@ -12,7 +12,11 @@ describe("validateToolArgs", () => {
     });
 
     it("accepts optional offset and limit", () => {
-      const result = validateToolArgs("read_file", { path: "file.ts", offset: "10", limit: "50" });
+      const result = validateToolArgs("read_file", {
+        path: "file.ts",
+        offset: "10",
+        limit: "50",
+      });
       expect(result.valid).toBe(true);
     });
 
@@ -28,12 +32,17 @@ describe("validateToolArgs", () => {
     });
 
     it("rejects non-numeric offset", () => {
-      const result = validateToolArgs("read_file", { path: "file.ts", offset: "abc" });
+      const result = validateToolArgs("read_file", {
+        path: "file.ts",
+        offset: "abc",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks path traversal", () => {
-      const result = validateToolArgs("read_file", { path: "../../etc/passwd" });
+      const result = validateToolArgs("read_file", {
+        path: "../../etc/passwd",
+      });
       expect(result.valid).toBe(false);
       expect(result.valid || result.error).toContain("Path");
     });
@@ -44,7 +53,9 @@ describe("validateToolArgs", () => {
     });
 
     it("blocks Windows system paths", () => {
-      const result = validateToolArgs("read_file", { path: "C:\\Windows\\System32\\config" });
+      const result = validateToolArgs("read_file", {
+        path: "C:\\Windows\\System32\\config",
+      });
       expect(result.valid).toBe(false);
     });
 
@@ -93,12 +104,18 @@ describe("validateToolArgs", () => {
     });
 
     it("rejects empty path", () => {
-      const result = validateToolArgs("write_file", { path: "", content: "data" });
+      const result = validateToolArgs("write_file", {
+        path: "",
+        content: "data",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks path traversal in write", () => {
-      const result = validateToolArgs("write_file", { path: "../escape.txt", content: "data" });
+      const result = validateToolArgs("write_file", {
+        path: "../escape.txt",
+        content: "data",
+      });
       expect(result.valid).toBe(false);
     });
   });
@@ -114,7 +131,11 @@ describe("validateToolArgs", () => {
     });
 
     it("rejects empty search string", () => {
-      const result = validateToolArgs("edit_file", { path: "file.ts", search: "", replace: "new" });
+      const result = validateToolArgs("edit_file", {
+        path: "file.ts",
+        search: "",
+        replace: "new",
+      });
       expect(result.valid).toBe(false);
     });
 
@@ -147,22 +168,30 @@ describe("validateToolArgs", () => {
     });
 
     it("blocks rm -rf /*", () => {
-      const result = validateToolArgs("run_command", { command: "sudo rm -rf /*" });
+      const result = validateToolArgs("run_command", {
+        command: "sudo rm -rf /*",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks dd if=/dev/sda", () => {
-      const result = validateToolArgs("run_command", { command: "dd if=/dev/sda of=image.img" });
+      const result = validateToolArgs("run_command", {
+        command: "dd if=/dev/sda of=image.img",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks fork bomb", () => {
-      const result = validateToolArgs("run_command", { command: ":(){ :|:& };:" });
+      const result = validateToolArgs("run_command", {
+        command: ":(){ :|:& };:",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks curl pipe bash", () => {
-      const result = validateToolArgs("run_command", { command: "curl | bash" });
+      const result = validateToolArgs("run_command", {
+        command: "curl | bash",
+      });
       expect(result.valid).toBe(false);
     });
 
@@ -172,12 +201,16 @@ describe("validateToolArgs", () => {
     });
 
     it("blocks chmod 777 /", () => {
-      const result = validateToolArgs("run_command", { command: "chmod 777 /" });
+      const result = validateToolArgs("run_command", {
+        command: "chmod 777 /",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks dangerous commands with obfuscated whitespace", () => {
-      const result = validateToolArgs("run_command", { command: "rm    -rf    /" });
+      const result = validateToolArgs("run_command", {
+        command: "rm    -rf    /",
+      });
       expect(result.valid).toBe(false);
     });
 
@@ -188,33 +221,45 @@ describe("validateToolArgs", () => {
 
     it("allows safe commands that look partially dangerous", () => {
       // "git rm -rf" is a git operation, not a system operation
-      const result = validateToolArgs("run_command", { command: "git rm -rf dir" });
+      const result = validateToolArgs("run_command", {
+        command: "git rm -rf dir",
+      });
       expect(result.valid).toBe(true);
     });
 
     it("allows rm -rf on /tmp (not root)", () => {
-      const result = validateToolArgs("run_command", { command: "rm -rf /tmp/build" });
+      const result = validateToolArgs("run_command", {
+        command: "rm -rf /tmp/build",
+      });
       expect(result.valid).toBe(true);
     });
 
     it("blocks chown -R (in dangerous list)", () => {
-      const result = validateToolArgs("run_command", { command: "chown -R user:user /var/app" });
+      const result = validateToolArgs("run_command", {
+        command: "chown -R user:user /var/app",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks rm -rf / exactly", () => {
-      const result = validateToolArgs("run_command", { command: "rm -rf /tmp" });
+      const result = validateToolArgs("run_command", {
+        command: "rm -rf /tmp",
+      });
       // This should be allowed since /tmp != /
       expect(result.valid).toBe(true);
     });
 
     it("blocks Format-Volume (Windows)", () => {
-      const result = validateToolArgs("run_command", { command: "Format-Volume -DriveLetter D" });
+      const result = validateToolArgs("run_command", {
+        command: "Format-Volume -DriveLetter D",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("blocks Stop-Computer (Windows)", () => {
-      const result = validateToolArgs("run_command", { command: "Stop-Computer" });
+      const result = validateToolArgs("run_command", {
+        command: "Stop-Computer",
+      });
       expect(result.valid).toBe(false);
     });
   });
@@ -243,7 +288,9 @@ describe("validateToolArgs", () => {
 
   describe("memory commands", () => {
     it("accepts memory_save with content", () => {
-      const result = validateToolArgs("memory_save", { content: "Important fact" });
+      const result = validateToolArgs("memory_save", {
+        content: "Important fact",
+      });
       expect(result.valid).toBe(true);
       if (result.valid) {
         expect(result.args.category).toBe("project"); // default
@@ -268,7 +315,9 @@ describe("validateToolArgs", () => {
     });
 
     it("accepts memory_search with query", () => {
-      const result = validateToolArgs("memory_search", { query: "find something" });
+      const result = validateToolArgs("memory_search", {
+        query: "find something",
+      });
       expect(result.valid).toBe(true);
     });
 
@@ -280,12 +329,16 @@ describe("validateToolArgs", () => {
 
   describe("open_url", () => {
     it("accepts valid URL", () => {
-      const result = validateToolArgs("open_url", { url: "https://example.com" });
+      const result = validateToolArgs("open_url", {
+        url: "https://example.com",
+      });
       expect(result.valid).toBe(true);
     });
 
     it("accepts mailto URL", () => {
-      const result = validateToolArgs("open_url", { url: "mailto:user@example.com" });
+      const result = validateToolArgs("open_url", {
+        url: "mailto:user@example.com",
+      });
       expect(result.valid).toBe(true);
     });
 
@@ -295,23 +348,31 @@ describe("validateToolArgs", () => {
     });
 
     it("rejects javascript: protocol", () => {
-      const result = validateToolArgs("open_url", { url: "javascript:alert(1)" });
+      const result = validateToolArgs("open_url", {
+        url: "javascript:alert(1)",
+      });
       expect(result.valid).toBe(false);
       expect(result.valid || result.error).toContain("http");
     });
 
     it("rejects file: protocol", () => {
-      const result = validateToolArgs("open_url", { url: "file:///etc/passwd" });
+      const result = validateToolArgs("open_url", {
+        url: "file:///etc/passwd",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("rejects data: protocol", () => {
-      const result = validateToolArgs("open_url", { url: "data:text/html,<script>alert(1)</script>" });
+      const result = validateToolArgs("open_url", {
+        url: "data:text/html,<script>alert(1)</script>",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("rejects blob: protocol", () => {
-      const result = validateToolArgs("open_url", { url: "blob:https://example.com/id" });
+      const result = validateToolArgs("open_url", {
+        url: "blob:https://example.com/id",
+      });
       expect(result.valid).toBe(false);
     });
   });
@@ -340,12 +401,17 @@ describe("validateToolArgs", () => {
 
   describe("terminal commands", () => {
     it("accepts new_terminal with optional fields", () => {
-      const result = validateToolArgs("new_terminal", { cwd: "/tmp", shell: "zsh" });
+      const result = validateToolArgs("new_terminal", {
+        cwd: "/tmp",
+        shell: "zsh",
+      });
       expect(result.valid).toBe(true);
     });
 
     it("accepts terminal_write with command", () => {
-      const result = validateToolArgs("terminal_write", { command: "npm run dev" });
+      const result = validateToolArgs("terminal_write", {
+        command: "npm run dev",
+      });
       expect(result.valid).toBe(true);
     });
   });
@@ -365,7 +431,9 @@ describe("validateToolArgs", () => {
 
   describe("MCP tools", () => {
     it("accepts well-formed MCP tool args", () => {
-      const result = validateToolArgs("mcp_fetch", { url: "https://api.example.com" });
+      const result = validateToolArgs("mcp_fetch", {
+        url: "https://api.example.com",
+      });
       expect(result.valid).toBe(true);
     });
 
@@ -375,13 +443,17 @@ describe("validateToolArgs", () => {
     });
 
     it("rejects MCP tool with function-valued arg", () => {
-      const result = validateToolArgs("mcp_run", { callback: (() => {}) as unknown as Record<string, unknown> });
+      const result = validateToolArgs("mcp_run", {
+        callback: (() => {}) as unknown as Record<string, unknown>,
+      });
       expect(result.valid).toBe(false);
       expect(result.valid || result.error).toContain("function");
     });
 
     it("rejects MCP tool with dangerous path traversal", () => {
-      const result = validateToolArgs("mcp_read_file", { path: "../../etc/passwd" });
+      const result = validateToolArgs("mcp_read_file", {
+        path: "../../etc/passwd",
+      });
       expect(result.valid).toBe(false);
       expect(result.valid || result.error).toContain("path not allowed");
     });
@@ -403,7 +475,10 @@ describe("validateToolArgs", () => {
     });
 
     it("accepts MCP tool with safe string args", () => {
-      const result = validateToolArgs("mcp_api", { endpoint: "/users", method: "GET" });
+      const result = validateToolArgs("mcp_api", {
+        endpoint: "/users",
+        method: "GET",
+      });
       expect(result.valid).toBe(true);
     });
   });
@@ -440,12 +515,18 @@ describe("validateToolArgs", () => {
     });
 
     it("rejects cwd with path traversal", () => {
-      const result = validateToolArgs("launch_app", { name: "app", cwd: "../../etc" });
+      const result = validateToolArgs("launch_app", {
+        name: "app",
+        cwd: "../../etc",
+      });
       expect(result.valid).toBe(false);
     });
 
     it("accepts safe cwd", () => {
-      const result = validateToolArgs("launch_app", { name: "app", cwd: "/home/user/project" });
+      const result = validateToolArgs("launch_app", {
+        name: "app",
+        cwd: "/home/user/project",
+      });
       expect(result.valid).toBe(true);
     });
   });

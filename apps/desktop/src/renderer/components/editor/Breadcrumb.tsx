@@ -1,10 +1,20 @@
 import { useRef, useState, useCallback } from "react";
 import { useWorkspace } from "@/store/useAppStore";
 import { useToast } from "@/components/ui/toastStore";
-import { ChevronRight, FileCode, Copy, TerminalSquare, FolderSearch } from "lucide-react";
+import {
+  ChevronRight,
+  FileCode,
+  Copy,
+  TerminalSquare,
+  FolderSearch,
+} from "lucide-react";
 import { splitPath } from "@/lib/pathUtils";
 import { showContextMenu } from "@/components/ui/contextMenuUtils";
-import { copyToClipboard, revealInFinder, openInTerminal } from "@/lib/editorHelpers";
+import {
+  copyToClipboard,
+  revealInFinder,
+  openInTerminal,
+} from "@/lib/editorHelpers";
 
 export function Breadcrumb() {
   const { activeFilePath, workspaces, activeWorkspaceId } = useWorkspace();
@@ -24,24 +34,32 @@ export function Breadcrumb() {
     setFocused(null);
   }
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!totalSegments) return;
-    if (e.altKey && e.key === "ArrowLeft") {
-      e.preventDefault();
-      setFocused((prev) => (prev === null || prev <= 0) ? 0 : prev - 1);
-    } else if (e.altKey && e.key === "ArrowRight") {
-      e.preventDefault();
-      setFocused((prev) => (prev === null || prev >= totalSegments - 1) ? totalSegments - 1 : prev + 1);
-    } else if (e.key === "Enter" && focused !== null) {
-      e.preventDefault();
-      // Simulate click on the focused segment button
-      const btns = containerRef.current?.querySelectorAll<HTMLElement>("button");
-      btns?.[focused]?.click();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setFocused(null);
-    }
-  }, [totalSegments, focused]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!totalSegments) return;
+      if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        setFocused((prev) => (prev === null || prev <= 0 ? 0 : prev - 1));
+      } else if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        setFocused((prev) =>
+          prev === null || prev >= totalSegments - 1
+            ? totalSegments - 1
+            : prev + 1,
+        );
+      } else if (e.key === "Enter" && focused !== null) {
+        e.preventDefault();
+        // Simulate click on the focused segment button
+        const btns =
+          containerRef.current?.querySelectorAll<HTMLElement>("button");
+        btns?.[focused]?.click();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setFocused(null);
+      }
+    },
+    [totalSegments, focused],
+  );
 
   if (!activeFilePath) {
     return (
@@ -56,14 +74,18 @@ export function Breadcrumb() {
   const basePath = activeWorkspace?.path ?? "";
 
   /** Build absolute path for a directory segment at the given index */
-  const segFullPath = (idx: number) => basePath
-    ? basePath + "/" + pathParts.slice(0, idx + 1).join("/")
-    : pathParts.slice(0, idx + 1).join("/");
+  const segFullPath = (idx: number) =>
+    basePath
+      ? basePath + "/" + pathParts.slice(0, idx + 1).join("/")
+      : pathParts.slice(0, idx + 1).join("/");
   /** Absolute path to the file itself */
-  const fileFullPath = basePath ? basePath + "/" + pathParts.join("/") + "/" + fileName : pathParts.join("/") + "/" + fileName;
+  const fileFullPath = basePath
+    ? basePath + "/" + pathParts.join("/") + "/" + fileName
+    : pathParts.join("/") + "/" + fileName;
   const fileRelPath = pathParts.join("/") + "/" + fileName;
 
-  const handleSegmentClick = (idx: number) => copyToClipboard(segFullPath(idx), toast);
+  const handleSegmentClick = (idx: number) =>
+    copyToClipboard(segFullPath(idx), toast);
 
   const handleSegmentContextMenu = (e: React.MouseEvent, idx: number) => {
     e.preventDefault();
@@ -71,11 +93,31 @@ export function Breadcrumb() {
     const fullPath = segFullPath(idx);
     const relPath = pathParts.slice(0, idx + 1).join("/");
     showContextMenu(e, [
-      { type: "item", label: "Copy Absolute Path", icon: <Copy className="w-3.5 h-3.5" />, perform: () => copyToClipboard(fullPath, toast) },
-      { type: "item", label: "Copy Relative Path", icon: <Copy className="w-3.5 h-3.5" />, perform: () => copyToClipboard(relPath, toast) },
+      {
+        type: "item",
+        label: "Copy Absolute Path",
+        icon: <Copy className="w-3.5 h-3.5" />,
+        perform: () => copyToClipboard(fullPath, toast),
+      },
+      {
+        type: "item",
+        label: "Copy Relative Path",
+        icon: <Copy className="w-3.5 h-3.5" />,
+        perform: () => copyToClipboard(relPath, toast),
+      },
       { type: "separator" },
-      { type: "item", label: "Reveal in Finder", icon: <FolderSearch className="w-3.5 h-3.5" />, perform: () => revealInFinder(fullPath) },
-      { type: "item", label: "Open in Terminal", icon: <TerminalSquare className="w-3.5 h-3.5" />, perform: () => openInTerminal(fullPath) },
+      {
+        type: "item",
+        label: "Reveal in Finder",
+        icon: <FolderSearch className="w-3.5 h-3.5" />,
+        perform: () => revealInFinder(fullPath),
+      },
+      {
+        type: "item",
+        label: "Open in Terminal",
+        icon: <TerminalSquare className="w-3.5 h-3.5" />,
+        perform: () => openInTerminal(fullPath),
+      },
     ]);
   };
 
@@ -83,15 +125,39 @@ export function Breadcrumb() {
     e.preventDefault();
     e.stopPropagation();
     showContextMenu(e, [
-      { type: "item", label: "Copy Absolute Path", icon: <Copy className="w-3.5 h-3.5" />, perform: () => copyToClipboard(fileFullPath, toast) },
-      { type: "item", label: "Copy Relative Path", icon: <Copy className="w-3.5 h-3.5" />, perform: () => copyToClipboard(fileRelPath, toast) },
+      {
+        type: "item",
+        label: "Copy Absolute Path",
+        icon: <Copy className="w-3.5 h-3.5" />,
+        perform: () => copyToClipboard(fileFullPath, toast),
+      },
+      {
+        type: "item",
+        label: "Copy Relative Path",
+        icon: <Copy className="w-3.5 h-3.5" />,
+        perform: () => copyToClipboard(fileRelPath, toast),
+      },
       { type: "separator" },
-      { type: "item", label: "Reveal in Finder", icon: <FolderSearch className="w-3.5 h-3.5" />, perform: () => revealInFinder(fileFullPath) },
-      { type: "item", label: "Open in Terminal", icon: <TerminalSquare className="w-3.5 h-3.5" />, perform: () => openInTerminal(activeWorkspace?.path ?? pathParts.slice(0, -1).join("/")) },
+      {
+        type: "item",
+        label: "Reveal in Finder",
+        icon: <FolderSearch className="w-3.5 h-3.5" />,
+        perform: () => revealInFinder(fileFullPath),
+      },
+      {
+        type: "item",
+        label: "Open in Terminal",
+        icon: <TerminalSquare className="w-3.5 h-3.5" />,
+        perform: () =>
+          openInTerminal(
+            activeWorkspace?.path ?? pathParts.slice(0, -1).join("/"),
+          ),
+      },
     ]);
   };
 
-  const focusClass = "outline-none ring-1 ring-dalam-accent-primary bg-dalam-accent-subtle";
+  const focusClass =
+    "outline-none ring-1 ring-dalam-accent-primary bg-dalam-accent-subtle";
 
   return (
     <div
@@ -103,7 +169,10 @@ export function Breadcrumb() {
       tabIndex={0}
     >
       {pathParts.map((part, idx) => (
-        <span key={`${idx}-${part}`} className="flex items-center flex-shrink-0">
+        <span
+          key={`${idx}-${part}`}
+          className="flex items-center flex-shrink-0"
+        >
           <button
             className={`px-1 py-0.5 text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors ${focused === idx ? focusClass : ""}`}
             onClick={() => handleSegmentClick(idx)}

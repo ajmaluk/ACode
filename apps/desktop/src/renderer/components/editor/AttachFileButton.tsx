@@ -22,8 +22,13 @@ export function AttachFileButton() {
         reader.readAsDataURL(file);
       } else {
         const reader = new FileReader();
-        reader.onload = () => resolve({ content: reader.result as string, mimeType: file.type || "text/plain" });
-        reader.onerror = () => resolve({ content: "", mimeType: file.type || "text/plain" });
+        reader.onload = () =>
+          resolve({
+            content: reader.result as string,
+            mimeType: file.type || "text/plain",
+          });
+        reader.onerror = () =>
+          resolve({ content: "", mimeType: file.type || "text/plain" });
         reader.readAsText(file);
       }
     });

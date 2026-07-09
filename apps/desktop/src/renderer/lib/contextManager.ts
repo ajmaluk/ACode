@@ -76,16 +76,16 @@ export type ContextStats = {
   pressureRatio: number;
   messageCount: number;
   needsCompaction: boolean;
-  shouldPrune: boolean;      // tool outputs should be pruned
+  shouldPrune: boolean; // tool outputs should be pruned
   nextCheckpointTrigger: number | null; // next unfired trigger threshold (e.g. 0.20), or null if none pending
-  shouldCompact: boolean;    // full compaction needed (≥95%)
+  shouldCompact: boolean; // full compaction needed (≥95%)
   shouldProactivePrune: boolean; // proactive tool output pruning (≥60%)
   shouldProactiveCompact: boolean; // proactive compaction trigger (≥75%)
 };
 
 // ─── Proactive Context Management ────────────────────────────
 // Thresholds for proactive compression (more aggressive than reactive)
-const PROACTIVE_PRUNE_THRESHOLD = 0.60;  // Start pruning tool outputs at 60%
+const PROACTIVE_PRUNE_THRESHOLD = 0.6; // Start pruning tool outputs at 60%
 const PROACTIVE_COMPACT_THRESHOLD = 0.75; // Trigger background compaction at 75%
 
 /**
@@ -99,7 +99,7 @@ const PROACTIVE_COMPACT_THRESHOLD = 0.75; // Trigger background compaction at 75
  */
 export function checkProactiveContextManagement(
   messages: ChatMessage[],
-  maxContextTokens: number = 128000
+  maxContextTokens: number = 128000,
 ): { shouldPrune: boolean; shouldCompact: boolean; reason: string } {
   const stats = computeContextStats(messages, maxContextTokens);
 
@@ -132,7 +132,7 @@ export function checkProactiveContextManagement(
  */
 export function getContextPressureRecommendation(
   pressure: ContextPressure,
-  _pressureRatio: number
+  _pressureRatio: number,
 ): { color: string; label: string; action: string } {
   switch (pressure) {
     case "high":
@@ -166,7 +166,9 @@ export function getContextPressureRecommendation(
  * Compute the next checkpoint trigger that hasn't fired yet.
  * Caller is responsible for tracking which triggers have fired.
  */
-export function getNextCheckpointTrigger(firedUpToPercent: number): number | null {
+export function getNextCheckpointTrigger(
+  firedUpToPercent: number,
+): number | null {
   const next = CTX.CHECKPOINT_TRIGGERS.find((t) => t > firedUpToPercent);
   return next ?? null;
 }
@@ -216,13 +218,13 @@ export function estimateTokens(text: string): number {
   }
 
   let lineNum = 0;
-  // Detect fence on the very first line (line 0) before entering the loop
   if (fenceLines.has(0)) codeMode = !codeMode;
+  const lastNewlineIdx = text.lastIndexOf("\n");
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
 
     // Track line boundaries for code fence detection
-    if (code === 10) { // newline
+    if (code === 10) {
       lineNum++;
       if (fenceLines.has(lineNum)) {
         codeMode = !codeMode;
@@ -232,14 +234,20 @@ export function estimateTokens(text: string): number {
     }
 
     // CJK Unified Ideographs — ~1.5 chars per token
-    if ((code >= 0x4e00 && code <= 0x9fff) ||   // CJK Unified
-        (code >= 0x3400 && code <= 0x4dbf) ||   // CJK Extension A
-        (code >= 0xf900 && code <= 0xfaff)) {   // CJK Compatibility
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) || // CJK Unified
+      (code >= 0x3400 && code <= 0x4dbf) || // CJK Extension A
+      (code >= 0xf900 && code <= 0xfaff)
+    ) {
+      // CJK Compatibility
       count += 0.67;
     }
     // CJK punctuation and fullwidth forms — ~2 chars per token
-    else if ((code >= 0x3000 && code <= 0x303f) ||  // CJK Symbols
-             (code >= 0xff00 && code <= 0xffef)) {  // Fullwidth forms
+    else if (
+      (code >= 0x3000 && code <= 0x303f) || // CJK Symbols
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      // Fullwidth forms
       count += 0.5;
     }
     // Whitespace
@@ -247,13 +255,27 @@ export function estimateTokens(text: string): number {
       count += 1;
     }
     // Code identifiers — ~4 chars per token (realistic for mixed code)
-    else if (codeMode || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 95) {
+    else if (
+      codeMode ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 95
+    ) {
       count += 0.25;
     }
     // Other characters — ~4 chars per token
     else {
       count += 0.25;
     }
+  }
+
+  // Check if the last line (without trailing newline) has a fence marker.
+  // The loop above only detects fences on newlines; the final line is
+  // missed when the text doesn't end with \n.
+  if (lastNewlineIdx >= 0 && lastNewlineIdx < text.length - 1) {
+    const actualLastLineNum = text.split("\n").length - 1;
+    void (fenceLines.has(actualLastLineNum));
   }
 
   const result = Math.ceil(count);
@@ -272,7 +294,9 @@ let _cachedEstimator: ((text: string) => number) | null = null;
  * Get the best available token estimator.
  * Uses tiktoken (±5% accuracy) when available, falls back to heuristic (±20-30%).
  */
-export async function getReliableEstimator(): Promise<(text: string) => number> {
+export async function getReliableEstimator(): Promise<
+  (text: string) => number
+> {
   if (_cachedEstimator) return _cachedEstimator;
 
   if (_tiktokenAvailable === null) {
@@ -280,7 +304,8 @@ export async function getReliableEstimator(): Promise<(text: string) => number> 
       const { countTokens } = await import("./tokenizer");
       countTokens("test", "gpt-4");
       _tiktokenAvailable = true;
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[ContextManager] tiktoken not available, using heuristic:", e);
       _tiktokenAvailable = false;
     }
   }
@@ -321,14 +346,14 @@ export function estimateMessageTokens(msg: ChatMessage): number {
  */
 export function computePressure(
   usedTokens: number,
-  maxTokens: number = 128000
+  maxTokens: number = 128000,
 ): { pressure: ContextPressure; ratio: number } {
   if (maxTokens <= 0) return { pressure: "high", ratio: Infinity };
   const ratio = usedTokens / maxTokens;
   let pressure: ContextPressure = "none";
   if (ratio >= 0.85) pressure = "high";
-  else if (ratio >= 0.70) pressure = "medium";
-  else if (ratio >= 0.50) pressure = "low";
+  else if (ratio >= 0.7) pressure = "medium";
+  else if (ratio >= 0.5) pressure = "low";
   return { pressure, ratio };
 }
 
@@ -339,9 +364,12 @@ export function computeContextStats(
   messages: ChatMessage[],
   maxContextTokens: number = 128000,
   outputReserveTokens: number = CTX_LOCAL.OUTPUT_RESERVE,
-  compactionBufferTokens: number = CTX.COMPACTION_BUFFER
+  compactionBufferTokens: number = CTX.COMPACTION_BUFFER,
 ): ContextStats {
-  const totalTokens = messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
+  const totalTokens = messages.reduce(
+    (sum, m) => sum + estimateMessageTokens(m),
+    0,
+  );
   const reservedTokens = outputReserveTokens + compactionBufferTokens;
   const usableTokens = maxContextTokens - reservedTokens;
   const { pressure, ratio } = computePressure(totalTokens, usableTokens);
@@ -354,7 +382,7 @@ export function computeContextStats(
     pressureRatio: ratio,
     messageCount: messages.length,
     needsCompaction: ratio >= CTX.CHECKPOINT_HARD,
-    shouldPrune: totalTokens > (usableTokens - CTX.PRUNE_PROTECT),
+    shouldPrune: totalTokens > usableTokens - CTX.PRUNE_PROTECT,
     nextCheckpointTrigger: getNextCheckpointTrigger(ratio),
     shouldCompact: ratio >= CTX.COMPACT_THRESHOLD,
     shouldProactivePrune: ratio >= PROACTIVE_PRUNE_THRESHOLD,
@@ -392,15 +420,20 @@ export function computeContextStats(
  */
 /** Check if a message is a tool result (user message with tool prefix). */
 export function _isToolResult(m: ChatMessage): boolean {
-  return m.role === "user" && typeof m.content === "string" &&
-    (m.content.startsWith("[TOOL RESULT:") || m.content.startsWith("[TOOL ERROR:") ||
-     m.content.startsWith("[Tool result for ") || m.content.startsWith("[Tool error for "));
+  return (
+    m.role === "user" &&
+    typeof m.content === "string" &&
+    (m.content.startsWith("[TOOL RESULT:") ||
+      m.content.startsWith("[TOOL ERROR:") ||
+      m.content.startsWith("[Tool result for ") ||
+      m.content.startsWith("[Tool error for "))
+  );
 }
 
 /** Align compaction boundaries — exported for direct unit testing. */
 export function _alignBoundaryPairs(
   messages: ChatMessage[],
-  baseIndices: Set<number>
+  baseIndices: Set<number>,
 ): Set<number> {
   // Expand baseIndices (the keep set) to include related tool_call/tool_result
   // pairs so they stay together after compaction.
@@ -447,7 +480,7 @@ export function _alignBoundaryPairs(
 
 export function selectMessagesForCompaction(
   messages: ChatMessage[],
-  keepRecent: number = 6
+  keepRecent: number = 6,
 ): { toCompact: ChatMessage[]; toKeep: ChatMessage[] } {
   if (messages.length <= keepRecent) {
     return { toCompact: [], toKeep: messages };
@@ -457,7 +490,7 @@ export function selectMessagesForCompaction(
   const protectedIndices = new Set<number>();
 
   // Find the first user message in a forward pass (can't do everything backward)
-  const firstUserIdx = messages.findIndex(m => m.role === "user");
+  const firstUserIdx = messages.findIndex((m) => m.role === "user");
   if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
 
   // Single backward pass: protect recent user turns, recent assistant messages,
@@ -549,7 +582,7 @@ Rules:
 
 export function buildCompactionPrompt(
   messages: ChatMessage[],
-  previousSummary?: string
+  previousSummary?: string,
 ): { role: string; content: string }[] {
   const formatted: { role: string; content: string }[] = [];
 
@@ -563,31 +596,34 @@ export function buildCompactionPrompt(
       const toolResultMsgs: string[] = [];
       for (let j = i + 1; j < messages.length; j++) {
         const next = messages[j];
-        if (next.role === "assistant") break;  // next assistant turn
-        if (next.role === "user" && !_isToolResult(next)) break;  // real user message
+        if (next.role === "assistant") break; // next assistant turn
+        if (next.role === "user" && !_isToolResult(next)) break; // real user message
         if (_isToolResult(next)) {
-          const truncated = next.content.length > 500 ? next.content.slice(0, 500) + "..." : next.content;
+          const truncated =
+            next.content.length > 500
+              ? next.content.slice(0, 500) + "..."
+              : next.content;
           toolResultMsgs.push(truncated);
         }
       }
       if (toolResultMsgs.length > 0) {
-        content += `\n\nTool Results:\n${toolResultMsgs.join('\n---\n')}`;
+        content += `\n\nTool Results:\n${toolResultMsgs.join("\n---\n")}`;
       }
     }
 
     // Preserve file changes
     if (m.fileChanges?.length) {
       const changeSummary = m.fileChanges
-        .map(fc => `${fc.action}: ${fc.path}`)
-        .join('\n');
+        .map((fc) => `${fc.action}: ${fc.path}`)
+        .join("\n");
       content += `\n\nFile Changes:\n${changeSummary}`;
     }
 
     // Preserve todos
     if (m.todos?.length) {
       const todoSummary = m.todos
-        .map(t => `${t.status === 'completed' ? '✓' : '○'} ${t.content}`)
-        .join('\n');
+        .map((t) => `${t.status === "completed" ? "✓" : "○"} ${t.content}`)
+        .join("\n");
       content += `\n\nTodos:\n${todoSummary}`;
     }
 
@@ -605,7 +641,8 @@ export function buildCompactionPrompt(
       },
       {
         role: "assistant",
-        content: "I will merge the previous summary with the new messages to produce an updated, comprehensive summary.",
+        content:
+          "I will merge the previous summary with the new messages to produce an updated, comprehensive summary.",
       },
       ...formatted,
     ];
@@ -632,7 +669,7 @@ export function buildCompactionPrompt(
  */
 export function pruneToolOutputs(
   messages: ChatMessage[],
-  toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens
+  toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens,
 ): { pruned: ChatMessage[]; tokensReclaimed: number } {
   // Identify which turns to protect (last N user turns that are NOT tool results)
   const realUserTurnIndexes: number[] = [];
@@ -642,7 +679,8 @@ export function pruneToolOutputs(
     }
     if (realUserTurnIndexes.length >= CTX.TURN_PROTECT) break;
   }
-  const protectAfter = realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
+  const protectAfter =
+    realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
 
   // Sort tool result messages by size (largest first) for more efficient pruning
   const toolIndicesWithSize: Array<{ idx: number; size: number }> = [];
@@ -666,7 +704,10 @@ export function pruneToolOutputs(
   const toPrune = new Set<number>();
 
   for (const { idx, size } of toolIndicesWithSize) {
-    if (tokensReclaimed >= CTX.PRUNE_MINIMUM && totalPrunableToolTokens - tokensReclaimed < CTX.PRUNE_PROTECT) {
+    if (
+      tokensReclaimed >= CTX.PRUNE_MINIMUM &&
+      totalPrunableToolTokens - tokensReclaimed < CTX.PRUNE_PROTECT
+    ) {
       break; // enough reclaimed
     }
     tokensReclaimed += size;
@@ -683,7 +724,9 @@ export function pruneToolOutputs(
     // Extract tool name from either format:
     // [TOOL RESULT: name] or [TOOL ERROR: name] (colon format)
     // [Tool result for name] or [Tool error for name] (for-format)
-    const toolMatch = msg.content.match(/^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/);
+    const toolMatch = msg.content.match(
+      /^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/,
+    );
     const toolName = toolMatch?.[1] ?? toolMatch?.[2] ?? "unknown";
     const originalTokens = toolTokenEstimate(msg);
 
@@ -712,7 +755,7 @@ export function pruneToolOutputs(
  */
 export function tier1PruneToolOutputs(
   messages: ChatMessage[],
-  toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens
+  toolTokenEstimate: (msg: ChatMessage) => number = estimateMessageTokens,
 ): { pruned: ChatMessage[]; tokensReclaimed: number } {
   // Protect the last N user turns that are NOT tool results (more conservative than tier2)
   const realUserTurnIndexes: number[] = [];
@@ -722,7 +765,8 @@ export function tier1PruneToolOutputs(
     }
     if (realUserTurnIndexes.length >= CTX.TURN_PROTECT + 2) break; // Protect 4 recent real turns
   }
-  const protectAfter = realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
+  const protectAfter =
+    realUserTurnIndexes.length > 0 ? Math.min(...realUserTurnIndexes) : 0;
 
   // Identify prunable tool outputs (old ones outside the protected tail)
   const toolIndicesWithSize: Array<{ idx: number; size: number }> = [];
@@ -763,7 +807,9 @@ export function tier1PruneToolOutputs(
   // Truncate (don't remove) — keep the header, drop the body
   const pruned = messages.map((msg, idx) => {
     if (!toTruncate.has(idx)) return msg;
-    const toolMatch = msg.content.match(/^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/);
+    const toolMatch = msg.content.match(
+      /^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/,
+    );
     const toolName = toolMatch?.[1] ?? toolMatch?.[2] ?? "unknown";
     const originalTokens = toolTokenEstimate(msg);
     return {
@@ -800,7 +846,7 @@ export function tier1PruneToolOutputs(
 export function selectMessagesByTokenBudget(
   messages: ChatMessage[],
   keepTokenBudget: number,
-  estimateFn: (msg: ChatMessage) => number = estimateMessageTokens
+  estimateFn: (msg: ChatMessage) => number = estimateMessageTokens,
 ): { toCompact: ChatMessage[]; toKeep: ChatMessage[] } {
   if (messages.length <= 2) {
     return { toCompact: [], toKeep: messages };
@@ -818,7 +864,7 @@ export function selectMessagesByTokenBudget(
 
   // Protect first user message (original task context)
   const protectedIndices = new Set<number>();
-  const firstUserIdx = tokenCosts.findIndex(c => c.role === "user");
+  const firstUserIdx = tokenCosts.findIndex((c) => c.role === "user");
   if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
 
   // Protect messages with file changes or todos (important for diffs/task tracking)
@@ -874,7 +920,7 @@ export function selectMessagesByTokenBudget(
  */
 export function buildRollingSummary(
   messages: ChatMessage[],
-  previousSummary?: string
+  previousSummary?: string,
 ): string {
   if (messages.length === 0) return previousSummary ?? "";
 
@@ -901,7 +947,9 @@ export function buildRollingSummary(
 
     // Extract tool results (completed work)
     if (msg.role === "user" && _isToolResult(msg)) {
-      const toolMatch = msg.content.match(/^\[(?:TOOL RESULT|Tool result) for (\S+)\]/);
+      const toolMatch = msg.content.match(
+        /^\[(?:TOOL RESULT|Tool result) for (\S+)\]/,
+      );
       if (toolMatch) {
         const toolName = toolMatch[1];
         const preview = msg.content.slice(0, 100).replace(/\n/g, " ");
@@ -910,7 +958,11 @@ export function buildRollingSummary(
     }
 
     // Extract errors
-    if (msg.role === "user" && _isToolResult(msg) && msg.content.includes("[Tool error")) {
+    if (
+      msg.role === "user" &&
+      _isToolResult(msg) &&
+      msg.content.includes("[Tool error")
+    ) {
       const errorPreview = msg.content.slice(0, 100).replace(/\n/g, " ");
       errors.push(errorPreview);
     }
@@ -932,23 +984,38 @@ export function buildRollingSummary(
   }
 
   if (goals.length > 0) {
-    parts.push(`## Goal\n${goals.map(g => `- ${g}`).join("\n")}`);
+    parts.push(`## Goal\n${goals.map((g) => `- ${g}`).join("\n")}`);
   }
 
   if (completed.length > 0) {
-    parts.push(`## Completed\n${completed.slice(-5).map(c => `- ${c}`).join("\n")}`);
+    parts.push(
+      `## Completed\n${completed
+        .slice(-5)
+        .map((c) => `- ${c}`)
+        .join("\n")}`,
+    );
   }
 
   if (active.length > 0) {
-    parts.push(`## Active\n${active.map(a => `- ${a}`).join("\n")}`);
+    parts.push(`## Active\n${active.map((a) => `- ${a}`).join("\n")}`);
   }
 
   if (errors.length > 0) {
-    parts.push(`## Errors\n${errors.slice(-3).map(e => `- ${e}`).join("\n")}`);
+    parts.push(
+      `## Errors\n${errors
+        .slice(-3)
+        .map((e) => `- ${e}`)
+        .join("\n")}`,
+    );
   }
 
   if (files.size > 0) {
-    parts.push(`## Files\n${[...files].slice(-10).map(f => `- ${f}`).join("\n")}`);
+    parts.push(
+      `## Files\n${[...files]
+        .slice(-10)
+        .map((f) => `- ${f}`)
+        .join("\n")}`,
+    );
   }
 
   return parts.join("\n\n") || "(No context available)";
@@ -969,7 +1036,7 @@ export function buildRollingSummary(
 export function computeKeepBudget(
   modelContextWindow: number,
   systemPromptTokens: number = 4000,
-  outputReserve: number = 8000
+  outputReserve: number = 8000,
 ): number {
   // Reserve: system prompt + output + rolling summary buffer
   const reserved = systemPromptTokens + outputReserve + 2000;
@@ -990,31 +1057,52 @@ export function computeKeepBudget(
 export function checkContextBudget(
   messages: ChatMessage[],
   modelContextWindow: number = 128000,
-  systemPromptTokens: number = 4000
+  systemPromptTokens: number = 4000,
 ): {
   needsCompaction: boolean;
   pressureRatio: number;
   recommendedAction: "none" | "prune" | "compact" | "deep-compact";
   keepBudget: number;
 } {
-  const totalTokens = messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
+  const totalTokens = messages.reduce(
+    (sum, m) => sum + estimateMessageTokens(m),
+    0,
+  );
   const available = modelContextWindow - systemPromptTokens - 8000; // reserve for output
   const pressureRatio = totalTokens / available;
   const keepBudget = computeKeepBudget(modelContextWindow, systemPromptTokens);
 
   if (pressureRatio < 0.5) {
-    return { needsCompaction: false, pressureRatio, recommendedAction: "none", keepBudget };
+    return {
+      needsCompaction: false,
+      pressureRatio,
+      recommendedAction: "none",
+      keepBudget,
+    };
   }
 
   if (pressureRatio < 0.7) {
-    return { needsCompaction: true, pressureRatio, recommendedAction: "prune", keepBudget };
+    return {
+      needsCompaction: true,
+      pressureRatio,
+      recommendedAction: "prune",
+      keepBudget,
+    };
   }
 
   if (pressureRatio < 0.9) {
-    return { needsCompaction: true, pressureRatio, recommendedAction: "compact", keepBudget };
+    return {
+      needsCompaction: true,
+      pressureRatio,
+      recommendedAction: "compact",
+      keepBudget,
+    };
   }
 
-  return { needsCompaction: true, pressureRatio, recommendedAction: "deep-compact", keepBudget };
+  return {
+    needsCompaction: true,
+    pressureRatio,
+    recommendedAction: "deep-compact",
+    keepBudget,
+  };
 }
-
-

@@ -41,8 +41,8 @@ function InlineDiffHunks({ diff }: { diff: DiffProposal }) {
               line.type === "add"
                 ? "bg-dalam-git-added/10 text-dalam-git-added"
                 : line.type === "remove"
-                ? "bg-dalam-git-deleted/10 text-dalam-git-deleted"
-                : "text-dalam-text-secondary"
+                  ? "bg-dalam-git-deleted/10 text-dalam-git-deleted"
+                  : "text-dalam-text-secondary"
             }`}
           >
             <span className="inline-block w-4 text-right mr-2 opacity-40">
@@ -73,7 +73,9 @@ export const MultiFileDiffSummary: React.FC = () => {
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   const pendingDiffs: PendingDiffInfo[] = useMemo(() => {
@@ -109,10 +111,15 @@ export const MultiFileDiffSummary: React.FC = () => {
       <div className="flex items-center justify-between px-3 py-2 border-b border-dalam-border-primary bg-dalam-bg-secondary">
         <div className="flex items-center gap-2 text-sm">
           <span className="font-medium text-dalam-text-primary">
-            {pendingDiffs.length} file{pendingDiffs.length !== 1 ? "s" : ""} changed
+            {pendingDiffs.length} file{pendingDiffs.length !== 1 ? "s" : ""}{" "}
+            changed
           </span>
-          <span className="text-xs text-dalam-git-added">+{totalAdditions}</span>
-          <span className="text-xs text-dalam-git-deleted">-{totalDeletions}</span>
+          <span className="text-xs text-dalam-git-added">
+            +{totalAdditions}
+          </span>
+          <span className="text-xs text-dalam-git-deleted">
+            -{totalDeletions}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -120,8 +127,12 @@ export const MultiFileDiffSummary: React.FC = () => {
               setBatchResolving(true);
               try {
                 const ids = pendingDiffs.map((d) => d.id);
-                await Promise.allSettled(ids.map((id) => resolveToolApproval(id, "approved")));
-              } catch { /* handled upstream */ } finally {
+                await Promise.allSettled(
+                  ids.map((id) => resolveToolApproval(id, "approved")),
+                );
+              } catch (e) {
+                if (import.meta.env.DEV) console.warn("[MultiFileDiff] Batch approve failed:", e);
+              } finally {
                 if (mountedRef.current) setBatchResolving(false);
               }
             }}
@@ -136,8 +147,12 @@ export const MultiFileDiffSummary: React.FC = () => {
               setBatchResolving(true);
               try {
                 const ids = pendingDiffs.map((d) => d.id);
-                await Promise.allSettled(ids.map((id) => resolveToolApproval(id, "denied")));
-              } catch { /* handled upstream */ } finally {
+                await Promise.allSettled(
+                  ids.map((id) => resolveToolApproval(id, "denied")),
+                );
+              } catch (e) {
+                if (import.meta.env.DEV) console.warn("[MultiFileDiff] Batch deny failed:", e);
+              } finally {
                 if (mountedRef.current) setBatchResolving(false);
               }
             }}
@@ -155,22 +170,44 @@ export const MultiFileDiffSummary: React.FC = () => {
         {pendingDiffs.map((diff) => {
           const isExpanded = expandedFiles.has(diff.id);
           return (
-            <div key={diff.id} className="hover:bg-dalam-bg-hover transition-colors">
+            <div
+              key={diff.id}
+              className="hover:bg-dalam-bg-hover transition-colors"
+            >
               <div className="flex items-center justify-between px-3 py-1.5">
                 <button
                   onClick={() => toggleFile(diff.id)}
                   className="flex items-center gap-2 min-w-0 text-left"
                 >
                   {diff.diff && diff.diff.hunks.length > 0 ? (
-                    isExpanded ? <ChevronDown size={12} className="text-dalam-text-muted shrink-0" /> : <ChevronRight size={12} className="text-dalam-text-muted shrink-0" />
+                    isExpanded ? (
+                      <ChevronDown
+                        size={12}
+                        className="text-dalam-text-muted shrink-0"
+                      />
+                    ) : (
+                      <ChevronRight
+                        size={12}
+                        className="text-dalam-text-muted shrink-0"
+                      />
+                    )
                   ) : (
-                    <FileText size={14} className="text-dalam-text-muted shrink-0" />
+                    <FileText
+                      size={14}
+                      className="text-dalam-text-muted shrink-0"
+                    />
                   )}
-                  <span className="text-xs font-mono truncate text-dalam-text-primary">{diff.filePath}</span>
+                  <span className="text-xs font-mono truncate text-dalam-text-primary">
+                    {diff.filePath}
+                  </span>
                 </button>
                 <div className="flex items-center gap-3 shrink-0">
-                  <span className="text-[10px] text-dalam-git-added">+{diff.additions}</span>
-                  <span className="text-[10px] text-dalam-git-deleted">-{diff.deletions}</span>
+                  <span className="text-[10px] text-dalam-git-added">
+                    +{diff.additions}
+                  </span>
+                  <span className="text-[10px] text-dalam-git-deleted">
+                    -{diff.deletions}
+                  </span>
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => resolveToolApproval(diff.id, "approved")}

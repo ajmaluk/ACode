@@ -95,7 +95,8 @@ export type GitBranchInfo = {
   current: boolean;
 };
 
-export type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh" | "sh";
+export type ShellType =
+  "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh" | "sh";
 
 export type TerminalTab = {
   id: string;
@@ -128,18 +129,40 @@ export type ChatMessage = {
   todos?: TodoItem[];
   activities?: PendingActivity[];
   attachments?: FileAttachment[];
-  taskPlan?: { id: string; title: string; status: "pending" | "running" | "completed" | "failed" }[];
+  taskPlan?: {
+    id: string;
+    title: string;
+    status: "pending" | "running" | "completed" | "failed";
+  }[];
   taskPlanSummary?: string;
   /** Questions asked by the agent and user's answers */
-  questions?: { id: string; question: string; options: string[]; answer: string; timestamp: number }[];
+  questions?: {
+    id: string;
+    question: string;
+    options: string[];
+    answer: string;
+    timestamp: number;
+  }[];
   /** Internal flag: tool result messages that should be hidden from the chat UI */
   isToolResult?: boolean;
 };
 
 export type PendingActivity =
   | { type: "think"; id: string; content: string }
-  | { type: "explore"; id: string; query: string; kind?: "files" | "grep" | "symbols" | "definition"; matches: { path: string; line?: number; preview?: string }[] }
-  | { type: "read"; id: string; path: string; content: string; lineRange?: [number, number] }
+  | {
+      type: "explore";
+      id: string;
+      query: string;
+      kind?: "files" | "grep" | "symbols" | "definition";
+      matches: { path: string; line?: number; preview?: string }[];
+    }
+  | {
+      type: "read";
+      id: string;
+      path: string;
+      content: string;
+      lineRange?: [number, number];
+    }
   | { type: "skill"; id: string; name: string; content: string; args?: string }
   | { type: "bash"; id: string; command: string; result: string }
   | { type: "plan"; id: string; plan: string };
@@ -187,7 +210,8 @@ export type AgentSession = {
   mode: AgentSessionMode;
   startedAt: number;
   messages: ChatMessage[];
-  status: "idle" | "running" | "completed" | "aborted" | "error" | "questioning";
+  status:
+    "idle" | "running" | "completed" | "aborted" | "error" | "questioning";
 };
 
 /** @deprecated Use SkillInfo instead — Skill has inconsistent source values */
@@ -210,7 +234,11 @@ export type McpServer = {
   enabled: boolean;
   status: "disconnected" | "connecting" | "connected" | "error";
   error?: string;
-  tools?: { name: string; description: string; inputSchema?: Record<string, unknown> }[];
+  tools?: {
+    name: string;
+    description: string;
+    inputSchema?: Record<string, unknown>;
+  }[];
   scope?: "user" | "project";
 };
 
@@ -249,7 +277,8 @@ export type ChatSessionSummary = {
   lastVisitedAt?: number;
   messageCount: number;
   /** "running" reflects an in-flight AI response; "aborted" is user-paused; "questioning" means AI is waiting for user input. */
-  status: "idle" | "running" | "completed" | "aborted" | "error" | "questioning";
+  status:
+    "idle" | "running" | "completed" | "aborted" | "error" | "questioning";
   /** A short preview of the last user message, for the sidebar tooltip. */
   preview?: string;
   versionCount: number;
@@ -296,18 +325,58 @@ export type StreamEvent =
   | { type: "todo-update"; todos: TodoItem[] }
   | { type: "thinking"; messageId: string; content: string }
   | { type: "status"; status: AgentSession["status"] }
-  | { type: "ask-permission"; toolCallId: string; kind: string; command?: string; description?: string }
-  | { type: "ask-question"; header: string; question: string; options: { label: string; description: string }[] }
-  | { type: "sub-agent-start"; subAgentId: string; prompt: string; description: string; subagentType: string }
-  | { type: "sub-agent-update"; subAgentId: string; toolCalls?: ToolCall[]; content?: string }
-  | { type: "sub-agent-end"; subAgentId: string; status: "completed" | "failed"; error?: string }
+  | {
+      type: "ask-permission";
+      toolCallId: string;
+      kind: string;
+      command?: string;
+      description?: string;
+    }
+  | {
+      type: "ask-question";
+      header: string;
+      question: string;
+      options: { label: string; description: string }[];
+    }
+  | {
+      type: "sub-agent-start";
+      subAgentId: string;
+      prompt: string;
+      description: string;
+      subagentType: string;
+    }
+  | {
+      type: "sub-agent-update";
+      subAgentId: string;
+      toolCalls?: ToolCall[];
+      content?: string;
+    }
+  | {
+      type: "sub-agent-end";
+      subAgentId: string;
+      status: "completed" | "failed";
+      error?: string;
+    }
   | { type: "activity-think"; content: string }
-  | { type: "activity-explore"; query: string; kind?: "files" | "grep" | "symbols" | "definition"; matches: { path: string; line?: number; preview?: string }[] }
-  | { type: "activity-read"; path: string; content: string; lineRange?: [number, number] }
+  | {
+      type: "activity-explore";
+      query: string;
+      kind?: "files" | "grep" | "symbols" | "definition";
+      matches: { path: string; line?: number; preview?: string }[];
+    }
+  | {
+      type: "activity-read";
+      path: string;
+      content: string;
+      lineRange?: [number, number];
+    }
   | { type: "activity-skill"; name: string; content: string; args?: string }
   | { type: "activity-bash"; command: string; result: string }
   | { type: "activity-plan"; plan: string }
-  | { type: "usage"; usage: { inputTokens: number; outputTokens: number; totalTokens: number } }
+  | {
+      type: "usage";
+      usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+    }
   | { type: "error"; error: string };
 
 // ============================================================================
@@ -316,7 +385,16 @@ export type StreamEvent =
 
 export type AgentMode = "subagent" | "primary" | "all";
 
-export type AgentCategory = "build" | "plan" | "general" | "explore" | "title" | "summary" | "compaction" | "dream" | "distill";
+export type AgentCategory =
+  | "build"
+  | "plan"
+  | "general"
+  | "explore"
+  | "title"
+  | "summary"
+  | "compaction"
+  | "dream"
+  | "distill";
 
 export type PermissionAction = "allow" | "deny" | "ask";
 
@@ -383,7 +461,7 @@ export type SkillInfo = {
   name: string;
   description: string;
   content: string;
-  location: string;   // absolute path to SKILL.md
+  location: string; // absolute path to SKILL.md
   hidden?: boolean;
   source: "bundled" | "user-global" | "user-workspace" | "user" | "project";
 };
@@ -435,18 +513,35 @@ export interface DalamAPI {
       model: string;
       mode: AgentSessionMode;
     }): Promise<{ sessionId: string }>;
-    sendPrompt(sessionId: string, prompt: string, conversationHistory?: ChatMessage[], agentName?: string, attachments?: FileAttachment[]): Promise<void>;
-    summarizeMessages(model: string, messages: Array<{ role: string; content: string }>): Promise<string>;
+    sendPrompt(
+      sessionId: string,
+      prompt: string,
+      conversationHistory?: ChatMessage[],
+      agentName?: string,
+      attachments?: FileAttachment[],
+    ): Promise<void>;
+    summarizeMessages(
+      model: string,
+      messages: Array<{ role: string; content: string }>,
+    ): Promise<string>;
     abort(sessionId: string): Promise<void>;
     approveDiff(sessionId: string, diffId: string): Promise<void>;
     rejectDiff(sessionId: string, diffId: string): Promise<void>;
-    onStreamEvent(sessionId: string, cb: (event: StreamEvent) => void): () => void;
+    onStreamEvent(
+      sessionId: string,
+      cb: (event: StreamEvent) => void,
+    ): () => void;
     cleanupStream(sessionId: string): void;
   };
   git: {
     status(repoPath: string): Promise<GitStatus>;
     commit(repoPath: string, message: string): Promise<{ sha: string }>;
-    log(repoPath: string, limit?: number): Promise<{ sha: string; message: string; date: string; author: string }[]>;
+    log(
+      repoPath: string,
+      limit?: number,
+    ): Promise<
+      { sha: string; message: string; date: string; author: string }[]
+    >;
     branches(repoPath: string): Promise<GitBranchInfo[]>;
     checkout(repoPath: string, branch: string): Promise<void>;
     createBranch(repoPath: string, name: string): Promise<void>;
@@ -466,18 +561,43 @@ export interface DalamAPI {
     clipboardWriteText(text: string): Promise<void>;
     clipboardHasImage(): Promise<boolean>;
     clipboardReadImage(): Promise<string | null>;
-    notify(payload: { title: string; body: string; icon?: string }): Promise<void>;
-    getSystemInfo(): Promise<{ os: string; arch: string; hostname: string; homeDir: string; shell: string; locale?: string }>;
+    notify(payload: {
+      title: string;
+      body: string;
+      icon?: string;
+    }): Promise<void>;
+    getSystemInfo(): Promise<{
+      os: string;
+      arch: string;
+      hostname: string;
+      homeDir: string;
+      shell: string;
+      locale?: string;
+    }>;
     getWorkingDir(): Promise<string>;
     openWithSystemHandler(pathOrUrl: string): Promise<void>;
     launchApp(appName: string, args?: string[], cwd?: string): Promise<string>;
     getEnv(key: string): Promise<string>;
-    getScreenInfo(): Promise<{ width: number; height: number; scaleFactor: number }>;
-    listProcesses(): Promise<{ pid: number; name: string; cpuUsage: number; memoryKb: number }[]>;
+    getScreenInfo(): Promise<{
+      width: number;
+      height: number;
+      scaleFactor: number;
+    }>;
+    listProcesses(): Promise<
+      { pid: number; name: string; cpuUsage: number; memoryKb: number }[]
+    >;
     killProcess(pid: number): Promise<void>;
-    getDiskSpace(path: string): Promise<{ totalBytes: number; availableBytes: number; usedBytes: number }>;
+    getDiskSpace(
+      path: string,
+    ): Promise<{
+      totalBytes: number;
+      availableBytes: number;
+      usedBytes: number;
+    }>;
     detectAvailableShells(): Promise<{ name: string; path: string }[]>;
-    detectInstalledIdes(): Promise<{ name: string; command: string; kind: string }[]>;
+    detectInstalledIdes(): Promise<
+      { name: string; command: string; kind: string }[]
+    >;
   };
 }
 

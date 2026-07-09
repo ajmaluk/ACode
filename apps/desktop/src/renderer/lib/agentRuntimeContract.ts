@@ -210,7 +210,7 @@ export function createInitialRuntimeState(): AgentRuntimeState {
 export function agentReducer(
   state: AgentRuntimeState,
   event: AgentEvent,
-  options: { debug?: boolean } = {}
+  options: { debug?: boolean } = {},
 ): AgentRuntimeState {
   const { debug = false } = options;
 
@@ -221,7 +221,7 @@ export function agentReducer(
   if (!nextPhase) {
     if (typeof import.meta !== "undefined" && import.meta.env?.DEV) {
       console.warn(
-        `[AgentRuntime] Invalid transition: ${state.phase} → ${event.type}`
+        `[AgentRuntime] Invalid transition: ${state.phase} → ${event.type}`,
       );
     }
     return state; // No-op for invalid transitions
@@ -263,7 +263,7 @@ export function agentReducer(
       // Invariant: tool call must exist in pending set
       assert(
         newState.pendingToolCallIds.has(event.toolCallId),
-        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} not in pending set when requesting approval`
+        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} not in pending set when requesting approval`,
       );
       newState.toolCallStatuses.set(event.toolCallId, "awaiting-approval");
       break;
@@ -272,7 +272,7 @@ export function agentReducer(
       // Invariant: must be awaiting-approval before approval
       assert(
         newState.toolCallStatuses.get(event.toolCallId) === "awaiting-approval",
-        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} status is "${newState.toolCallStatuses.get(event.toolCallId)}", expected "awaiting-approval"`
+        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} status is "${newState.toolCallStatuses.get(event.toolCallId)}", expected "awaiting-approval"`,
       );
       newState.toolCallStatuses.set(event.toolCallId, "approved");
       break;
@@ -280,7 +280,7 @@ export function agentReducer(
     case "TOOL_DENIED":
       assert(
         newState.toolCallStatuses.get(event.toolCallId) === "awaiting-approval",
-        `[AgentRuntime] INVARIANT VIOLATION: denying toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`
+        `[AgentRuntime] INVARIANT VIOLATION: denying toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`,
       );
       newState.toolCallStatuses.set(event.toolCallId, "denied");
       newState.resolvedToolCallIds.add(event.toolCallId);
@@ -289,7 +289,7 @@ export function agentReducer(
     case "TOOL_RUNNING":
       assert(
         newState.toolCallStatuses.get(event.toolCallId) === "approved",
-        `[AgentRuntime] INVARIANT VIOLATION: running toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`
+        `[AgentRuntime] INVARIANT VIOLATION: running toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`,
       );
       newState.toolCallStatuses.set(event.toolCallId, "running");
       break;
@@ -299,16 +299,16 @@ export function agentReducer(
       assert(
         newState.pendingToolCallIds.has(event.toolCallId) ||
           newState.toolCallStatuses.has(event.toolCallId),
-        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} not in pending set when receiving result`
+        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} not in pending set when receiving result`,
       );
       // Invariant: tool-result must bind to toolCallId exactly once
       assert(
         !newState.resolvedToolCallIds.has(event.toolCallId),
-        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} already resolved`
+        `[AgentRuntime] INVARIANT VIOLATION: toolCallId ${event.toolCallId} already resolved`,
       );
       newState.toolCallStatuses.set(
         event.toolCallId,
-        event.success ? "completed" : "error"
+        event.success ? "completed" : "error",
       );
       newState.resolvedToolCallIds.add(event.toolCallId);
       break;
@@ -316,7 +316,7 @@ export function agentReducer(
     case "TOOL_TIMEOUT":
       assert(
         newState.toolCallStatuses.get(event.toolCallId) === "running",
-        `[AgentRuntime] INVARIANT VIOLATION: timeout for toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`
+        `[AgentRuntime] INVARIANT VIOLATION: timeout for toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`,
       );
       newState.toolCallStatuses.set(event.toolCallId, "error");
       break;
@@ -324,10 +324,10 @@ export function agentReducer(
     case "TOOL_RETRY":
       assert(
         newState.toolCallStatuses.get(event.toolCallId) === "running" ||
-        newState.toolCallStatuses.get(event.toolCallId) === "error" ||
-        newState.toolCallStatuses.get(event.toolCallId) === "pending" ||
-        newState.toolCallStatuses.get(event.toolCallId) === "approved",
-        `[AgentRuntime] INVARIANT VIOLATION: retry for toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`
+          newState.toolCallStatuses.get(event.toolCallId) === "error" ||
+          newState.toolCallStatuses.get(event.toolCallId) === "pending" ||
+          newState.toolCallStatuses.get(event.toolCallId) === "approved",
+        `[AgentRuntime] INVARIANT VIOLATION: retry for toolCallId ${event.toolCallId} but status is "${newState.toolCallStatuses.get(event.toolCallId)}"`,
       );
       newState.toolCallStatuses.set(event.toolCallId, "pending");
       // Remove from resolved so it can be re-resolved
@@ -339,7 +339,8 @@ export function agentReducer(
       // Tools that have diffs attached must not be cleared
       const toolCallsWithDiffs = new Set(newState.diffToToolCall.values());
       const unresolvedWithDiffs = [...newState.pendingToolCallIds].filter(
-        (id) => toolCallsWithDiffs.has(id) && !newState.resolvedToolCallIds.has(id)
+        (id) =>
+          toolCallsWithDiffs.has(id) && !newState.resolvedToolCallIds.has(id),
       );
       if (unresolvedWithDiffs.length > 0) {
         // Transition to streaming-pending-diffs so the agent is not stuck
@@ -360,11 +361,16 @@ export function agentReducer(
       const resolvedToolCallId = newState.diffToToolCall.get(event.diffId);
       // Remove the resolved tool call from pending list
       const remaining = resolvedToolCallId
-        ? newState.pendingDiffToolCalls.filter((id) => id !== resolvedToolCallId)
+        ? newState.pendingDiffToolCalls.filter(
+            (id) => id !== resolvedToolCallId,
+          )
         : newState.pendingDiffToolCalls;
       newState.pendingDiffToolCalls = remaining;
       // If all pending diffs resolved, transition back to idle
-      if (remaining.length === 0 && newState.phase === "streaming-pending-diffs") {
+      if (
+        remaining.length === 0 &&
+        newState.phase === "streaming-pending-diffs"
+      ) {
         newState.phase = "idle";
         newState.currentMessageId = null;
       }
@@ -403,23 +409,26 @@ export function agentReducer(
     state.sessionId ??
     ("sessionId" in event ? (event as { sessionId: string }).sessionId : "");
   const messageIdForLog =
-    (event.type === "STREAM_START" || event.type === "FINALIZING")
+    event.type === "STREAM_START" || event.type === "FINALIZING"
       ? (event as { messageId: string }).messageId
-      : state.currentMessageId ?? undefined;
+      : (state.currentMessageId ?? undefined);
   const toolCallIdForLog =
     "toolCallId" in event
       ? (event as { toolCallId: string }).toolCallId
       : undefined;
 
-  const newLog = [...newState.transitionLog, {
-    timestamp: Date.now(),
-    from: state.phase,
-    to: nextPhase,
-    event: event.type,
-    sessionId: sessionIdForLog,
-    messageId: messageIdForLog,
-    toolCallId: toolCallIdForLog,
-  }];
+  const newLog = [
+    ...newState.transitionLog,
+    {
+      timestamp: Date.now(),
+      from: state.phase,
+      to: nextPhase,
+      event: event.type,
+      sessionId: sessionIdForLog,
+      messageId: messageIdForLog,
+      toolCallId: toolCallIdForLog,
+    },
+  ];
 
   // Keep only the last MAX_TRANSITION_LOG entries to prevent memory leak
   if (newLog.length > MAX_TRANSITION_LOG) {
@@ -429,7 +438,7 @@ export function agentReducer(
 
   if (debug && import.meta.env.DEV) {
     console.log(
-      `[AgentRuntime] ${state.sessionId?.slice(0, 8) ?? "?"} phase: ${state.phase} → ${nextPhase} (event: ${event.type})`
+      `[AgentRuntime] ${state.sessionId?.slice(0, 8) ?? "?"} phase: ${state.phase} → ${nextPhase} (event: ${event.type})`,
     );
   }
 
@@ -494,7 +503,7 @@ export function isBusy(phase: AgentPhase): boolean {
  */
 export function getPendingToolCalls(state: AgentRuntimeState): string[] {
   return [...state.pendingToolCallIds].filter(
-    (id) => !state.resolvedToolCallIds.has(id)
+    (id) => !state.resolvedToolCallIds.has(id),
   );
 }
 
@@ -504,7 +513,7 @@ export function getPendingToolCalls(state: AgentRuntimeState): string[] {
 export function getPendingApprovalCount(state: AgentRuntimeState): number {
   return [...state.toolCallStatuses.entries()].filter(
     ([id, status]) =>
-      status === "awaiting-approval" && !state.resolvedToolCallIds.has(id)
+      status === "awaiting-approval" && !state.resolvedToolCallIds.has(id),
   ).length;
 }
 
@@ -513,6 +522,7 @@ export function getPendingApprovalCount(state: AgentRuntimeState): number {
  */
 export function getPendingExecutionCount(state: AgentRuntimeState): number {
   return [...state.toolCallStatuses.entries()].filter(
-    ([id, status]) => status === "approved" && !state.resolvedToolCallIds.has(id)
+    ([id, status]) =>
+      status === "approved" && !state.resolvedToolCallIds.has(id),
   ).length;
 }

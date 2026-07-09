@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { isPrivateHost, validateMcpUrl, logPermission, getAuditLog, exportAuditLog } from "../security";
+import {
+  isPrivateHost,
+  validateMcpUrl,
+  logPermission,
+  getAuditLog,
+  exportAuditLog,
+} from "../security";
 
 describe("isPrivateHost", () => {
   it("detects localhost", () => {
@@ -123,11 +129,15 @@ describe("validateMcpUrl", () => {
   });
 
   it("rejects URL to localhost", () => {
-    expect(() => validateMcpUrl("http://localhost:3000/mcp")).toThrow("Private");
+    expect(() => validateMcpUrl("http://localhost:3000/mcp")).toThrow(
+      "Private",
+    );
   });
 
   it("rejects URL to 127.0.0.1", () => {
-    expect(() => validateMcpUrl("http://127.0.0.1:8080/mcp")).toThrow("Private");
+    expect(() => validateMcpUrl("http://127.0.0.1:8080/mcp")).toThrow(
+      "Private",
+    );
   });
 
   it("rejects URL to private IP range", () => {
@@ -136,7 +146,9 @@ describe("validateMcpUrl", () => {
   });
 
   it("rejects URL to cloud metadata", () => {
-    expect(() => validateMcpUrl("http://169.254.169.254/mcp")).toThrow("Private");
+    expect(() => validateMcpUrl("http://169.254.169.254/mcp")).toThrow(
+      "Private",
+    );
   });
 
   it("rejects invalid URL format", () => {
@@ -144,7 +156,9 @@ describe("validateMcpUrl", () => {
   });
 
   it("rejects non-HTTP protocols", () => {
-    expect(() => validateMcpUrl("ftp://files.example.com/mcp")).toThrow("HTTP/HTTPS");
+    expect(() => validateMcpUrl("ftp://files.example.com/mcp")).toThrow(
+      "HTTP/HTTPS",
+    );
     expect(() => validateMcpUrl("file:///etc/passwd")).toThrow("HTTP/HTTPS");
     expect(() => validateMcpUrl("ws://localhost:3000")).toThrow("HTTP/HTTPS");
   });
@@ -169,7 +183,9 @@ describe("audit logging", () => {
 
     const log = getAuditLog("session-1");
     expect(log.length).toBeGreaterThan(0);
-    expect(log.some((e) => e.toolName === "run_command" && e.decision === "allow")).toBe(true);
+    expect(
+      log.some((e) => e.toolName === "run_command" && e.decision === "allow"),
+    ).toBe(true);
   });
 
   it("filters audit log by session ID", () => {
@@ -212,8 +228,18 @@ describe("audit logging", () => {
   });
 
   it("records all decision types", () => {
-    const decisions: Array<"allow" | "deny" | "ask" | "always"> = ["allow", "deny", "ask", "always"];
-    const sources: Array<"auto" | "user" | "always-allow" | "rule"> = ["auto", "user", "always-allow", "rule"];
+    const decisions: Array<"allow" | "deny" | "ask" | "always"> = [
+      "allow",
+      "deny",
+      "ask",
+      "always",
+    ];
+    const sources: Array<"auto" | "user" | "always-allow" | "rule"> = [
+      "auto",
+      "user",
+      "always-allow",
+      "rule",
+    ];
 
     for (const decision of decisions) {
       for (const source of sources) {

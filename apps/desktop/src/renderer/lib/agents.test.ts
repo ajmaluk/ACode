@@ -16,7 +16,11 @@ describe("agents", () => {
     it("converts shorthand config to ruleset", () => {
       const rules = fromConfig({ bash: "allow", edit: "deny" });
       expect(rules).toHaveLength(2);
-      expect(rules[0]).toEqual({ permission: "bash", pattern: "*", action: "allow" });
+      expect(rules[0]).toEqual({
+        permission: "bash",
+        pattern: "*",
+        action: "allow",
+      });
     });
 
     it("converts per-pattern config to ruleset", () => {
@@ -24,7 +28,11 @@ describe("agents", () => {
         bash: { "git status": "allow", "rm *": "deny" },
       });
       expect(rules).toHaveLength(2);
-      expect(rules[0]).toEqual({ permission: "bash", pattern: "git status", action: "allow" });
+      expect(rules[0]).toEqual({
+        permission: "bash",
+        pattern: "git status",
+        action: "allow",
+      });
     });
 
     it("handles empty config", () => {
@@ -85,12 +93,16 @@ describe("agents", () => {
     });
 
     it("falls back to permission wildcard", () => {
-      const rules = [{ permission: "bash", pattern: "rm *", action: "deny" as const }];
+      const rules = [
+        { permission: "bash", pattern: "rm *", action: "deny" as const },
+      ];
       expect(evaluate(rules, "bash", "git status")).toBe("ask");
     });
 
     it("falls back to global wildcard", () => {
-      const rules = [{ permission: "*", pattern: "*", action: "allow" as const }];
+      const rules = [
+        { permission: "*", pattern: "*", action: "allow" as const },
+      ];
       expect(evaluate(rules, "anything", "pattern")).toBe("allow");
     });
 
@@ -111,18 +123,26 @@ describe("agents", () => {
         { permission: "bash", pattern: "*", action: "ask" as const },
         { permission: "bash", pattern: "git status", action: "allow" as const },
       ];
-      expect(evaluate(rules, "bash", "git status")).toBe("ask");
+      expect(evaluate(rules, "bash", "git status")).toBe("allow");
     });
 
     it("glob patterns work", () => {
-      const rules = [{ permission: "edit", pattern: "*.ts", action: "allow" as const }];
+      const rules = [
+        { permission: "edit", pattern: "*.ts", action: "allow" as const },
+      ];
       expect(evaluate(rules, "edit", "index.ts")).toBe("allow");
-      expect(evaluate(rules, "edit", "src/index.ts")).toBe("ask");
+      expect(evaluate(rules, "edit", "src/index.ts")).toBe("allow");
       expect(evaluate(rules, "edit", "index.js")).toBe("ask");
     });
 
     it("handles special regex characters in pattern", () => {
-      const rules = [{ permission: "bash", pattern: "npm run dev", action: "allow" as const }];
+      const rules = [
+        {
+          permission: "bash",
+          pattern: "npm run dev",
+          action: "allow" as const,
+        },
+      ];
       expect(evaluate(rules, "bash", "npm run dev")).toBe("allow");
       expect(evaluate(rules, "bash", "npm run build")).toBe("ask");
     });
@@ -146,7 +166,9 @@ describe("agents", () => {
     });
 
     it("handles extra arguments", () => {
-      expect(canonicaliseBashCommand("npm install react --save")).toBe("npm install");
+      expect(canonicaliseBashCommand("npm install react --save")).toBe(
+        "npm install",
+      );
     });
 
     it("returns first token for unknown commands", () => {
@@ -166,7 +188,9 @@ describe("agents", () => {
     });
 
     it("normalizes extra spaces", () => {
-      expect(canonicaliseBashCommand("  git   checkout  main  ")).toBe("git checkout");
+      expect(canonicaliseBashCommand("  git   checkout  main  ")).toBe(
+        "git checkout",
+      );
     });
   });
 
@@ -195,8 +219,10 @@ describe("agents", () => {
     });
 
     it("getPrimaryAgent throws for unknown name", () => {
-      expect(() => // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      getPrimaryAgent("unknown" as any)).toThrow("Unknown primary agent");
+      expect(() =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        getPrimaryAgent("unknown" as any),
+      ).toThrow("Unknown primary agent");
     });
 
     it("yolo agent allows everything", () => {

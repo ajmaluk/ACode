@@ -16,31 +16,90 @@ export type { ModelProfile };
 
 /** Keywords that indicate simple tasks (quick questions, formatting, etc.) */
 const SIMPLE_KEYWORDS = [
-  "what is", "what are", "how do", "how to", "explain", "define",
-  "format", "lint", "fix formatting", "sort", "rename",
-  "list", "show", "print", "display", "read",
-  "yes", "no", "ok", "sure", "thanks",
-  "help", "continue", "next", "skip",
+  "what is",
+  "what are",
+  "how do",
+  "how to",
+  "explain",
+  "define",
+  "format",
+  "lint",
+  "fix formatting",
+  "sort",
+  "rename",
+  "list",
+  "show",
+  "print",
+  "display",
+  "read",
+  "yes",
+  "no",
+  "ok",
+  "sure",
+  "thanks",
+  "help",
+  "continue",
+  "next",
+  "skip",
 ];
 
 /** Keywords that indicate complex tasks (architecture, debugging, etc.) */
 const COMPLEX_KEYWORDS = [
-  "refactor", "architect", "design", "plan", "strategy",
-  "debug", "investigate", "analyze", "trace", "profile",
-  "optimize", "performance", "scale", "migrate",
-  "security", "audit", "vulnerability",
-  "explain why", "root cause", "trade-off", "compare",
-  "review", "improve", "rewrite",
+  "refactor",
+  "architect",
+  "design",
+  "plan",
+  "strategy",
+  "debug",
+  "investigate",
+  "analyze",
+  "trace",
+  "profile",
+  "optimize",
+  "performance",
+  "scale",
+  "migrate",
+  "security",
+  "audit",
+  "vulnerability",
+  "explain why",
+  "root cause",
+  "trade-off",
+  "compare",
+  "review",
+  "improve",
+  "rewrite",
 ];
 
 /** Keywords that indicate code generation tasks */
 const CODE_KEYWORDS = [
-  "write", "create", "implement", "add", "build", "generate",
-  "function", "class", "component", "module", "file",
-  "test", "spec", "mock", "fixture",
-  "import", "export", "interface", "type",
-  "fix bug", "fix error", "fix issue", "patch",
-  "edit", "modify", "update", "change",
+  "write",
+  "create",
+  "implement",
+  "add",
+  "build",
+  "generate",
+  "function",
+  "class",
+  "component",
+  "module",
+  "file",
+  "test",
+  "spec",
+  "mock",
+  "fixture",
+  "import",
+  "export",
+  "interface",
+  "type",
+  "fix bug",
+  "fix error",
+  "fix issue",
+  "patch",
+  "edit",
+  "modify",
+  "update",
+  "change",
 ];
 
 /**
@@ -70,7 +129,11 @@ export function classifyPromptComplexity(prompt: string): TaskComplexity {
   }
 
   // Code blocks or file paths suggest code tasks
-  if (lower.includes("```") || lower.includes("function ") || lower.includes("class ")) {
+  if (
+    lower.includes("```") ||
+    lower.includes("function ") ||
+    lower.includes("class ")
+  ) {
     codeScore += 2;
   }
 

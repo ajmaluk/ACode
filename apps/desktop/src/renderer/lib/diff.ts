@@ -82,7 +82,11 @@ function myersDiff(oldLines: string[], newLines: string[]): DiffOp[] {
 /**
  * Backtrack through Myers' trace to produce edit operations.
  */
-function backtrack(trace: Map<number, number>[], oldLines: string[], newLines: string[]): DiffOp[] {
+function backtrack(
+  trace: Map<number, number>[],
+  oldLines: string[],
+  newLines: string[],
+): DiffOp[] {
   const ops: DiffOp[] = [];
   let x = oldLines.length;
   let y = newLines.length;
@@ -189,26 +193,42 @@ function patienceDiff(oldLines: string[], newLines: string[]): DiffOp[] {
  * Simple Myers diff for small segments (used by patience diff).
  * Uses direct O(mn) LCS to avoid recursion back into myersDiff.
  */
-function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: number, newOffset: number): DiffOp[] {
+function myersDiffSimple(
+  oldLines: string[],
+  newLines: string[],
+  oldOffset: number,
+  newOffset: number,
+): DiffOp[] {
   const n = oldLines.length;
   const m = newLines.length;
 
   // Small enough for direct O(mn) diff — avoids recursion into myersDiff
   if (n + m <= 1000) {
     // Simple LCS-based diff
-    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    const dp: number[][] = Array.from({ length: n + 1 }, () =>
+      new Array(m + 1).fill(0),
+    );
     for (let i = 1; i <= n; i++) {
       for (let j = 1; j <= m; j++) {
-        dp[i][j] = oldLines[i - 1] === newLines[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+        dp[i][j] =
+          oldLines[i - 1] === newLines[j - 1]
+            ? dp[i - 1][j - 1] + 1
+            : Math.max(dp[i - 1][j], dp[i][j - 1]);
       }
     }
     // Backtrack
     const ops: DiffOp[] = [];
-    let i = n, j = m;
+    let i = n,
+      j = m;
     while (i > 0 || j > 0) {
       if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-        ops.push({ type: "keep", oldIdx: i - 1 + oldOffset, newIdx: j - 1 + newOffset });
-        i--; j--;
+        ops.push({
+          type: "keep",
+          oldIdx: i - 1 + oldOffset,
+          newIdx: j - 1 + newOffset,
+        });
+        i--;
+        j--;
       } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
         ops.push({ type: "insert", newIdx: j - 1 + newOffset });
         j--;
@@ -223,21 +243,37 @@ function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: numb
   // For larger segments, split into chunks and diff each with Myers
   const CHUNK_SIZE = 500;
 
-  function lcsChunkDiff(oldChunk: string[], newChunk: string[], baseOldIdx: number, baseNewIdx: number): DiffOp[] {
+  function lcsChunkDiff(
+    oldChunk: string[],
+    newChunk: string[],
+    baseOldIdx: number,
+    baseNewIdx: number,
+  ): DiffOp[] {
     const cn = oldChunk.length;
     const cm = newChunk.length;
-    const dp: number[][] = Array.from({ length: cn + 1 }, () => new Array(cm + 1).fill(0));
+    const dp: number[][] = Array.from({ length: cn + 1 }, () =>
+      new Array(cm + 1).fill(0),
+    );
     for (let i = 1; i <= cn; i++) {
       for (let j = 1; j <= cm; j++) {
-        dp[i][j] = oldChunk[i - 1] === newChunk[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+        dp[i][j] =
+          oldChunk[i - 1] === newChunk[j - 1]
+            ? dp[i - 1][j - 1] + 1
+            : Math.max(dp[i - 1][j], dp[i][j - 1]);
       }
     }
     const chunkOps: DiffOp[] = [];
-    let i = cn, j = cm;
+    let i = cn,
+      j = cm;
     while (i > 0 || j > 0) {
       if (i > 0 && j > 0 && oldChunk[i - 1] === newChunk[j - 1]) {
-        chunkOps.push({ type: "keep", oldIdx: i - 1 + baseOldIdx, newIdx: j - 1 + baseNewIdx });
-        i--; j--;
+        chunkOps.push({
+          type: "keep",
+          oldIdx: i - 1 + baseOldIdx,
+          newIdx: j - 1 + baseNewIdx,
+        });
+        i--;
+        j--;
       } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
         chunkOps.push({ type: "insert", newIdx: j - 1 + baseNewIdx });
         j--;
@@ -258,7 +294,14 @@ function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: numb
     const cn = oldChunk.length;
     const cm = newChunk.length;
     if (cn + cm <= 200) {
-      ops.push(...lcsChunkDiff(oldChunk, newChunk, oldPos + oldOffset, newPos + newOffset));
+      ops.push(
+        ...lcsChunkDiff(
+          oldChunk,
+          newChunk,
+          oldPos + oldOffset,
+          newPos + newOffset,
+        ),
+      );
     } else {
       // Larger chunk — split into segments and diff each correctly
       const SEGMENT_SIZE = 100;
@@ -267,7 +310,14 @@ function myersDiffSimple(oldLines: string[], newLines: string[], oldOffset: numb
         const segEnd = Math.min(segStart + SEGMENT_SIZE, maxChunkLen);
         const oldSeg = oldChunk.slice(segStart, segEnd);
         const newSeg = newChunk.slice(segStart, segEnd);
-        ops.push(...lcsChunkDiff(oldSeg, newSeg, oldPos + oldOffset + segStart, newPos + newOffset + segStart));
+        ops.push(
+          ...lcsChunkDiff(
+            oldSeg,
+            newSeg,
+            oldPos + oldOffset + segStart,
+            newPos + newOffset + segStart,
+          ),
+        );
       }
     }
     oldPos += cn;
@@ -295,7 +345,8 @@ function patienceLCS(anchors: [number, number][]): [number, number][] {
 
   for (let i = 0; i < anchors.length; i++) {
     const val = anchors[i][1];
-    let lo = 0, hi = tails.length;
+    let lo = 0,
+      hi = tails.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
       if (tails[mid] < val) lo = mid + 1;
@@ -344,7 +395,7 @@ type DiffOp =
 export function computeDiff(
   oldText: string,
   newText: string,
-  contextLines: number = 3
+  contextLines: number = 3,
 ): DiffResult {
   if (oldText === newText) {
     return { hunks: [], additions: 0, deletions: 0 };
@@ -353,7 +404,10 @@ export function computeDiff(
   // Handle empty old text — all lines are additions
   if (oldText === "") {
     const newLines = newText.split("\n");
-    if (newLines.length === 0 || (newLines.length === 1 && newLines[0] === "")) {
+    if (
+      newLines.length === 0 ||
+      (newLines.length === 1 && newLines[0] === "")
+    ) {
       return { hunks: [], additions: 0, deletions: 0 };
     }
     const diffLines: ComputedDiffLine[] = newLines.map((content, i) => ({
@@ -363,7 +417,15 @@ export function computeDiff(
       newLineNum: i + 1,
     }));
     return {
-      hunks: [{ oldStart: 1, oldCount: 0, newStart: 1, newCount: newLines.length, lines: diffLines }],
+      hunks: [
+        {
+          oldStart: 1,
+          oldCount: 0,
+          newStart: 1,
+          newCount: newLines.length,
+          lines: diffLines,
+        },
+      ],
       additions: newLines.length,
       deletions: 0,
     };
@@ -379,7 +441,15 @@ export function computeDiff(
       newLineNum: null,
     }));
     return {
-      hunks: [{ oldStart: 1, oldCount: oldLines.length, newStart: 1, newCount: 0, lines: diffLines }],
+      hunks: [
+        {
+          oldStart: 1,
+          oldCount: oldLines.length,
+          newStart: 1,
+          newCount: 0,
+          lines: diffLines,
+        },
+      ],
       additions: 0,
       deletions: oldLines.length,
     };
@@ -447,7 +517,7 @@ export function computeDiff(
  */
 function groupIntoHunks(
   diffLines: (ComputedDiffLine & { op: DiffOp })[],
-  contextLines: number
+  contextLines: number,
 ): DiffHunk[] {
   if (diffLines.length === 0) return [];
 

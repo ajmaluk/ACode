@@ -47,14 +47,54 @@ type SlashCommand = {
 };
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: "init",      label: "/init",      description: "Scan the workspace and bootstrap DALAM.md",  insert: "/init " },
-  { id: "compact",   label: "/compact",   description: "Compress the current session into a summary", insert: "/compact" },
-  { id: "clear",     label: "/clear",     description: "Clear the current chat and start fresh",      insert: "/clear" },
-  { id: "help",      label: "/help",      description: "Show the available commands and shortcuts",   insert: "/help" },
-  { id: "login",     label: "/login",     description: "Authenticate the active model provider",      insert: "/login" },
-  { id: "model",     label: "/model",     description: "Switch to a different model",                 insert: "/model " },
-  { id: "reasoning", label: "/reasoning", description: "Toggle extended reasoning for this turn",     insert: "/reasoning" },
-  { id: "share",     label: "/share",     description: "Copy a shareable link to this session",       insert: "/share" },
+  {
+    id: "init",
+    label: "/init",
+    description: "Scan the workspace and bootstrap DALAM.md",
+    insert: "/init ",
+  },
+  {
+    id: "compact",
+    label: "/compact",
+    description: "Compress the current session into a summary",
+    insert: "/compact",
+  },
+  {
+    id: "clear",
+    label: "/clear",
+    description: "Clear the current chat and start fresh",
+    insert: "/clear",
+  },
+  {
+    id: "help",
+    label: "/help",
+    description: "Show the available commands and shortcuts",
+    insert: "/help",
+  },
+  {
+    id: "login",
+    label: "/login",
+    description: "Authenticate the active model provider",
+    insert: "/login",
+  },
+  {
+    id: "model",
+    label: "/model",
+    description: "Switch to a different model",
+    insert: "/model ",
+  },
+  {
+    id: "reasoning",
+    label: "/reasoning",
+    description: "Toggle extended reasoning for this turn",
+    insert: "/reasoning",
+  },
+  {
+    id: "share",
+    label: "/share",
+    description: "Copy a shareable link to this session",
+    insert: "/share",
+  },
 ];
 
 // ----------------------------------------------------------------------------
@@ -78,9 +118,13 @@ function detectTrigger(value: string, caret: number): Trigger {
       const before = i === 0 ? " " : value[i - 1];
       if (before === " " || before === "\n" || before === "\t" || i === 0) {
         const type: TriggerType =
-          ch === "/" ? "command" :
-          ch === "@" ? "file" :
-          ch === "$" ? "skill" : "related";
+          ch === "/"
+            ? "command"
+            : ch === "@"
+              ? "file"
+              : ch === "$"
+                ? "skill"
+                : "related";
         return { type, query: value.slice(i + 1, caret), start: i };
       }
       return null;
@@ -94,7 +138,10 @@ function detectTrigger(value: string, caret: number): Trigger {
 // File-tree flattening + fuzzy match
 // ----------------------------------------------------------------------------
 
-function flattenFiles(nodes: FileNode[], out: { path: string; name: string }[] = []): { path: string; name: string }[] {
+function flattenFiles(
+  nodes: FileNode[],
+  out: { path: string; name: string }[] = [],
+): { path: string; name: string }[] {
   for (const n of nodes) {
     if (n.type === "file") out.push({ path: n.path, name: n.name });
     if (n.children) flattenFiles(n.children, out);
@@ -112,7 +159,8 @@ function fuzzyScore(query: string, target: string): number {
   for (let ti = 0; ti < t.length && qi < q.length; ti++) {
     if (t[ti] === q[qi]) {
       if (lastMatch === ti - 1) score += 2;
-      else if (t[ti - 1] === "/" || t[ti - 1] === "." || t[ti - 1] === "-") score += 3;
+      else if (t[ti - 1] === "/" || t[ti - 1] === "." || t[ti - 1] === "-")
+        score += 3;
       else score += 1;
       lastMatch = ti;
       qi++;
@@ -138,14 +186,22 @@ export type PromptAutocompleteProps = {
    * its own key handling. Returns true if the menu consumed the event
    * (parent should NOT also act on it).
    */
-  keyHandlerRef?: React.MutableRefObject<((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null>;
+  keyHandlerRef?: React.MutableRefObject<
+    ((e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean) | null
+  >;
 };
 
 type Option =
-  | { kind: "command";  id: string; label: string; description: string; insert: string }
-  | { kind: "file";     path: string; name: string }
-  | { kind: "skill";    name: string; description: string }
-  | { kind: "related";  id: string; title: string; status: string };
+  | {
+      kind: "command";
+      id: string;
+      label: string;
+      description: string;
+      insert: string;
+    }
+  | { kind: "file"; path: string; name: string }
+  | { kind: "skill"; name: string; description: string }
+  | { kind: "related"; id: string; title: string; status: string };
 
 export function PromptAutocomplete({
   value,
@@ -169,15 +225,27 @@ export function PromptAutocomplete({
     if (!trigger) return [];
     if (trigger.type === "command") {
       const q = trigger.query.toLowerCase();
-      return SLASH_COMMANDS
-        .filter((c) => !q || c.id.includes(q) || c.label.toLowerCase().includes(q))
+      return SLASH_COMMANDS.filter(
+        (c) => !q || c.id.includes(q) || c.label.toLowerCase().includes(q),
+      )
         .slice(0, 8)
-        .map((c) => ({ kind: "command" as const, id: c.id, label: c.label, description: c.description, insert: c.insert }));
+        .map((c) => ({
+          kind: "command" as const,
+          id: c.id,
+          label: c.label,
+          description: c.description,
+          insert: c.insert,
+        }));
     }
     if (trigger.type === "file") {
       const files = flattenFiles(fileTree);
       return files
-        .map((f) => ({ kind: "file" as const, path: f.path, name: f.name, _s: fuzzyScore(trigger.query, f.path) }))
+        .map((f) => ({
+          kind: "file" as const,
+          path: f.path,
+          name: f.name,
+          _s: fuzzyScore(trigger.query, f.path),
+        }))
         .filter((f) => f._s > 0)
         .sort((a, b) => b._s - a._s)
         .slice(0, 8)
@@ -185,16 +253,27 @@ export function PromptAutocomplete({
     }
     if (trigger.type === "skill") {
       const q = trigger.query.toLowerCase();
-      return BUNDLED_SKILLS
-        .filter((s) => !q || s.name.includes(q) || s.description.toLowerCase().includes(q))
+      return BUNDLED_SKILLS.filter(
+        (s) =>
+          !q || s.name.includes(q) || s.description.toLowerCase().includes(q),
+      )
         .slice(0, 8)
-        .map((s) => ({ kind: "skill" as const, name: s.name, description: s.description }));
+        .map((s) => ({
+          kind: "skill" as const,
+          name: s.name,
+          description: s.description,
+        }));
     }
     const q = trigger.query.toLowerCase();
     return chatSessions
       .filter((s) => !q || s.title.toLowerCase().includes(q))
       .slice(0, 8)
-      .map((s) => ({ kind: "related" as const, id: s.id, title: s.title, status: s.status }));
+      .map((s) => ({
+        kind: "related" as const,
+        id: s.id,
+        title: s.title,
+        status: s.status,
+      }));
   }, [trigger, fileTree, chatSessions]);
 
   // Keep the caret in sync with the textarea. Mouse / arrow / select events
@@ -220,10 +299,13 @@ export function PromptAutocomplete({
     const opt = options[idx];
     if (!opt) return;
     const insert =
-      opt.kind === "file"    ? `@${opt.path} ` :
-      opt.kind === "skill"   ? `$${opt.name} ` :
-      opt.kind === "related" ? `#${opt.title} ` :
-                               opt.insert;
+      opt.kind === "file"
+        ? `@${opt.path} `
+        : opt.kind === "skill"
+          ? `$${opt.name} `
+          : opt.kind === "related"
+            ? `#${opt.title} `
+            : opt.insert;
     const before = value.slice(0, trigger.start);
     const after = value.slice(trigger.start + 1 + trigger.query.length);
     const next = before + insert + after;
@@ -243,7 +325,9 @@ export function PromptAutocomplete({
    * intercept ↑/↓/Tab/Enter/Escape when the menu is open, and return `true`
    * to tell the parent "I've handled this, don't also submit on Enter".
    */
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>,
+  ): boolean => {
     if (!trigger || options.length === 0) return false;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -255,7 +339,10 @@ export function PromptAutocomplete({
       setActiveIdx((i) => (i - 1 + options.length) % options.length);
       return true;
     }
-    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)) {
+    if (
+      e.key === "Tab" ||
+      (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey)
+    ) {
       e.preventDefault();
       accept(activeIdxRef.current);
       return true;
@@ -292,14 +379,24 @@ export function PromptAutocomplete({
       onMouseDown={(e) => e.preventDefault()}
     >
       <div className="px-3 py-1.5 flex items-center gap-2 text-[10px] uppercase tracking-wider text-dalam-text-muted border-b border-dalam-border-primary">
-        {trigger.type === "command" ? <Terminal className="w-3 h-3" /> :
-         trigger.type === "file"    ? <FileText className="w-3 h-3" /> :
-         trigger.type === "skill"   ? <Sparkles className="w-3 h-3" /> :
-                                      <Hash className="w-3 h-3" />}
+        {trigger.type === "command" ? (
+          <Terminal className="w-3 h-3" />
+        ) : trigger.type === "file" ? (
+          <FileText className="w-3 h-3" />
+        ) : trigger.type === "skill" ? (
+          <Sparkles className="w-3 h-3" />
+        ) : (
+          <Hash className="w-3 h-3" />
+        )}
         <span>{triggerHeader(trigger.type)}</span>
         <span className="ml-auto flex items-center gap-2 normal-case tracking-normal text-dalam-text-muted">
-          <span className="flex items-center gap-0.5"><ChevronUp className="w-2.5 h-2.5" /><ChevronDown className="w-2.5 h-2.5" /> navigate</span>
-          <span className="flex items-center gap-0.5"><CornerDownLeft className="w-2.5 h-2.5" /> select</span>
+          <span className="flex items-center gap-0.5">
+            <ChevronUp className="w-2.5 h-2.5" />
+            <ChevronDown className="w-2.5 h-2.5" /> navigate
+          </span>
+          <span className="flex items-center gap-0.5">
+            <CornerDownLeft className="w-2.5 h-2.5" /> select
+          </span>
           <span>esc dismiss</span>
         </span>
       </div>
@@ -311,7 +408,9 @@ export function PromptAutocomplete({
               onClick={() => accept(idx)}
               onMouseEnter={() => setActiveIdx(idx)}
               className={`w-full text-left px-3 py-1.5 flex items-center gap-2 ${
-                idx === activeIdx ? "bg-dalam-bg-hover" : "hover:bg-dalam-bg-hover/50"
+                idx === activeIdx
+                  ? "bg-dalam-bg-hover"
+                  : "hover:bg-dalam-bg-hover/50"
               }`}
             >
               {renderOption(opt)}
@@ -329,16 +428,20 @@ export function PromptAutocomplete({
 
 function triggerHeader(type: TriggerType): string {
   switch (type) {
-    case "command": return "Commands";
-    case "file":    return "Workspace files";
-    case "skill":   return "Skills";
-    case "related": return "Related sessions";
+    case "command":
+      return "Commands";
+    case "file":
+      return "Workspace files";
+    case "skill":
+      return "Skills";
+    case "related":
+      return "Related sessions";
   }
 }
 
 function optionKey(opt: Option, idx: number): string {
-  if (opt.kind === "file")    return `f:${opt.path}`;
-  if (opt.kind === "skill")   return `s:${opt.name}`;
+  if (opt.kind === "file") return `f:${opt.path}`;
+  if (opt.kind === "skill") return `s:${opt.name}`;
   if (opt.kind === "related") return `r:${opt.id}`;
   return `c:${opt.id ?? idx}`;
 }
@@ -348,8 +451,12 @@ function renderOption(opt: Option) {
     return (
       <>
         <Terminal className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
-        <span className="text-sm text-dalam-text-primary font-mono">{opt.label}</span>
-        <span className="text-xs text-dalam-text-muted truncate ml-2">{opt.description}</span>
+        <span className="text-sm text-dalam-text-primary font-mono">
+          {opt.label}
+        </span>
+        <span className="text-xs text-dalam-text-muted truncate ml-2">
+          {opt.description}
+        </span>
       </>
     );
   }
@@ -357,8 +464,12 @@ function renderOption(opt: Option) {
     return (
       <>
         <FileText className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
-        <span className="text-sm text-dalam-text-primary truncate">{opt.name}</span>
-        <span className="text-[11px] text-dalam-text-muted font-mono truncate ml-2">{opt.path}</span>
+        <span className="text-sm text-dalam-text-primary truncate">
+          {opt.name}
+        </span>
+        <span className="text-[11px] text-dalam-text-muted font-mono truncate ml-2">
+          {opt.path}
+        </span>
       </>
     );
   }
@@ -366,16 +477,24 @@ function renderOption(opt: Option) {
     return (
       <>
         <Sparkles className="w-3.5 h-3.5 text-dalam-accent-primary flex-shrink-0" />
-        <span className="text-sm text-dalam-text-primary font-mono">${opt.name}</span>
-        <span className="text-xs text-dalam-text-muted truncate ml-2">{opt.description}</span>
+        <span className="text-sm text-dalam-text-primary font-mono">
+          ${opt.name}
+        </span>
+        <span className="text-xs text-dalam-text-muted truncate ml-2">
+          {opt.description}
+        </span>
       </>
     );
   }
   return (
     <>
       <Hash className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
-      <span className="text-sm text-dalam-text-primary truncate">{opt.title}</span>
-      <span className="text-[10px] text-dalam-text-muted ml-2 flex-shrink-0">{opt.status}</span>
+      <span className="text-sm text-dalam-text-primary truncate">
+        {opt.title}
+      </span>
+      <span className="text-[10px] text-dalam-text-muted ml-2 flex-shrink-0">
+        {opt.status}
+      </span>
     </>
   );
 }

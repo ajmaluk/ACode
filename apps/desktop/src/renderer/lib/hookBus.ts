@@ -120,7 +120,7 @@ export type HookEventPayloads = {
 // ---------------------------------------------------------------------------
 
 export type HookHandler<K extends HookEventName = HookEventName> = (
-  event: HookEventPayloads[K]
+  event: HookEventPayloads[K],
 ) => void | Promise<void>;
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,10 @@ class HookEventBus {
    * Register a handler for a lifecycle event.
    * Returns an unsubscribe function.
    */
-  on<K extends HookEventName>(eventName: K, handler: HookHandler<K>): () => void {
+  on<K extends HookEventName>(
+    eventName: K,
+    handler: HookHandler<K>,
+  ): () => void {
     if (!this.listeners.has(eventName)) {
       this.listeners.set(eventName, new Set());
     }
@@ -163,7 +166,7 @@ class HookEventBus {
    */
   async emit<K extends HookEventName>(
     eventName: K,
-    payload: HookEventPayloads[K]
+    payload: HookEventPayloads[K],
   ): Promise<void> {
     const handlers = this.listeners.get(eventName);
     if (!handlers || handlers.size === 0) return;
@@ -171,7 +174,7 @@ class HookEventBus {
     // Warn if too many listeners (potential memory leak)
     if (handlers.size > 20) {
       console.warn(
-        `[HookBus] ${handlers.size} listeners registered for "${eventName}" — possible memory leak`
+        `[HookBus] ${handlers.size} listeners registered for "${eventName}" — possible memory leak`,
       );
     }
 
@@ -196,9 +199,15 @@ class HookEventBus {
             await Promise.race([
               result,
               new Promise<never>((_, reject) => {
-                timeoutController.signal.addEventListener("abort", () => {
-                  reject(new Error(`Handler "${handlerName}" timed out after 10s`));
-                }, { once: true });
+                timeoutController.signal.addEventListener(
+                  "abort",
+                  () => {
+                    reject(
+                      new Error(`Handler "${handlerName}" timed out after 10s`),
+                    );
+                  },
+                  { once: true },
+                );
               }),
             ]);
           } finally {
@@ -223,7 +232,7 @@ class HookEventBus {
         });
         console.warn(
           `[HookBus] Error in ${eventName} handler "${handlerName}":`,
-          errorMsg
+          errorMsg,
         );
       }
     }
@@ -232,14 +241,16 @@ class HookEventBus {
   /**
    * Push an entry to the execution log, capping at MAX_LOG_SIZE.
    */
-  private pushLog(entry: typeof this.executionLog[number]): void {
+  private pushLog(entry: (typeof this.executionLog)[number]): void {
     this.executionLog.push(entry);
     if (this.executionLog.length > HookEventBus.MAX_LOG_SIZE) {
       // splice avoids allocating a new array on every overflow
-      this.executionLog.splice(0, this.executionLog.length - HookEventBus.MAX_LOG_SIZE);
+      this.executionLog.splice(
+        0,
+        this.executionLog.length - HookEventBus.MAX_LOG_SIZE,
+      );
     }
   }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +270,10 @@ export interface PreToolUseResult {
 
 const _preToolUseResults = new Map<string, PreToolUseResult>();
 
-export function setPreToolUseResult(toolCallId: string, result: PreToolUseResult): void {
+export function setPreToolUseResult(
+  toolCallId: string,
+  result: PreToolUseResult,
+): void {
   _preToolUseResults.set(toolCallId, result);
 }
 
@@ -267,7 +281,7 @@ export async function emitPreToolUse(
   sessionId: string,
   toolCallId: string,
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ): Promise<PreToolUseResult> {
   _preToolUseResults.delete(toolCallId);
 

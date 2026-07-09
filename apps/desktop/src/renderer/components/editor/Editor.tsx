@@ -158,64 +158,99 @@ export function CodeView({ path, content, onChange, onEditorReady }: Props) {
   // Memoize editor options to prevent unnecessary Monaco reconfiguration on every render
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editorOptions = useMemo((): any => ({
-    fontFamily: "'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace",
-    fontSize: settings.codeFontSize,
-    fontLigatures: true,
-    fontWeight: "400",
-    letterSpacing: settings.letterSpacing ?? 0.3,
-    lineNumbers: settings.showLineNumbers ? "on" : "off",
-    lineNumbersMinChars: 3,
-    wordWrap: settings.wordWrap ? "on" : "off",
-    minimap: { enabled: settings.showMinimap ?? true, scale: 1, renderCharacters: false, maxColumn: 120, showSlider: "mouseover" },
-    scrollBeyondLastLine: false,
-    smoothScrolling: true,
-    cursorBlinking: "smooth",
-    cursorSmoothCaretAnimation: "on",
-    cursorWidth: settings.cursorWidth ?? 2,
-    renderLineHighlight: "all",
-    renderLineHighlightOnlyWhenFocus: false,
-    bracketPairColorization: { enabled: settings.bracketPairColorization ?? true, independentColorPoolPerBracketType: true },
-    guides: { bracketPairs: true, bracketPairsHorizontal: true, indentation: settings.showIndentGuides ?? true, highlightActiveIndentation: true },
-    padding: { top: 12, bottom: 12 },
-    tabSize: settings.tabSize ?? 2,
-    automaticLayout: true,
-    renderWhitespace: "selection",
-    scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8, useShadows: false, verticalSliderSize: 6 },
-    folding: true,
-    foldingHighlight: true,
-    showFoldingControls: "mouseover",
-    links: true,
-    colorDecorators: true,
-    contextmenu: true,
-    mouseWheelZoom: true,
-    quickSuggestions: { other: true, comments: false, strings: false },
-    parameterHints: { enabled: true },
-    suggestOnTriggerCharacters: true,
-    acceptSuggestionOnEnter: "smart",
-    autoClosingBrackets: "always",
-    autoClosingQuotes: "always",
-    autoSurround: "languageDefined",
-    formatOnPaste: false,
-    formatOnType: false,
-    dragAndDrop: true,
-    copyWithSyntaxHighlighting: true,
-    occurrencesHighlight: "singleFile",
-    selectionHighlight: true,
-    roundedSelection: true,
-    readOnly: !onChange,
-    showDeprecated: true,
-    inlineSuggest: { enabled: true },
-  }), [settings.codeFontSize, settings.letterSpacing, settings.showLineNumbers, settings.wordWrap, settings.showMinimap, settings.cursorWidth, settings.bracketPairColorization, settings.showIndentGuides, settings.tabSize, onChange]);
+      fontFamily:
+        "'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace",
+      fontSize: settings.codeFontSize,
+      fontLigatures: true,
+      fontWeight: "400",
+      letterSpacing: settings.letterSpacing ?? 0.3,
+      lineNumbers: settings.showLineNumbers ? "on" : "off",
+      lineNumbersMinChars: 3,
+      wordWrap: settings.wordWrap ? "on" : "off",
+      minimap: {
+        enabled: settings.showMinimap ?? true,
+        scale: 1,
+        renderCharacters: false,
+        maxColumn: 120,
+        showSlider: "mouseover",
+      },
+      scrollBeyondLastLine: false,
+      smoothScrolling: true,
+      cursorBlinking: "smooth",
+      cursorSmoothCaretAnimation: "on",
+      cursorWidth: settings.cursorWidth ?? 2,
+      renderLineHighlight: "all",
+      renderLineHighlightOnlyWhenFocus: false,
+      bracketPairColorization: {
+        enabled: settings.bracketPairColorization ?? true,
+        independentColorPoolPerBracketType: true,
+      },
+      guides: {
+        bracketPairs: true,
+        bracketPairsHorizontal: true,
+        indentation: settings.showIndentGuides ?? true,
+        highlightActiveIndentation: true,
+      },
+      padding: { top: 12, bottom: 12 },
+      tabSize: settings.tabSize ?? 2,
+      automaticLayout: true,
+      renderWhitespace: "selection",
+      scrollbar: {
+        verticalScrollbarSize: 8,
+        horizontalScrollbarSize: 8,
+        useShadows: false,
+        verticalSliderSize: 6,
+      },
+      folding: true,
+      foldingHighlight: true,
+      showFoldingControls: "mouseover",
+      links: true,
+      colorDecorators: true,
+      contextmenu: true,
+      mouseWheelZoom: true,
+      quickSuggestions: { other: true, comments: false, strings: false },
+      parameterHints: { enabled: true },
+      suggestOnTriggerCharacters: true,
+      acceptSuggestionOnEnter: "smart",
+      autoClosingBrackets: "always",
+      autoClosingQuotes: "always",
+      autoSurround: "languageDefined",
+      formatOnPaste: false,
+      formatOnType: false,
+      dragAndDrop: true,
+      copyWithSyntaxHighlighting: true,
+      occurrencesHighlight: "singleFile",
+      selectionHighlight: true,
+      roundedSelection: true,
+      readOnly: !onChange,
+      showDeprecated: true,
+      inlineSuggest: { enabled: true },
+    }),
+    [
+      settings.codeFontSize,
+      settings.letterSpacing,
+      settings.showLineNumbers,
+      settings.wordWrap,
+      settings.showMinimap,
+      settings.cursorWidth,
+      settings.bracketPairColorization,
+      settings.showIndentGuides,
+      settings.tabSize,
+      onChange,
+    ],
+  );
 
   return (
-    <Suspense fallback={
-      <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
-        <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
-          <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
-          Loading editor...
+    <Suspense
+      fallback={
+        <div className="h-full w-full flex items-center justify-center bg-dalam-bg-primary">
+          <div className="flex items-center gap-2 text-sm text-dalam-text-muted">
+            <div className="w-2 h-2 rounded-full bg-dalam-accent-primary animate-pulse-soft" />
+            Loading editor...
+          </div>
         </div>
-      </div>
-    }>
+      }
+    >
       <MonacoEditor
         key={path ?? "empty"}
         path={path ?? undefined}

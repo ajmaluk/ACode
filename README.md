@@ -4,7 +4,7 @@
 
 Dalam is a desktop IDE built with [Tauri](https://tauri.app/ v2), React 19, and TypeScript. It integrates an AI coding assistant directly into your development workflow with streaming responses, tool execution, memory systems, and a self-evolving skill architecture.
 
-**Current Status:** 1,014 tests passing, 0 TypeScript errors, 31 test files
+**Current Status:** 1,109 tests passing (2 skipped), 0 TypeScript errors, 35 test files
 
 ## Features
 
@@ -84,12 +84,12 @@ Dalam/
 ├── apps/
 │   └── desktop/               # Tauri desktop application
 │       ├── src/
-│       │   ├── renderer/      # React frontend
-│       │   │   ├── components/  # UI components (editor, sidebar, terminal, chat, settings)
-│       │   │   ├── lib/         # Core logic (dalamAPI, agents, skills, memory, state machine)
-│       │   │   └── store/       # Zustand state stores (useAppStore — 5,564 lines)
-│       │   └── tauri/         # Rust backend
-│       │       └── src/         # Tauri commands (git, clipboard, system — 1,404 lines)
+│       │   └── renderer/      # React frontend
+│       │       ├── components/  # UI components (editor, sidebar, terminal, chat, settings)
+│       │       ├── lib/         # Core logic (dalamAPI, agents, skills, memory, state machine)
+│       │       └── store/       # Zustand state stores (useAppStore)
+│       ├── src-tauri/          # Rust backend
+│       │   └── src/            # Tauri commands (git, clipboard, system)
 │       └── package.json
 ├── packages/
 │   └── shared-types/          # Shared TypeScript types for IPC
@@ -132,7 +132,7 @@ Supported formats: `openai`, `anthropic`
 ## Test Suite
 
 ```bash
-pnpm test              # Run all tests (vitest) — 1,014 tests, 31 files
+pnpm test              # Run all tests (vitest) — 1,109 tests, 35 files
 pnpm test:watch        # Watch mode
 pnpm typecheck         # TypeScript checking — 0 errors
 pnpm lint              # ESLint on renderer source

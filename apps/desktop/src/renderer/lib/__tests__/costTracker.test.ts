@@ -35,7 +35,9 @@ describe("parseUsageFromChunk", () => {
   });
 
   it("parses OpenAI format (prompt_tokens, completion_tokens)", () => {
-    const chunk = { usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } };
+    const chunk = {
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    };
     const result = parseUsageFromChunk(chunk);
     expect(result).toEqual({
       inputTokens: 100,
@@ -94,14 +96,18 @@ describe("parseUsageFromChunk", () => {
   });
 
   it("handles nested chunk format { usage: { ... } }", () => {
-    const chunk = { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
+    const chunk = {
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    };
     const result = parseUsageFromChunk(chunk);
     expect(result?.inputTokens).toBe(10);
     expect(result?.outputTokens).toBe(5);
   });
 
   it("handles zero values correctly", () => {
-    const chunk = { usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+    const chunk = {
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    };
     const result = parseUsageFromChunk(chunk);
     expect(result).toEqual({
       inputTokens: 0,
@@ -118,20 +124,32 @@ describe("recordTokenUsage and getSessionCost", () => {
   });
 
   it("records token usage and retrieves it", () => {
-    const usage: TokenUsage = { inputTokens: 100, outputTokens: 50, totalTokens: 150 };
+    const usage: TokenUsage = {
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    };
     recordTokenUsage("test-session", "gpt-4o", usage);
 
     const cost = getSessionCost("test-session");
     expect(cost.totalInputTokens).toBe(100);
     expect(cost.totalOutputTokens).toBe(50);
     // gpt-4o: $2.50/1M input, $10.00/1M output
-    expectedCost = (100 / 1_000_000) * 2.50 + (50 / 1_000_000) * 10.00;
+    expectedCost = (100 / 1_000_000) * 2.5 + (50 / 1_000_000) * 10.0;
     expect(cost.totalCostUsd).toBeCloseTo(expectedCost, 6);
   });
 
   it("accumulates multiple calls for same session", () => {
-    recordTokenUsage("test-session", "gpt-4o", { inputTokens: 100, outputTokens: 50, totalTokens: 150 });
-    recordTokenUsage("test-session", "gpt-4o", { inputTokens: 200, outputTokens: 100, totalTokens: 300 });
+    recordTokenUsage("test-session", "gpt-4o", {
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    });
+    recordTokenUsage("test-session", "gpt-4o", {
+      inputTokens: 200,
+      outputTokens: 100,
+      totalTokens: 300,
+    });
 
     const cost = getSessionCost("test-session");
     expect(cost.totalInputTokens).toBe(300);
@@ -139,8 +157,16 @@ describe("recordTokenUsage and getSessionCost", () => {
   });
 
   it("tracks per-model breakdown", () => {
-    recordTokenUsage("test-session", "gpt-4o", { inputTokens: 100, outputTokens: 50, totalTokens: 150 });
-    recordTokenUsage("test-session", "claude-3-5-sonnet", { inputTokens: 200, outputTokens: 80, totalTokens: 280 });
+    recordTokenUsage("test-session", "gpt-4o", {
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    });
+    recordTokenUsage("test-session", "claude-3-5-sonnet", {
+      inputTokens: 200,
+      outputTokens: 80,
+      totalTokens: 280,
+    });
 
     const cost = getSessionCost("test-session");
     expect(Object.keys(cost.byModel)).toHaveLength(2);
@@ -159,7 +185,11 @@ describe("recordTokenUsage and getSessionCost", () => {
   });
 
   it("clears session cost", () => {
-    recordTokenUsage("test-session", "gpt-4o", { inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+    recordTokenUsage("test-session", "gpt-4o", {
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    });
     clearSessionCost("test-session");
 
     const cost = getSessionCost("test-session");
@@ -173,7 +203,11 @@ describe("formatCost", () => {
   });
 
   it("formats cost string for a session with usage", () => {
-    recordTokenUsage("fmt-session", "gpt-4o", { inputTokens: 1500, outputTokens: 500, totalTokens: 2000 });
+    recordTokenUsage("fmt-session", "gpt-4o", {
+      inputTokens: 1500,
+      outputTokens: 500,
+      totalTokens: 2000,
+    });
     const formatted = formatCost("fmt-session");
     expect(formatted).toContain("↑2K");
     expect(formatted).toContain("↓1K");
@@ -193,7 +227,11 @@ describe("formatCostDetailed", () => {
   });
 
   it("returns detailed cost breakdown", () => {
-    recordTokenUsage("det-session", "gpt-4o", { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 });
+    recordTokenUsage("det-session", "gpt-4o", {
+      inputTokens: 1000,
+      outputTokens: 500,
+      totalTokens: 1500,
+    });
     const formatted = formatCostDetailed("det-session");
     expect(formatted).toContain("Total:");
     expect(formatted).toContain("in");
@@ -216,11 +254,15 @@ describe("setModelPricing", () => {
   });
 
   it("allows overriding pricing for a model", () => {
-    setModelPricing("custom-model", 1.00, 2.00);
-    recordTokenUsage("price-session", "custom-model", { inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 });
+    setModelPricing("custom-model", 1.0, 2.0);
+    recordTokenUsage("price-session", "custom-model", {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      totalTokens: 2_000_000,
+    });
 
     const cost = getSessionCost("price-session");
-    expect(cost.totalCostUsd).toBeCloseTo(3.00, 4);
+    expect(cost.totalCostUsd).toBeCloseTo(3.0, 4);
   });
 });
 

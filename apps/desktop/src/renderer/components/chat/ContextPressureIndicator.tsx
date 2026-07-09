@@ -33,12 +33,17 @@ export function ContextPressureIndicator({
   const { sessionMessages, activeSessionId } = useChat();
 
   const stats = useMemo(() => {
-    const messages = activeSessionId ? sessionMessages[activeSessionId] || [] : [];
+    const messages = activeSessionId
+      ? sessionMessages[activeSessionId] || []
+      : [];
     return computeContextStats(messages, maxContextTokens);
   }, [sessionMessages, activeSessionId, maxContextTokens]);
 
   const recommendation = useMemo(() => {
-    return getContextPressureRecommendation(stats.pressure, stats.pressureRatio);
+    return getContextPressureRecommendation(
+      stats.pressure,
+      stats.pressureRatio,
+    );
   }, [stats.pressure, stats.pressureRatio]);
 
   // Format token counts for display
@@ -102,12 +107,17 @@ export function ContextPressureBar({
   const { sessionMessages, activeSessionId } = useChat();
 
   const stats = useMemo(() => {
-    const messages = activeSessionId ? sessionMessages[activeSessionId] || [] : [];
+    const messages = activeSessionId
+      ? sessionMessages[activeSessionId] || []
+      : [];
     return computeContextStats(messages, maxContextTokens);
   }, [sessionMessages, activeSessionId, maxContextTokens]);
 
   const recommendation = useMemo(() => {
-    return getContextPressureRecommendation(stats.pressure, stats.pressureRatio);
+    return getContextPressureRecommendation(
+      stats.pressure,
+      stats.pressureRatio,
+    );
   }, [stats.pressure, stats.pressureRatio]);
 
   const percentage = Math.min(100, Math.round(stats.pressureRatio * 100));

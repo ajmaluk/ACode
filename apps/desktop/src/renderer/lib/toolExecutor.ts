@@ -19,7 +19,8 @@ async function readFileBeforeEdit(path: string): Promise<string> {
   try {
     const { readTextFile } = await import("@tauri-apps/plugin-fs");
     return await readTextFile(path);
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[ToolExecutor] Failed to read file before edit:", e);
     return "";
   }
 }
@@ -72,7 +73,11 @@ const TOOL_DEPENDENCIES: Record<string, ToolDependency> = {
   webfetch: { tool: "webfetch", dependsOn: [], readOnly: true },
   websearch: { tool: "websearch", dependsOn: [], readOnly: true },
   create_file: { tool: "create_file", dependsOn: [], readOnly: false },
-  git_create_branch: { tool: "git_create_branch", dependsOn: [], readOnly: false },
+  git_create_branch: {
+    tool: "git_create_branch",
+    dependsOn: [],
+    readOnly: false,
+  },
   get_disk_space: { tool: "get_disk_space", dependsOn: [], readOnly: true },
   get_screen_info: { tool: "get_screen_info", dependsOn: [], readOnly: true },
   list_processes: { tool: "list_processes", dependsOn: [], readOnly: true },
@@ -81,20 +86,36 @@ const TOOL_DEPENDENCIES: Record<string, ToolDependency> = {
   // Write tools — depend on all previous writes
   write_file: { tool: "write_file", dependsOn: [], readOnly: false },
   edit_file: { tool: "edit_file", dependsOn: [], readOnly: false },
-  git_commit: { tool: "git_commit", dependsOn: ["write_file", "edit_file"], readOnly: false },
+  git_commit: {
+    tool: "git_commit",
+    dependsOn: ["write_file", "edit_file"],
+    readOnly: false,
+  },
   git_checkout: { tool: "git_checkout", dependsOn: [], readOnly: false },
   run_command: { tool: "run_command", dependsOn: [], readOnly: false },
   memory_save: { tool: "memory_save", dependsOn: [], readOnly: false },
   memory_delete: { tool: "memory_delete", dependsOn: [], readOnly: false },
   memory_maintain: { tool: "memory_maintain", dependsOn: [], readOnly: false },
   task: { tool: "task", dependsOn: [], readOnly: false },
-  browser_navigate: { tool: "browser_navigate", dependsOn: [], readOnly: false },
+  browser_navigate: {
+    tool: "browser_navigate",
+    dependsOn: [],
+    readOnly: false,
+  },
   browser_execute: { tool: "browser_execute", dependsOn: [], readOnly: false },
   run_preview: { tool: "run_preview", dependsOn: [], readOnly: false },
-  create_task_plan: { tool: "create_task_plan", dependsOn: [], readOnly: false },
+  create_task_plan: {
+    tool: "create_task_plan",
+    dependsOn: [],
+    readOnly: false,
+  },
   kill_process: { tool: "kill_process", dependsOn: [], readOnly: false },
   launch_app: { tool: "launch_app", dependsOn: [], readOnly: false },
-  reveal_in_finder: { tool: "reveal_in_finder", dependsOn: [], readOnly: false },
+  reveal_in_finder: {
+    tool: "reveal_in_finder",
+    dependsOn: [],
+    readOnly: false,
+  },
   open_panel: { tool: "open_panel", dependsOn: [], readOnly: false },
   clipboard_write: { tool: "clipboard_write", dependsOn: [], readOnly: false },
   notify: { tool: "notify", dependsOn: [], readOnly: false },
@@ -102,11 +123,31 @@ const TOOL_DEPENDENCIES: Record<string, ToolDependency> = {
   set_theme: { tool: "set_theme", dependsOn: [], readOnly: false },
   toggle_theme: { tool: "toggle_theme", dependsOn: [], readOnly: false },
   set_view_mode: { tool: "set_view_mode", dependsOn: [], readOnly: false },
-  toggle_view_mode: { tool: "toggle_view_mode", dependsOn: [], readOnly: false },
-  toggle_right_panel: { tool: "toggle_right_panel", dependsOn: [], readOnly: false },
-  toggle_bottom_panel: { tool: "toggle_bottom_panel", dependsOn: [], readOnly: false },
-  set_right_panel_tab: { tool: "set_right_panel_tab", dependsOn: [], readOnly: false },
-  set_bottom_panel_tab: { tool: "set_bottom_panel_tab", dependsOn: [], readOnly: false },
+  toggle_view_mode: {
+    tool: "toggle_view_mode",
+    dependsOn: [],
+    readOnly: false,
+  },
+  toggle_right_panel: {
+    tool: "toggle_right_panel",
+    dependsOn: [],
+    readOnly: false,
+  },
+  toggle_bottom_panel: {
+    tool: "toggle_bottom_panel",
+    dependsOn: [],
+    readOnly: false,
+  },
+  set_right_panel_tab: {
+    tool: "set_right_panel_tab",
+    dependsOn: [],
+    readOnly: false,
+  },
+  set_bottom_panel_tab: {
+    tool: "set_bottom_panel_tab",
+    dependsOn: [],
+    readOnly: false,
+  },
   new_terminal: { tool: "new_terminal", dependsOn: [], readOnly: false },
   terminal_write: { tool: "terminal_write", dependsOn: [], readOnly: false },
 };
@@ -184,7 +225,7 @@ async function executeWithTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   toolName: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
   let rejectFn: ((err: Error) => void) | null = null;
@@ -195,8 +236,9 @@ async function executeWithTimeout<T>(
   const timeoutPromise = new Promise<T>((_, reject) => {
     rejectFn = reject;
     timeoutId = setTimeout(
-      () => reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`)),
-      timeoutMs
+      () =>
+        reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`)),
+      timeoutMs,
     );
     if (abortSignal) {
       if (abortSignal.aborted) {
@@ -210,7 +252,11 @@ async function executeWithTimeout<T>(
   return Promise.race([promise, timeoutPromise]).finally(() => {
     clearTimeout(timeoutId!);
     if (abortSignal) {
-      try { abortSignal.removeEventListener("abort", abortHandler); } catch { /* ignore */ }
+      try {
+        abortSignal.removeEventListener("abort", abortHandler);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[ToolExecutor] Failed to remove abort listener:", e);
+      }
     }
   });
 }
@@ -220,7 +266,7 @@ async function executeWithTimeout<T>(
  */
 function isRetryableError(error: string): boolean {
   const lower = error.toLowerCase();
-  return RETRYABLE_ERRORS.some(e => lower.includes(e.toLowerCase()));
+  return RETRYABLE_ERRORS.some((e) => lower.includes(e.toLowerCase()));
 }
 
 // Tool call cost tracking
@@ -297,7 +343,9 @@ export function canRunInParallel(tool1: ToolCall, tool2: ToolCall): boolean {
  * Group tool calls into parallel batches.
  * Returns an array of batches, where each batch can be executed in parallel.
  */
-export function groupToolCallsForExecution(toolCalls: ToolCall[]): ToolCall[][] {
+export function groupToolCallsForExecution(
+  toolCalls: ToolCall[],
+): ToolCall[][] {
   if (toolCalls.length === 0) return [];
   if (toolCalls.length === 1) return [[toolCalls[0]]];
 
@@ -309,7 +357,7 @@ export function groupToolCallsForExecution(toolCalls: ToolCall[]): ToolCall[][] 
     const current = toolCalls[i];
     let added = false;
     for (const batch of batches) {
-      if (batch.every(tc => canRunInParallel(tc, current))) {
+      if (batch.every((tc) => canRunInParallel(tc, current))) {
         batch.push(current);
         added = true;
         break;
@@ -331,7 +379,7 @@ export async function executeToolWithRetry(
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: unknown) => void,
   abortSignal?: AbortSignal,
-  sessionId?: string
+  sessionId?: string,
 ): Promise<ToolResult> {
   let lastError: string | null = null;
   let retries = 0;
@@ -359,7 +407,7 @@ export async function executeToolWithRetry(
       // Read beforeContent BEFORE execution to capture the original file state
       let beforeContent = "";
       if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
-        const path = String(toolCall.args.path ?? "");
+        const path = String(validated.args.path ?? toolCall.args.path ?? "");
         if (path) {
           beforeContent = await readFileBeforeEdit(path);
         }
@@ -371,18 +419,19 @@ export async function executeToolWithRetry(
         executeFn(toolCall.name, validated.args),
         timeoutMs,
         toolCall.name,
-        abortSignal
+        abortSignal,
       );
       const durationMs = Date.now() - startTime;
 
       // Record file changes for undo support (beforeContent was captured pre-execution)
       if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
-        const path = String(toolCall.args.path ?? "");
+        const path = String(validated.args.path ?? toolCall.args.path ?? "");
         if (path) {
           const callId = `${toolCall.name}-${crypto.randomUUID().slice(0, 8)}`;
-          const afterContent = toolCall.name === "write_file"
-            ? String(toolCall.args.content ?? "")
-            : result;
+          const afterContent =
+            toolCall.name === "write_file"
+              ? String(toolCall.args.content ?? "")
+              : result;
           recordChange({
             filePath: path,
             beforeContent,
@@ -429,10 +478,17 @@ export async function executeToolWithRetry(
           await new Promise<void>((resolve) => {
             if (abortSignal.aborted) return resolve();
             const timer = setTimeout(resolve, delay);
-            abortSignal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+            abortSignal.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              { once: true },
+            );
           });
         } else {
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
         continue;
       }
@@ -476,10 +532,12 @@ export async function executeToolBatch(
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: unknown) => void,
   abortSignal?: AbortSignal,
-  sessionId?: string
+  sessionId?: string,
 ): Promise<ToolResult[]> {
   const results = await Promise.all(
-    batch.map(tc => executeToolWithRetry(tc, executeFn, emit, abortSignal, sessionId))
+    batch.map((tc) =>
+      executeToolWithRetry(tc, executeFn, emit, abortSignal, sessionId),
+    ),
   );
   return results;
 }
@@ -492,14 +550,16 @@ export async function executeToolCalls(
   executeFn: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: unknown) => void,
   abortSignal?: AbortSignal,
-  sessionId?: string
+  sessionId?: string,
 ): Promise<ToolResult[]> {
   const batches = groupToolCallsForExecution(toolCalls);
   const allResults: ToolResult[] = [];
   let abortedMidBatch = false;
 
   // Register abort listener for mid-batch cancellation (complements per-batch polling)
-  const abortHandler = () => { abortedMidBatch = true; };
+  const abortHandler = () => {
+    abortedMidBatch = true;
+  };
   if (abortSignal && !abortSignal.aborted) {
     abortSignal.addEventListener("abort", abortHandler, { once: true });
   }
@@ -518,12 +578,22 @@ export async function executeToolCalls(
         continue;
       }
 
-      const results = await executeToolBatch(batch, executeFn, emit, abortSignal, sessionId);
+      const results = await executeToolBatch(
+        batch,
+        executeFn,
+        emit,
+        abortSignal,
+        sessionId,
+      );
       allResults.push(...results);
     }
   } finally {
     if (abortSignal && abortHandler) {
-      try { abortSignal.removeEventListener("abort", abortHandler); } catch { /* ignore */ }
+      try {
+        abortSignal.removeEventListener("abort", abortHandler);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[ToolExecutor] Failed to remove batch abort listener:", e);
+      }
     }
   }
 
@@ -534,13 +604,15 @@ export async function executeToolCalls(
  * Format tool results for inclusion in conversation history.
  */
 export function formatToolResults(results: ToolResult[]): string {
-  return results.map(r => {
-    if (r.success) {
-      return `[Tool result for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result || "(no output)"}`;
-    } else {
-      return `[Tool error for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result}`;
-    }
-  }).join("\n\n");
+  return results
+    .map((r) => {
+      if (r.success) {
+        return `[Tool result for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result || "(no output)"}`;
+      } else {
+        return `[Tool error for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result}`;
+      }
+    })
+    .join("\n\n");
 }
 
 /**
@@ -554,9 +626,9 @@ export function getToolStats(results: ToolResult[]): {
   totalDurationMs: number;
   avgDurationMs: number;
 } {
-  const succeeded = results.filter(r => r.success).length;
+  const succeeded = results.filter((r) => r.success).length;
   const failed = results.length - succeeded;
-  const retried = results.filter(r => (r.retries ?? 0) > 0).length;
+  const retried = results.filter((r) => (r.retries ?? 0) > 0).length;
   const totalDurationMs = results.reduce((sum, r) => sum + r.durationMs, 0);
 
   return {
@@ -565,6 +637,7 @@ export function getToolStats(results: ToolResult[]): {
     failed,
     retried,
     totalDurationMs,
-    avgDurationMs: results.length > 0 ? Math.round(totalDurationMs / results.length) : 0,
+    avgDurationMs:
+      results.length > 0 ? Math.round(totalDurationMs / results.length) : 0,
   };
 }

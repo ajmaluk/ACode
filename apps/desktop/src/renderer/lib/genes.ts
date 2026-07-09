@@ -29,12 +29,13 @@ export interface Gene {
   id: string;
   name: string;
   description: string;
-  trigger: string;           // When to activate (regex or keyword)
-  action: string;            // What to do (prompt template or tool call)
-  category: "strategy" | "tool_use" | "error_recovery" | "optimization" | "pattern";
-  confidence: number;        // 0-1, how reliable this gene is
-  activationCount: number;   // How many times it's been used
-  successCount: number;      // How many times it succeeded
+  trigger: string; // When to activate (regex or keyword)
+  action: string; // What to do (prompt template or tool call)
+  category:
+    "strategy" | "tool_use" | "error_recovery" | "optimization" | "pattern";
+  confidence: number; // 0-1, how reliable this gene is
+  activationCount: number; // How many times it's been used
+  successCount: number; // How many times it succeeded
   createdAt: number;
   lastActivatedAt: number;
   source: "session" | "reflection" | "manual";
@@ -86,8 +87,14 @@ interface GeneRow {
 function rowToGene(row: GeneRow): Gene {
   let tags: string[];
   try {
-    tags = typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []);
-  } catch { tags = []; }
+    tags =
+      typeof row.tags === "string"
+        ? JSON.parse(row.tags || "[]")
+        : (row.tags ?? []);
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Genes] Failed to parse gene tags:", e);
+    tags = [];
+  }
   return {
     id: row.id,
     name: row.name,
@@ -114,15 +121,19 @@ export async function loadGenePool(): Promise<GenePool> {
   }
   try {
     const db = getDb();
-    const rows = await db.select(
-      `SELECT * FROM genes ORDER BY confidence DESC, created_at DESC`
-    ) as GeneRow[];
+    const rows = (await db.select(
+      `SELECT * FROM genes ORDER BY confidence DESC, created_at DESC`,
+    )) as GeneRow[];
     const genes = rows.map(rowToGene);
-    const totalActivations = genes.reduce((sum, g) => sum + g.activationCount, 0);
+    const totalActivations = genes.reduce(
+      (sum, g) => sum + g.activationCount,
+      0,
+    );
     return {
       genes,
       version: 1,
-      lastEvolution: genes.length > 0 ? Math.max(...genes.map(g => g.lastActivatedAt)) : 0,
+      lastEvolution:
+        genes.length > 0 ? Math.max(...genes.map((g) => g.lastActivatedAt)) : 0,
       totalActivations,
     };
   } catch (err) {
@@ -141,9 +152,21 @@ export async function saveGene(gene: Gene): Promise<void> {
     await db.execute(
       `INSERT OR REPLACE INTO genes (id, name, description, trigger_pattern, action, category, confidence, activation_count, success_count, created_at, last_activated, source, tags)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [gene.id, gene.name, gene.description, gene.trigger, gene.action, gene.category,
-       gene.confidence, gene.activationCount, gene.successCount, gene.createdAt,
-       gene.lastActivatedAt, gene.source, JSON.stringify(gene.tags)]
+      [
+        gene.id,
+        gene.name,
+        gene.description,
+        gene.trigger,
+        gene.action,
+        gene.category,
+        gene.confidence,
+        gene.activationCount,
+        gene.successCount,
+        gene.createdAt,
+        gene.lastActivatedAt,
+        gene.source,
+        JSON.stringify(gene.tags),
+      ],
     );
   } catch (err) {
     console.warn("[Genes] Failed to save gene:", err);
@@ -177,7 +200,9 @@ export async function migrateLocalStorageGenes(): Promise<number> {
     }
     // Clear localStorage after successful migration
     localStorage.removeItem(LEGACY_KEY);
-    console.info(`[Genes] Migrated ${migrated} genes from localStorage to SQLite`);
+    console.info(
+      `[Genes] Migrated ${migrated} genes from localStorage to SQLite`,
+    );
     return migrated;
   } catch (err) {
     console.warn("[Genes] Failed to migrate localStorage genes:", err);
@@ -187,30 +212,41 @@ export async function migrateLocalStorageGenes(): Promise<number> {
 
 export async function addGene(pool: GenePool, gene: Gene): Promise<GenePool> {
   // Deduplication: check for genes with same name or similar trigger
-  const existing = pool.genes.find(g => g.name === gene.name || g.trigger === gene.trigger);
+  const existing = pool.genes.find(
+    (g) => g.name === gene.name || g.trigger === gene.trigger,
+  );
   if (existing) {
     // Boost existing gene's confidence instead of creating duplicate
     const updatedConfidence = Math.min(1, existing.confidence + 0.05);
-    const updatedGene = { ...existing, confidence: updatedConfidence, activationCount: existing.activationCount + 1, lastActivatedAt: Date.now() };
+    const updatedGene = {
+      ...existing,
+      confidence: updatedConfidence,
+      activationCount: existing.activationCount + 1,
+      lastActivatedAt: Date.now(),
+    };
     await saveGene(updatedGene);
     return {
       ...pool,
-      genes: pool.genes.map(g => g.id === existing.id ? updatedGene : g),
+      genes: pool.genes.map((g) => (g.id === existing.id ? updatedGene : g)),
     };
   }
 
   // Cap gene pool at 50 genes (evict lowest confidence / oldest first)
   let genes = [...pool.genes, gene];
   if (genes.length > 50) {
-    genes.sort((a, b) => b.confidence - a.confidence || b.createdAt - a.createdAt);
+    genes.sort(
+      (a, b) => b.confidence - a.confidence || b.createdAt - a.createdAt,
+    );
     genes = genes.slice(0, 50);
     // Remove evicted genes from DB
     if (isDatabaseReady()) {
       const db = getDb();
-      const keepIds = new Set(genes.map(g => g.id));
+      const keepIds = new Set(genes.map((g) => g.id));
       for (const g of pool.genes) {
         if (!keepIds.has(g.id)) {
-          await db.execute(`DELETE FROM genes WHERE id = ?`, [g.id]).catch(() => {});
+          await db
+            .execute(`DELETE FROM genes WHERE id = ?`, [g.id])
+            .catch(() => {});
         }
       }
     }
@@ -220,22 +256,30 @@ export async function addGene(pool: GenePool, gene: Gene): Promise<GenePool> {
   return { ...pool, genes };
 }
 
-export async function removeGene(pool: GenePool, geneId: string): Promise<GenePool> {
+export async function removeGene(
+  pool: GenePool,
+  geneId: string,
+): Promise<GenePool> {
   if (isDatabaseReady()) {
     const db = getDb();
-    await db.execute(`DELETE FROM genes WHERE id = ?`, [geneId]).catch(() => {});
+    await db
+      .execute(`DELETE FROM genes WHERE id = ?`, [geneId])
+      .catch(() => {});
   }
-  return { ...pool, genes: pool.genes.filter(g => g.id !== geneId) };
+  return { ...pool, genes: pool.genes.filter((g) => g.id !== geneId) };
 }
 
 /**
  * Record a successful activation for a gene (increments successCount).
  */
-export async function recordGeneSuccess(pool: GenePool, geneId: string): Promise<GenePool> {
-  const updated = pool.genes.map(g =>
-    g.id === geneId ? { ...g, successCount: g.successCount + 1 } : g
+export async function recordGeneSuccess(
+  pool: GenePool,
+  geneId: string,
+): Promise<GenePool> {
+  const updated = pool.genes.map((g) =>
+    g.id === geneId ? { ...g, successCount: g.successCount + 1 } : g,
   );
-  const gene = updated.find(g => g.id === geneId);
+  const gene = updated.find((g) => g.id === geneId);
   if (gene) await saveGene(gene);
   return { ...pool, genes: updated };
 }
@@ -250,7 +294,10 @@ interface GeneSaveQueueEntry {
 const _saveQueue: GeneSaveQueueEntry[] = [];
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-function queueGeneSave(pool: GenePool, activationCounts: Map<string, number>): void {
+function queueGeneSave(
+  pool: GenePool,
+  activationCounts: Map<string, number>,
+): void {
   _saveQueue.push({
     pool: JSON.parse(JSON.stringify(pool)),
     activationCounts: new Map(activationCounts),
@@ -278,7 +325,7 @@ async function processGeneSaveQueue(): Promise<void> {
 
   _saveQueue.length = 0;
 
-  const updatedGenes = basePool.genes.map(gene => {
+  const updatedGenes = basePool.genes.map((gene) => {
     const count = mergedCounts.get(gene.id) || 0;
     if (count > 0) {
       return { ...gene, activationCount: gene.activationCount + count };
@@ -287,7 +334,7 @@ async function processGeneSaveQueue(): Promise<void> {
   });
 
   await saveGenePool({ ...basePool, genes: updatedGenes });
-  
+
   // If new entries were added during await, schedule another save
   if (_saveQueue.length > 0 && !_saveTimer) {
     _saveTimer = setTimeout(processGeneSaveQueue, 50);
@@ -304,8 +351,8 @@ const MAX_GENE_TRIGGER_CACHE = 200;
 
 const MAX_TRIGGER_LENGTH = 200;
 const DANGEROUS_REGEX_PATTERNS = [
-  /(.*a.*){100,}/,  // Catastrophic backtracking
-  /\(\?/,           // Lookahead/lookbehind (expensive)
+  /(.*a.*){100,}/, // Catastrophic backtracking
+  /\(\?/, // Lookahead/lookbehind (expensive)
 ];
 
 function getGeneTriggerRegex(trigger: string): RegExp | null {
@@ -319,14 +366,18 @@ function getGeneTriggerRegex(trigger: string): RegExp | null {
   }
 
   if (trigger.length > MAX_TRIGGER_LENGTH) {
-    console.warn(`[Genes] Trigger too long (${trigger.length} chars), skipping: ${trigger.slice(0, 50)}...`);
+    console.warn(
+      `[Genes] Trigger too long (${trigger.length} chars), skipping: ${trigger.slice(0, 50)}...`,
+    );
     _geneTriggerCache.set(trigger, null);
     return null;
   }
 
   for (const pattern of DANGEROUS_REGEX_PATTERNS) {
     if (pattern.test(trigger)) {
-      console.warn(`[Genes] Dangerous regex pattern detected, skipping: ${trigger.slice(0, 50)}...`);
+      console.warn(
+        `[Genes] Dangerous regex pattern detected, skipping: ${trigger.slice(0, 50)}...`,
+      );
       _geneTriggerCache.set(trigger, null);
       return null;
     }
@@ -336,7 +387,8 @@ function getGeneTriggerRegex(trigger: string): RegExp | null {
     const regex = new RegExp(trigger, "i");
     _geneTriggerCache.set(trigger, regex);
     return regex;
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Genes] Invalid trigger regex:", trigger, e);
     _geneTriggerCache.set(trigger, null);
     return null;
   }
@@ -349,16 +401,16 @@ function getGeneTriggerRegex(trigger: string): RegExp | null {
 export async function expressGenes(
   pool: GenePool,
   prompt: string,
-  recentMessages: ChatMessage[]
+  recentMessages: ChatMessage[],
 ): Promise<Gene[]> {
   const lowerPrompt = prompt.toLowerCase();
   const recentContent = recentMessages
     .slice(-5)
-    .map(m => m.content.toLowerCase())
+    .map((m) => m.content.toLowerCase())
     .join(" ");
 
   const matched = pool.genes
-    .filter(gene => {
+    .filter((gene) => {
       const regex = getGeneTriggerRegex(gene.trigger);
       if (regex) {
         return regex.test(lowerPrompt) || regex.test(recentContent);
@@ -371,8 +423,8 @@ export async function expressGenes(
   // Track activation for matched genes
   if (matched.length > 0) {
     const activationCounts = new Map<string, number>();
-    const updatedGenes = pool.genes.map(g => {
-      const m = matched.find(mg => mg.id === g.id);
+    const updatedGenes = pool.genes.map((g) => {
+      const m = matched.find((mg) => mg.id === g.id);
       if (m) {
         activationCounts.set(g.id, 1);
         return { ...g, lastActivatedAt: Date.now() };
@@ -392,24 +444,28 @@ export async function expressGenes(
  */
 export function reflectOnSession(
   messages: ChatMessage[],
-  sessionId: string
+  sessionId: string,
 ): ReflectionResult {
   const patterns: DetectedPattern[] = [];
   const suggestedGenes: Gene[] = [];
 
   // Analyze tool usage patterns
-  const toolCalls = messages.filter(m =>
-    m.content.startsWith("[TOOL RESULT:") || m.content.startsWith("[TOOL ERROR:")
+  const toolCalls = messages.filter(
+    (m) =>
+      m.content.startsWith("[TOOL RESULT:") ||
+      m.content.startsWith("[TOOL ERROR:"),
   );
 
-  const toolErrors = messages.filter(m => m.content.startsWith("[TOOL ERROR:"));
+  const toolErrors = messages.filter((m) =>
+    m.content.startsWith("[TOOL ERROR:"),
+  );
   if (toolErrors.length > 2) {
     patterns.push({
       type: "failure",
       description: `Multiple tool errors in session (${toolErrors.length})`,
       frequency: toolErrors.length,
       impact: "high",
-      evidence: toolErrors.map(m => m.content.slice(0, 100)),
+      evidence: toolErrors.map((m) => m.content.slice(0, 100)),
     });
 
     // Extract specific error types for targeted genes
@@ -436,22 +492,28 @@ export function reflectOnSession(
   }
 
   // Detect file edit patterns for optimization genes
-  const fileEdits = messages.filter(m => m.content.includes("File edited successfully") || m.content.includes("File written successfully"));
+  const fileEdits = messages.filter(
+    (m) =>
+      m.content.includes("File edited successfully") ||
+      m.content.includes("File written successfully"),
+  );
   if (fileEdits.length > 3) {
     patterns.push({
       type: "inefficiency",
       description: `Many file operations (${fileEdits.length}) — consider batching`,
       frequency: fileEdits.length,
       impact: "medium",
-      evidence: fileEdits.map(m => m.content.slice(0, 80)),
+      evidence: fileEdits.map((m) => m.content.slice(0, 80)),
     });
 
     suggestedGenes.push({
       id: createGeneId(),
       name: "batch-file-operations",
-      description: "Batch multiple file edits into a single operation when possible",
+      description:
+        "Batch multiple file edits into a single operation when possible",
       trigger: "edit multiple|change several|update all|refactor",
-      action: "When editing multiple files, group related changes and use write_file for each batch instead of individual edits",
+      action:
+        "When editing multiple files, group related changes and use write_file for each batch instead of individual edits",
       category: "optimization",
       confidence: 0.4,
       activationCount: 0,
@@ -464,8 +526,10 @@ export function reflectOnSession(
   }
 
   // Detect repetition patterns
-  const userMessages = messages.filter(m => m.role === "user");
-  const repeatedPhrases = findRepeatedPhrases(userMessages.map(m => m.content));
+  const userMessages = messages.filter((m) => m.role === "user");
+  const repeatedPhrases = findRepeatedPhrases(
+    userMessages.map((m) => m.content),
+  );
   if (repeatedPhrases.length > 0) {
     patterns.push({
       type: "repetition",
@@ -481,7 +545,8 @@ export function reflectOnSession(
       name: "repetition-strategy",
       description: "Detect and preempt repeated user requests",
       trigger: repeatedPhrases.slice(0, 2).join("|"),
-      action: "When you detect a pattern the user repeats, proactively address it in your response",
+      action:
+        "When you detect a pattern the user repeats, proactively address it in your response",
       category: "strategy",
       confidence: 0.35,
       activationCount: 0,
@@ -494,7 +559,7 @@ export function reflectOnSession(
   }
 
   // Detect successful patterns for positive reinforcement genes
-  const assistantMessages = messages.filter(m => m.role === "assistant");
+  const assistantMessages = messages.filter((m) => m.role === "assistant");
   if (assistantMessages.length > 3 && toolErrors.length === 0) {
     patterns.push({
       type: "success",
@@ -546,11 +611,16 @@ function extractErrorTypes(errors: ChatMessage[]): Record<string, number> {
   const types: Record<string, number> = {};
   for (const err of errors) {
     const content = err.content.toLowerCase();
-    if (content.includes("permission")) types["permission"] = (types["permission"] || 0) + 1;
-    else if (content.includes("not found")) types["not-found"] = (types["not-found"] || 0) + 1;
-    else if (content.includes("timeout")) types["timeout"] = (types["timeout"] || 0) + 1;
-    else if (content.includes("network")) types["network"] = (types["network"] || 0) + 1;
-    else if (content.includes("syntax")) types["syntax"] = (types["syntax"] || 0) + 1;
+    if (content.includes("permission"))
+      types["permission"] = (types["permission"] || 0) + 1;
+    else if (content.includes("not found"))
+      types["not-found"] = (types["not-found"] || 0) + 1;
+    else if (content.includes("timeout"))
+      types["timeout"] = (types["timeout"] || 0) + 1;
+    else if (content.includes("network"))
+      types["network"] = (types["network"] || 0) + 1;
+    else if (content.includes("syntax"))
+      types["syntax"] = (types["syntax"] || 0) + 1;
     else types["generic"] = (types["generic"] || 0) + 1;
   }
   return types;
@@ -561,12 +631,14 @@ function extractErrorTypes(errors: ChatMessage[]): Record<string, number> {
  */
 function getRecoveryAction(errorType: string): string {
   const actions: Record<string, string> = {
-    "permission": "Check file permissions and try with elevated access or different path",
-    "not-found": "Verify the file/directory exists before attempting operations",
-    "timeout": "Split the operation into smaller chunks or increase timeout",
-    "network": "Check network connectivity and retry with exponential backoff",
-    "syntax": "Review the command syntax and use --help to check valid options",
-    "generic": "Analyze the error message and try an alternative approach",
+    permission:
+      "Check file permissions and try with elevated access or different path",
+    "not-found":
+      "Verify the file/directory exists before attempting operations",
+    timeout: "Split the operation into smaller chunks or increase timeout",
+    network: "Check network connectivity and retry with exponential backoff",
+    syntax: "Review the command syntax and use --help to check valid options",
+    generic: "Analyze the error message and try an alternative approach",
   };
   return actions[errorType] || actions["generic"];
 }
@@ -590,9 +662,12 @@ function findRepeatedPhrases(contents: string[]): string[] {
   const phrases: Record<string, number> = {};
   for (const content of contents) {
     // Extract 3-5 word phrases
-    const words = content.split(/\s+/).filter(w => w.length > 2);
+    const words = content.split(/\s+/).filter((w) => w.length > 2);
     for (let i = 0; i <= words.length - 3; i++) {
-      const phrase = words.slice(i, i + 3).join(" ").toLowerCase();
+      const phrase = words
+        .slice(i, i + 3)
+        .join(" ")
+        .toLowerCase();
       phrases[phrase] = (phrases[phrase] || 0) + 1;
     }
   }
@@ -610,7 +685,7 @@ function findRepeatedPhrases(contents: string[]): string[] {
  */
 export async function solidifyGene(
   pool: GenePool,
-  candidate: Omit<Gene, "id" | "createdAt" | "lastActivatedAt">
+  candidate: Omit<Gene, "id" | "createdAt" | "lastActivatedAt">,
 ): Promise<{ success: boolean; gene?: Gene; error?: string }> {
   // Validate name is not empty
   if (!candidate.name || candidate.name.trim().length === 0) {
@@ -623,12 +698,13 @@ export async function solidifyGene(
   }
   try {
     new RegExp(candidate.trigger, "i");
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Genes] Invalid trigger regex for solidification:", candidate.trigger, e);
     return { success: false, error: "Invalid trigger regex" };
   }
 
   // Check for duplicate names
-  if (pool.genes.some(g => g.name === candidate.name)) {
+  if (pool.genes.some((g) => g.name === candidate.name)) {
     return { success: false, error: "Gene with this name already exists" };
   }
 
@@ -654,9 +730,12 @@ export async function evolveGenes(pool: GenePool): Promise<GenePool> {
   const now = Date.now();
   const STALE_DAYS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-  const evolved = pool.genes.map(gene => {
+  const evolved = pool.genes.map((gene) => {
     // Boost confidence for successful genes
-    if (gene.activationCount > 5 && gene.successCount > gene.activationCount * 0.7) {
+    if (
+      gene.activationCount > 5 &&
+      gene.successCount > gene.activationCount * 0.7
+    ) {
       return { ...gene, confidence: Math.min(1, gene.confidence + 0.05) };
     }
     // Reduce confidence for unused genes (zero activations, stale)
@@ -664,22 +743,30 @@ export async function evolveGenes(pool: GenePool): Promise<GenePool> {
       return { ...gene, confidence: Math.max(0, gene.confidence - 0.1) };
     }
     // Reduce confidence for rarely-used stale genes (1-3 activations, stale)
-    if (now - gene.lastActivatedAt > STALE_DAYS && gene.activationCount > 0 && gene.activationCount <= 3) {
+    if (
+      now - gene.lastActivatedAt > STALE_DAYS &&
+      gene.activationCount > 0 &&
+      gene.activationCount <= 3
+    ) {
       return { ...gene, confidence: Math.max(0, gene.confidence - 0.05) };
     }
     return gene;
   });
 
   // Remove very low confidence genes
-  const filtered = evolved.filter(g => g.confidence > 0.1 || g.activationCount > 0);
+  const filtered = evolved.filter(
+    (g) => g.confidence > 0.1 || g.activationCount > 0,
+  );
 
   // Delete removed genes from DB
   if (isDatabaseReady()) {
     const db = getDb();
-    const keepIds = new Set(filtered.map(g => g.id));
+    const keepIds = new Set(filtered.map((g) => g.id));
     for (const g of pool.genes) {
       if (!keepIds.has(g.id)) {
-        await db.execute(`DELETE FROM genes WHERE id = ?`, [g.id]).catch(() => {});
+        await db
+          .execute(`DELETE FROM genes WHERE id = ?`, [g.id])
+          .catch(() => {});
       }
     }
   }

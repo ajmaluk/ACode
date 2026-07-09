@@ -1,13 +1,33 @@
 import { useEffect, useRef, useState, Suspense, lazy } from "react";
-import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import type {
+  ImperativePanelHandle} from "react-resizable-panels";
+import {
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from "react-resizable-panels";
 import { TitleBar } from "@/components/editor/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { EditorPane } from "@/components/editor/EditorPane";
-import { PanelLeft, PanelRight, ChevronLeft, ChevronRight, MessageSquare, Code2, Moon, Sun, Monitor } from "lucide-react";
+import {
+  PanelLeft,
+  PanelRight,
+  ChevronLeft,
+  ChevronRight,
+  MessageSquare,
+  Code2,
+  Moon,
+  Sun,
+  Monitor,
+} from "lucide-react";
 import { RightPanel } from "@/components/rightpanel/RightPanel";
 import { BottomPanel } from "@/components/terminal/BottomPanel";
 import { CommandPalette } from "@/components/palette/CommandPalette";
-const SettingsModal = lazy(() => import("@/components/settings/SettingsModal").then(m => ({ default: m.SettingsModal })));
+const SettingsModal = lazy(() =>
+  import("@/components/settings/SettingsModal").then((m) => ({
+    default: m.SettingsModal,
+  })),
+);
 import { PermissionDialog } from "@/components/permissions/PermissionDialog";
 // QuestionDialog removed — now rendered inline above input in ChatView
 import { Toaster } from "@/components/ui/Toaster";
@@ -37,16 +57,21 @@ export function App() {
   useProgressKeyframes();
   const [booted, setBooted] = useState(false);
   const { settings, effectiveTheme } = useSettings();
-  const { toggle: togglePalette, open: paletteOpen, setOpen: setPaletteOpen } =
-    useCommandPalette();
+  const {
+    toggle: togglePalette,
+    open: paletteOpen,
+    setOpen: setPaletteOpen,
+  } = useCommandPalette();
   const { toggle: toggleShortcuts } = useShortcuts();
   const { openState: settingsOpen } = useSettingsView();
   const { rightPanelOpen, sidebarOpen, viewMode } = useUI();
   const { chatHistory, chatHistoryIdx } = useChat();
   const canGoBack = chatHistoryIdx >= 0 || chatHistory.length > 0;
-  const canGoForward = chatHistoryIdx >= 0 && chatHistoryIdx < chatHistory.length - 1;
+  const canGoForward =
+    chatHistoryIdx >= 0 && chatHistoryIdx < chatHistory.length - 1;
   const { workspaces, activeWorkspaceId } = useWorkspace();
-  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
+  const activeWorkspace =
+    workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   const { bottomPanelOpen } = useUI();
   const { mcpServers, connectMcpServer } = useSkillsMcp();
 
@@ -72,12 +97,14 @@ export function App() {
             loadWorkspaceConfigAndSessions(ws.path).catch((err) => {
               const msg = (err as Error)?.message ?? String(err);
               if (msg.includes("forbidden") || msg.includes("scope")) {
-                console.debug(`[Workspace] Skipped inaccessible workspace: ${ws.name}`);
+                console.debug(
+                  `[Workspace] Skipped inaccessible workspace: ${ws.name}`,
+                );
               } else {
                 console.warn(`Failed to load workspace ${ws.name}:`, err);
               }
-            })
-          )
+            }),
+          ),
         );
         if (cancelled) return;
 
@@ -88,14 +115,21 @@ export function App() {
             const chat = useChat.getState();
             if (chat.activeSessionId) {
               chat.injectSystemMessage(
-                `[${msg.platform}] Message from ${msg.senderName ?? msg.senderId}: ${msg.content}`
+                `[${msg.platform}] Message from ${msg.senderName ?? msg.senderId}: ${msg.content}`,
               );
             } else {
-              console.debug("[Connector] No active session — message queued:", msg.content.slice(0, 80));
+              console.debug(
+                "[Connector] No active session — message queued:",
+                msg.content.slice(0, 80),
+              );
             }
           },
-          (id, status) => console.debug("[Connector] status change:", id, status)
-        ).catch((err) => { if (import.meta.env.DEV) console.error("Failed to initialize connectors:", err); });
+          (id, status) =>
+            console.debug("[Connector] status change:", id, status),
+        ).catch((err) => {
+          if (import.meta.env.DEV)
+            console.error("Failed to initialize connectors:", err);
+        });
 
         // Stage 5: MCP servers are connected by the useEffect after boot completes.
         // (Removed duplicate connection logic — the useEffect at line 157 handles this.)
@@ -129,7 +163,11 @@ export function App() {
     mcpServers.forEach((server) => {
       if (server.enabled && server.status === "disconnected") {
         void connectMcpServer(server.name).catch((err) => {
-          if (import.meta.env.DEV) console.error(`Failed to auto-connect to MCP server ${server.name}:`, err);
+          if (import.meta.env.DEV)
+            console.error(
+              `Failed to auto-connect to MCP server ${server.name}:`,
+              err,
+            );
         });
       }
     });
@@ -150,7 +188,9 @@ export function App() {
       switch (actionId) {
         // File
         case "file.new-file": {
-          const ws = workspace.workspaces.find((w) => w.id === workspace.activeWorkspaceId);
+          const ws = workspace.workspaces.find(
+            (w) => w.id === workspace.activeWorkspaceId,
+          );
           if (ws) void workspace.openFile(ws.path + "/untitled");
           break;
         }
@@ -158,7 +198,9 @@ export function App() {
           void workspace.openWorkspace();
           break;
         case "file.save": {
-          const tab = workspace.openTabs.find((t) => t.path === workspace.activeFilePath);
+          const tab = workspace.openTabs.find(
+            (t) => t.path === workspace.activeFilePath,
+          );
           if (tab) {
             void (async () => {
               try {
@@ -188,7 +230,8 @@ export function App() {
           break;
         }
         case "file.close-tab":
-          if (workspace.activeFilePath) workspace.closeTab(workspace.activeFilePath);
+          if (workspace.activeFilePath)
+            workspace.closeTab(workspace.activeFilePath);
           break;
         case "file.preferences":
           settingsView.open();
@@ -217,10 +260,16 @@ export function App() {
           void updateSetting("wordWrap", !settings.settings.wordWrap);
           break;
         case "view.zoom-in":
-          void updateSetting("codeFontSize", Math.min((settings.settings.codeFontSize ?? 14) + 1, 32));
+          void updateSetting(
+            "codeFontSize",
+            Math.min((settings.settings.codeFontSize ?? 14) + 1, 32),
+          );
           break;
         case "view.zoom-out":
-          void updateSetting("codeFontSize", Math.max((settings.settings.codeFontSize ?? 14) - 1, 8));
+          void updateSetting(
+            "codeFontSize",
+            Math.max((settings.settings.codeFontSize ?? 14) - 1, 8),
+          );
           break;
         case "view.agent-mode":
           ui.setViewMode("chat");
@@ -231,18 +280,27 @@ export function App() {
         case "view.toggle-devtools":
           void (async () => {
             try {
-              const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+              const { getCurrentWebviewWindow } =
+                await import("@tauri-apps/api/webviewWindow");
               const appWindow = await getCurrentWebviewWindow();
               if (appWindow) {
-                const webview = appWindow as any;
-                if (webview.isDevtoolsOpen && await webview.isDevtoolsOpen()) {
-                  await webview.closeDevtools();
+                const webview = appWindow as unknown as {
+                  isDevtoolsOpen?: () => Promise<boolean>;
+                  openDevtools?: () => Promise<void>;
+                  closeDevtools?: () => Promise<void>;
+                };
+                if (
+                  webview.isDevtoolsOpen &&
+                  (await webview.isDevtoolsOpen())
+                ) {
+                  await webview.closeDevtools?.();
                 } else if (webview.openDevtools) {
                   await webview.openDevtools();
                 }
               }
             } catch (err) {
-              if (import.meta.env.DEV) console.error("Failed to toggle devtools:", err);
+              if (import.meta.env.DEV)
+                console.error("Failed to toggle devtools:", err);
             }
           })();
           break;
@@ -306,9 +364,14 @@ export function App() {
     const initial = effectiveTheme();
     apply(initial);
     // Listen for system theme changes if the user picked "system".
-    if (settings.theme === "system" && typeof window !== "undefined" && window.matchMedia) {
+    if (
+      settings.theme === "system" &&
+      typeof window !== "undefined" &&
+      window.matchMedia
+    ) {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
-      const handler = (e: MediaQueryListEvent) => apply(e.matches ? "dark" : "light");
+      const handler = (e: MediaQueryListEvent) =>
+        apply(e.matches ? "dark" : "light");
       mq.addEventListener("change", handler);
       return () => mq.removeEventListener("change", handler);
     }
@@ -323,7 +386,8 @@ export function App() {
     const panel = rightPanelRef.current;
     if (!panel) return;
     if (rightPanelOpen) panel.expand();
-    else panel.collapse();  }, [rightPanelOpen]);
+    else panel.collapse();
+  }, [rightPanelOpen]);
 
   const paletteOpenRef = useRef(paletteOpen);
 
@@ -365,7 +429,8 @@ export function App() {
         if (platform() === "mac") return;
         e.preventDefault();
         useChat.getState().newChat();
-        if (useUI.getState().viewMode !== "chat") useUI.getState().setViewMode("chat");
+        if (useUI.getState().viewMode !== "chat")
+          useUI.getState().setViewMode("chat");
         return;
       }
       if (mod && e.key === "b" && !isTyping(e.target)) {
@@ -406,7 +471,11 @@ export function App() {
       }
       // Ctrl+E: Toggle between chat and editor view (only when workspace is active)
       // On macOS, native menu handles view.agent-mode/view.editor-mode — skip to prevent double-set
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e" && !isTyping(e.target)) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "e" &&
+        !isTyping(e.target)
+      ) {
         if (platform() === "mac") return;
         if (useWorkspace.getState().activeWorkspaceId) {
           e.preventDefault();
@@ -414,13 +483,33 @@ export function App() {
         }
       }
       // Zoom In/Out: Ctrl+= / Ctrl+- (works on all platforms including Windows/Linux)
-      if ((e.metaKey || e.ctrlKey) && (e.key === "=" || e.key === "+") && !isTyping(e.target)) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        (e.key === "=" || e.key === "+") &&
+        !isTyping(e.target)
+      ) {
         e.preventDefault();
-        void useSettings.getState().update("codeFontSize", Math.min((useSettings.getState().settings.codeFontSize ?? 14) + 1, 32));
+        void useSettings
+          .getState()
+          .update(
+            "codeFontSize",
+            Math.min(
+              (useSettings.getState().settings.codeFontSize ?? 14) + 1,
+              32,
+            ),
+          );
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "-" && !isTyping(e.target)) {
         e.preventDefault();
-        void useSettings.getState().update("codeFontSize", Math.max((useSettings.getState().settings.codeFontSize ?? 14) - 1, 8));
+        void useSettings
+          .getState()
+          .update(
+            "codeFontSize",
+            Math.max(
+              (useSettings.getState().settings.codeFontSize ?? 14) - 1,
+              8,
+            ),
+          );
       }
     };
     window.addEventListener("keydown", onKey);
@@ -442,7 +531,13 @@ export function App() {
       <ContextMenuProvider>
         <ErrorBoundary>
           <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
-            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-dalam-text-secondary">Loading settings...</div>}>
+            <Suspense
+              fallback={
+                <div className="flex-1 flex items-center justify-center text-dalam-text-secondary">
+                  Loading settings...
+                </div>
+              }
+            >
               <SettingsModal />
             </Suspense>
             <CommandPalette />
@@ -461,173 +556,212 @@ export function App() {
   return (
     <ContextMenuProvider>
       <div className="flex flex-col h-full w-full bg-dalam-bg-primary text-dalam-text-primary">
-      {/* TitleBar — hidden on macOS (uses native menu bar) */}
-      {!isMac && <TitleBar />}
+        {/* TitleBar — hidden on macOS (uses native menu bar) */}
+        {!isMac && <TitleBar />}
 
-      {/* macOS: thin traffic-light padding bar with controls */}
-      {isMac && (
-        <div className="h-9 flex-shrink-0 flex items-center justify-between px-3 bg-dalam-bg-secondary border-b border-dalam-border-primary" data-tauri-drag-region>
-          {/* Left side: sidebar toggle + back/forward + workspace name */}
-          <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
-            <button
-              onClick={() => useUI.getState().toggleSidebar()}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-              title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
+        {/* macOS: thin traffic-light padding bar with controls */}
+        {isMac && (
+          <div
+            className="h-9 flex-shrink-0 flex items-center justify-between px-3 bg-dalam-bg-secondary border-b border-dalam-border-primary"
+            data-tauri-drag-region
+          >
+            {/* Left side: sidebar toggle + back/forward + workspace name */}
+            <div
+              className="flex items-center gap-0.5"
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             >
-              <PanelLeft className="w-4 h-4" />
-            </button>
-            <div className="w-px h-4 bg-dalam-border-primary mx-1" />
-            <button
-              onClick={() => useChat.getState().goBackChat()}
-              disabled={!canGoBack}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Previous session"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => useChat.getState().goForwardChat()}
-              disabled={!canGoForward}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Next session"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-            <span className="text-[11px] text-dalam-text-muted font-medium select-none ml-1.5" data-tauri-drag-region>
-              {activeWorkspace?.name ?? "Dalam"}
-            </span>
-          </div>
-          {/* Right side: mode switcher + theme + right panel */}
-          <div className="flex items-center gap-1" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
-            {activeWorkspaceId && (
-              <div className="relative flex items-center bg-dalam-bg-tertiary rounded-full border border-dalam-border-primary p-0.5 mr-2">
-                <button
-                  className={`flex items-center gap-1 px-2 h-5 text-[10px] font-medium rounded-full transition-all duration-200 relative z-10 ${
-                    viewMode === "chat" ? "text-white" : "text-dalam-text-muted hover:text-dalam-text-primary"
-                  }`}
-                  onClick={() => useUI.getState().setViewMode("chat")}
-                  title="Agent mode"
-                >
-                  <MessageSquare className="w-2.5 h-2.5" />
-                  <span>Agent</span>
-                </button>
-                <button
-                  className={`flex items-center gap-1 px-2 h-5 text-[10px] font-medium rounded-full transition-all duration-200 relative z-10 ${
-                    viewMode === "editor" ? "text-white" : "text-dalam-text-muted hover:text-dalam-text-primary"
-                  }`}
-                  onClick={() => useUI.getState().setViewMode("editor")}
-                  title="Editor mode"
-                >
-                  <Code2 className="w-2.5 h-2.5" />
-                  <span>Editor</span>
-                </button>
-                <div
-                  className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] bg-dalam-accent-primary rounded-full shadow-sm transition-all duration-200 ease-out"
-                  style={{ left: viewMode === "chat" ? "2px" : "calc(50%)" }}
-                />
-              </div>
-            )}
-            <button
-              onClick={() => {
-                const next = settings.theme === "dark" ? "light" : settings.theme === "light" ? "system" : "dark";
-                void useSettings.getState().update("theme", next);
-              }}
-              className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-              title="Toggle theme"
-            >
-              {settings.theme === "dark" ? <Moon className="w-4 h-4" /> : settings.theme === "light" ? <Sun className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
-            </button>
-            {/* Right panel toggle button — only visible in chat/agent mode with an active workspace */}
-            {viewMode === "chat" && activeWorkspaceId && (
               <button
-                onClick={() => useUI.getState().toggleRightPanel()}
+                onClick={() => useUI.getState().toggleSidebar()}
                 className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
-                title="Toggle right panel"
+                title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
               >
-                <PanelRight className="w-4 h-4" />
+                <PanelLeft className="w-4 h-4" />
               </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Main layout: horizontal panels + optional bottom panel */}
-      <div className="flex-1 min-h-0 flex flex-col">
-        <div className="flex-1 min-h-0">
-          <PanelGroup direction="horizontal">
-
-            {/* Sidebar — visible in chat mode when sidebarOpen, or in editor mode when sidebarOpen */}
-            {sidebarOpen && (
-              <>
-                <Panel id="sidebar" order={1} defaultSize={20} minSize={12} maxSize={32}>
-                  <ErrorBoundary>
-                    <Sidebar />
-                  </ErrorBoundary>
-                </Panel>
-                <PanelResizeHandle
-                  className="panel-resizer horizontal"
-                  hitAreaMargins={{ coarse: 6, fine: 4 }}
-                />
-              </>
-            )}
-            <Panel id="editor" order={2} defaultSize={rightPanelOpen ? (viewMode === "editor" ? 75 : 55) : 100} minSize={30}>
-              <ErrorBoundary>
-                <EditorPane />
-              </ErrorBoundary>
-            </Panel>
-            {/* Right panel — only available in chat/agent mode with an active workspace */}
-            {viewMode === "chat" && activeWorkspaceId && (
-              <>
-                <PanelResizeHandle
-                  className="panel-resizer horizontal"
-                  hitAreaMargins={{ coarse: 6, fine: 4 }}
-                  disabled={!rightPanelOpen}
-                />
-                <Panel
-                  ref={rightPanelRef}
-                  id="right-panel"
-                  order={3}
-                  defaultSize={25}
-                  minSize={16}
-                  maxSize={42}
-                  collapsible
-                  collapsedSize={0}
-                  onCollapse={() => useUI.getState().setRightPanelOpen(false)}
-                  onExpand={() => useUI.getState().setRightPanelOpen(true)}
+              <div className="w-px h-4 bg-dalam-border-primary mx-1" />
+              <button
+                onClick={() => useChat.getState().goBackChat()}
+                disabled={!canGoBack}
+                className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Previous session"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => useChat.getState().goForwardChat()}
+                disabled={!canGoForward}
+                className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Next session"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <span
+                className="text-[11px] text-dalam-text-muted font-medium select-none ml-1.5"
+                data-tauri-drag-region
+              >
+                {activeWorkspace?.name ?? "Dalam"}
+              </span>
+            </div>
+            {/* Right side: mode switcher + theme + right panel */}
+            <div
+              className="flex items-center gap-1"
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            >
+              {activeWorkspaceId && (
+                <div className="relative flex items-center bg-dalam-bg-tertiary rounded-full border border-dalam-border-primary p-0.5 mr-2">
+                  <button
+                    className={`flex items-center gap-1 px-2 h-5 text-[10px] font-medium rounded-full transition-all duration-200 relative z-10 ${
+                      viewMode === "chat"
+                        ? "text-white"
+                        : "text-dalam-text-muted hover:text-dalam-text-primary"
+                    }`}
+                    onClick={() => useUI.getState().setViewMode("chat")}
+                    title="Agent mode"
+                  >
+                    <MessageSquare className="w-2.5 h-2.5" />
+                    <span>Agent</span>
+                  </button>
+                  <button
+                    className={`flex items-center gap-1 px-2 h-5 text-[10px] font-medium rounded-full transition-all duration-200 relative z-10 ${
+                      viewMode === "editor"
+                        ? "text-white"
+                        : "text-dalam-text-muted hover:text-dalam-text-primary"
+                    }`}
+                    onClick={() => useUI.getState().setViewMode("editor")}
+                    title="Editor mode"
+                  >
+                    <Code2 className="w-2.5 h-2.5" />
+                    <span>Editor</span>
+                  </button>
+                  <div
+                    className="absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] bg-dalam-accent-primary rounded-full shadow-sm transition-all duration-200 ease-out"
+                    style={{ left: viewMode === "chat" ? "2px" : "calc(50%)" }}
+                  />
+                </div>
+              )}
+              <button
+                onClick={() => {
+                  const next =
+                    settings.theme === "dark"
+                      ? "light"
+                      : settings.theme === "light"
+                        ? "system"
+                        : "dark";
+                  void useSettings.getState().update("theme", next);
+                }}
+                className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+                title="Toggle theme"
+              >
+                {settings.theme === "dark" ? (
+                  <Moon className="w-4 h-4" />
+                ) : settings.theme === "light" ? (
+                  <Sun className="w-4 h-4" />
+                ) : (
+                  <Monitor className="w-4 h-4" />
+                )}
+              </button>
+              {/* Right panel toggle button — only visible in chat/agent mode with an active workspace */}
+              {viewMode === "chat" && activeWorkspaceId && (
+                <button
+                  onClick={() => useUI.getState().toggleRightPanel()}
+                  className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
+                  title="Toggle right panel"
                 >
-                  <ErrorBoundary>
-                    <RightPanel />
-                  </ErrorBoundary>
-                </Panel>
-              </>
-            )}
-          </PanelGroup>
+                  <PanelRight className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Main layout: horizontal panels + optional bottom panel */}
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-0">
+            <PanelGroup direction="horizontal">
+              {/* Sidebar — visible in chat mode when sidebarOpen, or in editor mode when sidebarOpen */}
+              {sidebarOpen && (
+                <>
+                  <Panel
+                    id="sidebar"
+                    order={1}
+                    defaultSize={20}
+                    minSize={12}
+                    maxSize={32}
+                  >
+                    <ErrorBoundary>
+                      <Sidebar />
+                    </ErrorBoundary>
+                  </Panel>
+                  <PanelResizeHandle
+                    className="panel-resizer horizontal"
+                    hitAreaMargins={{ coarse: 6, fine: 4 }}
+                  />
+                </>
+              )}
+              <Panel
+                id="editor"
+                order={2}
+                defaultSize={
+                  rightPanelOpen ? (viewMode === "editor" ? 75 : 55) : 100
+                }
+                minSize={30}
+              >
+                <ErrorBoundary>
+                  <EditorPane />
+                </ErrorBoundary>
+              </Panel>
+              {/* Right panel — only available in chat/agent mode with an active workspace */}
+              {viewMode === "chat" && activeWorkspaceId && (
+                <>
+                  <PanelResizeHandle
+                    className="panel-resizer horizontal"
+                    hitAreaMargins={{ coarse: 6, fine: 4 }}
+                    disabled={!rightPanelOpen}
+                  />
+                  <Panel
+                    ref={rightPanelRef}
+                    id="right-panel"
+                    order={3}
+                    defaultSize={25}
+                    minSize={16}
+                    maxSize={42}
+                    collapsible
+                    collapsedSize={0}
+                    onCollapse={() => useUI.getState().setRightPanelOpen(false)}
+                    onExpand={() => useUI.getState().setRightPanelOpen(true)}
+                  >
+                    <ErrorBoundary>
+                      <RightPanel />
+                    </ErrorBoundary>
+                  </Panel>
+                </>
+              )}
+            </PanelGroup>
+          </div>
+
+          {/* Bottom Panel (Terminal, Output, Problems) — editor mode only */}
+          {viewMode === "editor" && bottomPanelOpen && (
+            <ErrorBoundary>
+              <BottomPanel />
+            </ErrorBoundary>
+          )}
         </div>
 
-        {/* Bottom Panel (Terminal, Output, Problems) — editor mode only */}
-        {viewMode === "editor" && bottomPanelOpen && (
-          <ErrorBoundary>
-            <BottomPanel />
-          </ErrorBoundary>
-        )}
-      </div>
-
-      <ErrorBoundary>
-        <CommandPalette />
-      </ErrorBoundary>
-      <ErrorBoundary>
-        <ShortcutsCheatsheet />
-      </ErrorBoundary>
-      <ErrorBoundary>
-        <WelcomeScreen />
-      </ErrorBoundary>
-      <ErrorBoundary>
-        <PermissionDialog />
-      </ErrorBoundary>
-      {/* QuestionDialog removed — now rendered inline above input in ChatView */}
-      <ErrorBoundary>
-        <Toaster />
-      </ErrorBoundary>
+        <ErrorBoundary>
+          <CommandPalette />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          <ShortcutsCheatsheet />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          <WelcomeScreen />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          <PermissionDialog />
+        </ErrorBoundary>
+        {/* QuestionDialog removed — now rendered inline above input in ChatView */}
+        <ErrorBoundary>
+          <Toaster />
+        </ErrorBoundary>
       </div>
     </ContextMenuProvider>
   );

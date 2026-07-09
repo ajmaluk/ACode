@@ -300,7 +300,10 @@ describe("createProposal", () => {
 // ============================================================================
 
 describe("processProposals", () => {
-  function makeProposal(status: DreamProposal["status"], score: number): DreamProposal {
+  function makeProposal(
+    status: DreamProposal["status"],
+    score: number,
+  ): DreamProposal {
     return {
       id: `dp-${Math.random().toString(36).slice(2)}`,
       type: "purge-stale",
@@ -414,7 +417,16 @@ describe("formatPipelineSummary", () => {
   it("includes auto-applied proposals", () => {
     const summary = formatPipelineSummary({
       autoAccepted: [
-        { id: "1", type: "purge-stale", description: "Purge 2 stale memories", score: 9, status: "applied", createdAt: 0, affectedCount: 2, details: {} },
+        {
+          id: "1",
+          type: "purge-stale",
+          description: "Purge 2 stale memories",
+          score: 9,
+          status: "applied",
+          createdAt: 0,
+          affectedCount: 2,
+          details: {},
+        },
       ],
       queuedForReview: [],
       rejected: [],
@@ -429,7 +441,16 @@ describe("formatPipelineSummary", () => {
     const summary = formatPipelineSummary({
       autoAccepted: [],
       queuedForReview: [
-        { id: "2", type: "deduplicate-merge", description: "Merge 2 memories", score: 6, status: "user-review", createdAt: 0, affectedCount: 2, details: {} },
+        {
+          id: "2",
+          type: "deduplicate-merge",
+          description: "Merge 2 memories",
+          score: 6,
+          status: "user-review",
+          createdAt: 0,
+          affectedCount: 2,
+          details: {},
+        },
       ],
       rejected: [],
     });
@@ -442,7 +463,16 @@ describe("formatPipelineSummary", () => {
       autoAccepted: [],
       queuedForReview: [],
       rejected: [
-        { id: "3", type: "re-score", description: "Re-score 1 entry", score: 3, status: "rejected", createdAt: 0, affectedCount: 1, details: {} },
+        {
+          id: "3",
+          type: "re-score",
+          description: "Re-score 1 entry",
+          score: 3,
+          status: "rejected",
+          createdAt: 0,
+          affectedCount: 1,
+          details: {},
+        },
       ],
     });
     expect(summary).toContain("Rejected 1 low-scoring proposal");
@@ -451,13 +481,40 @@ describe("formatPipelineSummary", () => {
   it("combines all categories in full summary", () => {
     const summary = formatPipelineSummary({
       autoAccepted: [
-        { id: "1", type: "purge-stale", description: "Purge 5 stale", score: 9, status: "applied", createdAt: 0, affectedCount: 5, details: {} },
+        {
+          id: "1",
+          type: "purge-stale",
+          description: "Purge 5 stale",
+          score: 9,
+          status: "applied",
+          createdAt: 0,
+          affectedCount: 5,
+          details: {},
+        },
       ],
       queuedForReview: [
-        { id: "2", type: "deduplicate-merge", description: "Merge 3 memories", score: 6, status: "user-review", createdAt: 0, affectedCount: 3, details: {} },
+        {
+          id: "2",
+          type: "deduplicate-merge",
+          description: "Merge 3 memories",
+          score: 6,
+          status: "user-review",
+          createdAt: 0,
+          affectedCount: 3,
+          details: {},
+        },
       ],
       rejected: [
-        { id: "3", type: "re-score", description: "Re-score 1 entry", score: 3, status: "rejected", createdAt: 0, affectedCount: 1, details: {} },
+        {
+          id: "3",
+          type: "re-score",
+          description: "Re-score 1 entry",
+          score: 3,
+          status: "rejected",
+          createdAt: 0,
+          affectedCount: 1,
+          details: {},
+        },
       ],
     });
     expect(summary).toContain("Auto-applied 1 proposal");

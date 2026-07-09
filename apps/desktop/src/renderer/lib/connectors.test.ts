@@ -75,10 +75,13 @@ describe("connectors", () => {
         enabled: true,
         config: { port: 3847, path: "/webhook" },
       };
-      localStorage.setItem("dalam.connectorConfigs.v1", JSON.stringify([config]));
+      localStorage.setItem(
+        "dalam.connectorConfigs.v1",
+        JSON.stringify([config]),
+      );
       removeConnectorConfig("c1");
       const configs = getConnectorConfigs();
-      expect(configs.find(c => c.id === "c1")).toBeUndefined();
+      expect(configs.find((c) => c.id === "c1")).toBeUndefined();
     });
 
     it("stops the connector if running", async () => {
@@ -102,7 +105,9 @@ describe("connectors", () => {
 
     it("handles stop failures gracefully", async () => {
       const connector = createMockConnector("c1", "Fail");
-      (connector.stop as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("stop failed"));
+      (connector.stop as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("stop failed"),
+      );
       registerConnector(connector);
       await expect(shutdownConnectors()).resolves.not.toThrow();
     });

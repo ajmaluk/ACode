@@ -65,7 +65,8 @@ async function runShellCommand(command: string, cwd?: string): Promise<{ exitCod
       stdout: output.stdout,
       stderr: output.stderr,
     };
-  } catch {
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Verify] import(\"@tauri-apps/plugin-shell\");:", e);
     // Fallback for environments where Tauri is unavailable (test, web)
     try {
       const { execSync } = await import("child_process");
@@ -147,7 +148,8 @@ export async function checkActualFileChanges(
       try {
         const api = await import("@/lib/dalamAPI").then(m => m.createDalamAPI());
         return await api.fs.readFile(filePath);
-      } catch {
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[Verify] import(\"@/lib/dalamAPI\").then(m => m.createDalamAP:", e);
         return "";
       }
     };
@@ -313,7 +315,9 @@ async function detectProjectTypes(workspacePath: string): Promise<Set<string>> {
       else if (name.endsWith(".rs")) types.add("rust");
       else if (name.endsWith(".go")) types.add("go");
     }
-  } catch { /* ignore read errors */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Verify] import(\"@tauri-apps/plugin-fs\");:", e);
+  }
   return types;
 }
 
@@ -342,7 +346,9 @@ export async function detectCommandsFromWorkspace(
         devDependencies: pkg.devDependencies || {},
         dependencies: pkg.dependencies || {},
       }));
-    } catch { /* package.json not readable */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Verify] const pkgJsonPath = `${workspacePath}/package.json:", e);
+    }
   }
 
   // Rust (Cargo.toml)
@@ -354,7 +360,9 @@ export async function detectCommandsFromWorkspace(
         { command: "cargo test", label: "Rust tests", required: false, checkType: "exit-code" },
         { command: "cargo clippy", label: "Rust lint", required: false, checkType: "exit-code" },
       );
-    } catch { /* not a Rust project */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Verify] api.fs.readFile(`${workspacePath}/Cargo.toml`);:", e);
+    }
   }
 
   // Python (.py files detected)
@@ -373,7 +381,9 @@ export async function detectCommandsFromWorkspace(
         { command: "go test ./...", label: "Go tests", required: false, checkType: "exit-code" },
         { command: "go vet ./...", label: "Go vet", required: false, checkType: "exit-code" },
       );
-    } catch { /* not a Go project */ }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[Verify] api.fs.readFile(`${workspacePath}/go.mod`);:", e);
+    }
   }
 
   // Monorepo (turbo.json) — add to any language-specific commands
@@ -384,7 +394,9 @@ export async function detectCommandsFromWorkspace(
       { command: "turbo lint", label: "Monorepo lint", required: false, checkType: "exit-code" },
       { command: "turbo test", label: "Monorepo tests", required: false, checkType: "exit-code" },
     );
-  } catch { /* not a monorepo */ }
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[Verify] api.fs.readFile(`${workspacePath}/turbo.json`);:", e);
+  }
 
   return allCommands;
 }
