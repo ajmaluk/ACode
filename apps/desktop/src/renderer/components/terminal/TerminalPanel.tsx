@@ -8,7 +8,7 @@ import { Plus, X, Trash2, Bot, Wifi, ChevronDown, TerminalSquare, FolderOpen } f
 import "@xterm/xterm/css/xterm.css";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename } from "@/lib/pathUtils";
-import { isWindows } from "@/lib/platform";
+
 
 const DALAM_TERM_DARK_THEME = {
   background: "#0d0d0d",
@@ -361,24 +361,11 @@ export function TerminalPanel() {
           .map((s) => shellMap[s.name])
           .filter((s): s is ShellOption => !!s);
 
-        // Always show at least the platform default
-        if (detected.length === 0) {
-          detected.push(isWindows() ? shellMap.powershell : shellMap.bash);
-        }
+
 
         setAvailableShells(detected);
-      } catch {
-        // Fallback: show platform defaults
-        setAvailableShells(isWindows() ? [
-          { value: "powershell", label: "PowerShell", icon: "\u{26A1}" },
-          { value: "pwsh", label: "PowerShell Core", icon: "P" },
-          { value: "cmd", label: "Command Prompt", icon: ">" },
-        ] : [
-          { value: "bash", label: "Bash", icon: "\u{1F41A}" },
-          { value: "zsh", label: "Zsh", icon: "z" },
-          { value: "fish", label: "Fish", icon: "\u{1F41F}" },
-          { value: "sh", label: "sh", icon: "$" },
-        ]);
+      } catch (err) {
+        console.warn("[Terminal] Failed to detect shells:", err);
       }
     };
     void detect();
