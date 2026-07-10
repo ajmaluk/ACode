@@ -432,65 +432,24 @@ export class CronConnector implements Connector {
     // Use setTimeout to schedule the next occurrence, then reschedule
     const scheduleNext = () => {
       const now = new Date();
+      // Start from the next full minute
       const target = new Date(now);
-
-      // Find next matching minute
       target.setSeconds(0, 0);
-      if (minute !== "*") {
-        const min = parseInt(minute);
-        target.setMinutes(min);
-        if (target <= now) target.setMinutes(target.getMinutes() + 1);
-      } else {
-        // For wildcard minute, advance to next full minute to avoid rapid-fire
-        target.setMinutes(target.getMinutes() + 1);
-        target.setSeconds(0, 0);
-      }
+      target.setMinutes(target.getMinutes() + 1);
 
-      // Resolve the minute value once for resets
-      const minuteVal = minute !== "*" ? parseInt(minute, 10) : 0;
-      const hourVal = hour !== "*" ? parseInt(hour, 10) : undefined;
-
-      // Find next matching hour
-      if (hour !== "*") {
-        target.setHours(hourVal!);
-        if (target <= now) {
-          target.setDate(target.getDate() + 1);
-          target.setHours(hourVal!);
-          target.setMinutes(minuteVal);
-          target.setSeconds(0, 0);
+      // Advance minute-by-minute until all cron fields match (with safety limit)
+      const SAFETY_LIMIT = 366 * 24 * 60; // ~1 year of minutes
+      for (let i = 0; i < SAFETY_LIMIT; i++) {
+        if (
+          cronFieldMatches(minute, target.getMinutes()) &&
+          cronFieldMatches(hour, target.getHours()) &&
+          cronFieldMatches(dayOfMonth, target.getDate()) &&
+          cronFieldMatches(month, target.getMonth() + 1) &&
+          cronFieldMatches(dayOfWeek, target.getDay())
+        ) {
+          break; // found valid time
         }
-      }
-
-      // Check day-of-month
-      if (
-        dayOfMonth !== "*" &&
-        !cronFieldMatches(dayOfMonth, target.getDate())
-      ) {
-        target.setDate(target.getDate() + 1);
-        if (hourVal !== undefined) target.setHours(hourVal);
-        target.setMinutes(minuteVal);
-        target.setSeconds(0, 0);
-      }
-
-      // Check month
-      if (month !== "*" && !cronFieldMatches(month, target.getMonth() + 1)) {
-        target.setMonth(target.getMonth() + 1);
-        target.setDate(dayOfMonth !== "*" ? parseInt(dayOfMonth, 10) : 1);
-        if (hourVal !== undefined) target.setHours(hourVal);
-        target.setMinutes(minuteVal);
-        target.setSeconds(0, 0);
-      }
-
-      // Check day-of-week (0=Sunday, 6=Saturday)
-      if (dayOfWeek !== "*" && !cronFieldMatches(dayOfWeek, target.getDay())) {
-        // Parse ranges like "1-5" or single values like "0"
-        const dowValue = parseInt(dayOfWeek.split("-")[0], 10);
-        let daysAhead = (dowValue - target.getDay() + 7) % 7;
-        if (daysAhead === 0) daysAhead = 7; // at least 1 day ahead
-        target.setDate(target.getDate() + daysAhead);
-        if (hourVal !== undefined) target.setHours(hourVal);
-        target.setMinutes(minuteVal);
-        target.setSeconds(0, 0);
+        target.setMinutes(target.getMinutes() + 1);
       }
 
       // Safety: ensure minimum 60s gap between firings to prevent rapid-fire

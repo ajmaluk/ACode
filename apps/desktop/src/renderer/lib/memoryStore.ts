@@ -458,43 +458,47 @@ const WRITE_RETRY_DELAY_MS = 5000;
  * Process pending markdown write retries. Call periodically (e.g., every 30s).
  */
 export async function processPendingWrites(): Promise<void> {
-  const now = Date.now();
-  const stillPending: PendingWrite[] = [];
+  try {
+    const now = Date.now();
+    const stillPending: PendingWrite[] = [];
 
-  for (const write of _pendingWrites) {
-    if (write.retries >= MAX_WRITE_RETRIES) {
-      console.error(`[MemoryStore] Giving up on markdown write for ${write.entry.id} after ${MAX_WRITE_RETRIES} retries`);
-      continue;
+    for (const write of _pendingWrites) {
+      if (write.retries >= MAX_WRITE_RETRIES) {
+        console.error(`[MemoryStore] Giving up on markdown write for ${write.entry.id} after ${MAX_WRITE_RETRIES} retries`);
+        continue;
+      }
+
+      if (now - write.timestamp < WRITE_RETRY_DELAY_MS * (write.retries + 1)) {
+        stillPending.push(write);
+        continue;
+      }
+
+      try {
+        await writeMemoryMarkdown(write.workspacePath, write.entry);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[Memory] writeMemoryMarkdown(write.workspacePath, write.entry):", e);
+        stillPending.push({
+          ...write,
+          retries: write.retries + 1,
+          timestamp: now,
+        });
+      }
     }
 
-    if (now - write.timestamp < WRITE_RETRY_DELAY_MS * (write.retries + 1)) {
-      stillPending.push(write);
-      continue;
+    // Atomically swap to avoid race with concurrent push failures
+    const oldQueue = _pendingWrites.splice(0, _pendingWrites.length);
+    // Merge still-pending with any entries pushed by concurrent failures during processing
+    const seenKeys = new Set(stillPending.map(w => w.entry.id));
+    for (const w of oldQueue) {
+      if (!seenKeys.has(w.entry.id)) {
+        stillPending.push(w);
+        seenKeys.add(w.entry.id);
+      }
     }
-
-    try {
-      await writeMemoryMarkdown(write.workspacePath, write.entry);
-    } catch (e) {
-      if (import.meta.env.DEV) console.warn("[Memory] writeMemoryMarkdown(write.workspacePath, write.ent:", e);
-      stillPending.push({
-        ...write,
-        retries: write.retries + 1,
-        timestamp: now,
-      });
-    }
+    _pendingWrites.push(...stillPending);
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn("[MemoryStore] processPendingWrites failed:", e);
   }
-
-  // Atomically swap to avoid race with concurrent push failures
-  const oldQueue = _pendingWrites.splice(0, _pendingWrites.length);
-  // Merge still-pending with any entries pushed by concurrent failures during processing
-  const seenKeys = new Set(stillPending.map(w => w.entry.id));
-  for (const w of oldQueue) {
-    if (!seenKeys.has(w.entry.id)) {
-      stillPending.push(w);
-      seenKeys.add(w.entry.id);
-    }
-  }
-  _pendingWrites.push(...stillPending);
 }
 
 /**
@@ -591,19 +595,24 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
       }
-      // Unescape YAML escape sequences (order matters: \\ before \")
-      value = value
-        .replace(/\\\\/g, '\\')
-        .replace(/\\"/g, '"')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t')
-        .replace(/\\:/g, ':')
-        .replace(/\\#/g, '#')
-        .replace(/\\\|/g, '|')
-        .replace(/\\!/g, '!')
-        .replace(/\\&/g, '&')
-        .replace(/\\\*/g, '*');
+      // Unescape YAML escape sequences — single-pass to avoid double-processing
+      // e.g. \\n (literal backslash + n) must not become a newline
+      value = value.replace(/\\(["\\nrt:#!|&*])/g, (_match, char) => {
+        switch (char) {
+          case '\\': return '\\';
+          case '"': return '"';
+          case 'n': return '\n';
+          case 'r': return '\r';
+          case 't': return '\t';
+          case ':': return ':';
+          case '#': return '#';
+          case '|': return '|';
+          case '!': return '!';
+          case '&': return '&';
+          case '*': return '*';
+          default: return char;
+        }
+      });
       // Parse arrays
       if (value.startsWith("[") && value.endsWith("]")) {
         value = value.slice(1, -1);

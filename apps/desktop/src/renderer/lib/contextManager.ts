@@ -218,8 +218,6 @@ export function estimateTokens(text: string): number {
   }
 
   let lineNum = 0;
-  if (fenceLines.has(0)) codeMode = !codeMode;
-  const lastNewlineIdx = text.lastIndexOf("\n");
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
 
@@ -268,14 +266,6 @@ export function estimateTokens(text: string): number {
     else {
       count += 0.25;
     }
-  }
-
-  // Check if the last line (without trailing newline) has a fence marker.
-  // The loop above only detects fences on newlines; the final line is
-  // missed when the text doesn't end with \n.
-  if (lastNewlineIdx >= 0 && lastNewlineIdx < text.length - 1) {
-    const actualLastLineNum = text.split("\n").length - 1;
-    void (fenceLines.has(actualLastLineNum));
   }
 
   const result = Math.ceil(count);

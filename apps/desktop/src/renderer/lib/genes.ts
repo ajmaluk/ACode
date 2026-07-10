@@ -352,7 +352,7 @@ const MAX_GENE_TRIGGER_CACHE = 200;
 const MAX_TRIGGER_LENGTH = 200;
 const DANGEROUS_REGEX_PATTERNS = [
   /(.*a.*){100,}/, // Catastrophic backtracking
-  /\(\?/, // Lookahead/lookbehind (expensive)
+  /\(\?[=!<]/, // Lookahead (?=, (?!) or lookbehind (?<=, (?<!) — expensive
 ];
 
 function getGeneTriggerRegex(trigger: string): RegExp | null {

@@ -538,8 +538,21 @@ if (typeof window !== "undefined") {
           TRAJECTORY_DIR,
           `trajectory-${sessionId}.jsonl`,
         );
-        const newLines =
-          buffer.turns.map((t) => JSON.stringify(t)).join("\n") + "\n";
+        // Create valid TrajectoryRecord format for JSONL parsing
+        const record = {
+          conversations: buffer.turns,
+          timestamp: new Date().toISOString(),
+          model: "",
+          agent: "",
+          completed: false,
+          session: {
+            id: sessionId,
+            workspacePath: buffer.workspacePath,
+            startedAt: buffer.turns[0]?.ts ?? Date.now(),
+            messageCount: buffer.turns.length,
+          },
+        };
+        const newLines = JSON.stringify(record) + "\n";
         // Read existing + append new, fire-and-forget
         api.fs
           .readFile(filePath)

@@ -53,9 +53,9 @@ export { exportTrajectories, getTrajectoryStats } from "@/lib/trajectoryRecorder
 
 // Build regex inside function calls to avoid lastIndex mutation issues with global flag
 function createToolCallRegex(): RegExp {
-  return /<([a-zA-Z_][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z_][a-zA-Z0-9_-]*="[^"]*")*)\s*\/?>/g;
+  return /<([a-zA-Z_][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z_][a-zA-Z0-9_-]*=(?:"[^"]*"|'[^']*'))*)\s*\/?>/g;
 }
-const XML_ATTR_RE = /([a-zA-Z_][a-zA-Z0-9_-]*)="([^"]*)"/g;
+const XML_ATTR_RE = /([a-zA-Z_][a-zA-Z0-9_-]*)=(?:"([^"]*)"|'([^']*)')/g;
 
 import {
   TAG_TO_TOOL,
@@ -198,7 +198,7 @@ export function parseXmlToolCalls(content: string): {
       let attrMatch: RegExpExecArray | null;
       XML_ATTR_RE.lastIndex = 0;
       while ((attrMatch = XML_ATTR_RE.exec(attrString)) !== null) {
-        args[attrMatch[1]] = attrMatch[2];
+        args[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
       }
     }
 
@@ -2185,6 +2185,7 @@ export const useChat = create<ChatState>((set, get) => ({
           pendingToolCalls: [],
           pendingActivities: [],
           _safetyTimer: null,
+          _pendingVerification: null,
           subAgents: [],
           messageQueue: [],
           chatSessions: get().chatSessions.map((s) =>
@@ -2328,6 +2329,9 @@ export const useChat = create<ChatState>((set, get) => ({
 
     // Safety timeout: fires 120s after the LAST stream event (reset on each event in appendStream).
     // This catches truly hung streams without killing active multi-turn agent loops.
+    // Clear any previous safety timer to prevent it from killing a new streaming session.
+    const prevTimer = get()._safetyTimer;
+    if (prevTimer) clearTimeout(prevTimer);
     const safetyTimer = _createSafetyTimer(get, set, "normal");
     set({ _safetyTimer: safetyTimer });
     // Capture sessionId for stale-closure prevention in async error handlers
@@ -3173,12 +3177,21 @@ export const useChat = create<ChatState>((set, get) => ({
               }
             }
             if (lastAssistantIdx === -1) return s;
+            const updatedMessages = s.messages.map((m, i) =>
+              i === lastAssistantIdx
+                ? { ...m, fileChanges: [...(m.fileChanges ?? []), event.change] }
+                : m
+            );
+            // Persist to sessionMessages so file changes survive session switches
+            const sessionId = s.activeSessionId;
             return {
-              messages: s.messages.map((m, i) =>
-                i === lastAssistantIdx
-                  ? { ...m, fileChanges: [...(m.fileChanges ?? []), event.change] }
-                  : m
-              ),
+              messages: updatedMessages,
+              ...(sessionId ? {
+                sessionMessages: {
+                  ...s.sessionMessages,
+                  [sessionId]: updatedMessages,
+                },
+              } : {}),
             };
           });
         }
@@ -3350,7 +3363,7 @@ export const useChat = create<ChatState>((set, get) => ({
         break;
       }
       case "thinking":
-        set((s) => ({ thinkingContent: (s.thinkingContent + event.content).slice(-100000) }));
+        set((s) => ({ thinkingContent: (s.thinkingContent + (s.thinkingContent ? "\n" : "") + event.content).slice(-100000) }));
         break;
       case "status":
         set((s) => ({

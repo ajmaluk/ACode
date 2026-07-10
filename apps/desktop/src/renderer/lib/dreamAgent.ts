@@ -172,6 +172,14 @@ export async function runDreamCycle(
         staleIds.length,
         { totalInCategory: totalWithFiles || 1 },
       );
+      if (validateProposal.status === "auto-accept") {
+        // Actually mark the stale memories so purgeStale can clean them up
+        for (const id of staleIds) {
+          await markStale(id);
+        }
+        validateProposal.status = "applied";
+        validateProposal.appliedAt = Date.now();
+      }
       allProposals.push(validateProposal);
     }
 
@@ -779,58 +787,7 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           continue;
         }
 
-        // Backup skill A before modification for rollback on failure
-        const backupDir = joinPath(
-          workspacePath,
-          ".dalam/skills-backup",
-          Date.now().toString(),
-        );
-        try {
-          const { mkdir, readFile: readFileFs } =
-            await import("@tauri-apps/plugin-fs");
-          await mkdir(backupDir, { recursive: true });
-          const backupA = joinPath(backupDir, `${skillA.name}.md`);
-          await writeFile(backupA, await readFileFs(skillA.fullPath));
-          const backupB = joinPath(backupDir, `${skillB.name}.md`);
-          await writeFile(backupB, await readFileFs(skillB.fullPath));
-
-          // Re-write consolidated results back to primary node entry point
-          await writeFile(skillA.fullPath, new TextEncoder().encode(response));
-
-          // Drop redundant micro-skill directories
-          const oldTargetDir = joinPath(skillsPath, skillB.name);
-          await remove(oldTargetDir, { recursive: true });
-        } catch (writeErr) {
-          // Rollback: restore skill A from backup
-          try {
-            const backupA = joinPath(backupDir, `${skillA.name}.md`);
-            const { readFile: readFs } = await import("@tauri-apps/plugin-fs");
-            const restored = await readFs(backupA);
-            await writeFile(skillA.fullPath, restored);
-          } catch (e) {
-            if (import.meta.env.DEV) console.error(
-              `[DreamAgent] Failed to rollback skill ${skillA.name} after consolidation error:`,
-              e,
-            );
-          }
-          throw writeErr;
-        }
-
-        // Update skillA content IN the array so subsequent comparisons use merged version.
-        // Must re-read from array (not stale destructured `skillA` which has old rawContent).
-        discoveredSkills[i] = {
-          ...discoveredSkills[i]!,
-          rawContent: response,
-        };
-
-        // Mark skillB for removal so subsequent comparisons skip it
-        removedIndices.add(j);
-
-        // Reload skills registry so UI updates
-        const projectSkills = await loadProjectSkills(workspacePath, api.fs);
-        refreshProjectSkills(projectSkills);
-
-        // Create a proposal for this skill consolidation
+        // Create proposal BEFORE modifying files — proposal gates the operation
         const skillConsolidateProposal = createProposal(
           "consolidate-skill",
           `Merged skill "${skillA.name}" with overlapping "${skillB.name}"`,
@@ -842,7 +799,58 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           2,
           { similarity: similarityScore },
         );
+
         if (skillConsolidateProposal.status === "auto-accept") {
+          // Only modify files after proposal is approved
+          const backupDir = joinPath(
+            workspacePath,
+            ".dalam/skills-backup",
+            `${Date.now()}-${skillA.name}`,
+          );
+          try {
+            const { mkdir, readFile: readFileFs } =
+              await import("@tauri-apps/plugin-fs");
+            await mkdir(backupDir, { recursive: true });
+            const backupA = joinPath(backupDir, `${skillA.name}.md`);
+            await writeFile(backupA, await readFileFs(skillA.fullPath));
+            const backupB = joinPath(backupDir, `${skillB.name}.md`);
+            await writeFile(backupB, await readFileFs(skillB.fullPath));
+
+            // Re-write consolidated results back to primary node entry point
+            await writeFile(skillA.fullPath, new TextEncoder().encode(response));
+
+            // Drop redundant micro-skill directories
+            const oldTargetDir = joinPath(skillsPath, skillB.name);
+            await remove(oldTargetDir, { recursive: true });
+          } catch (writeErr) {
+            // Rollback: restore skill A from backup
+            try {
+              const backupA = joinPath(backupDir, `${skillA.name}.md`);
+              const { readFile: readFs } = await import("@tauri-apps/plugin-fs");
+              const restored = await readFs(backupA);
+              await writeFile(skillA.fullPath, restored);
+            } catch (e) {
+              if (import.meta.env.DEV) console.error(
+                `[DreamAgent] Failed to rollback skill ${skillA.name} after consolidation error:`,
+                e,
+              );
+            }
+            throw writeErr;
+          }
+
+          // Update skillA content IN the array so subsequent comparisons use merged version.
+          discoveredSkills[i] = {
+            ...discoveredSkills[i]!,
+            rawContent: response,
+          };
+
+          // Mark skillB for removal so subsequent comparisons skip it
+          removedIndices.add(j);
+
+          // Reload skills registry so UI updates
+          const projectSkills = await loadProjectSkills(workspacePath, api.fs);
+          refreshProjectSkills(projectSkills);
+
           skillConsolidateProposal.status = "applied";
           skillConsolidateProposal.appliedAt = Date.now();
         } else if (skillConsolidateProposal.status === "user-review") {

@@ -397,17 +397,25 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
     } else if (resp.headers) {
       for (const [k, v] of Object.entries(resp.headers as Record<string, string>)) respHeaders.set(k, v);
     }
-    // Cache the body to avoid double consumption
-    let bodyCache: ArrayBuffer | null = null;
-    const getBody = async () => {
-      if (!bodyCache) bodyCache = await resp.arrayBuffer();
-      return bodyCache;
+    // Cache the body promise to avoid double consumption (cache the Promise, not the resolved value)
+    let bodyPromise: Promise<ArrayBuffer> | null = null;
+    const getBody = (): Promise<ArrayBuffer> => {
+      if (!bodyPromise) bodyPromise = resp.arrayBuffer();
+      return bodyPromise;
     };
     
     // Clone helper that handles both cached and uncached body
     const cloneResponse = (): Response => {
-      if (bodyCache) {
-        return new Response(new Blob([bodyCache]), { status: resp.status, statusText: resp.statusText, headers: respHeaders });
+      if (bodyPromise) {
+        // Create a ReadableStream that resolves the cached body promise
+        const stream = new ReadableStream({
+          async start(controller) {
+            const buf = await bodyPromise!;
+            controller.enqueue(new Uint8Array(buf));
+            controller.close();
+          },
+        });
+        return new Response(stream, { status: resp.status, statusText: resp.statusText, headers: respHeaders });
       }
       // For uncached body, return a Response that will read from the original body
       // Note: This is a best-effort clone; if the body has already been consumed, this will fail
@@ -716,6 +724,7 @@ async function* streamOpenAI(
     }
     _tcArgBuffers.clear();
   } finally {
+    _tcArgBuffers.clear();
     reader.releaseLock();
     if (abortHandlerOpenAI && signal) {
       signal.removeEventListener("abort", abortHandlerOpenAI);

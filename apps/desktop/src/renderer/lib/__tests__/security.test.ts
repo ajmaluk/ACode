@@ -77,6 +77,39 @@ describe("isPrivateHost", () => {
     expect(isPrivateHost("010.0.0.1")).toBe(true); // 10.0.0.1
   });
 
+  it("rejects non-octal strings that start with 0", () => {
+    // "0123" is decimal 83, not an octal IP — should not be flagged
+    expect(isPrivateHost("0123")).toBe(false);
+  });
+
+  it("detects IPv6 link-local addresses (fe80::/10)", () => {
+    expect(isPrivateHost("fe80::1")).toBe(true);
+    expect(isPrivateHost("[fe80::1]")).toBe(true);
+    expect(isPrivateHost("fe80::abcd:1234")).toBe(true);
+  });
+
+  it("detects IPv6 unique local addresses (fc00::/7)", () => {
+    expect(isPrivateHost("fc00::1")).toBe(true);
+    expect(isPrivateHost("fd00::1")).toBe(true);
+    expect(isPrivateHost("[fc00::1]")).toBe(true);
+  });
+
+  it("detects CGNAT range (100.64.0.0/10)", () => {
+    expect(isPrivateHost("100.64.0.1")).toBe(true);
+    expect(isPrivateHost("100.127.255.255")).toBe(true);
+    expect(isPrivateHost("100.63.0.1")).toBe(false);
+    expect(isPrivateHost("100.128.0.1")).toBe(false);
+  });
+
+  it("detects multicast addresses (224.0.0.0/4)", () => {
+    expect(isPrivateHost("224.0.0.1")).toBe(true);
+    expect(isPrivateHost("239.255.255.255")).toBe(true);
+  });
+
+  it("detects broadcast address", () => {
+    expect(isPrivateHost("255.255.255.255")).toBe(true);
+  });
+
   it("detects hex IPs with dots via URL normalization", () => {
     // 0x7f.0.0.1 → URL normalization detects it as 127.0.0.1
     expect(isPrivateHost("0x7f.0.0.1")).toBe(true);

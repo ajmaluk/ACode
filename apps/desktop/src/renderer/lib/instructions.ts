@@ -173,9 +173,11 @@ export async function loadInstructions(
   }
 
   // --- Layer 3: Project ({workspace}/DALAM.md) ---
+  let projectFileFound = false;
   try {
     const projectPath = joinPath(workspacePath, "DALAM.md");
     if (await fsAdapter.exists(projectPath)) {
+      projectFileFound = true;
       layers.project = await fsAdapter.readFile(projectPath);
       loadedPaths.push(projectPath);
     }
@@ -185,8 +187,9 @@ export async function loadInstructions(
   }
 
   // --- Layer 3b: Legacy fallback ---
-  // If no project DALAM.md, check legacy rule files for backwards compat
-  if (!layers.project) {
+  // If no project DALAM.md file exists at all, check legacy rule files for backwards compat.
+  // If the file exists but is empty, user explicitly opted out — don't fall back.
+  if (!projectFileFound) {
     try {
       const legacyPaths = [
         joinPath(workspacePath, ".cursorrules"),

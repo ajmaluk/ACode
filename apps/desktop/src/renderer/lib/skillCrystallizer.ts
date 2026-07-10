@@ -193,6 +193,14 @@ ${formattedHistory}`;
                   .replace(/[^a-zA-Z0-9_-]/g, "-")
                   .replace(/-+/g, "-")
                   .replace(/^-|-$/g, "");
+                if (!safeName) {
+                  console.warn("[SkillCrystallizer] Sanitized skill name is empty, skipping");
+                  return;
+                }
+                if (!safeName) {
+                  notify({ kind: "error", title: "Invalid Name", description: "Skill name is invalid after sanitization." });
+                  return;
+                }
                 const skillsDir = joinPath(
                   workspacePath,
                   `.dalam/skills/${safeName}`,

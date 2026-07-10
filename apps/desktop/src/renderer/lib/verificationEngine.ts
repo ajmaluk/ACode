@@ -215,10 +215,12 @@ export async function runVerificationPipeline(
 
   let status: "passed" | "failed" | "partial";
   if (totalRequired > 0) {
-    // Partial: some required passed but some failed
-    if (requiredPassed > 0 && requiredFailures > 0) {
+    // Unmet file changes are always a hard failure
+    if (unmetFileChanges.length > 0) {
+      status = "failed";
+    } else if (requiredPassed > 0 && requiredFailures > 0) {
       status = "partial";
-    } else if (requiredFailures > 0 || unmetFileChanges.length > 0) {
+    } else if (requiredFailures > 0) {
       status = "failed";
     } else {
       status = "passed";

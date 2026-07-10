@@ -6,6 +6,9 @@
 export function isPrivateHost(hostname: string): boolean {
   // IPv6 loopback/link-local
   if (hostname === "::1" || hostname === "[::1]") return true;
+  // IPv6 link-local (fe80::/10), ULA (fc00::/7)
+  if (/^\[?fe[89ab][0-9a-f]*:/i.test(hostname)) return true;
+  if (/^\[?f[cd][0-9a-f]{2}:/i.test(hostname)) return true;
   // IPv6-mapped IPv4 (e.g. [::ffff:127.0.0.1] or ::ffff:127.0.0.1)
   if (/^\[?::ffff:\d+\.\d+\.\d+\.\d+\]?$/i.test(hostname)) return true;
   // IPv4 private ranges
@@ -15,8 +18,14 @@ export function isPrivateHost(hostname: string): boolean {
   if (/^169\.254\./.test(hostname)) return true;
   if (/^0\./.test(hostname)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
-  // Octal IP (e.g. 0177.0.0.1 → 127.0.0.1)
-  if (/^0[0-7]+(\.[0-7]+)*$/.test(hostname)) return true;
+  // CGNAT (100.64.0.0/10, RFC 6598)
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(hostname)) return true;
+  // Multicast (224.0.0.0/4)
+  if (/^22[4-9]\./.test(hostname) || /^23[0-9]\./.test(hostname)) return true;
+  // Broadcast
+  if (hostname === "255.255.255.255") return true;
+  // Octal IP (e.g. 0177.0.0.1 → 127.0.0.1) — require exactly 4 dot-separated octets
+  if (/^0[0-7]+\.[0-7]+\.[0-7]+\.[0-7]+$/.test(hostname)) return true;
   // Cloud metadata endpoints
   if (/^metadata\.google\.internal$/i.test(hostname)) return true;
   if (/^instance-data\.local$/i.test(hostname)) return true;
@@ -34,8 +43,8 @@ export function isPrivateHost(hostname: string): boolean {
     }
   } else if (/^0x[0-9a-f]+$/i.test(hostname)) {
     return true; // Hex IP like 0x7f000001
-  } else if (/^\d+$/.test(hostname)) {
-    return true; // Decimal IP like 2130706433
+  } else if (/^[1-9]\d*$/.test(hostname)) {
+    return true; // Decimal IP like 2130706433 (no leading zeros)
   }
   return hostname === "localhost";
 }

@@ -154,7 +154,15 @@ pub async fn open_with_system_handler(path_or_url: String) -> Result<(), String>
         } else {
             path_or_url.clone()
         };
-        return opener::open(&expanded).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+        // Restrict to user's home directory on Windows too
+        let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
+        let p = std::path::Path::new(&expanded);
+        let canonical = std::fs::canonicalize(p)
+            .map_err(|_| format!("Cannot access path: '{}'", path_or_url))?;
+        if !canonical.starts_with(&home) {
+            return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+        }
+        return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
     }
     Err(format!("Cannot open '{}': only http/https URLs and local files are allowed", path_or_url))
 }
@@ -465,7 +473,7 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
-        let restricted = ["/etc", "/sys", "/proc"];
+        let restricted = ["/etc", "/sys", "/proc", "/var", "/tmp", "/private", "/usr/local/etc"];
         for r in &restricted {
             if p.starts_with(r) {
                 return Err(format!("Access to system path '{}' is not allowed", path));
@@ -523,7 +531,8 @@ pub async fn set_env(key: String, value: String) -> Result<(), String> {
                    "SSL_CERT_DIR", "SSL_CERT_FILE", "HTTP_PROXY", "HTTPS_PROXY",
                    "NO_PROXY", "EDITOR", "VISUAL", "GIT_EXEC_PATH",
                    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"];
-    if blocked.contains(&key.as_str()) {
+    let upper = key.to_uppercase();
+    if blocked.iter().any(|b| upper == *b) {
         return Err(format!("Cannot set restricted environment variable: {}", key));
     }
     let mut map = LOCAL_ENV.lock().map_err(|e| format!("Env lock poisoned: {e}"))?;
@@ -689,6 +698,10 @@ pub async fn get_disk_space(path: String) -> Result<DiskSpace, String> {
     {
         // Use PowerShell Get-CimInstance (wmic is deprecated in Windows 10+)
         let drive_letter = path.chars().next().unwrap_or('C');
+        // Validate drive letter is a single ASCII alphanumeric character to prevent injection
+        if !drive_letter.is_ascii_alphanumeric() {
+            return Err(format!("Invalid drive letter: '{}'", drive_letter));
+        }
         let ps_script = format!(
             "Get-CimInstance -ClassName Win32_LogicalDisk -Filter \"DeviceID='{}:'\" | Select-Object Size,FreeSpace | ConvertTo-Json",
             drive_letter

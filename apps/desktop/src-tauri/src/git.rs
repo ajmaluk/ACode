@@ -168,12 +168,12 @@ pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
 #[command]
 pub fn git_log(path: String, limit: Option<i32>) -> Result<Vec<GitLogEntry>, String> {
     let path = validate_git_path(&path)?;
-    let count = limit.unwrap_or(20);
+    let count = limit.unwrap_or(20).min(1000);
     let output = Command::new("git")
         .args([
             "log",
             &format!("-{}", count),
-            "--pretty=format:%H||%s||%aI||%an",
+            "--pretty=format:%H%x00%s%x00%aI%x00%an",
         ])
         .current_dir(&path)
         .output()
@@ -186,9 +186,9 @@ pub fn git_log(path: String, limit: Option<i32>) -> Result<Vec<GitLogEntry>, Str
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let entries: Vec<GitLogEntry> = stdout
-        .lines()
+        .split('\n')
         .filter_map(|line| {
-            let parts: Vec<&str> = line.splitn(4, "||").collect();
+            let parts: Vec<&str> = line.splitn(4, '\0').collect();
             if parts.len() == 4 {
                 Some(GitLogEntry {
                     sha: parts[0].to_string(),

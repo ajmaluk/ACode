@@ -228,20 +228,27 @@ async function executeWithTimeout<T>(
   abortSignal?: AbortSignal,
 ): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
+  let settled = false;
   let rejectFn: ((err: Error) => void) | null = null;
   const abortHandler = () => {
+    if (settled) return;
+    settled = true;
     clearTimeout(timeoutId);
     rejectFn?.(new Error(`Tool "${toolName}" was aborted`));
   };
   const timeoutPromise = new Promise<T>((_, reject) => {
     rejectFn = reject;
     timeoutId = setTimeout(
-      () =>
-        reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`)),
+      () => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`));
+      },
       timeoutMs,
     );
     if (abortSignal) {
       if (abortSignal.aborted) {
+        settled = true;
         clearTimeout(timeoutId);
         reject(new Error(`Tool "${toolName}" was aborted`));
         return;

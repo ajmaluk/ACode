@@ -132,28 +132,30 @@ export function evaluate(
 ): PermissionAction {
   let permissionWildcard: PermissionAction | undefined;
   let globalWildcard: PermissionAction | undefined;
+  let lastGlobMatch: PermissionAction | undefined;
 
-  // First pass: exact match (highest priority, bypasses ordering issues)
-  for (const r of ruleset) {
-    if (r.permission === permission && r.pattern === pattern) {
-      return r.action;
-    }
-  }
-
-  // Second pass: glob match + wildcard tracking
+  // Single pass: exact match wins immediately; otherwise track last matching
+  // glob and wildcard so later rules override earlier ones (last-write-wins).
   for (const r of ruleset) {
     if (r.permission === permission) {
-      if (r.pattern === "*") {
+      if (r.pattern === pattern) {
+        return r.action; // exact match — highest priority
+      } else if (r.pattern === "*") {
         permissionWildcard = r.action;
       } else if (r.pattern !== pattern && globToRegex(r.pattern).test(pattern)) {
-        return r.action;
+        lastGlobMatch = r.action; // keep iterating — later globs override
       }
     } else if (r.permission === "*") {
-      globalWildcard = r.action;
+      if (r.pattern === "*") {
+        globalWildcard = r.action;
+      } else if (globToRegex(r.pattern).test(pattern)) {
+        // global glob — only used if no permission-level match
+        lastGlobMatch ??= r.action;
+      }
     }
   }
 
-  return permissionWildcard ?? globalWildcard ?? "ask";
+  return lastGlobMatch ?? permissionWildcard ?? globalWildcard ?? "ask";
 }
 
 // ============================================================================

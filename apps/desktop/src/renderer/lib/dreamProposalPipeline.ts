@@ -250,6 +250,11 @@ export async function processProposals(
         result.queuedForReview.push(proposal);
         break;
 
+      case "applied":
+        // Already applied (e.g., by dreamAgent directly) — count as accepted
+        result.autoAccepted.push(proposal);
+        break;
+
       default:
         // "pending" or "rejected" — skip
         result.rejected.push(proposal);

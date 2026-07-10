@@ -568,7 +568,7 @@ describe("thinking content handling", () => {
       });
 
     expect(useChat.getState().thinkingContent).toBe(
-      "First thought. Second thought.",
+      "First thought. \nSecond thought.",
     );
   });
 });

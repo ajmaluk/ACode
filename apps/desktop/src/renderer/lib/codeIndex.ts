@@ -166,9 +166,10 @@ export async function indexWorkspace(
           continue;
         }
 
-        // Relative path from workspace root
-        const relativePath = fullPath.startsWith(workspacePath)
-          ? fullPath.slice(workspacePath.length + 1)
+        // Relative path from workspace root — ensure we match on path boundary, not prefix
+        const wsPrefix = workspacePath.endsWith("/") ? workspacePath : workspacePath + "/";
+        const relativePath = fullPath.startsWith(wsPrefix)
+          ? fullPath.slice(wsPrefix.length)
           : fullPath;
 
         const language = detectLanguage(relativePath);
