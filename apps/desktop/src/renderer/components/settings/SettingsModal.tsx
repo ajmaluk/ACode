@@ -861,7 +861,8 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
     setTestStatus("testing");
     setTestError("");
     const ac = new AbortController();
-    const timeoutId = setTimeout(() => ac.abort(), 15000);
+    // Use 60s for the initial request to handle NVIDIA NIM cold starts (20-30s+)
+    const timeoutId = setTimeout(() => ac.abort(), 60_000);
     try {
       // First try to find a connected model, then fall back to first model
       const connectedModel = provider.models.find((m) => m.connected);
@@ -943,8 +944,20 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
         });
       } else {
         const body = await resp.text().catch(() => "");
+        let errorMessage = `HTTP ${resp.status}`;
+        try {
+          const parsed = JSON.parse(body);
+          const detail = parsed.detail || parsed.message || parsed.error?.message || "";
+          if (detail.includes("DEGRADED")) {
+            errorMessage = `Model temporarily unavailable (DEGRADED). The endpoint may be under maintenance. Try again later or switch to a different model.`;
+          } else if (detail) {
+            errorMessage = `HTTP ${resp.status}: ${detail.slice(0, 200)}`;
+          }
+        } catch {
+          if (body) errorMessage = `HTTP ${resp.status}: ${body.slice(0, 200)}`;
+        }
         setTestStatus("error");
-        setTestError(`HTTP ${resp.status}: ${body.slice(0, 120)}`);
+        setTestError(errorMessage);
       }
     } catch (err) {
       clearTimeout(timeoutId);

@@ -224,9 +224,9 @@ export const ExploreBlock = React.memo(function ExploreBlock({
       }
     >
       <ul className="space-y-0.5 max-h-64 overflow-y-auto scrollbar-thin">
-        {result.matches.map((m, idx) => (
+        {result.matches.map((m) => (
           <li
-            key={idx}
+            key={m.path + (m.line ?? "")}
             className="flex items-center gap-2 hover:opacity-100 opacity-90 font-mono text-[11px] cursor-pointer hover:bg-dalam-bg-hover rounded px-1 py-0.5 transition-colors"
             onClick={() => {
               void useWorkspace.getState().openFile(m.path);
@@ -1558,7 +1558,7 @@ export const SubAgentBlock = React.memo(function SubAgentBlock({
   );
 
   const typeLabel = agent.subagentType === "explore" ? "Explore" : "General";
-  const elapsed = agent.completedAt
+  const elapsed = agent.completedAt != null && agent.startedAt != null
     ? ((agent.completedAt - agent.startedAt) / 1000).toFixed(1) + "s"
     : isRunning
       ? "running..."

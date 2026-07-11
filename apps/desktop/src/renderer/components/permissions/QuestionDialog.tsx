@@ -10,7 +10,7 @@ export function QuestionDialog() {
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const optionCount = request?.options.length ?? 0;
+  const optionCount = request?.options?.length ?? 0;
   const maxIndex = optionCount; // last index = custom input
 
   // Reset state when a new question appears

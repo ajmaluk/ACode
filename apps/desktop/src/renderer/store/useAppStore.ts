@@ -65,9 +65,10 @@ import {
 const KNOWN_TAG_NAMES = ALL_TOOL_NAMES;
 
 // Regex to strip ALL XML tool call tags (opening, closing, and self-closing) from content.
-// Uses [^>]* to handle malformed attributes (e.g. unescaped quotes inside command values).
+// Uses a pattern that handles > inside quoted attribute values.
+const XML_ATTR_ANY = `(?:[^>"']*|"[^"]*"|'[^']*')*`;
 const XML_STRIP_RE = new RegExp(
-  `<(${KNOWN_TAG_NAMES.join("|")})[^>]*>[\\s\\S]*?<\\/\\1>|<(${KNOWN_TAG_NAMES.join("|")})[^>]*\\/?>`,
+  `<(${KNOWN_TAG_NAMES.join("|")})${XML_ATTR_ANY}>[\\s\\S]*?<\\/\\1>|<(${KNOWN_TAG_NAMES.join("|")})${XML_ATTR_ANY}\\/?>`,
   "gi"
 );
 const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi");
@@ -75,19 +76,27 @@ const XML_CLOSING_TAG_RE = new RegExp(`<\\/(${KNOWN_TAG_NAMES.join("|")})>`, "gi
 // During streaming, a complete opening tag like <read_file path="/foo"> ends with `>`
 // but has no `</read_file>` yet. Neither XML_STRIP_RE (needs pair) nor XML_INCOMPLETE_TAG_RE
 // (needs no `>`) catches it, leaving it visible in the typing animation.
-const XML_OPENING_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*>`, "gi");
+const XML_OPENING_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})${XML_ATTR_ANY}>`, "gi");
 const XML_MCP_STRIP_RE = /<mcp_[\s\S]*?<\/mcp_[^>]*>|<mcp_[^>]*\/>/gi;
 const XML_MCP_OPENING_TAG_RE = /<mcp_[a-zA-Z_][a-zA-Z0-9_-]*[^>]*>/gi;
 const XML_MCP_CLOSING_TAG_RE = /<\/mcp_[^>]*>/gi;
-const XML_INCOMPLETE_TAG_RE = new RegExp(`<(${KNOWN_TAG_NAMES.join("|")})[^>]*$`, "gi");
+// Strip ANY partial-looking XML tag at end of content, not just known tool names.
+// SSE chunk boundaries can split tag names (e.g. <read_fi in one chunk, le> in the next),
+// so matching only known tool names lets partial names leak through for ~16ms (one rAF frame).
+// This matches <word, </word, <word attr="val etc. at end of content.
+const XML_INCOMPLETE_TAG_RE = /<\/?[a-zA-Z_][a-zA-Z0-9_-]*(?:\s[^>]*)?$/g;
 // Strip model output tags WITH their content (e.g. <thinking>...</thinking>)
-const XML_MODEL_OUTPUT_CONTENT_RE = /<(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)[^>]*>[\s\S]*?<\/(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\s*>/gi;
-const XML_MODEL_OUTPUT_RE = /<\/?(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)[^>]*>/gi;
+const XML_MODEL_OUTPUT_CONTENT_RE = new RegExp(`<(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)${XML_ATTR_ANY}>[\\s\\S]*?</(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\\s*>`, "gi");
+const XML_MODEL_OUTPUT_RE = new RegExp(`</(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)${XML_ATTR_ANY}>|<(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)${XML_ATTR_ANY}/?>`, "gi");
 const XML_MODEL_OUTPUT_CLOSE_RE = /<\/?(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\s*>/gi;
 // Strip skill invocation / structured plan XML tags emitted by models in Plan mode.
 const XML_SKILL_INVOCATION_RE = /<skill_invocation[\s\S]*?<\/skill_invocation>|<skill_invocation[^>]*\/>/gi;
 const XML_STRUCTURED_TAG_RE = /<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*>[\s\S]*?<\/(?:parameter|goal|subgoal|steps|step|constraint|context|scope)>|<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*\/>/gi;
 const XML_STRUCTURED_ORPHAN_CLOSE_RE = /<\/(?:parameter|goal|subgoal|steps|step|constraint|context|scope)>/gi;
+
+function decodeXmlEntities(s: string): string {
+  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&#x27;/g, "'");
+}
 
 /**
  * Strip all XML tool call tags from content (for display purposes).
@@ -198,7 +207,7 @@ export function parseXmlToolCalls(content: string): {
       let attrMatch: RegExpExecArray | null;
       XML_ATTR_RE.lastIndex = 0;
       while ((attrMatch = XML_ATTR_RE.exec(attrString)) !== null) {
-        args[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
+        args[attrMatch[1]] = decodeXmlEntities(attrMatch[2] ?? attrMatch[3]);
       }
     }
 
@@ -293,14 +302,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
   async update(key, value) {
     const api = createDalamAPI();
-    await api.settings.set(key, value as never);
+    await api.settings.set(key, value as AppSettings[typeof key]);
     set((s) => ({ settings: { ...s.settings, [key]: value } }));
   },
   async updateSettings(updates) {
     const api = createDalamAPI();
     const results = await Promise.allSettled(
       Object.entries(updates).map(([key, value]) =>
-        api.settings.set(key as keyof AppSettings, value as never)
+        api.settings.set(key as keyof AppSettings, value as AppSettings[keyof AppSettings])
       )
     );
     for (let i = 0; i < results.length; i++) {
@@ -4236,7 +4245,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const modelId = selectedModelId || useSettings.getState().settings.selectedModel;
       const allModels = useModelProviders.getState().getAllModels();
       const found = allModels.find((m) => m.model.modelId === modelId);
-      const maxContext = parseContextWindow(found?.model.contextWindow);
+      const maxContext = parseContextWindow(found?.model?.contextWindow);
       // Apply context budget reduction from overflow retries to prevent infinite loops
       const budgetFactor = _contextBudgetFactor[sessionId] ?? 1.0;
       const reducedMaxContext = Math.round(maxContext * budgetFactor);
@@ -4825,8 +4834,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
   return new Promise<{ name: string; description: string }[]>((resolve, reject) => {
     let resolved = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let childRef: any = null;
+    let childRef: { kill(): Promise<void> } | null = null;
 
     const stdoutHandler = (data: string) => {
       outputBuffer += data;

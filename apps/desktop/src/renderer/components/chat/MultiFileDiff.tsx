@@ -210,14 +210,14 @@ export const MultiFileDiffSummary: React.FC = () => {
                   </span>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => resolveToolApproval(diff.id, "approved")}
+                      onClick={() => { void resolveToolApproval(diff.id, "approved"); }}
                       className="p-0.5 text-dalam-git-added hover:opacity-80 transition-colors"
                       title="Approve"
                     >
                       <Check size={12} />
                     </button>
                     <button
-                      onClick={() => resolveToolApproval(diff.id, "denied")}
+                      onClick={() => { void resolveToolApproval(diff.id, "denied"); }}
                       className="p-0.5 text-dalam-git-deleted hover:opacity-80 transition-colors"
                       title="Reject"
                     >

@@ -260,7 +260,9 @@ export const ChatMessage = React.memo(
                     className="prose-dalam mb-2 last:mb-0"
                   >
                     {pending ? (
-                      <StreamingContent content={seg.content} />
+                      <MarkdownErrorBoundary>
+                        <StreamingContent content={seg.content} />
+                      </MarkdownErrorBoundary>
                     ) : (
                       <MarkdownErrorBoundary>
                         <MarkdownContent content={seg.content} />

@@ -13,7 +13,7 @@ import {
   useTerminal,
 } from "@/store/useAppStore";
 import type { FileNode } from "@dalam/shared-types";
-import { CodeView } from "@/components/editor/Editor";
+import { CodeView, type MonacoEditorInstance } from "@/components/editor/Editor";
 import { Breadcrumb } from "@/components/editor/Breadcrumb";
 import { FindBar } from "@/components/editor/FindBar";
 import { QuickOpen } from "@/components/editor/QuickOpen";
@@ -88,8 +88,7 @@ export function EditorPane() {
     y: number;
     path: string;
   } | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const monacoEditorRef = useRef<any>(null);
+  const monacoEditorRef = useRef<MonacoEditorInstance | null>(null);
 
   useEffect(() => {
     if (prevViewModeRef.current !== viewMode) {
@@ -266,7 +265,7 @@ export function EditorPane() {
         e.preventDefault();
         const editor = monacoEditorRef.current;
         if (editor) {
-          editor.getAction("editor.action.formatDocument")?.run();
+          void editor.getAction("editor.action.formatDocument")?.run();
         }
       }
 
@@ -274,7 +273,7 @@ export function EditorPane() {
         e.preventDefault();
         const editor = monacoEditorRef.current;
         if (editor) {
-          editor.getAction("editor.fold")?.run();
+          void editor.getAction("editor.fold")?.run();
         }
       }
 
@@ -282,7 +281,7 @@ export function EditorPane() {
         e.preventDefault();
         const editor = monacoEditorRef.current;
         if (editor) {
-          editor.getAction("editor.unfold")?.run();
+          void editor.getAction("editor.unfold")?.run();
         }
       }
 
@@ -296,7 +295,7 @@ export function EditorPane() {
           // Handle known actions
           if (action === "format") {
             const editor = monacoEditorRef.current;
-            if (editor) editor.getAction("editor.action.formatDocument")?.run();
+            if (editor) void editor.getAction("editor.action.formatDocument")?.run();
           } else if (action === "toggleMinimap") {
             void useSettings
               .getState()
@@ -635,7 +634,7 @@ function EditorStatusBar() {
     xml: "XML",
     sql: "SQL",
   };
-  const ext = activeTab?.path.split(".").pop()?.toLowerCase() ?? "";
+  const ext = activeTab?.path?.split(".").pop()?.toLowerCase() ?? "";
   const language = ext ? (extToLang[ext] ?? ext.toUpperCase()) : "";
   const cursor = activeTab?.cursor;
   const wordWrap = settings.wordWrap;

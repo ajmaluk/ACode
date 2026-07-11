@@ -56,9 +56,9 @@ export function RightPanel() {
     setRightPanelTab: setTab,
   } = useUI();
   const changeCount =
-    (status?.modified.length ?? 0) +
-    (status?.added.length ?? 0) +
-    (status?.deleted.length ?? 0) +
+    (status?.modified?.length ?? 0) +
+    (status?.added?.length ?? 0) +
+    (status?.deleted?.length ?? 0) +
     (status?.untracked?.length ?? 0);
 
   useEffect(() => {

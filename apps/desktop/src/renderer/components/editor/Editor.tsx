@@ -1,11 +1,9 @@
-import { loader, type OnMount } from "@monaco-editor/react";
+import { loader, type OnMount, type EditorProps } from "@monaco-editor/react";
 import { useSettings } from "@/store/useAppStore";
 import { detectLanguage } from "@/lib/pathUtils";
 import { useMemo, useState, useEffect, Suspense, lazy } from "react";
 
-// Monaco editor instance type — the @monaco-editor/react OnMount callback provides this
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MonacoEditorInstance = any;
+export type MonacoEditorInstance = Parameters<OnMount>[0];
 
 // Configure Monaco to load from CDN with proper worker setup
 loader.config({
@@ -149,15 +147,14 @@ export function CodeView({ path, content, onChange, onEditorReady }: Props) {
   }, [settings.theme, systemDark]);
 
   const onMount: OnMount = (editor, monaco) => {
-    monaco.editor.defineTheme("dalam-dark", DALAM_DARK as never);
-    monaco.editor.defineTheme("dalam-light", DALAM_LIGHT as never);
+    monaco.editor.defineTheme("dalam-dark", DALAM_DARK);
+    monaco.editor.defineTheme("dalam-light", DALAM_LIGHT);
     monaco.editor.setTheme(theme === "light" ? "dalam-light" : "dalam-dark");
     onEditorReady?.(editor);
   };
 
   // Memoize editor options to prevent unnecessary Monaco reconfiguration on every render
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const editorOptions = useMemo((): any => ({
+  const editorOptions = useMemo((): EditorProps["options"] => ({
       fontFamily:
         "'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace",
       fontSize: settings.codeFontSize,

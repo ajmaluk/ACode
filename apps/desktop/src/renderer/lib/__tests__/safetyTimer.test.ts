@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import {
   resetSafetyTimer,
   extendSafetyTimerForApproval,
@@ -7,8 +7,14 @@ import {
 } from "../safetyTimer";
 import type { ChatSessionSummary, ChatMessage } from "@dalam/shared-types";
 
-vi.stubGlobal("crypto", {
-  randomUUID: () => "mock-uuid-123",
+beforeAll(() => {
+  vi.stubGlobal("crypto", {
+    randomUUID: () => "mock-uuid-123",
+  });
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
 });
 
 const BASE_SESSION: ChatSessionSummary = {
@@ -41,8 +47,8 @@ interface MutableTimerState {
   activeSessionId: string | null;
   session: { id: string } | null;
   messages: ChatMessage[];
-  pendingToolCalls: unknown[];
-  pendingActivities: unknown[];
+  pendingToolCalls: Array<{ name: string; status?: string }>;
+  pendingActivities: Array<{ type: string; [key: string]: unknown }>;
   chatSessions: ChatSessionSummary[];
   _autoRemoveTimers: Set<ReturnType<typeof setTimeout>>;
 }

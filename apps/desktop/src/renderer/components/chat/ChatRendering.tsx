@@ -5,6 +5,7 @@ import { useToast } from "@/components/ui/toastStore";
 import { basename } from "@/lib/pathUtils";
 import { closeIncompleteMarkdown } from "@/lib/chatUtils";
 import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "@/lib/highlight";
 
@@ -54,7 +55,7 @@ function LinkComponent({
   children,
   ...props
 }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -147,40 +148,39 @@ function LinkComponent({
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const MARKDOWN_COMPONENTS: Record<string, any> = {
-  p: ({ children }: { children: React.ReactNode }) => (
+const MARKDOWN_COMPONENTS: Components = {
+  p: ({ children }: { children?: React.ReactNode }) => (
     <p className="whitespace-pre-wrap break-words mb-2 last:mb-0">{children}</p>
   ),
-  strong: ({ children }: { children: React.ReactNode }) => (
+  strong: ({ children }: { children?: React.ReactNode }) => (
     <strong className="font-semibold text-dalam-text-primary">
       {children}
     </strong>
   ),
-  em: ({ children }: { children: React.ReactNode }) => (
+  em: ({ children }: { children?: React.ReactNode }) => (
     <em className="italic">{children}</em>
   ),
   a: LinkComponent,
-  ul: ({ children }: { children: React.ReactNode }) => (
+  ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>
   ),
-  ol: ({ children }: { children: React.ReactNode }) => (
+  ol: ({ children }: { children?: React.ReactNode }) => (
     <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>
   ),
-  li: ({ children }: { children: React.ReactNode }) => (
+  li: ({ children }: { children?: React.ReactNode }) => (
     <li className="text-dalam-text-secondary">{children}</li>
   ),
-  h1: ({ children }: { children: React.ReactNode }) => (
+  h1: ({ children }: { children?: React.ReactNode }) => (
     <h1 className="text-lg font-bold mb-2 text-dalam-text-primary">
       {children}
     </h1>
   ),
-  h2: ({ children }: { children: React.ReactNode }) => (
+  h2: ({ children }: { children?: React.ReactNode }) => (
     <h2 className="text-base font-bold mb-2 text-dalam-text-primary">
       {children}
     </h2>
   ),
-  h3: ({ children }: { children: React.ReactNode }) => (
+  h3: ({ children }: { children?: React.ReactNode }) => (
     <h3 className="text-sm font-bold mb-1 text-dalam-text-primary">
       {children}
     </h3>
@@ -189,7 +189,7 @@ const MARKDOWN_COMPONENTS: Record<string, any> = {
     children,
     className,
   }: {
-    children: React.ReactNode;
+    children?: React.ReactNode;
     className?: string;
   }) => {
     const isInline = !className;
@@ -202,23 +202,23 @@ const MARKDOWN_COMPONENTS: Record<string, any> = {
     }
     return <code className={className}>{children}</code>;
   },
-  blockquote: ({ children }: { children: React.ReactNode }) => (
+  blockquote: ({ children }: { children?: React.ReactNode }) => (
     <blockquote className="border-l-2 border-dalam-accent-primary/40 pl-3 my-2 text-dalam-text-muted italic">
       {children}
     </blockquote>
   ),
   hr: () => <hr className="my-3 border-dalam-border-primary" />,
-  table: ({ children }: { children: React.ReactNode }) => (
+  table: ({ children }: { children?: React.ReactNode }) => (
     <div className="overflow-x-auto my-2">
       <table className="text-xs border-collapse">{children}</table>
     </div>
   ),
-  th: ({ children }: { children: React.ReactNode }) => (
+  th: ({ children }: { children?: React.ReactNode }) => (
     <th className="px-2 py-1 border border-dalam-border-primary text-left font-medium">
       {children}
     </th>
   ),
-  td: ({ children }: { children: React.ReactNode }) => (
+  td: ({ children }: { children?: React.ReactNode }) => (
     <td className="px-2 py-1 border border-dalam-border-primary">{children}</td>
   ),
 };

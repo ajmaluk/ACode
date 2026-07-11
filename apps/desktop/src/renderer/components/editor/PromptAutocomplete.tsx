@@ -365,9 +365,7 @@ export function PromptAutocomplete({
   });
   useLayoutEffect(() => {
     if (keyHandlerRef) {
-      // Bridge React.KeyboardEvent to native KeyboardEvent — intentional type coercion
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      keyHandlerRef.current = ((e: any) => latestHandler.current(e)) as any;
+      keyHandlerRef.current = ((e: unknown) => latestHandler.current(e as React.KeyboardEvent<HTMLTextAreaElement>)) as typeof keyHandlerRef.current;
     }
   }, [keyHandlerRef]);
 

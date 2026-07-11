@@ -24,7 +24,7 @@ export function ModelSubDropdown({
 }) {
   const [style, setStyle] = useState<React.CSSProperties>({});
   const p = providers.find((pr) => pr.id === hoveredProvider);
-  const enabledModels = p?.models.filter((m) => m.enabled !== false) ?? [];
+  const enabledModels = p?.models?.filter((m) => m.enabled !== false) ?? [];
 
   useLayoutEffect(() => {
     const rowEl = providerRowRefs.current[hoveredProvider];

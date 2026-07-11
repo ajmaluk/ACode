@@ -1216,9 +1216,9 @@ Add your project's common commands here so Dalam knows how to build:
     }
   };
 
-  const totalAdded = gitStatus?.added.length ?? 0;
-  const totalDeleted = gitStatus?.deleted.length ?? 0;
-  const totalModified = gitStatus?.modified.length ?? 0;
+  const totalAdded = gitStatus?.added?.length ?? 0;
+  const totalDeleted = gitStatus?.deleted?.length ?? 0;
+  const totalModified = gitStatus?.modified?.length ?? 0;
 
   return (
     <div className="h-full flex flex-col bg-dalam-bg-primary">
@@ -1458,7 +1458,7 @@ Add your project's common commands here so Dalam knows how to build:
                     <div className="relative" ref={modelRef}>
                       <Tooltip
                         content={
-                          currentModel?.model.name ||
+                          currentModel?.model?.name ||
                           selectedModelId ||
                           "Select model"
                         }
@@ -1475,7 +1475,7 @@ Add your project's common commands here so Dalam knows how to build:
                           <span
                             className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`}
                           />
-                          {currentModel?.model.name ||
+                          {currentModel?.model?.name ||
                             selectedModelId ||
                             "Select model"}
                           <ChevronDown className="w-3 h-3" />
@@ -1619,7 +1619,7 @@ Add your project's common commands here so Dalam knows how to build:
                 )}
                 <span className="ml-auto flex items-center gap-1">
                   <Cpu className="w-2.5 h-2.5" />
-                  {currentModel?.model.name || "Select model"}
+                  {currentModel?.model?.name || "Select model"}
                 </span>
               </div>
             )}
@@ -1650,7 +1650,7 @@ Add your project's common commands here so Dalam knows how to build:
                 </span>
                 <span className="ml-auto flex items-center gap-1">
                   <Cpu className="w-3 h-3" />
-                  {currentModel?.model.name ||
+                  {currentModel?.model?.name ||
                     settings.selectedModel ||
                     "No model"}
                 </span>
@@ -1816,7 +1816,7 @@ Add your project's common commands here so Dalam knows how to build:
                     <span
                       className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`}
                     />
-                    {currentModel?.model.name ||
+                    {currentModel?.model?.name ||
                       selectedModelId ||
                       "Select model"}
                     <ChevronDown className="w-3 h-3" />

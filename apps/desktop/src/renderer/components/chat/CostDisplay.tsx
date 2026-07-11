@@ -11,8 +11,7 @@
 import React from "react";
 import { useChat } from "@/store/useAppStore";
 
-// Stable selector — only recomputes when messages array changes
-const selectToolCallCount = (s: { messages: { toolCalls?: unknown[] }[] }) =>
+const selectToolCallCount = (s: { messages: { toolCalls?: Array<{ id: string }> }[] }) =>
   s.messages.reduce((sum, m) => sum + (m.toolCalls?.length ?? 0), 0);
 
 export const CostDisplay: React.FC = () => {

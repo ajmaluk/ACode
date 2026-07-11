@@ -34,10 +34,8 @@ export interface TimerState {
   activeSessionId: string | null;
   session: { id: string } | null;
   messages: ChatMessage[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  pendingToolCalls: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  pendingActivities: any[];
+  pendingToolCalls: Array<{ name: string; status?: string }>;
+  pendingActivities: Array<{ type: string; [key: string]: unknown }>;
   chatSessions: ChatSessionSummary[];
   _autoRemoveTimers: Set<ReturnType<typeof setTimeout>>;
 }

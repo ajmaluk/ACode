@@ -255,10 +255,11 @@ export const StreamingActivityPanel = React.memo(
               const isLast = idx === activities.length - 1;
               const status: "completed" | "running" =
                 isLast && activity.type !== "skill" ? "running" : "completed";
+              const activityKey = activity.id ?? `${activity.type}-${idx}`;
               if (activity.type === "explore") {
                 return (
                   <InlineActivityRow
-                    key={`explore-${idx}`}
+                    key={activityKey}
                     icon={<Search className="w-3 h-3 flex-shrink-0" />}
                     label="Searched"
                     target={activity.query}
@@ -272,7 +273,7 @@ export const StreamingActivityPanel = React.memo(
                 const ext = fileName.split(".").pop()?.toLowerCase() || "";
                 return (
                   <InlineActivityRow
-                    key={`read-${idx}`}
+                    key={activityKey}
                     icon={React.createElement(getFileIcon(ext), {
                       className: "w-3 h-3 flex-shrink-0",
                     })}
@@ -285,7 +286,7 @@ export const StreamingActivityPanel = React.memo(
               if (activity.type === "bash") {
                 return (
                   <InlineActivityRow
-                    key={`bash-${idx}`}
+                    key={activityKey}
                     icon={<Terminal className="w-3 h-3 flex-shrink-0" />}
                     label="Ran"
                     target={`$ ${activity.command}`}
@@ -306,7 +307,7 @@ export const StreamingActivityPanel = React.memo(
               if (activity.type === "skill") {
                 return (
                   <InlineActivityRow
-                    key={`skill-${idx}`}
+                    key={activityKey}
                     icon={<Zap className="w-3 h-3 flex-shrink-0" />}
                     label="Invoked"
                     target={`$${activity.name}`}
@@ -317,7 +318,7 @@ export const StreamingActivityPanel = React.memo(
               if (activity.type === "plan") {
                 return (
                   <InlineActivityRow
-                    key={`plan-${idx}`}
+                    key={activityKey}
                     icon={<ClipboardList className="w-3 h-3 flex-shrink-0" />}
                     label="Plan"
                     target={activity.plan.slice(0, 60)}

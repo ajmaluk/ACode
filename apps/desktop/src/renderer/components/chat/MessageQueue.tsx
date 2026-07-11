@@ -93,7 +93,7 @@ export function MessageQueue() {
           {/* Actions */}
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
-              onClick={() => steerQueueItem(item.id)}
+              onClick={() => { void steerQueueItem(item.id); }}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors"
               title="Send now (steer)"
             >

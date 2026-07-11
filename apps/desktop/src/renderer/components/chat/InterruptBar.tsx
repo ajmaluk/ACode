@@ -45,12 +45,18 @@ export const InterruptBar: React.FC = () => {
     if (redirectSentRef.current || !activeSessionId) return;
     redirectSentRef.current = true;
     await abort(activeSessionId);
-    // Wait for streaming to fully stop with timeout
-    const deadline = Date.now() + 3000;
-    while (useChat.getState().isStreaming && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    // Extra wait to ensure state is fully settled
+    // Wait for streaming to fully stop (event-driven via Zustand subscribe)
+    await new Promise<void>((resolve) => {
+      if (!useChat.getState().isStreaming) return resolve();
+      const unsub = useChat.subscribe((state, prev) => {
+        if (!state.isStreaming && prev.isStreaming) {
+          unsub();
+          resolve();
+        }
+      });
+      setTimeout(() => { unsub(); resolve(); }, 3000);
+    });
+    // Extra tick to ensure state is fully settled
     await new Promise((r) => setTimeout(r, 50));
     void sendMessage(text);
   };

@@ -348,7 +348,7 @@ export function MemoryGraph() {
       for (const node of graphData.nodes) {
         const isHovered = hovered?.id === node.id;
         const isSelected = selected?.id === node.id;
-        const isConnected = selected?.connections.includes(node.id) ?? false;
+        const isConnected = selected?.connections?.includes(node.id) ?? false;
         const baseSize = Math.max(4, Math.min(16, node.size));
         const dimmed = selected && !isSelected && !isConnected;
         const size = isHovered || isSelected ? baseSize * 1.4 : baseSize;

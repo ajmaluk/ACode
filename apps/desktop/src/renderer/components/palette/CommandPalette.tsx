@@ -164,10 +164,10 @@ export function CommandPalette() {
           },
         });
       } else {
-        n.children?.forEach((c) => visit(c as never));
+        n.children?.forEach((c) => visit(c as { name: string; path: string; type: string; children?: typeof fileTree }));
       }
     };
-    fileTree.forEach((n) => visit(n as never));
+    fileTree.forEach((n) => visit(n as { name: string; path: string; type: string; children?: typeof fileTree }));
     return out;
   }, [fileTree, openFile, setOpen]);
 

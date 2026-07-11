@@ -87,7 +87,7 @@ export function FindBar({
               placeholder="Find"
             />
             <span className="absolute right-2 text-[10px] text-dalam-text-muted">
-              {matchCount > 0 ? `${currentMatch}/${matchCount}` : "No results"}
+              {query ? (matchCount > 0 ? `${currentMatch}/${matchCount}` : "No results") : ""}
             </span>
           </div>
 

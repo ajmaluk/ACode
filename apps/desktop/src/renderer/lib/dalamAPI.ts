@@ -1,4 +1,5 @@
 import type { DalamAPI, AgentSessionMode, AppSettings, ChatMessage, DiffProposal, FileNode, StreamEvent, ToolCall } from "@dalam/shared-types";
+import type { TimerState } from "./safetyTimer";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
@@ -59,16 +60,19 @@ const _mcpStdioConnections = new Map<string, McpStdioConnection>();
 const MCP_STDIO_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // Periodic cleanup of idle MCP stdio connections
-setInterval(() => {
-  const now = Date.now();
-  for (const [serverName, conn] of _mcpStdioConnections) {
-    if (now - conn.lastUsed > MCP_STDIO_IDLE_TIMEOUT_MS) {
-      conn.child.kill().catch(() => {});
-      _mcpStdioConnections.delete(serverName);
-      _debugLog(`[MCP] Closed idle stdio connection: ${serverName}`);
+// Guard: only run in production/development builds, not during vitest
+if (typeof setInterval !== "undefined" && import.meta.env.MODE !== "test") {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [serverName, conn] of _mcpStdioConnections) {
+      if (now - conn.lastUsed > MCP_STDIO_IDLE_TIMEOUT_MS) {
+        conn.child.kill().catch(() => {});
+        _mcpStdioConnections.delete(serverName);
+        _debugLog(`[MCP] Closed idle stdio connection: ${serverName}`);
+      }
     }
-  }
-}, 60_000);
+  }, 60_000);
+}
 
 
 // ─── Internal Types ─────────────────────────────────────────
@@ -281,19 +285,24 @@ export function getActiveProvider(requireModel = true): {
   return { settings, providerId, modelId: modelId ?? "", config };
 }
 
+/**
+ * Parse SSE (Server-Sent Events) data from a buffer.
+ * Normalizes CRLF/LF, finds complete `data:` events delimited by blank lines,
+ * and returns parsed events plus the raw unconsumed portion (for incremental streaming).
+ *
+ * This is pure — no cursor/state. The caller trims the buffer via `buffer = remaining`,
+ * which naturally keeps per-call work proportional to new data (O(n), not O(n²)).
+ */
 function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining: string } {
-  // Normalize CRLF to LF (some proxies/CDNs send CRLF)
   const normalized = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = normalized.split("\n");
   const parsed: { data: string }[] = [];
   let currentData = "";
   let lastCompleteIdx = 0;
-  // Track start of the ENTIRE incomplete event (first data line before any comment/space)
   let incompleteEventStart = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line === "") {
-      // Empty line = event boundary
       if (currentData) {
         if (currentData !== "[DONE]") parsed.push({ data: currentData });
         currentData = "";
@@ -301,18 +310,14 @@ function parseSSEEvents(buffer: string): { parsed: { data: string }[]; remaining
       lastCompleteIdx = i + 1;
       incompleteEventStart = -1;
     } else if (line.startsWith(":")) {
-      // SSE comment line — skip (e.g. heartbeat), but don't reset event start
-      // Comments between data lines are part of the same event
       lastCompleteIdx = i + 1;
     } else if (line.startsWith("data:")) {
       if (incompleteEventStart === -1) incompleteEventStart = i;
       const dataContent = line.startsWith("data: ") ? line.slice(6) : line.slice(5);
       currentData += (currentData ? "\n" : "") + dataContent;
     }
-    // Other fields (event:, id:, retry:) are silently ignored per SSE spec
   }
-  // Preserve incomplete data lines (no trailing empty line) across buffer boundaries.
-  // Without this, data arriving mid-event is lost when the buffer splits mid-event.
+
   const remaining = incompleteEventStart >= 0
     ? lines.slice(incompleteEventStart).join("\n")
     : lines.slice(lastCompleteIdx).join("\n");
@@ -382,32 +387,39 @@ function extractRetryAfter(message: string): number | null {
  * Falls back to browser fetch if the plugin is unavailable.
  */
 export async function corsFetch(url: string, options: RequestInit): Promise<Response> {
+  // Try Tauri plugin HTTP first; fall back to browser fetch when the plugin
+  // is unavailable or its runtime environment isn't available (vitest/JSDOM).
+  // Real network/protocol errors from the plugin propagate normally.
+  let tauriFetch: (url: string, opts: Record<string, unknown>) => Promise<{
+    ok: boolean; status: number; statusText: string; headers: Headers | Record<string, string>;
+    body: ReadableStream<Uint8Array> | null; arrayBuffer: () => Promise<ArrayBuffer>;
+  }>;
   try {
-    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+    ({ fetch: tauriFetch } = await import("@tauri-apps/plugin-http"));
+  } catch {
+    return fetch(url, options);
+  }
+  try {
     const resp = await tauriFetch(url, {
       method: options.method as string || "GET",
       headers: options.headers as Record<string, string> || {},
       body: options.body as string | undefined,
       signal: options.signal,
     });
-    // Wrap Tauri response as a standard Response-like object
     const respHeaders = new Headers();
     if (resp.headers instanceof Headers) {
       resp.headers.forEach((v, k) => respHeaders.set(k, v));
     } else if (resp.headers) {
       for (const [k, v] of Object.entries(resp.headers as Record<string, string>)) respHeaders.set(k, v);
     }
-    // Cache the body promise to avoid double consumption (cache the Promise, not the resolved value)
     let bodyPromise: Promise<ArrayBuffer> | null = null;
     const getBody = (): Promise<ArrayBuffer> => {
       if (!bodyPromise) bodyPromise = resp.arrayBuffer();
       return bodyPromise;
     };
     
-    // Clone helper that handles both cached and uncached body
     const cloneResponse = (): Response => {
       if (bodyPromise) {
-        // Create a ReadableStream that resolves the cached body promise
         const stream = new ReadableStream({
           async start(controller) {
             const buf = await bodyPromise!;
@@ -417,8 +429,6 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
         });
         return new Response(stream, { status: resp.status, statusText: resp.statusText, headers: respHeaders });
       }
-      // For uncached body, return a Response that will read from the original body
-      // Note: This is a best-effort clone; if the body has already been consumed, this will fail
       return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: respHeaders });
     };
     
@@ -437,9 +447,12 @@ export async function corsFetch(url: string, options: RequestInit): Promise<Resp
       clone: cloneResponse,
     } as Response;
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
-    // Fallback to browser fetch if plugin unavailable
-    return fetch(url, options);
+    // Plugin module loaded but its runtime (window.__TAURI__) isn't available
+    if (e instanceof ReferenceError || (e as Error)?.message?.includes("window")) {
+      if (import.meta.env.DEV) console.warn("[DALAM] corsFetch runtime fallback:", e);
+      return fetch(url, options);
+    }
+    throw e;
   }
 }
 
@@ -466,6 +479,9 @@ async function fetchWithRetry(
       if (resp.status === 429) throw new ProviderError(`Rate limited. ${text.slice(0, 200)}`, "network");
       if (resp.status >= 500) throw new ProviderError(`Provider error (${resp.status}): ${text.slice(0, 200)}`, "provider");
       // Client errors (400, 404, etc.) are permanent — don't retry them
+      if (text.includes("DEGRADED")) {
+        throw new ProviderError(`Model temporarily unavailable (DEGRADED). The endpoint may be under maintenance. Try again later or switch to a different model.`, "provider");
+      }
       throw new ProviderError(`HTTP ${resp.status}: ${text.slice(0, 200)}`, "validation");
     }
     return resp;
@@ -488,6 +504,9 @@ async function fetchJsonWithRetry(
       if (resp.status === 401) throw new ProviderError("Authentication failed. Check your API key.", "auth");
       if (resp.status === 403) throw new ProviderError("Access forbidden. Check your API key and permissions.", "auth");
       if (resp.status === 402 || resp.status === 429) throw new ProviderError("Insufficient credits or rate limited.", "credit");
+      if (text.includes("DEGRADED")) {
+        throw new ProviderError("Model temporarily unavailable (DEGRADED). Try again later or switch to a different model.", "provider");
+      }
       throw new ProviderError(`Failed to summarize: HTTP ${resp.status} - ${text.slice(0, 300)}`, "provider");
     }
     return resp.json();
@@ -498,7 +517,7 @@ async function fetchJsonWithRetry(
 function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): string {
   const attrs = Object.entries(parsedArgs)
     .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
-    .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}"`)
+      .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&apos;')}"`)
     .join(" ");
   const bodyTools = ["write_file", "clipboard_write", "memory_save"];
   if (bodyTools.includes(tcName) && parsedArgs.content) {
@@ -506,15 +525,15 @@ function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): 
     const escapedContent = contentStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const bodyAttrs = Object.entries(parsedArgs)
       .filter(([k, v]) => k !== "content" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean"))
-      .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}"`)
+    .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&apos;')}"`)
       .join(" ");
     return `<${tcName} ${bodyAttrs}>${escapedContent}</${tcName}>`;
   }
   if (tcName === "edit_file" && parsedArgs.search && parsedArgs.replace !== undefined) {
     const occAttr = parsedArgs.occurrence ? ` occurrence="${parsedArgs.occurrence}"` : "";
-    const escapedPath = String(parsedArgs.path || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    const escapedSearch = String(parsedArgs.search).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const escapedReplace = String(parsedArgs.replace).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const escapedPath = String(parsedArgs.path || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+    const escapedSearch = String(parsedArgs.search).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&apos;');
+    const escapedReplace = String(parsedArgs.replace).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&apos;');
     return `<${tcName} path="${escapedPath}"${occAttr}>\n<search>${escapedSearch}</search>\n<replace>${escapedReplace}</replace>\n</${tcName}>`;
   }
   return attrs ? `<${tcName} ${attrs}/>` : `<${tcName}/>`;
@@ -530,11 +549,20 @@ async function* streamOpenAI(
   _debugLog(`[streamOpenAI] POST ${url} model=${model} messages=${messages.length} maxTokens=${maxTokens}`);
   let resp: Response;
   try {
-    resp = await fetchWithRetry(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-    }, 2, 1000, signal);
+    const fetchAbortController = new AbortController();
+    const fetchTimeoutId = setTimeout(() => fetchAbortController.abort(), 120_000);
+    if (signal) {
+      signal.addEventListener("abort", () => fetchAbortController.abort());
+    }
+    try {
+      resp = await fetchWithRetry(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+      }, 2, 1000, fetchAbortController.signal);
+    } finally {
+      clearTimeout(fetchTimeoutId);
+    }
   } catch (err) {
     _debugLog(`[streamOpenAI] fetchWithRetry failed:`, err);
     throw err;
@@ -758,7 +786,10 @@ async function* streamAnthropic(
   let currentClearFnAnth: (() => void) | undefined;
   let abortHandlerAnthropic: (() => void) | null = null;
   if (signal) {
-    abortHandlerAnthropic = () => currentClearFnAnth?.();
+    abortHandlerAnthropic = () => {
+      currentClearFnAnth?.();
+      reader.cancel().catch(() => {});
+    };
     signal.addEventListener("abort", abortHandlerAnthropic, { once: true });
   }
   // Tool call accumulation for Anthropic native tool calling
@@ -885,7 +916,7 @@ export async function* streamChat(
   }
 }
 
-const JUNK_DIRS = new Set([".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"]);
+export const JUNK_DIRS = new Set([".git", "node_modules", "__pycache__", ".next", ".nuxt", "dist", "build", ".turbo", ".cache", ".vscode", ".idea", "coverage", ".output"]);
 const JUNK_FILES = new Set([".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"]);
 
 async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles: number = 10000, _count: { n: number } = { n: 0 }, _visited: Set<string> = new Set()): Promise<FileNode[]> {
@@ -1513,7 +1544,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           const modelId = settingsStore.getState().settings.selectedModel || "";
           const allModels = useModelProviders.getState().getAllModels();
           const modelInfo = allModels.find((m) => m.model.modelId === modelId);
-          const MAX_TOKENS = parseContextWindow(modelInfo?.model.contextWindow) || 120000;
+          const MAX_TOKENS = parseContextWindow(modelInfo?.model?.contextWindow) || 120000;
           // Reserve tokens for system prompt, compaction summary, and output
           const systemTokenEst = estTokens(systemPrompt);
           const OUTPUT_RESERVE = 8000;
@@ -1587,8 +1618,11 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           const abortOnDelay = (delay: number) =>
             new Promise<void>((resolve) => {
               if (ac.signal.aborted) return resolve();
-              const timer = setTimeout(resolve, delay);
               const onAbort = () => { clearTimeout(timer); resolve(); };
+              const timer = setTimeout(() => {
+                ac.signal.removeEventListener("abort", onAbort);
+                resolve();
+              }, delay);
               ac.signal.addEventListener("abort", onAbort, { once: true });
             });
 
@@ -1677,14 +1711,19 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           emit({ type: "message-start", messageId: sessionId });
           // isStreaming handled by appendStream on message-start
 
-          await rateLimitDelay();
+          // Skip rate limit delay on the first turn — no point delaying before
+          // the very first chunk. The 2.5s base delay is only meaningful between
+          // subsequent turns to avoid hitting RPM limits.
+          if (loopCount > 1) {
+            await rateLimitDelay();
+          }
 
           const maxTokens = settings.maxTokens ?? 4096;
 
           // Pre-flight context check: estimate total tokens and compact if needed
           const { estimateTokens: estTk, parseContextWindow } = await import("./contextManager");
           const modelInfo2 = (await import("../store/useAppStore")).useModelProviders.getState().getAllModels().find((m) => m.model.modelId === activeModelId);
-          const ctxWindow = parseContextWindow(modelInfo2?.model.contextWindow) || 120000;
+          const ctxWindow = parseContextWindow(modelInfo2?.model?.contextWindow) || 120000;
           const totalEstTokens = messages.reduce((sum, m) => {
             const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
             return sum + estTk(content) + 4;
@@ -1975,10 +2014,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             try {
               const { resetSafetyTimer } = await import("./safetyTimer");
               resetSafetyTimer(
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                () => useChat.getState() as any,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (update: Record<string, unknown>) => useChat.setState(update as any),
+                () => useChat.getState() as TimerState,
+                (update: Record<string, unknown>) => useChat.setState(update as Partial<ReturnType<typeof useChat.getState>>),
                 "normal",
               );
             } catch (e) {
@@ -2373,7 +2410,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
     async set(key, value) {
       const s = getStoredSettings() as unknown as Record<string, unknown>;
       s[key as string] = value;
-      storeSettings(s as never);
+      storeSettings(s as unknown as AppSettings);
     },
     async getAll() { return getStoredSettings(); },
   },
@@ -2483,18 +2520,18 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
   },
 };
 
-interface ParsedToolCall {
+export interface ParsedToolCall {
   name: string;
   args: Record<string, string>;
   raw: string;
 }
 
-function decodeHtmlEntities(s: string): string {
+export function decodeHtmlEntities(s: string): string {
   // Decode HTML entities in correct order: &amp; first (to avoid double-decoding)
   return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
-function parseAttributes(tagStr: string): Record<string, string> {
+export function parseAttributes(tagStr: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   // Match key="value" or key='value', ensuring matching opening and closing quotes
   const regex = /([a-zA-Z0-9_-]+)=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g;
@@ -2513,7 +2550,7 @@ function parseAttributes(tagStr: string): Record<string, string> {
  * Previously, code block stripping replaced these with "[code block]"
  * before they could be parsed, causing the agent to get stuck.
  */
-const KNOWN_TOOL_NAMES = new Set([
+export const KNOWN_TOOL_NAMES = new Set([
   "read_file", "write_file", "edit_file", "create_file", "list_dir", "grep_file", "search_files",
   "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_diff_file",
   "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
@@ -2528,7 +2565,7 @@ const KNOWN_TOOL_NAMES = new Set([
   "new_terminal", "terminal_write",
 ]);
 
-function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
+export function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
   const toolCalls: ParsedToolCall[] = [];
   // Match any code block — LLMs may use any language hint or none at all
   const codeBlockRegex = /```[\w-]*\s*\n([\s\S]*?)```/gi;
@@ -2579,10 +2616,10 @@ function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
 const REGEX_READ_FILE = /<read_file\s+path=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
 // Use greedy match for edit_file content to handle replacement text containing </edit_file>
-const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*)<\/edit_file>/gi;
+const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*?)<\/edit_file>/gi;
 const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
 const REGEX_GREP_FILE = /<grep_file\s+path=["']([^"']+)["']\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
-const REGEX_SEARCH_FILES = /<search_files\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
+const REGEX_SEARCH_FILES = /<search_files\s+([^>]*)\/?>/gi;
 const REGEX_RUN_COMMAND = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
 const REGEX_BASH = /<bash\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
 const REGEX_SHELL = /<shell\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
@@ -2623,8 +2660,13 @@ const REGEX_MALFORMED_QUESTION = /(?:^|[\s<])question\s+question="([^"]*)"\s+opt
 const REGEX_MCP_TAG = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
 const REGEX_ANTML_BLOCK = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
 const REGEX_INVOKE = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
+const REGEX_GET_ENV = /<get_env\s+([^>]*)\/?>/gi;
+const REGEX_GET_SCREEN_INFO = /<get_screen_info\s*\/?>/gi;
+const REGEX_LIST_PROCESSES = /<list_processes\s*\/?>/gi;
+const REGEX_KILL_PROCESS = /<kill_process\s+([^>]*)\/?>/gi;
+const REGEX_GET_DISK_SPACE = /<get_disk_space\s+([^>]*)\/?>/gi;
 
-async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
+export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
 
   const toolCalls: ParsedToolCall[] = [];
   let match: RegExpExecArray | null;
@@ -2685,30 +2727,33 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // 6. search_files — new regex directly captures pattern
   REGEX_SEARCH_FILES.lastIndex = 0;
   while ((match = REGEX_SEARCH_FILES.exec(text)) !== null) {
-    if (match[1]) {
-      // Extract optional path, glob, regex, max_results from remaining attributes
-      const extraAttrs = parseAttributes(match[0].slice(match[0].indexOf(match[1]) + match[1].length));
-      toolCalls.push({ name: "search_files", args: { path: extraAttrs.path, pattern: match[1], glob: extraAttrs.glob, regex: extraAttrs.regex, max_results: extraAttrs.max_results }, raw: match[0] });
+    const attrs = parseAttributes(match[1]);
+    if (attrs.pattern) {
+      toolCalls.push({
+        name: "search_files",
+        args: { path: attrs.path, pattern: attrs.pattern, glob: attrs.glob, regex: attrs.regex, max_results: attrs.max_results },
+        raw: match[0],
+      });
     }
   }
 
   // 7. run_command
   REGEX_RUN_COMMAND.lastIndex = 0;
   while ((match = REGEX_RUN_COMMAND.exec(text)) !== null) {
-    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+    toolCalls.push({ name: "run_command", args: { command: decodeHtmlEntities(match[1] != null ? match[1] : (match[2] ?? "")) }, raw: match[0] });
   }
   // bash/shell/execute aliases for run_command
   REGEX_BASH.lastIndex = 0;
   while ((match = REGEX_BASH.exec(text)) !== null) {
-    toolCalls.push({ name: "bash", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+    toolCalls.push({ name: "bash", args: { command: decodeHtmlEntities(match[1] != null ? match[1] : (match[2] ?? "")) }, raw: match[0] });
   }
   REGEX_SHELL.lastIndex = 0;
   while ((match = REGEX_SHELL.exec(text)) !== null) {
-    toolCalls.push({ name: "shell", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+    toolCalls.push({ name: "shell", args: { command: decodeHtmlEntities(match[1] != null ? match[1] : (match[2] ?? "")) }, raw: match[0] });
   }
   REGEX_EXECUTE.lastIndex = 0;
   while ((match = REGEX_EXECUTE.exec(text)) !== null) {
-    toolCalls.push({ name: "execute", args: { command: decodeHtmlEntities(match[1] || match[2]) }, raw: match[0] });
+    toolCalls.push({ name: "execute", args: { command: decodeHtmlEntities(match[1] != null ? match[1] : (match[2] ?? "")) }, raw: match[0] });
   }
 
   // 8. git_status
@@ -2979,6 +3024,45 @@ async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
+  // 37. get_env
+  REGEX_GET_ENV.lastIndex = 0;
+  while ((match = REGEX_GET_ENV.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.key) {
+      toolCalls.push({ name: "get_env", args: { key: attrs.key }, raw: match[0] });
+    }
+  }
+
+  // 38. get_screen_info
+  REGEX_GET_SCREEN_INFO.lastIndex = 0;
+  while ((match = REGEX_GET_SCREEN_INFO.exec(text)) !== null) {
+    toolCalls.push({ name: "get_screen_info", args: {}, raw: match[0] });
+  }
+
+  // 39. list_processes
+  REGEX_LIST_PROCESSES.lastIndex = 0;
+  while ((match = REGEX_LIST_PROCESSES.exec(text)) !== null) {
+    toolCalls.push({ name: "list_processes", args: {}, raw: match[0] });
+  }
+
+  // 40. kill_process
+  REGEX_KILL_PROCESS.lastIndex = 0;
+  while ((match = REGEX_KILL_PROCESS.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.pid) {
+      toolCalls.push({ name: "kill_process", args: { pid: attrs.pid }, raw: match[0] });
+    }
+  }
+
+  // 41. get_disk_space
+  REGEX_GET_DISK_SPACE.lastIndex = 0;
+  while ((match = REGEX_GET_DISK_SPACE.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.path) {
+      toolCalls.push({ name: "get_disk_space", args: { path: attrs.path }, raw: match[0] });
+    }
+  }
+
   // 25. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
@@ -3215,6 +3299,9 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   write_file: 30_000,
   edit_file: 30_000,
   run_command: 60_000,
+  bash: 60_000,
+  shell: 60_000,
+  execute: 60_000,
   grep_file: 30_000,
   search_files: 60_000,
   git_status: 15_000,
@@ -4079,8 +4166,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (doc) {
         // Execute script in iframe context
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = (iframe.contentWindow as any)?.eval?.(script);
+        const result = (iframe.contentWindow as Window & { eval?: (script: string) => unknown })?.eval?.(script);
         return result !== undefined ? String(result) : "Script executed (no return value)";
       }
       // Cross-origin: can't access iframe content directly
