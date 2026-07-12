@@ -44,7 +44,12 @@ const TOKEN_CACHE_MAX = 1000;
 
 function getCachedTokenCount(text: string): number | null {
   const entry = _tokenCache.get(text);
-  if (entry) return entry.tokens;
+  if (entry) {
+    // Touch to move to end (MRU position) for true LRU eviction
+    _tokenCache.delete(text);
+    _tokenCache.set(text, entry);
+    return entry.tokens;
+  }
   return null;
 }
 
@@ -580,6 +585,11 @@ export function buildCompactionPrompt(
     const m = messages[i];
     let content = m.content;
 
+    // Truncate individual message content to avoid blowing up the compaction prompt
+    if (content.length > 2000) {
+      content = content.slice(0, 2000) + "...";
+    }
+
     // Preserve tool result user messages (the primary mechanism in ACode)
     // Look ahead for tool result messages that follow this message
     if (m.role === "assistant" && m.toolCalls?.length) {
@@ -951,7 +961,7 @@ export function buildRollingSummary(
     if (
       msg.role === "user" &&
       _isToolResult(msg) &&
-      msg.content.includes("[Tool error")
+      (msg.content.includes("[Tool error") || msg.content.includes("[TOOL ERROR"))
     ) {
       const errorPreview = msg.content.slice(0, 100).replace(/\n/g, " ");
       errors.push(errorPreview);

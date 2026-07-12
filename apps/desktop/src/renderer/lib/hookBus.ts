@@ -187,32 +187,16 @@ class HookEventBus {
       try {
         const result = handler(payload);
         if (result && typeof (result as Promise<void>).then === "function") {
-          // Use AbortController to create a timeout signal. When the timeout fires,
-          // the AbortController rejects the Promise, which races against the handler.
-          // The cleanup in finally ensures the timer is cleared on success.
-          const timeoutController = new AbortController();
-          const timeoutId = setTimeout(() => {
-            timeoutController.abort();
-          }, 10_000);
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          const timeout = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+              reject(new Error(`Handler "${handlerName}" timed out after 10s`));
+            }, 10_000);
+          });
           try {
-            // Race the handler against a signal-aware rejection
-            await Promise.race([
-              result,
-              new Promise<never>((_, reject) => {
-                timeoutController.signal.addEventListener(
-                  "abort",
-                  () => {
-                    reject(
-                      new Error(`Handler "${handlerName}" timed out after 10s`),
-                    );
-                  },
-                  { once: true },
-                );
-              }),
-            ]);
+            await Promise.race([result, timeout]);
           } finally {
-            clearTimeout(timeoutId);
-            timeoutController.abort(); // Clean up signal listeners
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
           }
         }
         this.pushLog({

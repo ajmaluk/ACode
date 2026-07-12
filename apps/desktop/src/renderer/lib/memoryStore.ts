@@ -57,7 +57,6 @@ export async function saveMemory(
   entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">,
   workspacePath: string
 ): Promise<{ action: "add" | "update" | "noop"; id: string }> {
-  const db = getDb();
 
   // Search for similar existing memories via FTS5
   const existing = await searchMemories(entry.summary, { category: entry.category, limit: 3, updateAccessCount: false });
@@ -71,7 +70,7 @@ export async function saveMemory(
       // Update existing — newer truth wins
       const now = Date.now();
       const mergedTags = Array.from(new Set([...e.tags, ...entry.tags]));
-      await db.execute(
+      await getDb().execute(
         `UPDATE memories SET content=?, summary=?, tags=?, tier=?, updated_at=?, stale=0 WHERE id=?`,
         [entry.content, entry.summary, JSON.stringify(mergedTags), entry.tier, now, e.id]
       );
@@ -101,7 +100,7 @@ export async function saveMemory(
     stale: false,
   };
 
-  await db.execute(
+  await getDb().execute(
     `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`,
     [id, entry.category, entry.tier, entry.content, entry.summary, JSON.stringify(entry.tags),
@@ -182,7 +181,7 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
       // Markdown cleanup is best-effort
     }
   }
-  const result = await db.execute(`DELETE FROM memories WHERE stale=1`);
+  const result = await getDb().execute(`DELETE FROM memories WHERE stale=1`);
   return result.rowsAffected;
 }
 
@@ -490,6 +489,7 @@ export async function processPendingWrites(): Promise<void> {
     // Merge still-pending with any entries pushed by concurrent failures during processing
     const seenKeys = new Set(stillPending.map(w => w.entry.id));
     for (const w of oldQueue) {
+      if (w.retries >= MAX_WRITE_RETRIES) continue;
       if (!seenKeys.has(w.entry.id)) {
         stillPending.push(w);
         seenKeys.add(w.entry.id);
@@ -587,7 +587,7 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
       continue;
     }
 
-    const match = line.match(/^(\w+):\s*(.*)$/);
+    const match = line.match(/^([\w-]+):\s*(.*)$/);
     if (match) {
       currentKey = match[1];
       let value = match[2].trim();
@@ -923,17 +923,21 @@ function parseRow(row: MemoryEntryRow): MemoryEntry {
     if (import.meta.env.DEV) console.warn("[Memory] JSON parse:", e);
     tags = [];
   }
+  const VALID_CATEGORIES: readonly string[] = ["user", "feedback", "project", "reference", "task", "decision"];
+  const VALID_TIERS: readonly string[] = ["critical", "high", "medium", "low"];
+  const rawCategory = String(row.category ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const rawTier = String(row.tier ?? "").toLowerCase().replace(/[^a-z]/g, "");
   return {
     id: row.id,
-    category: row.category as MemoryCategory,
-    tier: row.tier as MemoryTier,
+    category: (VALID_CATEGORIES.includes(rawCategory) ? rawCategory : "project") as MemoryCategory,
+    tier: (VALID_TIERS.includes(rawTier) ? rawTier : "medium") as MemoryTier,
     content: row.content,
     summary: row.summary,
     tags,
     sourceSession: row.source_session ?? undefined,
     sourceFile: row.source_file ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: row.created_at ?? Date.now(),
+    updatedAt: row.updated_at ?? Date.now(),
     accessCount: row.access_count ?? 0,
     lastAccessedAt: row.last_accessed ?? 0,
     verified: !!row.verified,

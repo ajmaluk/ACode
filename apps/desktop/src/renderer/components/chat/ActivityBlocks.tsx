@@ -267,7 +267,8 @@ export const ReadBlock = React.memo(function ReadBlock({
   lineRange?: [number, number];
 }) {
   const fileName = basename(path);
-  const lines = content.split("\n");
+  const body = content ?? "";
+  const lines = body.split("\n");
   const start = lineRange?.[0] ?? 1;
   const range = lineRange
     ? `${lineRange[0]}–${lineRange[1]}`
@@ -455,6 +456,8 @@ export const BashActivityBlock = React.memo(function BashActivityBlock({
   command: string;
   result: string;
 }) {
+  const MAX_RESULT_LENGTH = 5000;
+  const truncated = result.length > MAX_RESULT_LENGTH;
   return (
     <ActivityRow
       label={
@@ -466,7 +469,7 @@ export const BashActivityBlock = React.memo(function BashActivityBlock({
     >
       {result ? (
         <pre className="font-mono text-[11px] bg-dalam-bg-secondary/30 rounded-md p-2 max-h-60 overflow-y-auto scrollbar-thin whitespace-pre-wrap break-words">
-          {result}
+          {truncated ? result.slice(0, MAX_RESULT_LENGTH) + "\n... (truncated)" : result}
         </pre>
       ) : (
         <span className="italic opacity-70">no output</span>
@@ -770,17 +773,22 @@ function ArgsDisplay({
   args: Record<string, unknown>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const entries = Object.entries(args).filter(([k]) => {
+  const entries = Object.entries(args).filter(([k, v]) => {
     const lower = k.toLowerCase();
-    return (
-      !lower.includes("api_key") &&
-      !lower.includes("token") &&
-      !lower.includes("password") &&
-      !lower.includes("secret") &&
-      !lower.includes("authorization") &&
-      !lower.includes("privatekey") &&
-      !lower.includes("accesskey")
-    );
+    const sensitive =
+      lower.includes("api_key") ||
+      lower.includes("token") ||
+      lower.includes("password") ||
+      lower.includes("secret") ||
+      lower.includes("authorization") ||
+      lower.includes("privatekey") ||
+      lower.includes("accesskey") ||
+      lower.includes("credential") ||
+      lower.includes("auth_header") ||
+      lower.includes("bearer");
+    if (sensitive) return false;
+    if (typeof v === "string" && /^(sk-|pk-|eyJ)/i.test(v)) return false;
+    return true;
   });
 
   if (entries.length === 0) {
@@ -1188,11 +1196,20 @@ const ToolCallRow = React.memo(function ToolCallRow({
             <div className="text-[10px] uppercase tracking-wider opacity-60 mb-0.5">
               Result
             </div>
-            <ToolResultDisplay
-              toolName={toolCall.name}
-              result={toolCall.result}
-              args={args}
-            />
+            {isEdit ? (
+              <div className="font-mono text-[10px] text-dalam-text-secondary">
+                <span className="text-dalam-git-added">✓</span>{" "}
+                {toolCall.result.length > 100
+                  ? toolCall.result.slice(0, 100) + "..."
+                  : toolCall.result}
+              </div>
+            ) : (
+              <ToolResultDisplay
+                toolName={toolCall.name}
+                result={toolCall.result}
+                args={args}
+              />
+            )}
           </div>
         )}
         {needsApproval && (
@@ -1342,18 +1359,20 @@ function FileChangeRow({
           {change.preview ? (
             <pre className="text-[11px] font-mono leading-relaxed p-3 overflow-x-auto max-h-60 overflow-y-auto scrollbar-thin">
               {change.preview.split("\n").map((line, i) => {
-                const isAdd = line.startsWith("+");
-                const isRemove = line.startsWith("-");
+                const isHunk = line.startsWith("@@");
+                const isAdd = !isHunk && line.startsWith("+");
+                const isRemove = !isHunk && line.startsWith("-");
+                const isMeta = !isHunk && !isAdd && !isRemove && (line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("\\ No newline"));
                 return (
                   <div
                     key={i}
                     className={`flex ${isAdd ? "bg-dalam-git-added/10" : isRemove ? "bg-dalam-git-deleted/10" : ""}`}
                   >
                     <span className="w-8 text-right pr-2 text-dalam-text-muted/40 select-none flex-shrink-0">
-                      {i + 1}
+                      {isHunk || isMeta ? "" : i + 1}
                     </span>
                     <span
-                      className={`flex-1 whitespace-pre ${isAdd ? "text-dalam-git-added" : isRemove ? "text-dalam-git-deleted" : "text-dalam-text-secondary"}`}
+                      className={`flex-1 whitespace-pre ${isAdd ? "text-dalam-git-added" : isRemove ? "text-dalam-git-deleted" : isHunk ? "text-dalam-accent-primary font-semibold" : isMeta ? "text-dalam-text-muted/40" : "text-dalam-text-secondary"}`}
                     >
                       {line || "\u00A0"}
                     </span>

@@ -86,7 +86,12 @@ const _globRegexCache = new Map<string, RegExp>();
 const MAX_GLOB_CACHE = 500;
 function globToRegex(pattern: string): RegExp {
   const cached = _globRegexCache.get(pattern);
-  if (cached) return cached;
+  if (cached) {
+    // Touch to move to MRU position for true LRU eviction
+    _globRegexCache.delete(pattern);
+    _globRegexCache.set(pattern, cached);
+    return cached;
+  }
   // Evict oldest entries if at cap
   if (_globRegexCache.size >= MAX_GLOB_CACHE) {
     const firstKey = _globRegexCache.keys().next().value;

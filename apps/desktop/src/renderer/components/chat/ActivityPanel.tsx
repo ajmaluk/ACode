@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   FileCode,
@@ -32,11 +32,12 @@ export const WorkingTimer = React.memo(function WorkingTimer({
   startTime: number;
 }) {
   const [elapsed, setElapsed] = useState(() =>
-    Math.floor((Date.now() - startTime) / 1000),
+    startTime > 0 ? Math.max(0, Math.floor((Date.now() - startTime) / 1000)) : 0,
   );
   React.useEffect(() => {
+    if (startTime <= 0) return;
     const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+      setElapsed(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
     }, 1000);
     return () => clearInterval(interval);
   }, [startTime]);
@@ -49,6 +50,28 @@ export const WorkingTimer = React.memo(function WorkingTimer({
     </span>
   );
 });
+
+// ============================================================================
+// RunningTimer — live elapsed time for running commands
+// ============================================================================
+function RunningTimer() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  return (
+    <span className="text-[10px] text-dalam-text-muted/50 tabular-nums ml-auto">
+      {timeStr}
+    </span>
+  );
+}
 
 // ============================================================================
 // InlineActivityRow — shows a single tool/activity in progress (Cursor-style)
@@ -71,7 +94,9 @@ export function InlineActivityRow({
   const [open, setOpen] = useState(false);
   const hasDetail = !!children;
   return (
-    <div className="my-0.5">
+    <div
+      className={`my-0.5 relative ${status === "running" ? "animate-shimmer rounded" : ""}`}
+    >
       <button
         type="button"
         onClick={() => hasDetail && setOpen((o) => !o)}
@@ -94,11 +119,13 @@ export function InlineActivityRow({
             {target}
           </span>
         )}
-        {duration && (
+        {status === "running" && !duration ? (
+          <RunningTimer />
+        ) : duration ? (
           <span className="text-[10px] text-dalam-text-muted/50 tabular-nums ml-auto">
             {duration}
           </span>
-        )}
+        ) : null}
         {hasDetail && (
           <ChevronDown
             className={`w-2.5 h-2.5 text-dalam-text-muted/50 transition-transform flex-shrink-0 ml-1 ${open ? "" : "-rotate-90"}`}
@@ -218,6 +245,12 @@ export const StreamingActivityPanel = React.memo(
                     ? "failed"
                     : undefined;
 
+              const isWriteTool =
+                tc.name === "write_file" ||
+                tc.name === "write" ||
+                tc.name === "edit_file" ||
+                tc.name === "edit";
+
               const target = (() => {
                 const args = tc.args;
                 if (!args) return "";
@@ -239,7 +272,8 @@ export const StreamingActivityPanel = React.memo(
                   target={target}
                   status={status}
                 >
-                  {tc.result && (
+                  {/* Write/edit tools: show compact result, not full file content */}
+                  {tc.result && !isWriteTool && (
                     <pre className="font-mono text-[10px] bg-dalam-bg-secondary/30 rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
                       {tc.result.slice(0, 2000)}
                     </pre>

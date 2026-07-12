@@ -36,8 +36,6 @@ interface SqlDatabase {
 
 let dbInstance: SqlDatabase | null = null;
 let currentWorkspacePath: string | null = null;
-let dbLoadingPromise: Promise<SqlDatabase | null> | null = null;
-let dbLoadingWorkspace: string | null = null;
 
 // ─── Schema ──────────────────────────────────────────────────
 
@@ -163,26 +161,28 @@ export function normalizeDbPath(workspacePath: string): string {
  * The database file is stored at <workspacePath>/.dalam/project.db.
  * This file should be gitignored — it's a local cache.
  */
+let _initMutex: Promise<void> | null = null;
+let _resolveInitMutex: (() => void) | null = null;
+
 export async function initDatabase(
   workspacePath: string,
 ): Promise<SqlDatabase | null> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
-  // Prevent concurrent init calls from leaking connections
-  // Only await if the same workspace is being initialized
-  if (dbLoadingPromise && dbLoadingWorkspace === workspacePath) {
-    await dbLoadingPromise;
+
+  // Serialize all concurrent initDatabase calls — only one at a time.
+  while (_initMutex) {
+    await _initMutex;
     if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
   }
-  // If a different workspace is loading, wait for it to finish first,
-  // then re-check — the concurrent init may have already set dbInstance
-  if (dbLoadingPromise && dbLoadingWorkspace !== workspacePath) {
-    await dbLoadingPromise;
-    // Re-check: if the concurrent init opened our workspace, return it
+
+  _initMutex = new Promise<void>((r) => { _resolveInitMutex = r; });
+  try {
+    // Re-check after acquiring the lock — another call may have raced ahead
     if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
-  }
-  if (dbInstance) {
-    await closeDatabase();
-  }
+
+    if (dbInstance) {
+      await closeDatabase();
+    }
 
   let Database: { load(path: string): Promise<SqlDatabase> };
   try {
@@ -325,26 +325,24 @@ export async function initDatabase(
     return db;
   };
 
-  dbLoadingWorkspace = workspacePath;
-  dbLoadingPromise = initWork();
   let db: SqlDatabase | null;
   try {
-    db = await dbLoadingPromise;
+    db = await initWork();
   } catch (error) {
     dbInstance = null;
     throw error;
-  } finally {
-    dbLoadingPromise = null;
-    dbLoadingWorkspace = null;
   }
 
-  // Only set dbInstance if nothing is set yet, or we're switching to a
-  // different workspace. This prevents concurrent inits from clobbering.
   if (db && (!dbInstance || currentWorkspacePath !== workspacePath)) {
     dbInstance = db;
     currentWorkspacePath = workspacePath;
   }
   return db;
+  } finally {
+    _resolveInitMutex?.();
+    _initMutex = null;
+    _resolveInitMutex = null;
+  }
 }
 
 /**

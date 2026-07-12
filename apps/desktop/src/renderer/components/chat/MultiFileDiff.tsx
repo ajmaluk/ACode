@@ -128,7 +128,7 @@ export const MultiFileDiffSummary: React.FC = () => {
               try {
                 const ids = pendingDiffs.map((d) => d.id);
                 await Promise.allSettled(
-                  ids.map((id) => resolveToolApproval(id, "approved")),
+                  ids.map((id) => resolveToolApproval(id, "approved", "Batch approved")),
                 );
               } catch (e) {
                 if (import.meta.env.DEV) console.warn("[MultiFileDiff] Batch approve failed:", e);

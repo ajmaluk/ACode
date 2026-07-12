@@ -597,10 +597,19 @@ export function validateToolArgs(
         const regex = new RegExp(`${escaped}(?![\\w/])`);
         matched = regex.test(cmd);
       } else {
-        matched =
-          cmd === normalizedDangerous ||
-          cmd.startsWith(normalizedDangerous + " ") ||
-          cmd.includes(normalizedDangerous);
+        // Use word-boundary matching to prevent false positives from substrings.
+        // Single-word commands (e.g. "bcdedit", "mkfs") should only match whole words.
+        const escaped = normalizedDangerous.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&",
+        );
+        if (normalizedDangerous.includes(" ")) {
+          // Multi-word commands: match at word boundary start
+          matched = new RegExp(`(?:^|\\W)${escaped}(?=\\W|$)`).test(cmd);
+        } else {
+          // Single-word commands: require full word boundary on both sides
+          matched = new RegExp(`\\b${escaped}\\b`).test(cmd);
+        }
       }
       if (matched) {
         return {

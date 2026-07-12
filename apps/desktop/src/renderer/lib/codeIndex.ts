@@ -18,14 +18,6 @@
 import { getDb, isDatabaseReady } from "./database";
 import { joinPath } from "@/lib/pathUtils";
 
-function hashString(str: string): string {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
 // ─── Constants ───────────────────────────────────────────────
 const EXCLUDED_DIRS = new Set([
   ".git", "node_modules", "__pycache__", ".next", ".nuxt",
@@ -82,6 +74,9 @@ function detectLanguage(filePath: string): string | null {
   return map[ext] ?? ext;
 }
 
+// ─── Concurrency guard ────────────────────────────────────────
+let _indexingMutex = false;
+
 // ─── Indexing ────────────────────────────────────────────────
 
 /**
@@ -93,6 +88,9 @@ export async function indexWorkspace(
   onProgress?: (indexed: number, total: number) => void,
 ): Promise<{ indexed: number; skipped: number; errors: number }> {
   if (!isDatabaseReady()) return { indexed: 0, skipped: 0, errors: 0 };
+  if (_indexingMutex) return { indexed: 0, skipped: 0, errors: 0 };
+  _indexingMutex = true;
+  try {
 
   const db = getDb();
   const { readDir } = await import("@tauri-apps/plugin-fs");
@@ -173,7 +171,7 @@ export async function indexWorkspace(
           : fullPath;
 
         const language = detectLanguage(relativePath);
-        const id = `code-${hashString(relativePath)}`;
+        const id = `code-${crypto.randomUUID()}`;
 
         // Upsert: delete old entry, insert new
         await db.execute("DELETE FROM code_index WHERE file_path = ?", [relativePath]);
@@ -193,6 +191,9 @@ export async function indexWorkspace(
 
   await walkDir(workspacePath);
   return { indexed, skipped, errors };
+  } finally {
+    _indexingMutex = false;
+  }
 }
 
 /**

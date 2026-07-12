@@ -75,9 +75,9 @@ export async function runDreamCycle(
       proposals: { autoAccepted: [], queuedForReview: [], rejected: [] },
     };
   }
-  activeDreams.add(workspacePath);
 
   try {
+    activeDreams.add(workspacePath);
     const api = createDalamAPI();
     const model = useSettings.getState().settings.selectedModel;
 
@@ -188,7 +188,6 @@ export async function runDreamCycle(
     let reScoredPromoted = 0;
     let reScoredDemoted = 0;
     try {
-      const db = getDb();
       const allMemories = await getAllMemories({ excludeStale: true });
 
       const tierUpgrade: Record<string, string> = {
@@ -209,14 +208,16 @@ export async function runDreamCycle(
       for (const mem of promoteCandidates) {
         const newTier = tierUpgrade[mem.tier];
         if (newTier) {
-          await db
-            .execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
+          try {
+            await getDb().execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
               newTier,
               Date.now(),
               mem.id,
-            ])
-            .catch(() => {});
-          reScoredPromoted++;
+            ]);
+            reScoredPromoted++;
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DreamAgent] Promote failed:", e);
+          }
         }
       }
 
@@ -230,14 +231,16 @@ export async function runDreamCycle(
       for (const mem of demoteCandidates) {
         const newTier = tierDowngrade[mem.tier];
         if (newTier) {
-          await db
-            .execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
+          try {
+            await getDb().execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
               newTier,
               Date.now(),
               mem.id,
-            ])
-            .catch(() => {});
-          reScoredDemoted++;
+            ]);
+            reScoredDemoted++;
+          } catch (e) {
+            if (import.meta.env.DEV) console.warn("[DreamAgent] Demote failed:", e);
+          }
         }
       }
 
@@ -331,7 +334,7 @@ export async function runDreamCycle(
                 );
               if (Array.isArray(parsed)) {
                 for (const item of parsed) {
-                  if (item.id >= 0 && item.id < batch.length) {
+                  if (item && typeof item === "object" && typeof item.id === "number" && item.id >= 0 && item.id < batch.length) {
                     const mem = batch[item.id];
                     if (item.content && item.content !== mem.content) {
                       const db = getDb();
@@ -354,8 +357,10 @@ export async function runDreamCycle(
               console.warn(`[DreamAgent] Failed to batch-adjust dates:`, e);
             }
           }
-          dateProposal.status = "applied";
-          dateProposal.appliedAt = Date.now();
+          if (dateAdjustedCount > 0) {
+            dateProposal.status = "applied";
+            dateProposal.appliedAt = Date.now();
+          }
         } else {
           notifyFn?.(dateProposal);
         }
@@ -499,9 +504,9 @@ export async function runDreamCycle(
                   tier: mergedTier,
                   summary: parsed.summary,
                   content: parsed.content,
-                  tags:
-                    parsed.tags ||
-                    Array.from(new Set(cluster.members.flatMap((m) => m.tags))),
+                  tags: Array.isArray(parsed.tags)
+                    ? parsed.tags
+                    : Array.from(new Set(cluster.members.flatMap((m) => m.tags))),
                   sourceSession: cluster.members[0].sourceSession,
                   sourceFile: cluster.members[0].sourceFile,
                 },
@@ -822,7 +827,7 @@ Generate an elegant unified version. Output the result in clean markdown with ap
             // Drop redundant micro-skill directories
             const oldTargetDir = joinPath(skillsPath, skillB.name);
             await remove(oldTargetDir, { recursive: true });
-          } catch (writeErr) {
+          } catch {
             // Rollback: restore skill A from backup
             try {
               const backupA = joinPath(backupDir, `${skillA.name}.md`);
@@ -835,7 +840,8 @@ Generate an elegant unified version. Output the result in clean markdown with ap
                 e,
               );
             }
-            throw writeErr;
+            // Skip this pair but continue with remaining pairs
+            continue;
           }
 
           // Update skillA content IN the array so subsequent comparisons use merged version.
@@ -847,16 +853,21 @@ Generate an elegant unified version. Output the result in clean markdown with ap
           // Mark skillB for removal so subsequent comparisons skip it
           removedIndices.add(j);
 
-          // Reload skills registry so UI updates
-          const projectSkills = await loadProjectSkills(workspacePath, api.fs);
-          refreshProjectSkills(projectSkills);
-
           skillConsolidateProposal.status = "applied";
           skillConsolidateProposal.appliedAt = Date.now();
         } else if (skillConsolidateProposal.status === "user-review") {
           existingNotifyFn?.(skillConsolidateProposal);
         }
         skillProposals.push(skillConsolidateProposal);
+      }
+    }
+    // Reload skills registry once after all consolidations
+    if (removedIndices.size > 0) {
+      try {
+        const projectSkills = await loadProjectSkills(workspacePath, api.fs);
+        refreshProjectSkills(projectSkills);
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[DreamAgent] Failed to refresh skills registry:", e);
       }
     }
   } catch (err) {

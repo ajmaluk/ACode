@@ -807,9 +807,9 @@ Keyboard Shortcuts:
     if (trimmed === "/cost") {
       const sessionId = chat.activeSessionId;
       if (sessionId) {
-        void import("@/lib/costTracker").then(({ formatCostDetailed }) => {
+        import("@/lib/costTracker").then(({ formatCostDetailed }) => {
           chat.injectSystemMessage(formatCostDetailed(sessionId));
-        });
+        }).catch(() => toast.warning("Failed to load cost tracker."));
       } else {
         toast.warning("No active chat session.");
       }
@@ -818,14 +818,14 @@ Keyboard Shortcuts:
     }
 
     if (trimmed.startsWith("/metrics")) {
-      void import("@/lib/metrics").then(({ formatMetrics, resetMetrics }) => {
+      import("@/lib/metrics").then(({ formatMetrics, resetMetrics }) => {
         if (trimmed === "/metrics reset") {
           resetMetrics();
           chat.injectSystemMessage("Performance metrics reset.");
         } else {
           chat.injectSystemMessage(formatMetrics());
         }
-      });
+      }).catch(() => toast.warning("Failed to load metrics."));
       setValue("");
       return;
     }
@@ -838,7 +838,7 @@ Keyboard Shortcuts:
         )?.path;
       if (workspacePath) {
         toast.info("Running memory consolidation cycle...");
-        void import("@/lib/dreamAgent").then(({ runDreamCycle }) => {
+        import("@/lib/dreamAgent").then(({ runDreamCycle }) => {
           runDreamCycle(workspacePath)
             .then((result) => {
               const r = result.report;
@@ -860,7 +860,7 @@ Keyboard Shortcuts:
                 `Dream cycle failed: ${(err as Error).message || String(err)}`,
               );
             });
-        });
+        }).catch(() => toast.warning("Failed to load dream agent."));
       } else {
         toast.warning("No active workspace to run dream cycle.");
       }
@@ -958,7 +958,7 @@ Keyboard Shortcuts:
 
     if (trimmed === "/undo") {
       // Phase 1: Try file-level undo (revert the last write_file/edit_file change)
-      void import("@/lib/changeStack").then(
+      import("@/lib/changeStack").then(
         async ({ applyUndo, peekChange, getChangeStackSize }) => {
           const change = peekChange();
           if (change) {
@@ -994,7 +994,7 @@ Keyboard Shortcuts:
           savePersistedMessages(sessionMsgs);
           chat.injectSystemMessage(`Restored ${restored.length} message(s).`);
         },
-      );
+      ).catch(() => toast.warning("Failed to load undo system."));
       setValue("");
       return;
     }

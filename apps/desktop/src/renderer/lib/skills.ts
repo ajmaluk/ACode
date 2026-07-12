@@ -55,8 +55,8 @@ export function parseFrontmatter(raw: string): {
     ) {
       value = value.slice(1, -1);
     }
-    // Unescape escaped quotes and backslashes
-    value = value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    // Unescape escaped backslashes first, then quotes (wrong order corrupts \\" patterns)
+    value = value.replace(/\\\\/g, "\\").replace(/\\"/g, '"');
     frontmatter[kvMatch[1]] = value;
   }
 

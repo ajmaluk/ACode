@@ -1005,7 +1005,7 @@ function GitTab({
     );
   }
 
-  if (error === "not_initialized" || (!status && error)) {
+  if (error === "not_initialized") {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
@@ -1060,6 +1060,24 @@ function GitTab({
               Initialize Git Repository
             </button>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!status && error) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-8">
+        <div className="text-center">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-bg-tertiary flex items-center justify-center">
+            <GitBranch className="w-7 h-7 text-dalam-text-muted/50" />
+          </div>
+          <p className="text-sm text-dalam-text-primary font-medium mb-1">
+            Git error
+          </p>
+          <p className="text-xs text-dalam-text-muted max-w-[260px] leading-relaxed mb-4 break-words">
+            {error}
+          </p>
         </div>
       </div>
     );

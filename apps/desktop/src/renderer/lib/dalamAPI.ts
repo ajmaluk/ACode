@@ -1942,7 +1942,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                       if (tc.name === "task") {
                         result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
                       } else {
-                        result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
+                      result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved, ac.signal);
                       }
                       const durationMs = Date.now() - toolStartTime;
                       emit({ type: "tool-result", toolCallId: tc.id, result });
@@ -2657,9 +2657,6 @@ const REGEX_CREATE_TASK_PLAN_BLOCK = /<create_task_plan>([\s\S]*?)<\/create_task
 const REGEX_QUESTION = /<question\s+([^>]*)\/?>/gi;
 const REGEX_QUESTION_BLOCK = /<question>([\s\S]*?)<\/question>/gi;
 const REGEX_MALFORMED_QUESTION = /(?:^|[\s<])question\s+question="([^"]*)"\s+options="([^"]*)"\s*\/?/gi;
-const REGEX_MCP_TAG = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
-const REGEX_ANTML_BLOCK = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
-const REGEX_INVOKE = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
 const REGEX_GET_ENV = /<get_env\s+([^>]*)\/?>/gi;
 const REGEX_GET_SCREEN_INFO = /<get_screen_info\s*\/?>/gi;
 const REGEX_LIST_PROCESSES = /<list_processes\s*\/?>/gi;
@@ -3067,6 +3064,7 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
   // Hoisted dynamic import to avoid repeating per match
+  // NOTE: Uses local regex instance to avoid lastIndex sharing race from the await above
   let mcpServers: { name: string; enabled: boolean; transport?: string; url?: string; command?: string; args?: string[]; env?: Record<string, string> }[] = [];
   try {
     const { useSkillsMcp } = await import("../store/useAppStore");
@@ -3074,9 +3072,9 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   } catch (e) {
     if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
   }
+  const localMcpTagRe = /<mcp_([\w-]+(?:_[\w-]+)*)\s*([\s\S]*?)\s*(\/?)>/gi;
   let mcpMatch;
-  REGEX_MCP_TAG.lastIndex = 0;
-  while ((mcpMatch = REGEX_MCP_TAG.exec(text)) !== null) {
+  while ((mcpMatch = localMcpTagRe.exec(text)) !== null) {
     const rawTag = mcpMatch[0];
     const afterPrefix = mcpMatch[1]; // everything after "mcp_" before attributes/close
     const bodyOrAttrs = mcpMatch[2] || "";
@@ -3158,16 +3156,16 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
         const safeEnd = fullBlock.length >= mcpMatch[0].length
           ? mcpMatch.index + fullBlock.length
           : naturalEnd;
-        REGEX_MCP_TAG.lastIndex = safeEnd;
+        localMcpTagRe.lastIndex = safeEnd;
       }
     }
   }
 
-  // 25. Anthropic antml:function_calls / <invoke> format
+  // 26. Anthropic antml:function_calls / <invoke> format
   // Models like MiniMax output: antml:function_calls<invoke name="tool">parameter name="key">value</antml:parameter></antml:function_calls
+  const localAntmlBlockRe = /(?:antml:function_calls\s*)?<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/(?:antml:)?function_calls\s*>/gi;
   let antmlMatch;
-  REGEX_ANTML_BLOCK.lastIndex = 0;
-  while ((antmlMatch = REGEX_ANTML_BLOCK.exec(text)) !== null) {
+  while ((antmlMatch = localAntmlBlockRe.exec(text)) !== null) {
     const toolName = antmlMatch[1];
     const inner = antmlMatch[2];
     const args: Record<string, string> = {};
@@ -3183,10 +3181,10 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     toolCalls.push({ name: toolName, args, raw: antmlMatch[0] });
   }
 
-  // 26. Standalone <invoke> tags without wrapping antml:function_calls
+  // 27. Standalone <invoke> tags without wrapping antml:function_calls
+  const localInvokeRe = /<invoke\s+name=["']([^"']+)["']>([\s\S]*?)<\/invoke>/gi;
   let invokeMatch;
-  REGEX_INVOKE.lastIndex = 0;
-  while ((invokeMatch = REGEX_INVOKE.exec(text)) !== null) {
+  while ((invokeMatch = localInvokeRe.exec(text)) !== null) {
     // Skip if already captured by the antml block regex above
     if (toolCalls.some(tc => tc.raw.includes(invokeMatch![0]))) continue;
     const toolName = invokeMatch[1];
@@ -3332,19 +3330,27 @@ function truncateToolResult(result: string, toolName: string): string {
 async function executeWithTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  toolName: string
+  toolName: string,
+  abortSignal?: AbortSignal
 ): Promise<T> {
+  if (abortSignal?.aborted) throw new Error("Tool execution aborted");
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
+  const abortPromise = abortSignal
+    ? new Promise<T>((_, reject) => {
+        abortSignal.addEventListener("abort", () => reject(new Error("Tool execution aborted")), { once: true });
+      })
+    : undefined;
+  const competitors: Promise<T>[] = [
     promise.finally(() => { if (timer !== undefined) clearTimeout(timer); }),
     new Promise<T>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
     }),
-  ]);
+  ];
+  if (abortPromise) competitors.push(abortPromise);
+  return Promise.race(competitors);
 }
 
-async function executeTool(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
-  // Validate args against Zod schema
+async function executeTool(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false, abortSignal?: AbortSignal): Promise<string> {
   const { validateToolArgs } = await import("./toolSchemas");
   const validation = validateToolArgs(name, args);
   if (!validation.valid) {
@@ -3352,10 +3358,10 @@ async function executeTool(name: string, args: Record<string, string>, workspace
   }
 
   const timeout = TOOL_TIMEOUTS[name] ?? TOOL_TIMEOUTS.default;
-  return executeWithTimeout(executeToolInner(name, validation.args as Record<string, string>, workspacePath, emit, autoApprove), timeout, name);
+  return executeWithTimeout(executeToolInner(name, validation.args as Record<string, string>, workspacePath, emit, autoApprove, abortSignal), timeout, name, abortSignal);
 }
 
-async function executeToolInner(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false): Promise<string> {
+async function executeToolInner(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false, abortSignal?: AbortSignal): Promise<string> {
 
   if (name === "read_file") {
     const { readFile, stat } = await import("@tauri-apps/plugin-fs");
@@ -3733,7 +3739,18 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     const cmd = Command.create(program, commandArgs, { cwd: workspacePath || "." });
     const child = await cmd.spawn();
     let killed = false;
-    const timeoutMs = 60_000;
+    const timeoutMs = TOOL_TIMEOUTS.run_command ?? 60_000;
+
+    // Abort signal handler: kill the child process immediately
+    const abortHandler = () => {
+      if (!killed) {
+        killed = true;
+        child.kill().catch(() => {});
+      }
+    };
+    if (abortSignal?.aborted) abortHandler();
+    else if (abortSignal) abortSignal.addEventListener("abort", abortHandler, { once: true });
+
     const output = await Promise.race([
       new Promise<string>((resolve) => {
         let stdout = "";
@@ -3744,8 +3761,10 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       }),
       new Promise<never>((_, reject) =>
         setTimeout(() => {
-          killed = true;
-          child.kill().catch(() => { });
+          if (!killed) {
+            killed = true;
+            child.kill().catch(() => { });
+          }
           reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
         }, timeoutMs)
       ),
@@ -4314,6 +4333,18 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       const { validateMcpUrl } = await import("./security");
       validateMcpUrl(url);
       const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const mcpFetch = (body: string, signal?: AbortSignal) =>
+        corsFetch(url, { method: "POST", headers, body, signal });
+      const MCP_FETCH_TIMEOUT = 15_000;
+      const mcpFetchWithTimeout = async (body: string): Promise<Response> => {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), MCP_FETCH_TIMEOUT);
+        try {
+          return await mcpFetch(body, ac.signal);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
       let existingSessionId = mcpHttpSessions.get(serverName);
       if (!existingSessionId) {
         // Mutex: if another call is already initializing, wait for it
@@ -4323,19 +4354,19 @@ async function executeToolInner(name: string, args: Record<string, string>, work
         } else {
           const initPromise = (async (): Promise<string | null> => {
             try {
-              const initResp = await corsFetch(url, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: 1 }),
-              });
+              const initResp = await mcpFetchWithTimeout(
+                JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: 1 })
+              );
               if (!initResp.ok) throw new Error(`HTTP ${initResp.status} during MCP initialize`);
               const initJson = await initResp.json();
               if (initJson.error) throw new Error(initJson.error.message || JSON.stringify(initJson.error));
               const sid = initResp.headers.get("mcp-session-id");
               if (sid) mcpHttpSessions.set(serverName, sid);
+              const notifHeaders: Record<string, string> = { "Content-Type": "application/json" };
+              if (sid) notifHeaders["Mcp-Session-Id"] = sid;
               await corsFetch(url, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", ...(sid ? { "Mcp-Session-Id": sid } : {}) },
+                headers: notifHeaders,
                 body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
               });
               return sid;
@@ -4371,11 +4402,9 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           // Re-initialize session
           const freshHeaders: Record<string, string> = { "Content-Type": "application/json" };
           try {
-            const initResp2 = await corsFetch(url, {
-              method: "POST",
-              headers: freshHeaders,
-              body: JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: Date.now() }),
-            });
+            const initResp2 = await mcpFetchWithTimeout(
+              JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "Dalam", version: "1.0.0" } }, id: Date.now() })
+            );
             if (initResp2.ok) {
               const initJson2 = await initResp2.json();
               const newSessionId = initResp2.headers.get("mcp-session-id");
@@ -4391,11 +4420,17 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             if (import.meta.env.DEV) console.warn("[DALAM] corsFetch(url, {:", e);
           }
           // Retry tool call with fresh session
-          const retryResp = await corsFetch(url, {
+          const retryAc = new AbortController();
+          const retryTimer = setTimeout(() => retryAc.abort(), 15_000);
+          let retryResp: Response;
+          try {
+          retryResp = await corsFetch(url, {
             method: "POST",
             headers: freshHeaders,
             body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", params: { name: toolName, arguments: mcpArgs }, id: Date.now() }),
+            signal: retryAc.signal,
           });
+          } finally { clearTimeout(retryTimer); }
           if (!retryResp.ok) throw new Error(`HTTP ${retryResp.status} calling MCP tool (after session reset)`);
           const retryJson = await retryResp.json();
           if (retryJson.error) throw new Error(retryJson.error.message || JSON.stringify(retryJson.error));
@@ -4434,6 +4469,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             id: reqId,
           }) + "\n";
           conn.child.write(req).catch((err) => {
+            _mcpStdioConnections.delete(serverName);
             conn.pendingRequests.delete(reqIdStr);
             reject(err);
           });

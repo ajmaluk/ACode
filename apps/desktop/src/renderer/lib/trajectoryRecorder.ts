@@ -138,7 +138,7 @@ export async function startRecording(
 
   // Start flush timer if not running
   if (!flushTimer) {
-    flushTimer = setInterval(() => void flushAll(), FLUSH_INTERVAL_MS);
+    flushTimer = setInterval(() => { flushAll().catch(err => console.warn("[Trajectory] Flush failed:", err)); }, FLUSH_INTERVAL_MS);
   }
 }
 
@@ -553,22 +553,19 @@ if (typeof window !== "undefined") {
           },
         };
         const newLines = JSON.stringify(record) + "\n";
-        // Read existing + append new, fire-and-forget
+        // Best-effort flush: don't clear buffer until write completes
         api.fs
           .readFile(filePath)
           .then((existing) => {
-            return api.fs.writeFile(filePath, existing + newLines);
+            return api.fs.writeFile(filePath, existing + newLines).then(() => {
+              buffer.turns = [];
+            }).catch(() => {});
           })
-          .catch((_err) => {
-            // File may not exist yet — try write-only
-            api.fs.writeFile(filePath, newLines).catch((writeErr) => {
-              console.warn(
-                "[trajectory] Failed to flush trajectory on unload:",
-                writeErr,
-              );
-            });
+          .catch(() => {
+            api.fs.writeFile(filePath, newLines).then(() => {
+              buffer.turns = [];
+            }).catch(() => {});
           });
-        buffer.turns = [];
       }
     }
   });

@@ -286,3 +286,169 @@ export function splitCodeFences(
   _cacheSegments = segments;
   return segments;
 }
+
+// ── Language-agnostic raw code detection ───────────────────────────────────
+// When the model outputs code directly (without markdown fences), detect it
+// and split it into proper code segments. Works for ANY programming language.
+
+interface TransformedSegment {
+  type: "text" | "code";
+  content: string;
+  language?: string;
+  filename?: string;
+}
+
+function looksLikeCodeLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return false;
+
+  // Lines ending with code-specific punctuation
+  if (/[;{}]$/.test(t)) return true;
+
+  // Closing bracket/brace at line start (dedent)
+  if (/^\s*[}\])]/.test(t)) return true;
+
+  // Operators rare in prose
+  if (/[=!<>]=|=>|\|\||&&|\+\+|--|::|\.\.|->/.test(t)) return true;
+
+  // Indented line with code punctuation
+  if (/^\s{2,}/.test(line) && /[:=,()[\]]/.test(t)) return true;
+
+  // Declaration/control-flow keywords at line start
+  if (/^(class|def|function|func|fn|fun|var|let|const|import|export|from|require|return|if|else|elif|for|while|do|switch|case|default|try|catch|finally|throw|async|await|yield|interface|type|enum|struct|trait|impl|mod|use|pub|package|module|new|void|null|undefined|true|false|select|from|where|insert|update|delete|create|alter|drop|table|index|view|defer|range|go)\b/.test(t)) return true;
+
+  // HTML/JSX tags
+  if (/^<\w+[\s/>]/.test(t) && /<\/?/.test(t)) return true;
+
+  // Decorators/annotations
+  if (/^\s*@\w+\(/.test(t)) return true;
+
+  // Comment markers at line start
+  if (/^\s*\/\//.test(line) || /^\s*#/.test(line) || /^\s*--/.test(line)) return true;
+
+  // CSS-like patterns (property: value)
+  if (/^\s*[a-z-]+\s*:\s*[^:]+;?$/.test(t) && /[#.a-z0-9]/.test(t)) return true;
+
+  return false;
+}
+
+function findCodeStart(text: string): number {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (looksLikeCodeLine(lines[i])) {
+      let pos = 0;
+      for (let j = 0; j < i; j++) {
+        pos += lines[j].length + 1;
+      }
+      return pos;
+    }
+  }
+  return -1;
+}
+
+function isSubstantialCode(text: string): boolean {
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return false;
+  const codeLines = lines.filter((l) => looksLikeCodeLine(l)).length;
+  return codeLines / lines.length > 0.3 || codeLines >= 3;
+}
+
+const LANG_DETECTORS: [RegExp, string][] = [
+  [/^\s*def\s+\w+|^\s*import\s+\w+|^\s*from\s+\w+|^\s*class\s+\w+:?\s*$|^\s*elif\s|^\s*except\s|^\s*with\s+\w+\s+as\b|if __name__|self\./m, "python"],
+  [/^\s*func\s+\w+|^\s*package\s+\w+|^\s*import\s+\(|:=|defer\s/m, "go"],
+  [/^\s*fn\s+\w+|^\s*let\s+mut\b|^\s*use\s+\w+|^\s*impl\s|^\s*pub\s|->\s*\w+|#\[/m, "rust"],
+  [/^\s*function\s+\w+|^\s*const\s+\w+\s*=|^\s*let\s+\w+\s*=|^\s*var\s+\w+\s*=|console\.\w+|=>/m, "javascript"],
+  [/^\s*interface\s+\w+|^\s*type\s+\w+\s*=|:\s*(string|number|boolean|any|never|void)\b/m, "typescript"],
+  [/^\s*public\s+(class|interface|abstract)|^\s*private\s+|^\s*protected\s+|\.print(?:ln)?\(|System\./m, "java"],
+  [/^\s*#\s*(include|define|ifndef|endif|pragma)/m, "c"],
+  [/^\s*#include\s+<[^>]+>|std::/m, "cpp"],
+  [/^\s*def\s+\w+|^\s*class\s+\w+\s*\n?\s*end\b|end$/m, "ruby"],
+  [/<!DOCTYPE|<html[\s>]|<\/html>|<head[\s>]|<body[\s>]/im, "html"],
+  [/\{[\s\S]*?(?:margin|padding|background|color|font|border|display|position|width|height)\s*:/m, "css"],
+];
+
+function detectCodeLanguage(code: string): string | undefined {
+  const lines = code.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return undefined;
+
+  const scores: Record<string, number> = {};
+  for (const [re, lang] of LANG_DETECTORS) {
+    if (re.test(code)) {
+      scores[lang] = (scores[lang] || 0) + 2;
+    }
+  }
+
+  // Additional scoring per line
+  for (const line of lines) {
+    if (/^\s*def\s/.test(line)) scores.python = (scores.python || 0) + 2;
+    if (/^\s*class\s+\w+:/.test(line)) scores.python = (scores.python || 0) + 1;
+    if (/self\./.test(line)) scores.python = (scores.python || 0) + 1;
+    if (/^\s*print\s*\(/.test(line)) scores.python = (scores.python || 0) + 1;
+
+    if (/^\s*(const|let|var)\s/.test(line)) scores.javascript = (scores.javascript || 0) + 2;
+    if (/console\.\w+/.test(line)) scores.javascript = (scores.javascript || 0) + 1;
+    if (line.endsWith(";") && !line.endsWith("};") && !/^\s*for\s*\(/.test(line)) {
+      scores.javascript = (scores.javascript || 0) + 1;
+    }
+
+    if (/^\s*fn\s/.test(line)) scores.rust = (scores.rust || 0) + 2;
+    if (/^\s*let\s+mut\b/.test(line)) scores.rust = (scores.rust || 0) + 1;
+
+    if (/^\s*func\s/.test(line)) scores.go = (scores.go || 0) + 2;
+    if (/:=/.test(line)) scores.go = (scores.go || 0) + 1;
+  }
+
+  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  return best && best[1] >= 2 ? best[0] : undefined;
+}
+
+const LANG_FILENAME_EXT: Record<string, string> = {
+  python: "main.py",
+  javascript: "index.js",
+  typescript: "index.ts",
+  go: "main.go",
+  rust: "main.rs",
+  java: "Main.java",
+  ruby: "main.rb",
+  html: "index.html",
+  css: "styles.css",
+  c: "main.c",
+  cpp: "main.cpp",
+};
+
+/**
+ * Transform text segments that contain raw code (without markdown fences)
+ * into proper code segments. Handles any programming language.
+ */
+export function transformRawCodeSegments(
+  segments: TransformedSegment[],
+): TransformedSegment[] {
+  const result: TransformedSegment[] = [];
+  for (const seg of segments) {
+    if (seg.type === "code") {
+      result.push(seg);
+      continue;
+    }
+    const text = seg.content;
+    if (!isSubstantialCode(text)) {
+      result.push(seg);
+      continue;
+    }
+
+    const codeStart = findCodeStart(text);
+    if (codeStart === -1) {
+      result.push(seg);
+      continue;
+    }
+
+    const prose = text.slice(0, codeStart).trim();
+    const code = text.slice(codeStart).trim();
+    if (prose) {
+      result.push({ type: "text", content: prose });
+    }
+    const language = detectCodeLanguage(code);
+    const filename = language ? LANG_FILENAME_EXT[language] : undefined;
+    result.push({ type: "code", content: code, language, filename });
+  }
+  return result;
+}

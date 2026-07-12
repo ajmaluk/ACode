@@ -30,8 +30,8 @@ class MarkdownErrorBoundary extends Component<
 import { FileText, Copy, RotateCcw, Info } from "lucide-react";
 import { useChat } from "@/store/useAppStore";
 import { useToast } from "@/components/ui/toastStore";
-import { splitCodeFences } from "@/lib/chatUtils";
-import { CodeBlock, MarkdownContent, StreamingContent } from "./ChatRendering";
+import { splitCodeFences, transformRawCodeSegments } from "@/lib/chatUtils";
+import { CodeBlock, StreamingCodeBlock, MarkdownContent, StreamingContent } from "./ChatRendering";
 import {
   ThinkingBlock,
   ToolCallsList,
@@ -66,9 +66,13 @@ export const ChatMessage = React.memo(
     isLast?: boolean;
   }) {
     const toast = useToast();
-    const segments = useMemo(
+    const rawSegments = useMemo(
       () => splitCodeFences(message.content),
       [message.content],
+    );
+    const segments = useMemo(
+      () => transformRawCodeSegments(rawSegments),
+      [rawSegments],
     );
     const pendingActivities = useChat((s) =>
       pending ? s.pendingActivities : EMPTY_ACTIVITIES,
@@ -246,31 +250,35 @@ export const ChatMessage = React.memo(
           <div className="text-[13px] text-dalam-text-primary leading-relaxed my-0.5">
             {segments
               .filter((seg) => seg.type !== "text" || seg.content.trim())
-              .map((seg, idx) =>
-                seg.type === "code" ? (
-                  <CodeBlock
-                    key={`code-${idx}`}
-                    language={seg.language ?? ""}
-                    content={seg.content}
-                    filename={seg.filename}
-                  />
-                ) : (
-                  <div
-                    key={`txt-${idx}`}
-                    className="prose-dalam mb-2 last:mb-0"
-                  >
-                    {pending ? (
-                      <MarkdownErrorBoundary>
+              .map((seg, idx) => (
+                <MarkdownErrorBoundary key={`seg-${idx}`}>
+                  {seg.type === "code" ? (
+                    <div>
+                      {pending ? (
+                        <StreamingCodeBlock
+                          language={seg.language ?? ""}
+                          content={seg.content}
+                          filename={seg.filename}
+                        />
+                      ) : (
+                        <CodeBlock
+                          language={seg.language ?? ""}
+                          content={seg.content}
+                          filename={seg.filename}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="prose-dalam mb-2 last:mb-0">
+                      {pending ? (
                         <StreamingContent content={seg.content} />
-                      </MarkdownErrorBoundary>
-                    ) : (
-                      <MarkdownErrorBoundary>
+                      ) : (
                         <MarkdownContent content={seg.content} />
-                      </MarkdownErrorBoundary>
-                    )}
-                  </div>
-                ),
-              )}
+                      )}
+                    </div>
+                  )}
+                </MarkdownErrorBoundary>
+              ))}
             {pending && (
               <span className="inline-block w-[2px] h-4 bg-dalam-accent-primary ml-0.5 animate-typing-cursor rounded-sm align-middle" />
             )}
@@ -383,7 +391,10 @@ export const ChatMessage = React.memo(
         nextFC &&
         prevFC.some(
           (fc, i) =>
-            fc.path !== nextFC[i]?.path || fc.action !== nextFC[i]?.action,
+            fc.path !== nextFC[i]?.path ||
+            fc.action !== nextFC[i]?.action ||
+            fc.additions !== nextFC[i]?.additions ||
+            fc.deletions !== nextFC[i]?.deletions,
         ));
     const prevAct = prevProps.message.activities;
     const nextAct = nextProps.message.activities;
@@ -398,11 +409,11 @@ export const ChatMessage = React.memo(
             case "think":
               return b.type === "think" && a.content !== b.content;
             case "explore":
-              return b.type === "explore" && a.query !== b.query;
+              return b.type === "explore" && (a.query !== b.query || a.matches !== b.matches);
             case "read":
-              return b.type === "read" && a.path !== b.path;
+              return b.type === "read" && (a.path !== b.path || a.content !== b.content || a.lineRange !== b.lineRange);
             case "skill":
-              return b.type === "skill" && a.name !== b.name;
+              return b.type === "skill" && (a.name !== b.name || a.args !== b.args || a.content !== b.content);
             case "bash":
               return (
                 b.type === "bash" &&
@@ -423,8 +434,6 @@ export const ChatMessage = React.memo(
     return (
       prevProps.pending === nextProps.pending &&
       prevProps.isLast === nextProps.isLast &&
-      prevProps.onResetToMessage === nextProps.onResetToMessage &&
-      prevProps.onResetClick === nextProps.onResetClick &&
       prevProps.message.id === nextProps.message.id &&
       prevProps.message.content === nextProps.message.content &&
       prevProps.message.role === nextProps.message.role &&

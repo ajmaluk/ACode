@@ -4,7 +4,7 @@
  */
 
 // ── Context Window ──────────────────────────────────────────────────────────
-export const DEFAULT_CONTEXT_WINDOW = 128_000;
+export const DEFAULT_CONTEXT_WINDOW = 200_000;
 export const CONTEXT_RESERVE_OUTPUT = 4_000;
 export const CONTEXT_RESERVE_TOOLS = 8_000;
 export const CONTEXT_RESERVE_SAFETY = 2_000;

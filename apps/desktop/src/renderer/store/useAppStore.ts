@@ -104,8 +104,14 @@ function decodeXmlEntities(s: string): string {
  * Also handles malformed XML (unescaped quotes in attributes, broken tags).
  */
 export function stripXmlToolCallTags(content: string): string {
-  // Fast path: skip all regex if content has no angle brackets
-  if (!content.includes("<") && !content.match(/(?:^|[\s<])question\s+question=/)) return content;
+  // Fast path: skip all regex if content has no angle brackets or known patterns.
+  // Most streaming content is plain text — this avoids ~15 regex passes entirely.
+  if (content.length < 200) {
+    // Short content: only strip if it contains obvious XML-like patterns
+    if (!content.includes("<") && !content.includes("question")) return content;
+  } else if (!content.includes("<")) {
+    return content;
+  }
   let result = content;
   // Strip opening+content+closing blocks: <tool ...>content</tool>
   // and self-closing tags: <tool .../>
@@ -2808,6 +2814,11 @@ export const useChat = create<ChatState>((set, get) => ({
           const newSessionMessages = sessionId
             ? { ...get().sessionMessages, [sessionId]: [...(get().sessionMessages[sessionId] ?? []), intermediateMsg] }
             : get().sessionMessages;
+          // Open diff view for accumulated changes on intermediate messages
+          // so the user sees progress even during multi-tool agentic loops
+          if (_pendingChanges.length > 0) {
+            useDiffView.getState().openFile(_pendingChanges[0]);
+          }
           set({
             messages: [...get().messages, intermediateMsg],
             sessionMessages: newSessionMessages,
@@ -2892,12 +2903,21 @@ export const useChat = create<ChatState>((set, get) => ({
       const liveState = get();
       savePersistedMessages(liveState.sessionMessages);
       savePersistedSessionSummaries(liveState.chatSessions);
+        // Open diff view for all accumulated changes at turn completion.
+        // During streaming, file-changed events skip opening the diff — we open
+        // them all here so the user sees every change in the right sidebar.
+        const accumulatedChanges = _pendingChanges; // captured before set() cleared it
+        if (accumulatedChanges && accumulatedChanges.length > 0) {
+          const firstChange = accumulatedChanges[0];
+          if (firstChange) {
+            useDiffView.getState().openFile(firstChange);
+          }
+        }
         // Auto-verification: if build agent produced changes in this turn,
         // set _pendingVerification so verifyAfterPlanExecution will run the verification pipeline.
         // Only check current turn's pending changes, not all historical messages.
         if (sessionId && !get()._pendingVerification) {
-          const pendingChanges = get()._pendingChanges;
-          if (pendingChanges && pendingChanges.length > 0) {
+          if (accumulatedChanges && accumulatedChanges.length > 0) {
             const liveSess = get().session;
             if (liveSess?.workspacePath) {
               set({ _pendingVerification: { workspacePath: liveSess.workspacePath, planContent: "" } });

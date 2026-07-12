@@ -30,8 +30,8 @@ export function isPrivateHost(hostname: string): boolean {
   if (/^metadata\.google\.internal$/i.test(hostname)) return true;
   if (/^instance-data\.local$/i.test(hostname)) return true;
   if (/^169\.254\.169\.254$/.test(hostname)) return true;
-  // DNS rebinding via nip.io / sslip.io
-  if (/\.(nip\.io|sslip\.io)$/i.test(hostname)) return true;
+  // DNS rebinding via wildcard DNS services
+  if (/\.(nip\.io|sslip\.io|xip\.io|traefik\.me|localtest\.me|lvh\.me)$/i.test(hostname)) return true;
   // Catch bare integer IP representations
   if (hostname.includes(".")) {
     try {
@@ -40,13 +40,19 @@ export function isPrivateHost(hostname: string): boolean {
       if (normalized !== hostname) return isPrivateHost(normalized);
     } catch (e) {
       if (import.meta.env.DEV) console.warn("[Security] Failed to parse hostname for SSRF check:", hostname, e);
+      return true; // Fail closed: treat unparseable hostnames as private
     }
   } else if (/^0x[0-9a-f]+$/i.test(hostname)) {
     return true; // Hex IP like 0x7f000001
+  } else if (/^0$/.test(hostname)) {
+    return true; // Bare "0" resolves to 0.0.0.0
   } else if (/^[1-9]\d*$/.test(hostname)) {
-    return true; // Decimal IP like 2130706433 (no leading zeros)
+    return true; // Decimal IP like 2130706433
   }
-  return hostname === "localhost";
+  // Trailing dot normalization: "localhost." is equivalent to "localhost"
+  const normalizedHost = hostname.replace(/\.+$/, "");
+  if (normalizedHost === "localhost") return true;
+  return false;
 }
 
 /**

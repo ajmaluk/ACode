@@ -107,9 +107,16 @@ async function migrateFromLocalStorage(): Promise<void> {
 
     try {
       const data = JSON.parse(raw);
+      let transformed: unknown;
+      try {
+        transformed = transform(data);
+      } catch (transformErr) {
+        console.warn(`[IndexedDB] Transform failed for ${lsKey}, skipping:`, transformErr);
+        continue;
+      }
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
-      store.put(transform(data));
+      store.put(transformed);
 
       await new Promise<void>((resolve, reject) => {
         tx.oncomplete = () => {
@@ -126,6 +133,7 @@ async function migrateFromLocalStorage(): Promise<void> {
 
 // Track whether migration has been attempted (per-session guard)
 let migrationAttempted = false;
+let _migrationMutex: Promise<void> | null = null;
 
 /**
  * Ensure the database is initialized and localStorage migration is done.
@@ -135,12 +143,17 @@ let migrationAttempted = false;
 async function ensureDB(): Promise<IDBDatabase> {
   const db = await openDB();
   if (!migrationAttempted) {
-    migrationAttempted = true; // Set before to prevent retry storm on persistent failures
-    try {
-      await migrateFromLocalStorage();
-    } catch (e) {
-      console.warn("[IndexedDB] Migration from localStorage failed:", e);
+    migrationAttempted = true;
+    if (!_migrationMutex) {
+      _migrationMutex = (async () => {
+        try {
+          await migrateFromLocalStorage();
+        } catch (e) {
+          console.warn("[IndexedDB] Migration from localStorage failed:", e);
+        }
+      })();
     }
+    await _migrationMutex;
   }
   return db;
 }
@@ -160,7 +173,12 @@ export async function idbGet(
       const tx = db.transaction(storeName, "readonly");
       const store = tx.objectStore(storeName);
       const request = store.get(key);
-      request.onsuccess = () => resolve(request.result ?? null);
+      request.onsuccess = () => {
+        if (request.result === undefined) {
+          if (import.meta.env.DEV) console.debug(`[IndexedDB] Key "${key}" not found in ${storeName}`);
+        }
+        resolve(request.result ?? null);
+      };
       request.onerror = () => {
         console.warn(
           `[IndexedDB] Error reading key "${key}" from ${storeName}:`,
@@ -193,36 +211,25 @@ export async function idbPut(
     try {
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
-      store.put(value);
+      const request = store.put(value);
+      request.onerror = () => {
+        console.warn(`[IndexedDB] Request error writing to ${storeName}:`, request.error);
+        if (!settled) { settled = true; reject(request.error); }
+      };
       tx.oncomplete = () => {
-        if (!settled) {
-          settled = true;
-          resolve();
-        }
+        if (!settled) { settled = true; resolve(); }
       };
       tx.onerror = () => {
-        console.warn(
-          `[IndexedDB] Transaction error writing to ${storeName}:`,
-          tx.error,
-        );
-        if (!settled) {
-          settled = true;
-          reject(tx.error);
-        }
+        console.warn(`[IndexedDB] Transaction error writing to ${storeName}:`, tx.error);
+        if (!settled) { settled = true; reject(tx.error); }
       };
       tx.onabort = () => {
         console.warn(`[IndexedDB] Transaction aborted writing to ${storeName}`);
-        if (!settled) {
-          settled = true;
-          reject(new Error(`Transaction aborted for ${storeName}`));
-        }
+        if (!settled) { settled = true; reject(new Error(`Transaction aborted for ${storeName}`)); }
       };
     } catch (e) {
       console.warn(`[IndexedDB] Failed to write to ${storeName}:`, e);
-      if (!settled) {
-        settled = true;
-        reject(e);
-      }
+      if (!settled) { settled = true; reject(e); }
     }
   });
 }
@@ -236,9 +243,11 @@ export async function idbClear(storeName: ObjectStoreName): Promise<void> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
-      store.clear();
+      const request = store.clear();
+      request.onerror = () => reject(request.error);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(new Error(`Transaction aborted clearing ${storeName}`));
     });
   } catch (e) {
     console.warn(`[IndexedDB] Failed to clear ${storeName}:`, e);

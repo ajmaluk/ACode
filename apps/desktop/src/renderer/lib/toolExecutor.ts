@@ -289,6 +289,7 @@ export interface ToolCostRecord {
 
 const _toolCosts: Map<string, ToolCostRecord[]> = new Map();
 const MAX_COSTS_PER_SESSION = 500;
+const MAX_SESSIONS = 50;
 
 export function recordToolCost(record: ToolCostRecord): void {
   const sessionCosts = _toolCosts.get(record.sessionId) ?? [];
@@ -297,6 +298,10 @@ export function recordToolCost(record: ToolCostRecord): void {
     sessionCosts.splice(0, sessionCosts.length - MAX_COSTS_PER_SESSION);
   }
   _toolCosts.set(record.sessionId, sessionCosts);
+  if (_toolCosts.size > MAX_SESSIONS) {
+    const firstKey = _toolCosts.keys().next().value;
+    if (firstKey !== undefined) _toolCosts.delete(firstKey);
+  }
 }
 
 export function clearSessionToolCosts(sessionId: string): void {

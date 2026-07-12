@@ -92,15 +92,18 @@ function backtrack(
   let y = newLines.length;
 
   for (let d = trace.length - 1; d >= 0; d--) {
-    const v = trace[d];
+    // Use V-map from the PREVIOUS depth (d-1) to mirror the forward pass,
+    // which also used the previous iteration's V for decision logic.
+    // For d=0, the initial state before any moves is {1: 0}.
+    const prevDepthV = d > 0 ? trace[d - 1] : new Map([[1, 0]]);
     const k = x - y;
     let prevK: number;
-    if (k === -d || (k !== d && (v.get(k - 1) ?? 0) < (v.get(k + 1) ?? 0))) {
+    if (k === -d || (k !== d && (prevDepthV.get(k - 1) ?? 0) < (prevDepthV.get(k + 1) ?? 0))) {
       prevK = k + 1;
     } else {
       prevK = k - 1;
     }
-    const prevX = v.get(prevK) ?? 0;
+    const prevX = prevDepthV.get(prevK) ?? 0;
     const prevY = prevX - prevK;
 
     // Diagonal (keep matching lines)
@@ -293,33 +296,14 @@ function myersDiffSimple(
     const newChunk = newLines.slice(newPos, newPos + CHUNK_SIZE);
     const cn = oldChunk.length;
     const cm = newChunk.length;
-    if (cn + cm <= 200) {
-      ops.push(
-        ...lcsChunkDiff(
-          oldChunk,
-          newChunk,
-          oldPos + oldOffset,
-          newPos + newOffset,
-        ),
-      );
-    } else {
-      // Larger chunk — split into segments and diff each correctly
-      const SEGMENT_SIZE = 100;
-      const maxChunkLen = Math.max(cn, cm);
-      for (let segStart = 0; segStart < maxChunkLen; segStart += SEGMENT_SIZE) {
-        const segEnd = Math.min(segStart + SEGMENT_SIZE, maxChunkLen);
-        const oldSeg = oldChunk.slice(segStart, segEnd);
-        const newSeg = newChunk.slice(segStart, segEnd);
-        ops.push(
-          ...lcsChunkDiff(
-            oldSeg,
-            newSeg,
-            oldPos + oldOffset + segStart,
-            newPos + newOffset + segStart,
-          ),
-        );
-      }
-    }
+    ops.push(
+      ...lcsChunkDiff(
+        oldChunk,
+        newChunk,
+        oldPos + oldOffset,
+        newPos + newOffset,
+      ),
+    );
     oldPos += cn;
     newPos += cm;
   }
