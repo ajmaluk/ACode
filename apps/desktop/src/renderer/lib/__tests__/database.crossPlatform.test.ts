@@ -223,9 +223,10 @@ describe("Cross-platform SQLite database initialization", () => {
       expect(uri).toBe("sqlite:/./.dalam/project.db");
     });
 
-    it("dotdot path → valid URI", () => {
+    it("dotdot path → rejected (security)", () => {
       const uri = normalizeDbPath("..");
-      expect(uri).toBe("sqlite:/../.dalam/project.db");
+      // H-1: path traversal ".." is rejected and falls back to safe default
+      expect(uri).toBe("sqlite:.dalam/project.db");
     });
   });
 

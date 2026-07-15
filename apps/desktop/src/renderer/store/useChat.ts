@@ -1279,11 +1279,12 @@ export const useChat = create<ChatState>((set, get) => ({
           }
           // Enforce invariant: do NOT clear pendingToolCalls when unresolved diffs exist.
           // Partial message-end: save current turn content but preserve tool state.
-          // Use streamingContent directly (not finalContent which is declared later via let).
+          // Strip XML tool tags from display content before saving.
+          const { cleanedContent: intermediateCleaned } = parseXmlToolCalls(streamingContent);
           const intermediateMsg: ChatMessage = {
             id: event.messageId,
             role: "assistant",
-            content: streamingContent || "(executing tools...)",
+            content: intermediateCleaned || streamingContent || "(executing tools...)",
             timestamp: Date.now(),
             ...(thinkingContent ? { thinking: thinkingContent } : {}),
             ...(_pendingChanges.length > 0 ? { fileChanges: [..._pendingChanges] } : {}),
@@ -1618,15 +1619,21 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "tool-result":
         set((s) => {
-          const updated = s.pendingToolCalls.map((tc) =>
-            tc.id === event.toolCallId
-              ? {
-                  ...tc,
-                  status: typeof event.result === "string" && event.result.startsWith("Error:") ? "failed" as const : "completed" as const,
-                  result: event.result,
-                }
-              : tc
-          );
+          const updated = s.pendingToolCalls.map((tc) => {
+            if (tc.id !== event.toolCallId) return tc;
+            const isError = typeof event.result === "string" && event.result.startsWith("Error:");
+            // If the tool has a diffId (diff proposal pending), keep status as "awaiting-approval"
+            // so the user can approve/reject the diff. Only mark completed if there's no diff.
+            const hasDiffPending = !!(tc as { diffId?: string }).diffId;
+            const newStatus = isError ? "failed" as const
+              : hasDiffPending ? "awaiting-approval" as const
+              : "completed" as const;
+            return {
+              ...tc,
+              status: newStatus,
+              result: event.result,
+            };
+          });
           // If the tool call was already cleared by message-end (race condition),
           // the result is orphaned. Search ALL messages (not just last) for the
           // assistant message with matching toolCalls, so it's not lost.

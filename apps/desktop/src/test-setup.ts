@@ -2,6 +2,38 @@
  * Global test setup — provides common mocks and utilities for all test files.
  */
 
+// ─── window mock for Tauri plugins ──────────────────────────
+// Many source files (memoryStore, codeIndex, dalamAPI, etc.) dynamically import
+// Tauri plugins like @tauri-apps/plugin-fs which access window.__TAURI_INTERNALS__
+// at module evaluation time. In Node.js test environment, window is not defined,
+// causing ReferenceError noise in test output. This mock intercepts those imports
+// so they resolve cleanly without crashing.
+if (typeof globalThis.window === "undefined") {
+  (globalThis as any).window = {
+    __TAURI_INTERNALS__: {
+      invoke: (cmd: string, ..._args: unknown[]) => {
+        throw new Error(
+          `Tauri invoke('${cmd}') called in test environment — mock the calling module with vi.mock()`
+        );
+      },
+      transformCallback: (fn: (...args: unknown[]) => void) => {
+        // Return a numeric callback ID for Tauri listener registration
+        return Math.floor(Math.random() * 2 ** 32);
+      },
+    },
+    matchMedia: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  };
+}
+
 // ─── localStorage mock ──────────────────────────────────────
 const localStorageStore = new Map<string, string>();
 
@@ -49,23 +81,6 @@ if (typeof globalThis.crypto === "undefined") {
       return v.toString(16);
     });
   };
-}
-
-// ─── window.matchMedia mock ─────────────────────────────────
-if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
-  Object.defineProperty(window, "matchMedia", {
-    value: (query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }),
-    writable: true,
-  });
 }
 
 // ─── Clean up between tests ─────────────────────────────────

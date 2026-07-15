@@ -44,6 +44,20 @@ const _saveMemoryLocks = new Map<string, Promise<{ action: "add" | "update" | "n
 // ─── Per-ID mutex to prevent concurrent UPDATEs from overwriting each other ───
 const _perIdLocks = new Set<string>();
 
+/**
+ * Testing utility: hold the per-ID lock for a given memory entry.
+ * The lock prevents concurrent UPDATEs on the same entry.
+ * Returns { release } to unlock. Use in tests to verify retry-exhaustion logic.
+ * Not for production use.
+ */
+export function _testHoldPerIdLock(id: string): { release: () => void } {
+  const key = `update:${id}`;
+  _perIdLocks.add(key);
+  return {
+    release: () => { _perIdLocks.delete(key); },
+  };
+}
+
 function contentHash(content: string): string {
   // Simple hash: first 32 chars of first line length + last 32 chars
   // Collisions are OK — the mutex just serializes saves with same content
@@ -109,7 +123,11 @@ export async function saveMemory(
             if (_retryCount >= MAX_PER_ID_LOCK_RETRIES) {
               console.warn(`[MemoryStore] Per-ID lock exhausted for ${e.id} after ${MAX_PER_ID_LOCK_RETRIES} retries, proceeding with update`);
             } else {
-              // Another save is already updating this memory — wait briefly then retry
+              // Release the hash mutex BEFORE retrying to avoid circular promise
+              // resolution (the recursive saveMemory call would return the outer
+              // promise via the hash mutex, creating a self-resolution cycle that
+              // causes the promise to hang permanently).
+              _saveMemoryLocks.delete(hash);
               await new Promise(r => setTimeout(r, 50 * (_retryCount + 1)));
               return saveMemory(entry, workspacePath, _retryCount + 1);
             }
@@ -1546,7 +1564,7 @@ function findBalancedBracket(text: string, openChar: '[' | '{', closeChar: ']' |
  * LLM responses should always return objects or arrays.
  */
 export function parseLLMJson<T>(response: string): T | null {
-  let cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+  const cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
   // If the entire response is a markdown fence with no JSON content, return null
   if (!cleaned) return null;
 

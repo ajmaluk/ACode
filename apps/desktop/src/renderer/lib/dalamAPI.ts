@@ -1537,6 +1537,10 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       const MAX_LOOP_HARD = 30;
       const loopStartTime = Date.now();
       const MAX_LOOP_DURATION_MS = 30 * 60 * 1000; // 30 minutes — matches cumulative stream timeout in useAppStore
+      // Loop breaker: track consecutive identical tool calls to detect successful-tool loops
+      const MAX_IDENTICAL_TOOL_CALLS = 3;
+      let lastToolSignature = "";
+      let identicalToolCount = 0;
 
       // Build messages from LIVE currentHistory (not pre-loop snapshot)
       // Token-budget-aware: uses estimateTokens for accurate counting
@@ -2016,6 +2020,27 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               totalToolCalls += parsedTools.length;
             }
 
+            // Loop breaker: detect repeated identical successful tool calls
+            // (e.g. screenshot → browser_navigate → screenshot loop)
+            {
+              const toolSignature = parsedTools.map(t => `${t.name}:${JSON.stringify(t.args)}`).sort().join("|");
+              if (toolSignature === lastToolSignature && toolSignature !== "") {
+                identicalToolCount++;
+                if (identicalToolCount >= MAX_IDENTICAL_TOOL_CALLS) {
+                  _debugLog(`[sendPrompt] Loop breaker: ${identicalToolCount} consecutive identical tool calls (${toolSignature}). Breaking.`);
+                  const breakMsg = `\n\n[Loop breaker: You have called the same tools ${identicalToolCount} times with identical arguments. The results are not changing. Please try a different approach or stop.]\n`;
+                  currentHistory.push({ id: "lb-" + crypto.randomUUID(), role: "user" as const, content: breakMsg, timestamp: Date.now() });
+                  // Force a final response from the model
+                  emit({ type: "message-end", messageId: lastMessageId || sessionId });
+                  emittedEndInThisIteration = true;
+                  break;
+                }
+              } else {
+                identicalToolCount = 0;
+                lastToolSignature = toolSignature;
+              }
+            }
+
             // Reset streaming state
             emit({ type: "message-end", messageId: lastMessageId || sessionId });
             emittedEndInThisIteration = true;
@@ -2292,6 +2317,19 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         pendingDiffProposals.delete(diffId);
         // Write the file now that the user approved the diff
         await dalamAPI.fs.writeFile(pending.filePath, pending.newContent);
+        // Clear the diffId and mark the tool call as completed in the store
+        try {
+          const { useChat } = await import("../store/useAppStore");
+          const chatState = useChat.getState();
+          const updatedToolCalls = chatState.pendingToolCalls.map(tc =>
+            (tc as { diffId?: string }).diffId === diffId
+              ? { ...tc, diffId: undefined, status: "completed" as const }
+              : tc
+          );
+          useChat.setState({ pendingToolCalls: updatedToolCalls });
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[DALAM] approveDiff store update:", e);
+        }
         // Record change for undo support
         try {
           const { recordChange: rc } = await import("./changeStack");
@@ -2340,7 +2378,19 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       if (pending) {
         pendingDiffProposals.delete(diffId);
         // File was never written (writes only happen on approveDiff), so no action needed.
-        // The diff proposal is cleaned up and the UI will close the diff view.
+        // Clear the diffId and mark the tool call as failed in the store.
+        try {
+          const { useChat } = await import("../store/useAppStore");
+          const chatState = useChat.getState();
+          const updatedToolCalls = chatState.pendingToolCalls.map(tc =>
+            (tc as { diffId?: string }).diffId === diffId
+              ? { ...tc, diffId: undefined, status: "failed" as const, result: "Rejected by user." }
+              : tc
+          );
+          useChat.setState({ pendingToolCalls: updatedToolCalls });
+        } catch (e) {
+          if (import.meta.env.DEV) console.warn("[DALAM] rejectDiff store update:", e);
+        }
       }
     },
     onStreamEvent(sessionId, cb) {
@@ -2546,7 +2596,15 @@ export interface ParsedToolCall {
 
 export function decodeHtmlEntities(s: string): string {
   // Decode HTML entities in correct order: &amp; first (to avoid double-decoding)
-  return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 export function parseAttributes(tagStr: string): Record<string, string> {
@@ -2632,9 +2690,9 @@ export function extractToolCallsFromCodeBlocks(text: string): ParsedToolCall[] {
 // All tool regex patterns pre-compiled at module level (compiled once, reused per call)
 // Fixed: Use proper key="value" attribute patterns instead of broken ATTRSelfClose
 const REGEX_READ_FILE = /<read_file\s+path=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
-const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/write_file>/gi;
+const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)<\/write_file>/gi;
 // Use greedy match for edit_file content to handle replacement text containing </edit_file>
-const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*?)<\/edit_file>/gi;
+const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*)<\/edit_file>/gi;
 const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
 const REGEX_GREP_FILE = /<grep_file\s+path=["']([^"']+)["']\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_SEARCH_FILES = /<search_files\s+([^>]*)\/?>/gi;
@@ -3533,7 +3591,12 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       return "Error: edit_file 'search' argument cannot be empty. Provide the exact text to find in the file.";
     }
     const { readFile, writeFile } = await import("@tauri-apps/plugin-fs");
-    const bytes = await readFile(args.path);
+    let bytes: Uint8Array;
+    try {
+      bytes = await readFile(args.path);
+    } catch (e) {
+      return `Error: Unable to read file ${args.path} — ${(e as Error)?.message ?? String(e)}`;
+    }
     const original = new TextDecoder().decode(bytes);
 
     // Support optional occurrence index (0-based) for targeting specific matches
@@ -3644,9 +3707,14 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     } catch (e) {
       if (import.meta.env.DEV) console.warn("[DALAM] stat(args.path);:", e);
     }
-    const bytes = await readFile(args.path);
+    let bytes: Uint8Array;
+    try {
+      bytes = await readFile(args.path);
+    } catch (e) {
+      return `Error: Unable to read file ${args.path} — ${(e as Error)?.message ?? String(e)}`;
+    }
     const contentDecoder = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    if (contentDecoder.includes("\0") || (contentDecoder.match(/\uFFFD/g)?.length ?? 0) > bytes.length * 0.01) {
+    if (contentDecoder.includes("\0") || (contentDecoder.match(/\uFFFD/g)?.length ?? 0) > contentDecoder.length * 0.01) {
       return `[Binary file: ${args.path.split("/").pop()} — ${bytes.length} bytes. Use run_command with grep instead.]`;
     }
     const lines = contentDecoder.split("\n");
@@ -4156,11 +4224,22 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             `Text preview: ${bodyText.slice(0, 500)}`,
           ].filter(Boolean).join("\n");
         }
-        // Cross-origin fallback
-        return `Browser URL: ${iframe.src || "(loading...)"}. Page is cross-origin — cannot read content. Use browser_navigate to a same-origin URL.`;
+        // Cross-origin fallback — return what we can see without reading the page
+        const crossOriginUrl = iframe.src || "(loading...)";
+        return [
+          `Page loaded at: ${crossOriginUrl}`,
+          `Cross-origin restrictions prevent reading page content directly.`,
+          `The page is visible in the browser panel on the right.`,
+          `If you need to inspect the page, try browser_execute with JavaScript, or use open_url to open in the system browser.`,
+        ].join("\n");
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[DALAM] operation:", e);
-        return `Browser URL: ${iframe.src || "(unknown)"}. Cannot read cross-origin content.`;
+        if (import.meta.env.DEV) console.warn("[DALAM] screenshot:", e);
+        const errUrl = iframe.src || "(unknown)";
+        return [
+          `Page loaded at: ${errUrl}`,
+          `Cannot read page content (likely cross-origin restriction).`,
+          `The page is visible in the browser panel.`,
+        ].join("\n");
       }
     }
     return "No browser page open. Use browser_navigate to open a URL first.";
@@ -4235,16 +4314,18 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     const tasksText = args.tasks as string;
     const lines = tasksText.split("\n").filter((l: string) => l.trim());
     const { useChat } = await import("../store/useAppStore");
+    // Use existing task count as offset to avoid ID collisions across multiple calls
+    const existingPlan = useChat.getState().taskPlan ?? [];
+    const offset = existingPlan.length;
     const newTasks = lines.map((line: string, i: number) => ({
-      id: `task-${i + 1}`,
+      id: `task-${offset + i + 1}`,
       title: line.replace(/^[-*]\s*/, "").trim(),
       status: "pending" as const,
     }));
     if (newTasks.length > 0) {
       // Merge with existing task plan — preserve status of tasks that already exist
-      const existing = useChat.getState().taskPlan ?? [];
-      const existingMap = new Map(existing.map(t => [t.id, t]));
-      const merged = newTasks.map(t => existingMap.get(t.id) ?? t);
+      const existingMap = new Map(existingPlan.map(t => [t.id, t]));
+      const merged = [...existingPlan, ...newTasks.filter(t => !existingMap.has(t.id))];
       useChat.setState({ taskPlan: merged, taskPlanSummary: null });
       // Also open the progress panel so the user can see the tasks
       const { useUI } = await import("../store/useAppStore");
@@ -5046,7 +5127,7 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
           // Sub-agent tool execution is self-contained - suppress ALL events.
           // Only sub-agent-update events (emitted explicitly above) reach the parent.
           const subAgentEmit = (_event: StreamEvent) => { return; };
-          const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, subAgentEmit, true);
+          const toolResult = await executeTool(st.name, st.args as Record<string, string>, workspacePath, subAgentEmit, true, signal);
           // Update the tool call status
           const idx = subToolCalls.findIndex((t) => t.id === subToolId);
           if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "completed", result: toolResult };

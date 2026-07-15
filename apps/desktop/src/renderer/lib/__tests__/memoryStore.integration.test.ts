@@ -16,7 +16,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 
 // ─── Mock infrastructure for injecting real SQLite ───────────────────────
@@ -394,7 +394,8 @@ describe("MemoryStore SQLite Integration", () => {
   // ===================================================================
 
   describe("saveMemory() - concurrency", () => {
-    beforeAll(() => { clearTables(_mockNativeDb!); });
+    // Each concurrency test needs a clean slate since we're counting entries
+    beforeEach(() => { clearTables(_mockNativeDb!); });
 
     it("returns the same result for concurrent saves with identical content", async () => {
       const { saveMemory } = await getMemoryStore();
@@ -416,6 +417,246 @@ describe("MemoryStore SQLite Integration", () => {
       expect(result1.action).toBe(result2.action);
       expect(result1.id).toBe(result2.id);
       expect(countMemories()).toBe(1);
+    });
+
+    it("handles 50 parallel saves with identical content — all return same result, only 1 DB entry", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      const entry = {
+        category: "decision" as const,
+        tier: "high" as const,
+        content: "Heavy concurrency dedup test content for mutex verification",
+        summary: "Dedup test",
+        tags: ["concurrency", "mutex"] as string[],
+        sourceSession: undefined as string | undefined,
+        sourceFile: undefined as string | undefined,
+      };
+
+      // Fire 50 parallel saveMemory() calls with EXACTLY the same content
+      const CONCURRENCY = 50;
+      const promises = Array.from({ length: CONCURRENCY }, () =>
+        saveMemory(entry, "/test/ws"),
+      );
+
+      const results = await Promise.all(promises);
+
+      // All 50 should have the same action and id
+      const uniqueActions = new Set(results.map((r) => r.action));
+      const uniqueIds = new Set(results.map((r) => r.id));
+
+      expect(uniqueActions.size).toBe(1);
+      expect(uniqueIds.size).toBe(1);
+
+      // Only 1 memory entry should exist in the database
+      expect(countMemories()).toBe(1);
+
+      // The action should be "add" (first insert)
+      expect(results[0].action).toBe("add");
+      expect(results[0].id).toBeTruthy();
+
+      // Verify the entry is searchable via FTS5
+      const { searchMemories } = await getMemoryStore();
+      const searchResults = await searchMemories("concurrency", { limit: 5, updateAccessCount: false });
+      expect(searchResults.length).toBeGreaterThanOrEqual(1);
+      expect(searchResults.some((r) => r.id === results[0].id)).toBe(true);
+    });
+
+    it("handles 50 parallel saves with same content but different entry metadata (same hash)", async () => {
+      // The content-hash mutex uses `content + category` as the hash key.
+      // Different metadata fields (tier, summary, tags) should NOT affect the hash.
+      const { saveMemory } = await getMemoryStore();
+
+      const content = "Content-based hash collision test for mutex verification";
+      const category = "project" as const;
+
+      const CONCURRENCY = 50;
+      const promises = Array.from({ length: CONCURRENCY }, (_, i) =>
+        saveMemory({
+          category,
+          tier: i % 2 === 0 ? "high" as const : "low" as const,
+          content,
+          summary: `Summary ${i}`,
+          tags: [`tag-${i}`],
+          sourceSession: undefined,
+          sourceFile: undefined,
+        }, "/test/ws"),
+      );
+
+      const results = await Promise.all(promises);
+
+      // All should have the same result from the hash mutex
+      const uniqueActions = new Set(results.map((r) => r.action));
+      const uniqueIds = new Set(results.map((r) => r.id));
+
+      expect(uniqueActions.size).toBe(1);
+      expect(uniqueIds.size).toBe(1);
+
+      // Only 1 entry in DB (the rest were deduped by the hash mutex)
+      expect(countMemories()).toBe(1);
+
+      // Verify the single saved entry has the expected content and category
+      const rows = _mockNativeDb!.prepare("SELECT * FROM memories").all() as any[];
+      expect(rows.length).toBe(1);
+      expect(rows[0].content).toBe(content);
+      expect(rows[0].category).toBe(category);
+    });
+
+    // ===================================================================
+    // STRESS TESTS — 100+ concurrent calls
+    // ===================================================================
+
+    it("handles 100 parallel identical saves — hash mutex holds at 2x previous load", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      const entry = {
+        category: "reference" as const,
+        tier: "high" as const,
+        content: "Stress test 100 concurrent saves with identical content for mutex ceiling",
+        summary: "Stress 100",
+        tags: ["stress", "100"] as string[],
+        sourceSession: undefined as string | undefined,
+        sourceFile: undefined as string | undefined,
+      };
+
+      const promises = Array.from({ length: 100 }, () =>
+        saveMemory(entry, "/test/ws"),
+      );
+      const results = await Promise.all(promises);
+
+      // All 100 return the same result
+      const uniqueActions = new Set(results.map((r) => r.action));
+      const uniqueIds = new Set(results.map((r) => r.id));
+      expect(uniqueActions.size).toBe(1);
+      expect(uniqueIds.size).toBe(1);
+
+      // Only 1 DB entry
+      expect(countMemories()).toBe(1);
+
+      // Verify FTS5 is still consistent
+      const { searchMemories } = await getMemoryStore();
+      const searchResults = await searchMemories("stress", { limit: 5, updateAccessCount: false });
+      expect(searchResults.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("handles 500 parallel identical saves — mutex ceiling test", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      const entry = {
+        category: "decision" as const,
+        tier: "medium" as const,
+        content: "Stress test 500 concurrent saves with identical content for mutex ceiling verification",
+        summary: "Stress 500",
+        tags: ["stress", "500"] as string[],
+        sourceSession: undefined as string | undefined,
+        sourceFile: undefined as string | undefined,
+      };
+
+      const promises = Array.from({ length: 500 }, () =>
+        saveMemory(entry, "/test/ws"),
+      );
+      const results = await Promise.all(promises);
+
+      // All 500 return the same result from the hash mutex
+      const uniqueActions = new Set(results.map((r) => r.action));
+      const uniqueIds = new Set(results.map((r) => r.id));
+      expect(uniqueActions.size).toBe(1);
+      expect(uniqueIds.size).toBe(1);
+
+      // Only 1 DB entry
+      expect(countMemories()).toBe(1);
+    });
+
+    it("handles 100 parallel saves with unique content — no hash collisions, all INSERT", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      // CRITICAL: tokenize() filters out words with length ≤ 2 and stop words.
+      // To guarantee Jaccard similarity is 0 between any pair, each entry must
+      // have tokens ≥3 chars that don't overlap with other entries' tokens.
+      function uniqueContent(i: number): string {
+        // Pad base-36 to ≥3 chars so tokens survive the tokenizer filter
+        const base = i.toString(36);
+        const padded = base.length >= 3 ? base : base.padEnd(3, "x");
+        return Array.from({ length: 8 }, () => padded).join(" ");
+      }
+
+      const promises = Array.from({ length: 100 }, (_, i) =>
+        saveMemory({
+          // Unique category per entry so the UPDATE branch (same category
+          // + similarity > 0.65) never triggers. Unique summary so FTS5
+          // searches don't accidentally match batch-mates from concurrent runs.
+          category: `cat${i}` as any,
+          tier: "medium" as const,
+          content: uniqueContent(i),
+          summary: `Uniq${i}`,
+          tags: [`tag-${i}`],
+          sourceSession: undefined,
+          sourceFile: undefined,
+        }, "/test/ws"),
+      );
+
+      const results = await Promise.all(promises);
+
+      // All 100 must have unique IDs (no false dedup from timing races)
+      const uniqueIds = new Set(results.map((r) => r.id));
+      expect(uniqueIds.size).toBe(100);
+
+      // All should be "add" actions (distinct categories + unique content)
+      const adds = results.filter((r) => r.action === "add");
+      expect(adds.length).toBe(100);
+
+      // DB should have exactly 100 rows
+      expect(countMemories()).toBe(100);
+    });
+
+    it("handles 100 parallel saves where 50 are identical (deduped) and 50 are unique — mixed contention", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      const sharedContent = "Shared content for mixed stress test with exact content across all identical entries";
+
+      // Each unique entry needs distinct tokens ≥3 chars to avoid Jaccard
+      // overlap with other unique entries or with the shared content.
+      // Also use per-entry categories to prevent any UPDATE branch triggering.
+      function uniqueContent(i: number): string {
+        const base = i.toString(36);
+        const padded = base.length >= 3 ? base : base.padEnd(3, "y");
+        return Array.from({ length: 8 }, () => padded).join(" ");
+      }
+
+      const results = await Promise.all(
+        Array.from({ length: 100 }, (_, i) => {
+          // Even indices: identical content (hash mutex dedup)
+          // Odd indices: unique content (all INSERT)
+          if (i % 2 === 0) {
+            return saveMemory({
+              category: "project" as const,
+              tier: "high" as const,
+              content: sharedContent,
+              summary: "Shared stress",
+              tags: ["shared"],
+              sourceSession: undefined,
+              sourceFile: undefined,
+            }, "/test/ws");
+          }
+          return saveMemory({
+            category: `mix${i}` as any,
+            tier: "low" as const,
+            content: uniqueContent(i),
+            summary: `Mix${i}`,
+            tags: [`unique-${i}`],
+            sourceSession: undefined,
+            sourceFile: undefined,
+          }, "/test/ws");
+        }),
+      );
+
+      // 50 shared → 1 deduped entry (hash mutex); 50 unique → 50 entries
+      // Note: hash mutex returns { action: "add", id: sameId } for ALL
+      // deduped callers, so adds.length will be 100, NOT 51.
+      const uniqueIds = new Set(results.map((r) => r.id));
+      expect(uniqueIds.size).toBe(51);
+
+      // DB should have exactly 51 rows (1 shared + 50 unique)
+      expect(countMemories()).toBe(51);
     });
   });
 
@@ -631,6 +872,315 @@ describe("MemoryStore SQLite Integration", () => {
       const longQuery = "test ".repeat(200);
       const results = await searchMemories(longQuery, { limit: 5, updateAccessCount: false });
       expect(Array.isArray(results)).toBe(true);
+    });
+  });
+
+  // ===================================================================
+  // saveMemory() — Concurrent UPDATE contention
+  // ===================================================================
+  //
+  // Tests that multiple concurrent saveMemory() calls targeting the same
+  // existing memory all successfully perform their UPDATE.
+  //
+  // Each concurrent call must have DIFFERENT content (to bypass the
+  // content-hash mutex) but content must be ~0.80 Jaccard similar to the
+  // same existing entry in the same category (to trigger the UPDATE
+  // branch rather than INSERT).
+  //
+  // STRESS TESTS: 100+ concurrent updates to the same entry exercise the
+  // per-ID lock (MAX_PER_ID_LOCK_RETRIES=3) and the circular-promise fix.
+  // With 100 callers colliding on the same per-ID lock, many will hit the
+  // retry path — they delete the hash mutex, wait 50-150ms, recurse with
+  // a fresh FTS5 search, re-check the per-ID lock, and proceed.
+
+  describe("saveMemory() - concurrent UPDATE", () => {
+    beforeEach(() => { clearTables(_mockNativeDb!); });
+
+    // ===================================================================
+    // RETRY-EXHAUSTION — deliberately hold per-ID lock
+    // ===================================================================
+
+    it("exhausts per-ID lock retries when lock is deliberately held — proceeds with update after MAX_RETRIES", async () => {
+      const { saveMemory, _testHoldPerIdLock } = await getMemoryStore();
+
+      // Insert a base entry that the UPDATE branch will target
+      const base = await saveMemory({
+        category: "project", tier: "medium",
+        content: "strict TypeScript mode noImplicitAny enabled better code quality project overall",
+        summary: "TypeScript strict",
+        tags: ["typescript"],
+        sourceSession: undefined, sourceFile: undefined,
+      }, "/test/ws");
+      expect(base.action).toBe("add");
+
+      // Spy on console.warn to verify the exhaustion log
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // Deliberately hold the per-ID lock so saveMemory's UPDATE branch
+      // cannot acquire it. The first check sees it held, retries 3 times
+      // with backoff, then exhausts MAX_PER_ID_LOCK_RETRIES and proceeds.
+      const lock = _testHoldPerIdLock(base.id);
+
+      let result;
+      try {
+        // This content has ~0.82 Jaccard similarity to the base (same
+        // category "project") → triggers the UPDATE branch.
+        result = await saveMemory({
+          category: "project", tier: "high",
+          content: "strict TypeScript mode noUnusedLocals enabled better code quality project overall",
+          summary: "TypeScript strict",
+          tags: ["typescript", "strict-mode"],
+          sourceSession: undefined, sourceFile: undefined,
+        }, "/test/ws");
+      } finally {
+        // Release the lock immediately, before assertions, so the Set is
+        // always clean even if an assertion below throws.
+        lock.release();
+      }
+
+      // Despite retry exhaustion, the call should still succeed as an UPDATE
+      // (the else-branch after MAX_RETRIES proceeds without the per-ID lock)
+      expect(result!.action).toBe("update");
+      expect(result!.id).toBe(base.id);
+
+      // Verify the DB still has exactly 1 entry (no duplicate INSERT)
+      expect(countMemories()).toBe(1);
+
+      // Verify the exhaustion warning was emitted
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Per-ID lock exhausted"),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("3 concurrent updates to the same base entry all return 'update' with same id", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      // Insert base entry (10 meaningful tokens after stop-word filter)
+      const base = await saveMemory({
+        category: "project", tier: "medium",
+        content: "strict TypeScript mode noImplicitAny enabled better code quality project overall",
+        summary: "TypeScript strict",
+        tags: ["typescript"],
+        sourceSession: undefined, sourceFile: undefined,
+      }, "/test/ws");
+      expect(base.action).toBe("add");
+
+      // 3 variants — each changes 1 token out of ~10 → Jaccard ~9/11 ≈ 0.82
+      // Different content so the content-hash mutex does NOT dedup them.
+      const variants = [
+        "strict TypeScript mode noUnusedLocals enabled better code quality project overall",
+        "strict TypeScript mode noUncheckedIndexedAccess enabled better code quality project overall",
+        "strict TypeScript mode exactOptionalPropertyTypes enabled better code quality project overall",
+      ];
+
+      const results = await Promise.all(
+        variants.map((content) =>
+          saveMemory({
+            category: "project",
+            tier: "high",
+            content,
+            summary: "TypeScript strict",
+            tags: ["typescript", "strict-mode"],
+            sourceSession: undefined,
+            sourceFile: undefined,
+          }, "/test/ws"),
+        ),
+      );
+
+      // All should UPDATE the same base entry
+      expect(results.every((r) => r.action === "update")).toBe(true);
+      expect(results.every((r) => r.id === base.id)).toBe(true);
+
+      // DB still has exactly 1 entry (updates, not inserts)
+      expect(countMemories()).toBe(1);
+
+      // Final content should be one of the variants
+      const row = getMemoryById(base.id);
+      expect(variants).toContain(row.content);
+
+      // Tier and tags should reflect the update
+      expect(JSON.parse(row.tags)).toContain("strict-mode");
+    });
+
+    it("5 concurrent updates to the same memory all succeed", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      // Base content uses "chosen" token — none of the variants use this word.
+      // Variants change the first token (package manager name), keeping all
+      // other tokens identical.
+      const base = await saveMemory({
+        category: "decision", tier: "low",
+        content: "chosen package manager project dependencies management overall approach best",
+        summary: "Package decision",
+        tags: ["package-manager"],
+        sourceSession: undefined, sourceFile: undefined,
+      }, "/test/ws");
+      expect(base.action).toBe("add");
+
+      // 5 variants — each changes 1 token (package manager name) → Jaccard ~8/10 = 0.80
+      const managers = ["yarn", "npm", "bun", "cargo", "pnpm"];
+      const variants = managers.map(
+        (mgr) => `${mgr} package manager project dependencies management overall approach best`,
+      );
+
+      const results = await Promise.all(
+        variants.map((content) =>
+          saveMemory({
+            category: "decision",
+            tier: "high",
+            content,
+            summary: "Package decision",
+            tags: ["package-manager"],
+            sourceSession: undefined,
+            sourceFile: undefined,
+          }, "/test/ws"),
+        ),
+      );
+
+      // All should succeed — none use "chosen" (the base's unique token),
+      // so none triggers NOOP (would need similarity > 0.90).
+      expect(results.every((r) => r.action === "update")).toBe(true);
+      expect(results.every((r) => r.id === base.id)).toBe(true);
+      expect(countMemories()).toBe(1);
+
+      const row = getMemoryById(base.id);
+      expect(variants).toContain(row.content);
+    });
+
+    // ===================================================================
+    // STRESS TESTS — 100+ concurrent UPDATEs to the same entry
+    // ===================================================================
+
+    it("handles 100 parallel updates to the same base entry — all return 'update' with same ID", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      // Base entry with 9 meaningful tokens (10 after including the unique token)
+      // Uses "chosen" as the unique token that variants will replace.
+      const base = await saveMemory({
+        category: "project",
+        tier: "medium",
+        content: "chosen framework package manager project dependencies management overall approach best",
+        summary: "Stress update",
+        tags: ["stress"],
+        sourceSession: undefined,
+        sourceFile: undefined,
+      }, "/test/ws");
+      expect(base.action).toBe("add");
+
+      // Generate 100 unique variants. Each changes the first token from "chosen"
+      // to a unique 3+ char token. Jaccard between any variant and the base:
+      // 9 matching tokens out of 11 union → ~0.82 > 0.65 (UPDATE window).
+      // Different content per variant → different hash → no hash mutex dedup.
+      function variantContent(i: number): string {
+        // padStart ensures tokens ≥3 chars to survive tokenize() length filter
+        const padded = i.toString(36).padStart(3, "z");
+        return `${padded} framework package manager project dependencies management overall approach best`;
+      }
+
+      const promises = Array.from({ length: 100 }, (_, i) =>
+        saveMemory({
+          category: "project",
+          tier: "high",
+          content: variantContent(i),
+          summary: "Stress update",
+          tags: ["stress", "update"],
+          sourceSession: undefined,
+          sourceFile: undefined,
+        }, "/test/ws"),
+      );
+
+      const results = await Promise.all(promises);
+
+      // All 100 should UPDATE the same base entry
+      const uniqueIds = new Set(results.map((r) => r.id));
+      const updates = results.filter((r) => r.action === "update");
+
+      expect(uniqueIds.size).toBe(1);
+      expect(uniqueIds.has(base.id)).toBe(true);
+      expect(updates.length).toBe(100);
+
+      // DB still has exactly 1 entry
+      expect(countMemories()).toBe(1);
+
+      // Final content should be one of the variants
+      const row = getMemoryById(base.id);
+      const expectedVariants = Array.from({ length: 100 }, (_, i) => variantContent(i));
+      expect(expectedVariants).toContain(row.content);
+    });
+
+    it("handles 100 parallel updates where 50 share content (hash mutex dedup) and 50 are unique — mixed contention", async () => {
+      const { saveMemory } = await getMemoryStore();
+
+      // Base entry with a unique token "chosen" that variants will replace.
+      const base = await saveMemory({
+        category: "decision",
+        tier: "low",
+        content: "chosen stack framework language library tool database deployment hosting platform",
+        summary: "Mixed update",
+        tags: ["base"],
+        sourceSession: undefined,
+        sourceFile: undefined,
+      }, "/test/ws");
+      expect(base.action).toBe("add");
+
+      // Even indices: identical shared content → hash mutex dedup
+      // Odd indices: unique content → different hash, all UPDATE
+      const sharedContent = "chosen stack framework language library tool database deployment hosting platform";
+
+      function uniqueUpdateContent(i: number): string {
+        const padded = i.toString(36).padStart(3, "y");
+        return `${padded} stack framework language library tool database deployment hosting platform`;
+      }
+
+      const results = await Promise.all(
+        Array.from({ length: 100 }, (_, i) => {
+          if (i % 2 === 0) {
+            return saveMemory({
+              category: "decision",
+              tier: "high",
+              content: sharedContent,
+              summary: "Mixed update",
+              tags: ["shared"],
+              sourceSession: undefined,
+              sourceFile: undefined,
+            }, "/test/ws");
+          }
+          return saveMemory({
+            category: "decision",
+            tier: "medium",
+            content: uniqueUpdateContent(i),
+            summary: "Mixed update",
+            tags: [`unique-${i}`],
+            sourceSession: undefined,
+            sourceFile: undefined,
+          }, "/test/ws");
+        }),
+      );
+
+      // 50 shared → 1 deduped (hash mutex); 50 unique → all UPDATE the same base
+      // Total unique IDs = 1 (the base ID, since all UPDATE the same entry)
+      const uniqueIds = new Set(results.map((r) => r.id));
+      expect(uniqueIds.size).toBe(1);
+      expect(uniqueIds.has(base.id)).toBe(true);
+
+      // Note: the hash mutex returns { action: "noop", id: base.id } for ALL
+      // deduped callers (shared content is identical to base → Jaccard 1.0).
+      // The unique variants return "update". So actions will be a mix of "noop" and "update".
+      const updates = results.filter((r) => r.action === "update");
+      expect(updates.length).toBe(50);
+
+      // DB has exactly 1 entry (all UPDATEd the same base)
+      expect(countMemories()).toBe(1);
+
+      // Final content should be one of the variant strings (50 unique or shared)
+      const row = getMemoryById(base.id);
+      const allVariants = [
+        sharedContent,
+        ...Array.from({ length: 100 }, (_, i) => uniqueUpdateContent(i)),
+      ];
+      expect(allVariants).toContain(row.content);
     });
   });
 

@@ -73,17 +73,22 @@ describe("toolExecutor", () => {
       expect(batches[0].length).toBe(3);
     });
 
-    it("separates read and write tools", () => {
+    it("separates read and write tools with flush", () => {
       const tools: ToolCall[] = [
         { name: "read_file", args: { path: "/a" }, raw: "" },
         { name: "write_file", args: { path: "/b", content: "test" }, raw: "" },
         { name: "read_file", args: { path: "/c" }, raw: "" },
       ];
       const batches = groupToolCallsForExecution(tools);
-      // read_file tools can batch together; write_file must be separate
-      expect(batches.length).toBe(2);
-      expect(batches[0].length).toBe(2); // read_file /a + read_file /c
-      expect(batches[1].length).toBe(1); // write_file alone
+      // With next-fit: read_file accumulates until a write tool flushes it.
+      // Sequence: read_file /a -> write_file (flushes reads) -> read_file /c (new batch)
+      expect(batches.length).toBe(3);
+      expect(batches[0].length).toBe(1); // read_file /a
+      expect(batches[0][0].args.path).toBe("/a");
+      expect(batches[1].length).toBe(1); // write_file /b
+      expect(batches[1][0].args.path).toBe("/b");
+      expect(batches[2].length).toBe(1); // read_file /c
+      expect(batches[2][0].args.path).toBe("/c");
     });
   });
 
@@ -432,13 +437,14 @@ describe("toolExecutor", () => {
           { name: "list_dir", args: { path: "/workspace" }, raw: "" },
         ];
         const results = await executeToolCalls(tools, mockExecuteFn);
-        // read_file and list_dir are read-only, so they batch together
-        // run_command is a write tool, so it gets its own batch
+        // With next-fit batching: read-only tools accumulate until a write tool is encountered,
+        // then the read batch flushes and the write tool gets its own batch.
+        // Sequence: read_file -> run_command (flushes read_file) -> list_dir (new read batch)
         expect(results.length).toBe(3);
-        expect(results[0].success).toBe(true); // read_file (batch 1, parallel)
-        expect(results[1].success).toBe(true); // list_dir (batch 1, parallel)
-        expect(results[2].success).toBe(false); // run_command (dangerous, batch 2)
-        expect(results[2].result).toContain("Dangerous command blocked");
+        expect(results[0].success).toBe(true); // read_file (batch 1)
+        expect(results[1].success).toBe(false); // run_command (dangerous, batch 2)
+        expect(results[1].result).toContain("Dangerous command blocked");
+        expect(results[2].success).toBe(true); // list_dir (batch 3)
       });
 
       it("handles abort signal without executing tools", async () => {

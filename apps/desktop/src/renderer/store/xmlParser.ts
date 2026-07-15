@@ -38,6 +38,9 @@ const XML_MCP_CLOSING_TAG_RE = /<\/mcp_[^>]*>/gi;
 // SSE chunk boundaries can split tag names (e.g. <read_fi in one chunk, le> in the next),
 // so matching only known tool names lets partial names leak through for ~16ms (one rAF frame).
 // This matches <word, </word, <word attr="val etc. at end of content.
+// NOTE: We strip both bare tag names (<browser) and tags with attributes (<run_command cmd="x")
+// at end of content. The orphan cleanup regex at the end of the function catches any
+// text that leaks through when a tag is split across streaming chunk boundaries.
 const XML_INCOMPLETE_TAG_RE = /<\/?[a-zA-Z_][a-zA-Z0-9_-]*(?:\s[^>]*)?$/g;
 // Strip model output tags WITH their content (e.g. <thinking>...</thinking>)
 const XML_MODEL_OUTPUT_CONTENT_RE = new RegExp(`<(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)${XML_ATTR_ANY}>[\\s\\S]*?</(?:user|assistant|system|thinking|think|thought|reasoning|reasoning_content|analysis|plan|response|output|result|content|message|final)\\s*>`, "gi");
@@ -121,6 +124,27 @@ export function stripXmlToolCallTags(content: string): string {
   // Strip incomplete skill/structured tags at end of content (streaming)
   result = result.replace(/<skill_invocation[^>]*$/gi, "");
   result = result.replace(/<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*$/gi, "");
+  // Clean up orphaned tool call text fragments — when an incomplete tag like <browser_navigate
+  // was stripped during streaming, the remaining text (rowser_navigate url="..."/> ) leaks through
+  // because it doesn't start with <. Strip these known orphaned patterns.
+  for (const tagName of KNOWN_TAG_NAMES) {
+    // Match: tagName followed by attributes and />
+    const orphanRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*?\\/?>\\s*`, "gi");
+    result = result.replace(orphanRe, "");
+    // Match: tagName followed by attributes but no closing />
+    const orphanOpenRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*$`, "gi");
+    result = result.replace(orphanOpenRe, "");
+    // Match: tagName immediately followed by /> (no attributes, e.g. "screenshot/>")
+    const orphanSelfCloseRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s*\\/?>`, "gi");
+    result = result.replace(orphanSelfCloseRe, "");
+  }
+  // Strip orphaned partial tool name suffixes (e.g. "_navigate url=..." from split "browser")
+  // and orphaned XML attribute text at line boundaries (e.g. 'url="http://..." />')
+  const ORPHAN_SUFFIX_RE = /(?:^|\n)\s*(?:[a-z_]+(?:_navigate|_execute|_file|_command|_result|_status|_plan))\s*=?\s*[^<\n]*$/gim;
+  result = result.replace(ORPHAN_SUFFIX_RE, "");
+  // Also strip orphaned attribute text at line boundaries (url="...", path="...", command="...")
+  const ORPHAN_ATTR_RE = /(?:^|\n)\s*(?:url|path|command|pattern|query|content|name|src|href)\s*=\s*"[^"]*"\s*\/?>?\s*$/gim;
+  result = result.replace(ORPHAN_ATTR_RE, "");
   // Clean up excessive whitespace left behind
   // Collapse 3+ consecutive newlines into 2
   result = result.replace(/\n{3,}/g, "\n\n");
@@ -161,6 +185,17 @@ export function stripInlineXml(content: string): string {
   result = result.replace(/<\uff5c[\s\S]*?\uff5c>/g, "");
   // Strip OpenAI internal channel tokens
   result = result.replace(/<\|(?:channel|message|start|end|system_call)\|>/gi, "");
+  // Clean up orphaned tool call text fragments (same as stripXmlToolCallTags)
+  for (const tagName of KNOWN_TAG_NAMES) {
+    const orphanRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*?\\/?>\\s*`, "gi");
+    result = result.replace(orphanRe, "");
+    const orphanOpenRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*$`, "gi");
+    result = result.replace(orphanOpenRe, "");
+    const orphanSelfCloseRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s*\\/?>`, "gi");
+    result = result.replace(orphanSelfCloseRe, "");
+  }
+  const ORPHAN_SUFFIX_RE = /(?:^|\n)\s*(?:_navigate|_execute|_file|_command|_result|_status)\s+[^<]*?\/?>\s*/gi;
+  result = result.replace(ORPHAN_SUFFIX_RE, "");
   return result;
 }
 

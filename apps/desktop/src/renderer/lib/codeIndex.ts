@@ -214,8 +214,8 @@ export async function searchCodeIndex(
 
   try {
     let sql = `
-      SELECT file_path, file_name, content, language,
-             rank
+      SELECT code_index.file_path, code_index.file_name, code_index.content, code_index.language,
+             code_index_fts.rank
       FROM code_index_fts
       JOIN code_index ON code_index.id = code_index_fts.id
       WHERE code_index_fts MATCH ?
@@ -223,11 +223,11 @@ export async function searchCodeIndex(
     const params: unknown[] = [safeQuery];
 
     if (options?.language) {
-      sql += " AND language = ?";
+      sql += " AND code_index.language = ?";
       params.push(options.language);
     }
     if (options?.pathPrefix) {
-      sql += " AND file_path LIKE ?";
+      sql += " AND code_index.file_path LIKE ?";
       params.push(`${options.pathPrefix}%`);
     }
 

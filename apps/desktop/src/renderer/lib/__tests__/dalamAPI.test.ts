@@ -171,6 +171,20 @@ describe("getActiveProvider", () => {
 // corsFetch
 // ============================================================================
 
+// Mock the Tauri HTTP plugin so corsFetch's import succeeds but calling the
+// plugin fetch throws ReferenceError (matching the runtime fallback condition:
+// corsFetch catches ReferenceError and falls back to browser fetch).
+// vi.hoisted() is required because vitest hoists vi.mock() to the file top.
+const mockTauriFetch = vi.hoisted(() =>
+  vi.fn().mockRejectedValue(
+    new ReferenceError("window.__TAURI__ not available — falling back to browser fetch")
+  )
+);
+
+vi.mock("@tauri-apps/plugin-http", () => ({
+  fetch: mockTauriFetch,
+}));
+
 describe("corsFetch", () => {
   beforeEach(() => {
     vi.resetModules();

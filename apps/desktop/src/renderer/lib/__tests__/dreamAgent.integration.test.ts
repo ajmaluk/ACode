@@ -646,8 +646,8 @@ describe("DreamAgent Integration — dedup clustering", () => {
 
     const content = "strict TypeScript mode enabled for code quality";
 
-    const idA = seedEntry({ category: "project", content, tags: ["typescript"] });
-    const idB = seedEntry({ category: "user", content, tags: ["typescript"] });
+    seedEntry({ category: "project", content, tags: ["typescript"] });
+    seedEntry({ category: "user", content, tags: ["typescript"] });
 
     const memories = _mockNativeDb!.prepare(
       "SELECT * FROM memories WHERE stale = 0"
@@ -667,8 +667,8 @@ describe("DreamAgent Integration — dedup clustering", () => {
 
     const content = "enabled strict TypeScript mode for code quality noImplicitAny";
 
-    const idA = seedEntry({ category: "project", content, tags: ["typescript"] });
-    const idB = seedEntry({ category: "project", content, tags: ["react"] }); // no overlapping tags
+    seedEntry({ category: "project", content, tags: ["typescript"] });
+    seedEntry({ category: "project", content, tags: ["react"] }); // no overlapping tags
 
     const similarity = jaccardSimilarity(content, content);
     expect(similarity).toBe(1.0);
@@ -794,13 +794,13 @@ describe("DreamAgent Integration — dedup clustering", () => {
     expect(remainingIds).toEqual([mergedId]);
   });
 
-  it("uses jaccardSimilarity for clustering threshold (0.55)", () => {
+  it("uses jaccardSimilarity for clustering threshold (0.55)", async () => {
     // Direct test of the similarity function used by the clustering algorithm
     const contentA = "React component state management using hooks";
     const contentB = "React component state management using hooks hooks hooks";
     const contentC = "Python async await coroutine event loop";
 
-    const { jaccardSimilarity } = getMemoryStore();
+    const { jaccardSimilarity } = await getMemoryStore();
 
     // Similar content should be above threshold
     // tokenize splits on whitespace/punctuation, filters stop words and short words (<=2 chars)

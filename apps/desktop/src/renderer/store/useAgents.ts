@@ -39,7 +39,7 @@ function loadEnabledSkills(): Set<string> {
     if (!Array.isArray(parsed)) return new Set(defaults);
     return new Set(parsed as string[]);
   } catch (err) {
-    devWarn("[useChat] Failed to load persisted data:", err);
+    devWarn("[useAgents] Failed to load persisted data:", err);
     return new Set(defaults);
   }
 }
@@ -49,12 +49,13 @@ function saveEnabledSkills(s: Set<string>) {
   try {
     window.localStorage.setItem(ENABLED_SKILLS_STORAGE, JSON.stringify(Array.from(s)));
   } catch (err) {
-    devWarn("[useChat] Failed to save enabled skills:", err);
+    devWarn("[useAgents] Failed to save enabled skills:", err);
   }
 }
 
 function savePersistedAgents(agents: Record<string, PrimaryAgentName>) {
-  try { localStorage.setItem(SESSION_AGENTS_KEY, JSON.stringify(agents)); } catch (e) { devWarn("Failed to save agents:", e); }
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(SESSION_AGENTS_KEY, JSON.stringify(agents)); } catch (e) { devWarn("[useAgents] Failed to save agents:", e); }
   void saveWorkspaceData();
 }
 

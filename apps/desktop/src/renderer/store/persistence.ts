@@ -186,7 +186,7 @@ export function loadPersistedMessages(): Record<string, import("@dalam/shared-ty
 let _saveMessagesTimer: ReturnType<typeof setTimeout> | null = null;
 let _pendingMessagesRef: Record<string, import("@dalam/shared-types").ChatMessage[]> | null = null;
 const SAVE_MESSAGES_DEBOUNCE_MS = 200;
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {
     flushSavePersistedMessages();
     flushSaveWorkspaceData();

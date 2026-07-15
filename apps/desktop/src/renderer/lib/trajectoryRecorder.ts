@@ -518,7 +518,7 @@ export async function getTrajectoryStats(workspacePath: string): Promise<{
 }
 
 // Clean up flush timer on page unload to prevent background writes during shutdown.
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {
     if (flushTimer) {
       clearInterval(flushTimer);

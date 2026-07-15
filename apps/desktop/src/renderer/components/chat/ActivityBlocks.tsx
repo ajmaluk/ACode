@@ -516,6 +516,7 @@ const TOOL_META: Record<
     color: "text-dalam-text-muted",
   },
   grep: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
+  search: { icon: Search, label: "Searched", color: "text-dalam-text-muted" },
   grep_file: {
     icon: Search,
     label: "Searched",
@@ -782,7 +783,9 @@ function ArgsDisplay({
       lower.includes("secret") ||
       lower.includes("authorization") ||
       lower.includes("privatekey") ||
+      lower.includes("private_key") ||
       lower.includes("accesskey") ||
+      lower.includes("access_key") ||
       lower.includes("credential") ||
       lower.includes("auth_header") ||
       lower.includes("bearer");
@@ -810,12 +813,12 @@ function ArgsDisplay({
       const p = args.path as string;
       if (p) return p;
     }
-    if (toolName === "run_command") return `$ ${String(args.command ?? "")}`;
+    if (toolName === "run_command" || toolName === "bash" || toolName === "shell" || toolName === "execute") return `$ ${String(args.command ?? "")}`;
     if (toolName === "grep_file")
       return `${String(args.pattern ?? "")} in ${String(args.path ?? ".")}`;
     if (toolName === "search_files")
       return `"${String(args.pattern ?? "")}" in ${String(args.path ?? ".")}`;
-    if (toolName === "fetch_url") return String(args.url ?? "");
+    if (toolName === "webfetch" || toolName === "fetch_url") return String(args.url ?? "");
     if (toolName === "create_file") return String(args.path ?? "");
     return null;
   })();
@@ -1123,6 +1126,7 @@ const ToolCallRow = React.memo(function ToolCallRow({
 
   return (
     <ActivityRow
+      defaultOpen={needsApproval}
       className={isFailed ? "border-l-2 border-red-500/50" : undefined}
       label={
         <>
@@ -1638,7 +1642,11 @@ export const SubAgentBlock = React.memo(function SubAgentBlock({
                     </span>
                     {tc.args && typeof tc.args === "object" && (
                       <span className="text-dalam-text-muted/50 truncate max-w-[200px]">
-                        {Object.values(tc.args).slice(0, 2).join(", ")}
+                        {Object.entries(tc.args)
+                          .filter(([, v]) => typeof v === "string" || typeof v === "number")
+                          .slice(0, 2)
+                          .map(([k, v]) => `${k}=${String(v)}`)
+                          .join(", ")}
                       </span>
                     )}
                   </div>

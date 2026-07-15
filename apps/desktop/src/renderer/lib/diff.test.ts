@@ -104,6 +104,7 @@ describe("diff", () => {
       newLines[5] = "changed 5";
       newLines[7] = "changed 7";
       const result = computeDiff(lines.join("\n"), newLines.join("\n"), 2);
+
       expect(result.hunks).toHaveLength(1);
     });
 

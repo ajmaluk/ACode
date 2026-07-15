@@ -19,9 +19,6 @@
  * ============================================================
  */
 
-// ─── Imports ─────────────────────────────────────────────────
-import { Mutex } from "async-mutex";
-
 // ─── Types ─────────────────────────────────────────────────
 
 export interface ConnectorMessage {
@@ -271,7 +268,8 @@ export class FileWatcherConnector implements Connector {
           let fileStat: { size: number; mtime: number };
           try {
             const statResult = await stat(watchPath);
-            fileStat = { size: statResult.size ?? 0, mtime: statResult.mtime ?? 0 };
+            const mtime = statResult.mtime;
+            fileStat = { size: statResult.size ?? 0, mtime: mtime instanceof Date ? mtime.getTime() : (mtime ?? 0) };
           } catch {
             // If stat fails, file may not exist or be inaccessible
             continue;
@@ -856,8 +854,8 @@ export class WhatsAppConnector implements Connector {
 
 const STORAGE_KEY = "dalam.connectors.v1";
 
-// M-9: Add mutex to saveConnectorConfig to prevent race conditions
-const saveMutex = new Mutex();
+// M-9: Simple promise-chain mutex to prevent race conditions in saveConnectorConfig
+let _saveChain: Promise<void> = Promise.resolve();
 
 /**
  * Load connector configs from localStorage.
@@ -1002,9 +1000,8 @@ export async function saveConnectorConfig(
   onMessage?: (message: ConnectorMessage) => void,
   onStatusChange?: (connectorId: string, status: string) => void,
 ): Promise<void> {
-  // M-9: Use mutex to prevent race conditions
-  const release = await saveMutex.acquire();
-  try {
+  // M-9: Use promise-chain mutex to prevent race conditions
+  const myTurn = _saveChain.then(async () => {
     const configs = loadConnectorConfigs();
     const idx = configs.findIndex((c) => c.id === config.id);
     if (idx >= 0) {
@@ -1033,9 +1030,10 @@ export async function saveConnectorConfig(
         console.warn(`[Connectors] Failed to restart ${config.id}:`, err);
       }
     }
-  } finally {
-    release();
-  }
+  });
+
+  _saveChain = myTurn.then(() => {}).catch(() => {});
+  await myTurn;
 }
 
 /**
