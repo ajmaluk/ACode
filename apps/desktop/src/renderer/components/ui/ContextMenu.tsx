@@ -50,6 +50,7 @@ const ContextMenuPanel = forwardRef<
   const [openSub, setOpenSub] = useState<number | null>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const innerRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Build flat list of actionable items (separators excluded, disabled items skipped) for keyboard nav
@@ -57,10 +58,14 @@ const ContextMenuPanel = forwardRef<
     (i) => i.type === "submenu" || (i.type === "item" && !i.disabled),
   );
 
+  // Keep itemRefs array in sync with actionable items
+  const focusedItem = actionableItems[focusedIndex];
+
   // Keyboard navigation
   useEffect(() => {
     if (!innerRef.current) return;
     innerRef.current.focus();
+    itemRefs.current = itemRefs.current.slice(0, actionableItems.length);
     const handler = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -72,7 +77,6 @@ const ContextMenuPanel = forwardRef<
             (prev - 1 + actionableItems.length) % actionableItems.length,
         );
       } else if (e.key === "ArrowRight") {
-        // Open submenu if focused item is a submenu
         const focused = actionableItems[focusedIndex];
         if (focused?.type === "submenu") {
           e.preventDefault();
@@ -145,6 +149,7 @@ const ContextMenuPanel = forwardRef<
       onMouseDown={(e) => e.stopPropagation()}
       role="menu"
       tabIndex={0}
+      aria-activedescendant={focusedItem ? `context-menu-item-${state.items.indexOf(focusedItem)}` : undefined}
     >
       {state.items.map((item, idx) => {
         if (item.type === "separator")
@@ -168,6 +173,7 @@ const ContextMenuPanel = forwardRef<
               onMouseLeave={handleSubLeave}
             >
               <button
+                id={`context-menu-item-${idx}`}
                 className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs text-dalam-text-primary transition-colors ${isFocused ? "bg-dalam-accent-subtle" : "hover:bg-dalam-accent-subtle"}`}
                 role="menuitem"
                 aria-haspopup="menu"
@@ -190,7 +196,7 @@ const ContextMenuPanel = forwardRef<
                   onMouseEnter={() => handleSubEnter(idx)}
                   onMouseLeave={handleSubLeave}
                 >
-                  {item.items.map((sub, si) => {
+                      {item.items.map((sub, si) => {
                     if (sub.type === "separator")
                       return (
                         <div
@@ -203,6 +209,7 @@ const ContextMenuPanel = forwardRef<
                       return (
                         <button
                           key={si}
+                          id={`context-menu-sub-${idx}-${si}`}
                           disabled={sub.disabled}
                           onClick={() => {
                             sub.perform();
@@ -240,6 +247,7 @@ const ContextMenuPanel = forwardRef<
         return (
           <button
             key={idx}
+            id={`context-menu-item-${idx}`}
             disabled={item.disabled}
             onClick={() => {
               item.perform();

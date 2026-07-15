@@ -209,6 +209,11 @@ export const CreateFileArgsSchema = z.object({
 export const QuestionArgsSchema = z.object({
   question: z.string().min(1, "question is required"),
   options: z.string().optional(),
+  type: z.enum(["text", "number", "confirm"]).optional(),
+  allowFreeText: z.enum(["true", "false"]).optional(),
+  placeholder: z.string().optional(),
+  defaultValue: z.string().optional(),
+  required: z.enum(["true", "false"]).optional(),
 });
 
 export const GetEnvArgsSchema = z.object({

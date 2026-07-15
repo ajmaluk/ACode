@@ -115,6 +115,7 @@ function TerminalTabContent({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const procIdRef = useRef<string | null>(null);
   const { settings, effectiveTheme } = useSettings();
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const term = terminalsMapRef.current.get(tabId);
@@ -189,6 +190,7 @@ function TerminalTabContent({
 
     const startIO = async () => {
       try {
+        setLoading(true);
         const procId = await api.terminal.create(cwd, shell);
         if (isCleanedUp) {
           api.terminal.kill(procId).catch(() => {});
@@ -196,6 +198,8 @@ function TerminalTabContent({
         }
         procIdRef.current = procId;
         procIdsRef.current.set(tabId, procId);
+
+        setLoading(false);
 
         // Focus terminal after shell process is ready
         if (active) {
@@ -248,6 +252,7 @@ function TerminalTabContent({
         }
       } catch (err) {
         if (!isCleanedUp) {
+          setLoading(false);
           term.writeln(
             `\r\n\x1b[31mError spawning terminal: ${String(err)}\x1b[0m`,
           );
@@ -312,19 +317,31 @@ function TerminalTabContent({
   }, [active, tabId, terminalsMapRef]);
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full terminal-container"
-      tabIndex={0}
-      onClick={() => {
-        const term = terminalsMapRef.current.get(tabId);
-        if (term) term.focus();
-      }}
-      onFocus={() => {
-        const term = terminalsMapRef.current.get(tabId);
-        if (term) term.focus();
-      }}
-    />
+    <div className="relative w-full h-full">
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-dalam-bg-primary z-10">
+          <div className="flex items-center gap-2 text-xs text-dalam-text-muted">
+            <div className="animate-spin w-3 h-3 border-2 border-dalam-accent-primary border-t-transparent rounded-full" />
+            <span>Initializing {shell}...</span>
+          </div>
+        </div>
+      )}
+      <div
+        ref={containerRef}
+        className="w-full h-full terminal-container"
+        tabIndex={0}
+        role="application"
+        aria-label={`Terminal - ${shell}`}
+        onClick={() => {
+          const term = terminalsMapRef.current.get(tabId);
+          if (term) term.focus();
+        }}
+        onFocus={() => {
+          const term = terminalsMapRef.current.get(tabId);
+          if (term) term.focus();
+        }}
+      />
+    </div>
   );
 }
 

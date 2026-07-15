@@ -35,20 +35,16 @@ const CTX_LOCAL = {
 // LRU cache for token estimates to avoid re-computing for unchanged text.
 // Key: text content, Value: token count. Limited to 1000 entries.
 
-interface TokenCacheEntry {
-  tokens: number;
-}
-
-const _tokenCache = new Map<string, TokenCacheEntry>();
+const _tokenCache = new Map<string, number>();
 const TOKEN_CACHE_MAX = 1000;
 
 function getCachedTokenCount(text: string): number | null {
-  const entry = _tokenCache.get(text);
-  if (entry) {
+  const tokens = _tokenCache.get(text);
+  if (tokens !== undefined) {
     // Touch to move to end (MRU position) for true LRU eviction
     _tokenCache.delete(text);
-    _tokenCache.set(text, entry);
-    return entry.tokens;
+    _tokenCache.set(text, tokens);
+    return tokens;
   }
   return null;
 }
@@ -62,7 +58,7 @@ function setCachedTokenCount(text: string, tokens: number): void {
     const firstKey = _tokenCache.keys().next().value;
     if (firstKey !== undefined) _tokenCache.delete(firstKey);
   }
-  _tokenCache.set(text, { tokens });
+  _tokenCache.set(text, tokens);
 }
 
 /**
@@ -137,7 +133,6 @@ export function checkProactiveContextManagement(
  */
 export function getContextPressureRecommendation(
   pressure: ContextPressure,
-  _pressureRatio: number,
 ): { color: string; label: string; action: string } {
   switch (pressure) {
     case "high":
@@ -203,7 +198,7 @@ export function parseContextWindow(window: string | undefined): number {
  *
  * Uses LRU cache to avoid re-computing for unchanged text.
  */
-export function estimateTokens(text: string): number {
+export function estimateTokens(text: string | null | undefined): number {
   if (!text) return 0;
 
   // Check cache first
@@ -223,18 +218,24 @@ export function estimateTokens(text: string): number {
   }
 
   let lineNum = 0;
+  let inCodeBlock = false;
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
 
     // Track line boundaries for code fence detection
     if (code === 10) {
-      lineNum++;
+      // After finishing a fence line, toggle the code block state
       if (fenceLines.has(lineNum)) {
-        codeMode = !codeMode;
+        inCodeBlock = !inCodeBlock;
       }
+      lineNum++;
       count += 1;
       continue;
     }
+
+    // Determine if current line is inside a code block
+    // Fences themselves are processed in outside mode; content between fences in inside mode
+    codeMode = inCodeBlock && !fenceLines.has(lineNum);
 
     // CJK Unified Ideographs — ~1.5 chars per token
     if (
@@ -282,8 +283,8 @@ export function estimateTokens(text: string): number {
 }
 
 // tiktoken-based estimation (when available)
-let _tiktokenAvailable: boolean | null = null;
 let _cachedEstimator: ((text: string) => number) | null = null;
+let _estimatorPromise: Promise<void> | null = null;
 
 /**
  * Get the best available token estimator.
@@ -294,24 +295,20 @@ export async function getReliableEstimator(): Promise<
 > {
   if (_cachedEstimator) return _cachedEstimator;
 
-  if (_tiktokenAvailable === null) {
-    try {
-      const { countTokens } = await import("./tokenizer");
-      countTokens("test", "gpt-4");
-      _tiktokenAvailable = true;
-    } catch (e) {
-      if (import.meta.env.DEV) console.warn("[ContextManager] tiktoken not available, using heuristic:", e);
-      _tiktokenAvailable = false;
-    }
+  if (!_estimatorPromise) {
+    _estimatorPromise = (async () => {
+      try {
+        const { countTokens } = await import("./tokenizer");
+        countTokens("test", "gpt-4");
+        _cachedEstimator = (text: string) => countTokens(text, "gpt-4");
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn("[ContextManager] tiktoken not available, using heuristic:", e);
+        _cachedEstimator = estimateTokens;
+      }
+    })();
   }
-
-  if (_tiktokenAvailable) {
-    const { countTokens } = await import("./tokenizer");
-    _cachedEstimator = (text: string) => countTokens(text, "gpt-4");
-  } else {
-    _cachedEstimator = estimateTokens;
-  }
-  return _cachedEstimator;
+  await _estimatorPromise;
+  return _cachedEstimator!;
 }
 
 /**
@@ -326,6 +323,9 @@ export function estimateMessageTokens(msg: ChatMessage): number {
   }
   if (msg.fileChanges?.length) {
     tokens += msg.fileChanges.length * 10;
+  }
+  if (msg.thinking) {
+    tokens += estimateTokens(msg.thinking);
   }
   return tokens;
 }
@@ -343,7 +343,7 @@ export function computePressure(
   usedTokens: number,
   maxTokens: number = 128000,
 ): { pressure: ContextPressure; ratio: number } {
-  if (maxTokens <= 0) return { pressure: "high", ratio: Infinity };
+  if (maxTokens <= 0) return { pressure: "high", ratio: 1 };
   const ratio = usedTokens / maxTokens;
   let pressure: ContextPressure = "none";
   if (ratio >= 0.85) pressure = "high";
@@ -368,6 +368,8 @@ export function computeContextStats(
   const reservedTokens = outputReserveTokens + compactionBufferTokens;
   const usableTokens = maxContextTokens - reservedTokens;
   const { pressure, ratio } = computePressure(totalTokens, usableTokens);
+  // Use raw ratio (relative to full context window) for checkpoint triggers
+  const rawRatio = maxContextTokens > 0 ? totalTokens / maxContextTokens : ratio;
 
   return {
     totalTokens,
@@ -377,8 +379,8 @@ export function computeContextStats(
     pressureRatio: ratio,
     messageCount: messages.length,
     needsCompaction: ratio >= CTX.CHECKPOINT_HARD,
-    shouldPrune: totalTokens > usableTokens - CTX.PRUNE_PROTECT,
-    nextCheckpointTrigger: getNextCheckpointTrigger(ratio),
+    shouldPrune: totalTokens > Math.max(0, usableTokens - CTX.PRUNE_PROTECT),
+    nextCheckpointTrigger: getNextCheckpointTrigger(rawRatio),
     shouldCompact: ratio >= CTX.COMPACT_THRESHOLD,
     shouldProactivePrune: ratio >= PROACTIVE_PRUNE_THRESHOLD,
     shouldProactiveCompact: ratio >= PROACTIVE_COMPACT_THRESHOLD,
@@ -429,6 +431,7 @@ export function _isToolResult(m: ChatMessage): boolean {
 export function _alignBoundaryPairs(
   messages: ChatMessage[],
   baseIndices: Set<number>,
+  maxLookahead: number = 100,
 ): Set<number> {
   // Expand baseIndices (the keep set) to include related tool_call/tool_result
   // pairs so they stay together after compaction.
@@ -442,8 +445,8 @@ export function _alignBoundaryPairs(
     // → also keep the following tool result messages to prevent orphaned calls
     if (msg.role === "assistant" && msg.toolCalls?.length) {
       // Walk forward to capture all consecutive tool result messages
-      // that follow this assistant's tool calls
-      for (let j = idx + 1; j < messages.length; j++) {
+      // that follow this assistant's tool calls (bounded lookahead)
+      for (let j = idx + 1; j < messages.length && j - idx <= maxLookahead; j++) {
         const next = messages[j];
         if (next.role === "user" && _isToolResult(next)) {
           aligned.add(j);
@@ -457,7 +460,7 @@ export function _alignBoundaryPairs(
     // → also keep the preceding assistant message with toolCalls
     if (msg.role === "user" && _isToolResult(msg)) {
       // Walk backward to find the assistant message with toolCalls
-      for (let j = idx - 1; j >= 0; j--) {
+      for (let j = idx - 1; j >= 0 && idx - j <= maxLookahead; j--) {
         const prev = messages[j];
         if (prev.role === "assistant" && prev.toolCalls?.length) {
           aligned.add(j);
@@ -476,34 +479,40 @@ export function _alignBoundaryPairs(
 export function selectMessagesForCompaction(
   messages: ChatMessage[],
   keepRecent: number = 6,
+  protectUserTurns: number = keepRecent,
 ): { toCompact: ChatMessage[]; toKeep: ChatMessage[] } {
   if (messages.length <= keepRecent) {
     return { toCompact: [], toKeep: messages };
   }
 
-  // Identify which messages to protect — consolidated into a single backward pass
+  // Identify which messages to protect
   const protectedIndices = new Set<number>();
 
   // Find the first user message in a forward pass (can't do everything backward)
   const firstUserIdx = messages.findIndex((m) => m.role === "user");
   if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
 
-  // Single backward pass: protect recent user turns, recent assistant messages,
-  // and messages with file changes/todos
+  // Full forward pass: protect messages with file changes/todos/taskPlan (no early exit)
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.fileChanges && m.fileChanges.length > 0) {
+      protectedIndices.add(i);
+    }
+    if (m.todos && m.todos.length > 0) {
+      protectedIndices.add(i);
+    }
+    if (m.taskPlan && m.taskPlan.length > 0) {
+      protectedIndices.add(i);
+    }
+  }
+
+  // Backward pass: protect recent user turns and assistant messages
   let userTurnCount = 0;
   let assistantCount = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    // Protect messages with file changes (important for diffs)
-    if (m.fileChanges && m.fileChanges.length > 0) {
-      protectedIndices.add(i);
-    }
-    // Protect messages with todos (important for task tracking)
-    if (m.todos && m.todos.length > 0) {
-      protectedIndices.add(i);
-    }
     // Protect the last N user turns (non-tool-result)
-    if (m.role === "user" && !_isToolResult(m) && userTurnCount < keepRecent) {
+    if (m.role === "user" && !_isToolResult(m) && userTurnCount < protectUserTurns) {
       protectedIndices.add(i);
       userTurnCount++;
     }
@@ -513,7 +522,7 @@ export function selectMessagesForCompaction(
       assistantCount++;
     }
     // Exit early once all tail protections are satisfied
-    if (userTurnCount >= keepRecent && assistantCount >= 3) break;
+    if (userTurnCount >= protectUserTurns && assistantCount >= 3) break;
   }
 
   // Align boundaries: prevent splitting tool_call/tool_result pairs
@@ -578,16 +587,17 @@ Rules:
 export function buildCompactionPrompt(
   messages: ChatMessage[],
   previousSummary?: string,
-): { role: string; content: string }[] {
-  const formatted: { role: string; content: string }[] = [];
+): { role: "user" | "assistant"; content: string }[] {
+  const formatted: { role: "user" | "assistant"; content: string }[] = [];
 
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     let content = m.content;
 
     // Truncate individual message content to avoid blowing up the compaction prompt
+    // Use Array.from to avoid splitting surrogate pairs (emoji, CJK supplementary)
     if (content.length > 2000) {
-      content = content.slice(0, 2000) + "...";
+      content = Array.from(content).slice(0, 2000).join('') + "...";
     }
 
     // Preserve tool result user messages (the primary mechanism in ACode)
@@ -601,7 +611,7 @@ export function buildCompactionPrompt(
         if (_isToolResult(next)) {
           const truncated =
             next.content.length > 500
-              ? next.content.slice(0, 500) + "..."
+              ? Array.from(next.content).slice(0, 500).join('') + "..."
               : next.content;
           toolResultMsgs.push(truncated);
         }
@@ -860,6 +870,7 @@ export function selectMessagesByTokenBudget(
     isToolResult: _isToolResult(m),
     hasFileChanges: (m.fileChanges?.length ?? 0) > 0,
     hasTodos: (m.todos?.length ?? 0) > 0,
+    hasTaskPlan: (m.taskPlan?.length ?? 0) > 0,
   }));
 
   // Protect first user message (original task context)
@@ -867,9 +878,9 @@ export function selectMessagesByTokenBudget(
   const firstUserIdx = tokenCosts.findIndex((c) => c.role === "user");
   if (firstUserIdx >= 0) protectedIndices.add(firstUserIdx);
 
-  // Protect messages with file changes or todos (important for diffs/task tracking)
+  // Protect messages with file changes, todos, or task plans (important for diffs/task tracking)
   for (const tc of tokenCosts) {
-    if (tc.hasFileChanges || tc.hasTodos) {
+    if (tc.hasFileChanges || tc.hasTodos || tc.hasTaskPlan) {
       protectedIndices.add(tc.idx);
     }
   }
@@ -948,10 +959,10 @@ export function buildRollingSummary(
     // Extract tool results (completed work)
     if (msg.role === "user" && _isToolResult(msg)) {
       const toolMatch = msg.content.match(
-        /^\[(?:TOOL RESULT|Tool result) for (\S+)\]/,
+        /^\[(?:TOOL (?:RESULT|ERROR):\s*(\S+)|Tool (?:result|error) for (\S+))/,
       );
       if (toolMatch) {
-        const toolName = toolMatch[1];
+        const toolName = toolMatch[1] ?? toolMatch[2];
         const preview = msg.content.slice(0, 100).replace(/\n/g, " ");
         if (preview.length > 20) completed.push(`[${toolName}] ${preview}`);
       }
@@ -1042,7 +1053,7 @@ export function computeKeepBudget(
   const reserved = systemPromptTokens + outputReserve + 2000;
   // Keep 60% of remaining for messages, compact 40%
   const available = Math.max(0, modelContextWindow - reserved);
-  return Math.floor(available * 0.6);
+  return Math.max(2000, Math.floor(available * 0.6));
 }
 
 /**
@@ -1064,12 +1075,14 @@ export function checkContextBudget(
   recommendedAction: "none" | "prune" | "compact" | "deep-compact";
   keepBudget: number;
 } {
-  const totalTokens = messages.reduce(
-    (sum, m) => sum + estimateMessageTokens(m),
-    0,
+  const outputReserve = 8000;
+  const stats = computeContextStats(
+    messages,
+    modelContextWindow,
+    outputReserve,
+    systemPromptTokens,
   );
-  const available = modelContextWindow - systemPromptTokens - 8000; // reserve for output
-  const pressureRatio = totalTokens / available;
+  const pressureRatio = stats.pressureRatio;
   const keepBudget = computeKeepBudget(modelContextWindow, systemPromptTokens);
 
   if (pressureRatio < 0.5) {

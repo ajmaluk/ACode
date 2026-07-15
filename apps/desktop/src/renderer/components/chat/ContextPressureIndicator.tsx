@@ -42,9 +42,8 @@ export function ContextPressureIndicator({
   const recommendation = useMemo(() => {
     return getContextPressureRecommendation(
       stats.pressure,
-      stats.pressureRatio,
     );
-  }, [stats.pressure, stats.pressureRatio]);
+  }, [stats.pressure]);
 
   // Format token counts for display
   const formatTokens = (n: number): string => {
@@ -116,9 +115,8 @@ export function ContextPressureBar({
   const recommendation = useMemo(() => {
     return getContextPressureRecommendation(
       stats.pressure,
-      stats.pressureRatio,
     );
-  }, [stats.pressure, stats.pressureRatio]);
+  }, [stats.pressure]);
 
   const percentage = Math.min(100, Math.round(stats.pressureRatio * 100));
 

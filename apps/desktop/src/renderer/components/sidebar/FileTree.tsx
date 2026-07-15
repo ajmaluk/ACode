@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -150,6 +150,8 @@ export function FileTree() {
     <div
       className="flex-1 min-h-0 overflow-y-auto py-0.5 text-[13px] scrollbar-thin"
       onContextMenu={handleRootContextMenu}
+      role="tree"
+      aria-label="File tree"
     >
       {fileTree
         .filter(
@@ -181,6 +183,7 @@ const TreeNode = React.memo(function TreeNode({
     deletePath,
     renamePath,
   } = useWorkspace();
+  const nodeRef = useRef<HTMLDivElement>(null);
   const openDiff = useDiffView((s) => s.openFile);
   const toast = useToast();
   const isDir = node.type === "directory";
@@ -383,15 +386,39 @@ const TreeNode = React.memo(function TreeNode({
       .catch((err) => toast.error("Delete failed", (err as Error)?.message));
   };
 
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "ArrowRight" && isDir) {
+      e.preventDefault();
+      if (!open) setOpen(true);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      if (isDir && open) {
+        setOpen(false);
+      }
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (isDir) {
+        setOpen((o) => !o);
+      } else {
+        void openFile(node.path);
+      }
+    }
+  }, [isDir, open, node.path, openFile]);
+
   if (isDir) {
     return (
-      <div>
-        <button
-          className={`group w-full flex items-center gap-1 pr-2 py-[3px] text-left transition-colors
+      <div ref={nodeRef}>
+        <div
+          role="treeitem"
+          aria-expanded={open}
+          aria-selected={false}
+          tabIndex={0}
+          className={`group w-full flex items-center gap-1 pr-2 py-[3px] text-left transition-colors cursor-pointer
             hover:bg-dalam-bg-hover/60 text-dalam-text-primary`}
           style={{ paddingLeft: indent }}
           onClick={() => setOpen((o) => !o)}
           onContextMenu={handleContextMenu}
+          onKeyDown={handleKeyDown}
         >
           <span className="text-dalam-text-muted flex-shrink-0 w-4 h-4 flex items-center justify-center">
             {open ? (
@@ -416,7 +443,7 @@ const TreeNode = React.memo(function TreeNode({
               {STATUS_LETTER[node.gitStatus]}
             </span>
           )}
-        </button>
+        </div>
         {open &&
           node.children
             ?.filter(
@@ -431,8 +458,11 @@ const TreeNode = React.memo(function TreeNode({
   }
 
   return (
-    <button
-      className={`group w-full flex items-center gap-1.5 pr-2 py-[3px] text-left transition-colors
+    <div
+      role="treeitem"
+      aria-selected={isActive}
+      tabIndex={0}
+      className={`group w-full flex items-center gap-1.5 pr-2 py-[3px] text-left transition-colors cursor-pointer
         ${
           isActive
             ? "bg-dalam-accent-subtle text-dalam-text-primary"
@@ -443,6 +473,7 @@ const TreeNode = React.memo(function TreeNode({
         void openFile(node.path);
       }}
       onContextMenu={handleContextMenu}
+      onKeyDown={handleKeyDown}
     >
       {renderFileIcon(node.name, "w-4 h-4 flex-shrink-0")}
       <span className="truncate flex-1 text-[13px]">{node.name}</span>
@@ -454,6 +485,6 @@ const TreeNode = React.memo(function TreeNode({
           {STATUS_LETTER[node.gitStatus]}
         </span>
       )}
-    </button>
+    </div>
   );
 });

@@ -1434,31 +1434,20 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         }
 
         const systemPrompt =
-          "You are Dalam, an AI coding assistant with full workspace access. You MUST use tools to create and modify files.\n\n" +
-          "CRITICAL RULES — FOLLOW EXACTLY:\n" +
-          "1. When asked to CREATE a file, output: <write_file path=\"/absolute/path\">full content</write_file>\n" +
-          "2. When asked to EDIT a file, use edit_file with ONLY the specific lines that need to change:\n" +
-          "   <edit_file path=\"/absolute/path\"><search>few lines of old code</search><replace>few lines of new code</replace></edit_file>\n" +
-          "   Do NOT rewrite the entire file — only change what's needed. Include enough context in search to uniquely identify the location.\n" +
-          "3. When asked to READ a file, output: <read_file path=\"/absolute/path\"/>\n" +
-          "   For large files, read specific portions: <read_file path=\"/absolute/path\" offset=\"100\" limit=\"50\"/>\n" +
-          "4. NEVER output file content as markdown code blocks. Code blocks are displayed to the user — they do NOT create files.\n" +
-          "5. NEVER describe what you will do — just do it by outputting the XML tool tag.\n" +
-          "6. WRONG: ```html\\n<!DOCTYPE html>...\\n```\n" +
-          "   RIGHT: <write_file path=\"index.html\"><!DOCTYPE html>...</write_file>\n" +
-          "   WRONG (rewriting entire file): <edit_file><search>entire file</search><replace>entire new file</replace></edit_file>\n" +
-          "   RIGHT (editing specific lines): <edit_file><search>only the 3 lines that changed</search><replace>only the 3 new lines</replace></edit_file>\n" +
-          "7. Use the workspace path: " + (workspacePath || ".") + "\n" +
-          "8. Be concise. Output the tool tag with the complete content — nothing else.\n" +
-          "9. For complex tasks: First create a task plan with <create_task_plan>, then execute each task step by step.\n" +
-          "10. When you need user input or clarification, use <question> to ask the user. Always include options when possible.\n" +
-          "11. After completing a task, summarize what was done. Show file changes with their paths and stats.\n" +
-          "12. When building a project: create files, then use <run_preview> to start the dev server, then use <screenshot> to verify.\n" +
-          "13. TO APPEND TEXT TO END OF FILE: Read the file first, then use edit_file with the last line(s) as search and include old+new text in replace:\n" +
-          "   Example: To add 'By ajmal' at end of README.md:\n" +
-          "   <read_file path=\"/path/to/README.md\"/>\n" +
-          "   Then: <edit_file path=\"/path/to/README.md\"><search>last line of file</search><replace>last line of file\n\nBy ajmal</replace></edit_file>\n" +
-          "14. TO COMPLETE A TASK: After reading files to understand context, you MUST output the edit/write tool tag to make the actual change. Do NOT just read and stop."
+          "You are Dalam, an AI coding assistant. You MUST use XML tool tags to read, create, and modify files. " +
+          "NEVER output file content as markdown code blocks — they do NOT create files. " +
+          "NEVER describe what you will do or summarize what you did — just emit the tool tag with complete content and nothing else. " +
+          "Be extremely concise: output ONLY the tool tag, no preamble, no explanation, no summary.\n\n" +
+          "Rules:\n" +
+          "1. CREATE: <write_file path=\"/abs/path\">full content</write_file>\n" +
+          "2. EDIT (preferred): <edit_file path=\"/abs/path\"><search>exact old lines</search><replace>new lines</replace></edit_file>\n" +
+          "   Only change what's needed — never rewrite the whole file.\n" +
+          "3. READ: <read_file path=\"/abs/path\"/> or <read_file path=\"/abs/path\" offset=\"100\" limit=\"50\"/>\n" +
+          "4. Workspace path: " + (workspacePath || ".") + "\n" +
+          "5. Complex tasks: plan with <create_task_plan>, then execute each step.\n" +
+          "6. Need input? <question> with options.\n" +
+          "7. After creating files, <run_preview> then <screenshot> to verify.\n" +
+          "8. TO COMPLETE A TASK: After reading context, output the edit/write tool tag. Do NOT just read and stop."
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -1530,7 +1519,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       let loopCount = 0;
       const MAX_LOOP_HARD = 30;
       const loopStartTime = Date.now();
-      const MAX_LOOP_DURATION_MS = 5 * 60 * 1000;
+      const MAX_LOOP_DURATION_MS = 30 * 60 * 1000; // 30 minutes — matches cumulative stream timeout in useAppStore
 
       // Build messages from LIVE currentHistory (not pre-loop snapshot)
       // Token-budget-aware: uses estimateTokens for accurate counting
@@ -1635,10 +1624,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             await abortOnDelay(delay);
             return;
           }
-          // Base delay between turns: generous for fast-RPM providers, minimal for others
-          // Groq: 30 requests/min on free tier, so ~2s between turns is safe
-          // Together/Fireworks: similar limits
-          const baseDelay = isFastRpmProvider ? 2500 : 300;
+          // Base delay between turns: minimal — most providers handle 60+ RPM
+          const baseDelay = isFastRpmProvider ? 800 : 300;
           await abortOnDelay(baseDelay);
         }
 
@@ -1721,13 +1708,31 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           const maxTokens = settings.maxTokens ?? 4096;
 
           // Pre-flight context check: estimate total tokens and compact if needed
-          const { estimateTokens: estTk, parseContextWindow } = await import("./contextManager");
+          const { estimateTokens: estTk, parseContextWindow, computePressure: computePressureFn } = await import("./contextManager");
           const modelInfo2 = (await import("../store/useAppStore")).useModelProviders.getState().getAllModels().find((m) => m.model.modelId === activeModelId);
           const ctxWindow = parseContextWindow(modelInfo2?.model?.contextWindow) || 120000;
           const totalEstTokens = messages.reduce((sum, m) => {
             const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
             return sum + estTk(content) + 4;
           }, 0);
+
+          // Emit ContextPressure event so hookListeners can auto-save memories
+          {
+            const { pressure, ratio } = computePressureFn(totalEstTokens, ctxWindow);
+            if (pressure !== "none" && pressure !== "low") {
+              void hookBus.emit("ContextPressure", {
+                sessionId,
+                pressure,
+                pressureRatio: ratio,
+                totalTokens: totalEstTokens,
+                usableTokens: ctxWindow,
+                shouldPrune: ratio >= 0.5,
+                shouldCompact: ratio >= 0.85,
+                timestamp: Date.now(),
+              });
+            }
+          }
+
           if (totalEstTokens + maxTokens > ctxWindow * 0.9) {
             _debugLog(`[sendPrompt] Pre-flight: estimated ${totalEstTokens} tokens + ${maxTokens} output > ${ctxWindow} context. Triggering compaction.`);
             try {
@@ -1826,13 +1831,14 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               emit({ type: "tool-call", toolCall: { id: tc.id, name: tc.name, args: tc.args, status: tc.status } });
             }
 
-            // Check which tools were auto-approved by evaluating permissions directly
+            // Check which tools may be auto-approved (permission = "allow") so executeTool knows
+            // to skip diff proposals for write/edit tools. This is advisory only — the store's
+            // appendStream handler is the single source of truth for the actual approval decision.
             const autoApprovedTools = new Set<string>();
             try {
               const { useAgents } = await import("../store/useAppStore");
               const agentState = useAgents.getState();
               for (const tc of toolCallMetas) {
-                // Evaluate permission for this tool
                 const isBashTool = ["shell", "bash", "execute", "run_command", "launch_app"].includes(tc.name);
                 const isReadTool = ["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "memory_export", "memory_import", "task", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab", "webfetch", "websearch", "grep", "search", "question"].includes(tc.name);
                 const permissionKey = isBashTool ? "bash" : isReadTool ? "read" : "edit";
@@ -1840,13 +1846,6 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                 const action = agentState.evaluatePermission(permissionKey, canonicalPattern);
                 if (action === "allow") {
                   autoApprovedTools.add(tc.id);
-                  // Pre-store approval so waitForToolApproval resolves immediately
-                  try {
-                    const { _pendingResolutions } = await import("../store/useAppStore");
-                    _pendingResolutions.set(tc.id, "approved");
-                  } catch (e) {
-                    if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
-                  }
                 }
               }
             } catch (e) {
@@ -3335,9 +3334,11 @@ async function executeWithTimeout<T>(
 ): Promise<T> {
   if (abortSignal?.aborted) throw new Error("Tool execution aborted");
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
   const abortPromise = abortSignal
     ? new Promise<T>((_, reject) => {
-        abortSignal.addEventListener("abort", () => reject(new Error("Tool execution aborted")), { once: true });
+        abortHandler = () => reject(new Error("Tool execution aborted"));
+        abortSignal.addEventListener("abort", abortHandler);
       })
     : undefined;
   const competitors: Promise<T>[] = [
@@ -3347,7 +3348,14 @@ async function executeWithTimeout<T>(
     }),
   ];
   if (abortPromise) competitors.push(abortPromise);
-  return Promise.race(competitors);
+  try {
+    return await Promise.race(competitors);
+  } finally {
+    if (abortHandler !== undefined && abortSignal) {
+      abortSignal.removeEventListener("abort", abortHandler);
+    }
+    clearTimeout(timer);
+  }
 }
 
 async function executeTool(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false, abortSignal?: AbortSignal): Promise<string> {
@@ -3749,28 +3757,35 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       }
     };
     if (abortSignal?.aborted) abortHandler();
-    else if (abortSignal) abortSignal.addEventListener("abort", abortHandler, { once: true });
+    else if (abortSignal) abortSignal.addEventListener("abort", abortHandler);
 
-    const output = await Promise.race([
-      new Promise<string>((resolve) => {
-        let stdout = "";
-        let stderr = "";
-        cmd.stdout.on("data", (data: string) => { if (!killed) stdout += data; });
-        cmd.stderr.on("data", (data: string) => { if (!killed) stderr += data; });
-        cmd.on("close", () => { resolve(stdout + (stderr ? "\n" + stderr : "")); });
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          if (!killed) {
-            killed = true;
-            child.kill().catch(() => { });
-          }
-          reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
-        }, timeoutMs)
-      ),
-    ]);
-
-    return truncateToolResult(output, "run_command");
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const output = await Promise.race([
+        new Promise<string>((resolve) => {
+          let stdout = "";
+          let stderr = "";
+          cmd.stdout.on("data", (data: string) => { if (!killed) stdout += data; });
+          cmd.stderr.on("data", (data: string) => { if (!killed) stderr += data; });
+          cmd.on("close", () => { resolve(stdout + (stderr ? "\n" + stderr : "")); });
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            if (!killed) {
+              killed = true;
+              child.kill().catch(() => { });
+            }
+            reject(new Error(`Command timed out after ${timeoutMs / 1000}s`));
+          }, timeoutMs);
+        }),
+      ]);
+      return truncateToolResult(output, "run_command");
+    } finally {
+      clearTimeout(timeoutId);
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", abortHandler);
+      }
+    }
   }
 
   if (name === "git_status") {
@@ -4218,12 +4233,15 @@ async function executeToolInner(name: string, args: Record<string, string>, work
   if (name === "question") {
     const questionText = args.question as string;
     const optionsStr = args.options as string | undefined;
-    // Parse options from comma-separated string or newline-separated
     const options = optionsStr
       ? optionsStr.split(/[,;\n]/).filter((o: string) => o.trim()).map((o: string) => o.trim())
       : [];
+    const questionType = (args.type as string) || "text";
+    const allowFreeText = args.allowFreeText !== "false";
+    const placeholder = (args.placeholder as string) || (questionType === "number" ? "Enter a number..." : "Type your answer...");
+    const defaultValue = args.defaultValue as string | undefined;
+    const required = args.required !== "false";
 
-    // Extend safety timer to 10 minutes while waiting for user response
     try {
       const { extendSafetyTimerForApproval } = await import("./safetyTimer");
       const { useChat } = await import("../store/useAppStore");
@@ -4235,17 +4253,20 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       if (import.meta.env.DEV) console.warn("[DALAM] import(\"./safetyTimer\");:", e);
     }
 
-    // Emit ask-question event and wait for user response
     const { useQuestion } = await import("../store/useAppStore");
     const answer = await useQuestion.getState().ask({
       header: "Question",
       question: questionText,
       options: options.map((o: string) => ({ label: o, description: "" })),
+      type: questionType as "text" | "number" | "confirm" | undefined,
+      allowFreeText: allowFreeText && options.length > 0 ? true : options.length === 0 ? true : allowFreeText,
+      placeholder,
+      defaultValue,
+      required,
     });
 
     const answerText = answer === null ? "Dismissed" : (answer.customText || answer.selectedLabel);
 
-    // Store the Q&A in the current assistant message
     const { useChat } = await import("../store/useAppStore");
     const chatState = useChat.getState();
     const currentMessages = chatState.messages;
@@ -4651,11 +4672,25 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
           void doSpawn();
 
-          setTimeout(() => {
+          let connTimeoutId: ReturnType<typeof setTimeout> | undefined;
+          const origResolve = resolve;
+          const origReject = reject;
+          resolve = ((value: McpStdioConnection | PromiseLike<McpStdioConnection>) => {
+            clearTimeout(connTimeoutId);
+            resolved = true;
+            origResolve(value);
+          }) as typeof resolve;
+          reject = ((reason: unknown) => {
+            clearTimeout(connTimeoutId);
+            resolved = true;
+            origReject(reason);
+          }) as typeof reject;
+
+          connTimeoutId = setTimeout(() => {
             if (!resolved) {
               childProc?.kill().catch(() => {});
               _mcpStdioConnections.delete(serverName);
-              reject(new Error("Timeout waiting for tools/call response (30s)"));
+              origReject(new Error("Timeout waiting for tools/call response (30s)"));
             }
           }, 30000);
         });
@@ -4688,7 +4723,15 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           conn.pendingRequests.delete(reqIdStr);
           reject(err);
         });
-        setTimeout(() => {
+        let reqTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const origPending = conn.pendingRequests.get(reqIdStr);
+        if (origPending) {
+          conn.pendingRequests.set(reqIdStr, {
+            resolve: (v) => { clearTimeout(reqTimeoutId); origPending.resolve(v); },
+            reject: (e) => { clearTimeout(reqTimeoutId); origPending.reject(e); },
+          });
+        }
+        reqTimeoutId = setTimeout(() => {
           if (conn.pendingRequests.has(reqIdStr)) {
             conn.pendingRequests.delete(reqIdStr);
             reject(new Error("Timeout waiting for tools/call response (30s)"));

@@ -41,7 +41,6 @@ function resetStore() {
     taskPlan: null,
     taskPlanSummary: null,
     planApproval: null,
-    _userSelectedAgent: false,
     chatHistory: [],
     chatHistoryIdx: -1,
     selectedModelId: "",

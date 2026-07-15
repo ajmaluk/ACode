@@ -20,6 +20,8 @@ import { createDalamAPI } from "./dalamAPI";
 
 export const SAFETY_TIMEOUT_MS = 300_000;
 export const TOOL_APPROVAL_TIMEOUT_MS = 600_000;
+export const CUMULATIVE_STREAM_TIMEOUT_MS = 1_800_000; // 30 minutes cumulative
+export const CUMULATIVE_WARNING_MS = 1_500_000; // Warn at 25 minutes
 
 /**
  * Minimal interface matching the subset of ChatState that the timer needs.

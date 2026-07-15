@@ -206,6 +206,7 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   memory_import: 30_000,
   task: 300_000,
   mcp_tool: 60_000,
+  question: 600_000,
   default: 30_000,
 };
 

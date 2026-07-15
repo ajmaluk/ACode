@@ -721,6 +721,7 @@ export function Sidebar() {
               useUI.getState().setViewMode("chat");
             }
           }}
+          aria-label="New task"
         >
           <Plus className="w-4 h-4" />
           <span>New task</span>
@@ -731,6 +732,7 @@ export function Sidebar() {
         <button
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
           onClick={() => useCommandPalette.getState().toggle()}
+          aria-label="Search command palette"
         >
           <Search className="w-4 h-4" />
           <span>Search</span>
@@ -741,6 +743,7 @@ export function Sidebar() {
         <button
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
           onClick={() => openSettings("skills")}
+          aria-label="Open skills settings"
         >
           <Sparkles className="w-4 h-4" />
           <span>Skills</span>
@@ -766,6 +769,7 @@ export function Sidebar() {
             className="btn-icon"
             onClick={openWorkspace}
             title="Add workspace"
+            aria-label="Add workspace"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -822,6 +826,7 @@ export function Sidebar() {
                       setActiveWorkspace(ws.id);
                     }
                   }}
+                  aria-label={`${ws.name} workspace (${isExpanded ? "expanded" : "collapsed"})`}
                 >
                   {isExpanded ? (
                     <ChevronDown className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
@@ -857,6 +862,7 @@ export function Sidebar() {
                         void useWorkspace.getState().loadFileTree(ws.path);
                         useUI.getState().setViewMode("editor");
                       }}
+                      aria-label={`Show files for ${ws.name}`}
                     >
                       <List className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
@@ -866,6 +872,7 @@ export function Sidebar() {
                       className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                       draggable={false}
                       onClick={() => handleNewTask(ws.id)}
+                      aria-label={`New task in ${ws.name}`}
                     >
                       <MessageSquarePlus className="w-3.5 h-3.5 text-dalam-text-muted" />
                     </button>
@@ -951,6 +958,7 @@ export function Sidebar() {
                           onClick={() =>
                             setShowAll((prev) => ({ ...prev, [ws.id]: true }))
                           }
+                          aria-label={`Show more sessions for ${ws.name}`}
                         >
                           Show more ({wsSessions.length - VISIBLE_LIMIT})
                         </button>
@@ -961,6 +969,7 @@ export function Sidebar() {
                           onClick={() =>
                             setShowAll((prev) => ({ ...prev, [ws.id]: false }))
                           }
+                          aria-label={`Show fewer sessions for ${ws.name}`}
                         >
                           Show less
                         </button>

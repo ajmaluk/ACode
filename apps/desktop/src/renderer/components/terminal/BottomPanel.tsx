@@ -207,14 +207,20 @@ export function BottomPanel() {
 
       {/* Tab bar */}
       <div className="flex items-center justify-between px-2 border-b border-dalam-border-primary bg-dalam-bg-secondary/50 flex-shrink-0">
-        <div className="flex items-center gap-0">
+        <div className="flex items-center gap-0" role="tablist" aria-label="Bottom panel tabs">
           {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = tab === t.id;
+            const tabId = `bottom-tab-${t.id}`;
+            const panelId = `bottom-panel-${t.id}`;
             return (
               <button
                 key={t.id}
+                id={tabId}
                 onClick={() => setTab(t.id)}
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={panelId}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-all duration-150 border-b-2 ${
                   isActive
                     ? "text-dalam-text-primary border-dalam-accent-primary"
@@ -241,9 +247,21 @@ export function BottomPanel() {
 
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === "terminal" && <TerminalPanel />}
-        {tab === "output" && <OutputTab />}
-        {tab === "problems" && <ProblemsTab />}
+        {tab === "terminal" && (
+          <div role="tabpanel" id="bottom-panel-terminal" aria-labelledby="bottom-tab-terminal" className="h-full">
+            <TerminalPanel />
+          </div>
+        )}
+        {tab === "output" && (
+          <div role="tabpanel" id="bottom-panel-output" aria-labelledby="bottom-tab-output" className="h-full">
+            <OutputTab />
+          </div>
+        )}
+        {tab === "problems" && (
+          <div role="tabpanel" id="bottom-panel-problems" aria-labelledby="bottom-tab-problems" className="h-full">
+            <ProblemsTab />
+          </div>
+        )}
       </div>
     </div>
   );

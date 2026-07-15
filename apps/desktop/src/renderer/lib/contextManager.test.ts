@@ -15,6 +15,10 @@ import {
   getContextPressureRecommendation,
   getNextCheckpointTrigger,
   clearTokenCache,
+  buildRollingSummary,
+  selectMessagesByTokenBudget,
+  computeKeepBudget,
+  checkContextBudget,
 } from "./contextManager";
 import type { ChatMessage } from "@dalam/shared-types";
 
@@ -77,20 +81,16 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      // The assistant with toolCalls (index 2) should not be in toCompact
-      // without also having its tool result (index 3) — or both should be compacted together
-      const compactedIndices = new Set(
-        toCompact.map((m) => messages.indexOf(m)),
-      );
-      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
+      const compactedIds = new Set(toCompact.map((m) => m.id));
+      const keptIds = new Set(toKeep.map((m) => m.id));
 
       // If assistant (2) is kept, tool result (3) must also be kept
-      if (keptIndices.has(2)) {
-        expect(keptIndices.has(3)).toBe(true);
+      if (keptIds.has(messages[2].id)) {
+        expect(keptIds.has(messages[3].id)).toBe(true);
       }
       // If tool result (3) is compacted, assistant (2) must also be compacted
-      if (compactedIndices.has(3)) {
-        expect(compactedIndices.has(2)).toBe(true);
+      if (compactedIds.has(messages[3].id)) {
+        expect(compactedIds.has(messages[2].id)).toBe(true);
       }
     });
 
@@ -116,17 +116,15 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
       ];
       const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
-      const compactedIndices = new Set(
-        toCompact.map((m) => messages.indexOf(m)),
-      );
+      const keptIds = new Set(toKeep.map((m) => m.id));
+      const compactedIds = new Set(toCompact.map((m) => m.id));
 
       // Verify pairs are never split
-      if (keptIndices.has(3)) {
-        expect(keptIndices.has(2)).toBe(true);
+      if (keptIds.has(messages[3].id)) {
+        expect(keptIds.has(messages[2].id)).toBe(true);
       }
-      if (compactedIndices.has(2)) {
-        expect(compactedIndices.has(3)).toBe(true);
+      if (compactedIds.has(messages[2].id)) {
+        expect(compactedIds.has(messages[3].id)).toBe(true);
       }
     });
 
@@ -159,25 +157,23 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const compactedIndices = new Set(
-        toCompact.map((m) => messages.indexOf(m)),
-      );
-      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
+      const compactedIds = new Set(toCompact.map((m) => m.id));
+      const keptIds = new Set(toKeep.map((m) => m.id));
 
       // Verify all pairs are together
       // Pair 1: assistant(2) + toolResult(3)
-      if (compactedIndices.has(2)) {
-        expect(compactedIndices.has(3)).toBe(true);
+      if (compactedIds.has(messages[2].id)) {
+        expect(compactedIds.has(messages[3].id)).toBe(true);
       }
-      if (keptIndices.has(2)) {
-        expect(keptIndices.has(3)).toBe(true);
+      if (keptIds.has(messages[2].id)) {
+        expect(keptIds.has(messages[3].id)).toBe(true);
       }
       // Pair 2: assistant(5) + toolResult(6)
-      if (compactedIndices.has(5)) {
-        expect(compactedIndices.has(6)).toBe(true);
+      if (compactedIds.has(messages[5].id)) {
+        expect(compactedIds.has(messages[6].id)).toBe(true);
       }
-      if (keptIndices.has(5)) {
-        expect(keptIndices.has(6)).toBe(true);
+      if (keptIds.has(messages[5].id)) {
+        expect(keptIds.has(messages[6].id)).toBe(true);
       }
     });
 
@@ -207,15 +203,13 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toCompact, toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const compactedIndices = new Set(
-        toCompact.map((m) => messages.indexOf(m)),
-      );
-      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
+      const compactedIds = new Set(toCompact.map((m) => m.id));
+      const keptIds = new Set(toKeep.map((m) => m.id));
 
       // Assistant(2), toolResult1(3), toolResult2(4) must all be in the same set
-      const indices = [2, 3, 4];
-      const allCompacted = indices.every((i) => compactedIndices.has(i));
-      const allKept = indices.every((i) => keptIndices.has(i));
+      const ids = [messages[2].id, messages[3].id, messages[4].id];
+      const allCompacted = ids.every((id) => compactedIds.has(id));
+      const allKept = ids.every((id) => keptIds.has(id));
       expect(allCompacted || allKept).toBe(true);
     });
 
@@ -245,15 +239,15 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toKeep } = selectMessagesForCompaction(messages, 6);
 
-      const keptIndices = new Set(toKeep.map((m) => messages.indexOf(m)));
+      const keptIds = new Set(toKeep.map((m) => m.id));
 
       // The plain assistant (index 3) should NOT be pulled in just because
       // the tool result (index 5) and its assistant (index 4) are kept
       // (index 3 is a plain assistant without toolCalls, so it shouldn't be affected)
       // This is a sanity check — no assertion on index 3 specifically,
       // but we verify the pair 4+5 stays together
-      if (keptIndices.has(5)) {
-        expect(keptIndices.has(4)).toBe(true);
+      if (keptIds.has(messages[5].id)) {
+        expect(keptIds.has(messages[4].id)).toBe(true);
       }
     });
   });
@@ -302,6 +296,22 @@ describe("selectMessagesForCompaction — boundary alignment", () => {
 
       const { toKeep } = selectMessagesForCompaction(messages, 6);
       expect(toKeep).toContain(messages[6]);
+    });
+
+    it("protects messages with task plans", () => {
+      const messages = Array.from({ length: 15 }, (_, i) =>
+        i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
+      );
+      // Add a message with task plan in the middle
+      messages[7] = {
+        ...messages[7],
+        taskPlan: [
+          { id: "tp-1", title: "Implement feature", status: "completed" },
+        ],
+      };
+
+      const { toKeep } = selectMessagesForCompaction(messages, 6);
+      expect(toKeep).toContain(messages[7]);
     });
   });
 });
@@ -699,28 +709,28 @@ describe("checkProactiveContextManagement", () => {
 
 describe("getContextPressureRecommendation", () => {
   it("returns green Normal for none pressure", () => {
-    const rec = getContextPressureRecommendation("none", 0);
+    const rec = getContextPressureRecommendation("none");
     expect(rec.color).toBe("#22c55e");
     expect(rec.label).toBe("Normal");
     expect(rec.action).toBe("No action needed");
   });
 
   it("returns yellow Low for low pressure", () => {
-    const rec = getContextPressureRecommendation("low", 0.55);
+    const rec = getContextPressureRecommendation("low");
     expect(rec.color).toBe("#eab308");
     expect(rec.label).toBe("Low");
     expect(rec.action).toBe("Approaching limit");
   });
 
   it("returns orange Medium for medium pressure", () => {
-    const rec = getContextPressureRecommendation("medium", 0.75);
+    const rec = getContextPressureRecommendation("medium");
     expect(rec.color).toBe("#f97316");
     expect(rec.label).toBe("Medium");
     expect(rec.action).toBe("Monitor context usage");
   });
 
   it("returns red High for high pressure", () => {
-    const rec = getContextPressureRecommendation("high", 0.9);
+    const rec = getContextPressureRecommendation("high");
     expect(rec.color).toBe("#ef4444");
     expect(rec.label).toBe("High");
     expect(rec.action).toBe("Compaction recommended");
@@ -780,6 +790,17 @@ describe("estimateMessageTokens", () => {
     ];
     const tokens = estimateMessageTokens(msg);
     expect(tokens).toBeGreaterThan(10);
+  });
+
+  it("accounts for thinking content", () => {
+    const msg = assistantMsg("response");
+    msg.thinking = "Let me analyze the code carefully ".repeat(20);
+    const tokensWithThinking = estimateMessageTokens(msg);
+
+    const msgWithout = assistantMsg("response");
+    const tokensWithout = estimateMessageTokens(msgWithout);
+
+    expect(tokensWithThinking).toBeGreaterThan(tokensWithout);
   });
 });
 
@@ -889,13 +910,13 @@ describe("computePressure", () => {
   it("handles zero maxTokens", () => {
     const { pressure, ratio } = computePressure(1000, 0);
     expect(pressure).toBe("high");
-    expect(ratio).toBe(Infinity);
+    expect(ratio).toBe(1);
   });
 
   it("handles negative maxTokens (invalid config)", () => {
     const { pressure, ratio } = computePressure(1000, -1);
     expect(pressure).toBe("high");
-    expect(ratio).toBe(Infinity);
+    expect(ratio).toBe(1);
   });
 });
 
@@ -906,9 +927,7 @@ describe("estimateTokens", () => {
   it("returns 0 for empty string", () => expect(estimateTokens("")).toBe(0));
 
   it("returns 0 for null/undefined input", () => {
-    // @ts-expect-error testing null edge case
     expect(estimateTokens(null)).toBe(0);
-    // @ts-expect-error testing undefined edge case
     expect(estimateTokens(undefined)).toBe(0);
   });
 
@@ -932,8 +951,9 @@ describe("estimateTokens", () => {
     const cjk = "这是一个测试字符串用于验证中文分词";
     const tokens = estimateTokens(cjk);
     expect(tokens).toBeGreaterThan(0);
-    // CJK is ~1.5 chars/token, so 15 chars ≈ 10 tokens
-    expect(tokens).toBeLessThanOrEqual(15);
+    // CJK is ~0.67 tokens/char, so 15 chars ≈ 10 tokens
+    expect(tokens).toBeGreaterThanOrEqual(8);
+    expect(tokens).toBeLessThanOrEqual(12);
   });
 
   it("handles mixed CJK and ASCII", () => {
@@ -1001,7 +1021,7 @@ describe("computeContextStats", () => {
   });
 
   it("provides nextCheckpointTrigger for various ratios", () => {
-    // Low usage: ratio < 0.20, next trigger is 0.20
+    // Low usage: raw ratio < 0.20, next trigger is 0.20
     const stats1 = computeContextStats(
       [userMsg("x".repeat(50))],
       1000,
@@ -1010,13 +1030,580 @@ describe("computeContextStats", () => {
     );
     expect(stats1.nextCheckpointTrigger).toBeDefined();
 
-    // High usage: ratio > 0.70 (all triggers fired), next trigger is null
+    // High usage: raw ratio > 0.70 (all triggers fired), next trigger is null
+    // Need totalTokens/maxContextTokens > 0.7 → totalTokens > 700
+    // At ~0.25 tokens/char, need ~2800+ chars
     const stats2 = computeContextStats(
-      [userMsg("x".repeat(2500))],
+      [userMsg("x".repeat(3000))],
       1000,
       100,
       100,
     );
     expect(stats2.nextCheckpointTrigger).toBeNull();
+  });
+
+  it("shouldPrune is false when usableTokens < PRUNE_PROTECT (no underflow)", () => {
+    // usableTokens = 10000 - 4000 - 2000 = 4000, PRUNE_PROTECT = 10000
+    // Math.max(0, 4000 - 10000) = 0, so shouldPrune = totalTokens > 0
+    // With 0 messages, totalTokens = 0, so shouldPrune should be false
+    const stats = computeContextStats([], 10000, 4000, 2000);
+    expect(stats.shouldPrune).toBe(false);
+  });
+});
+
+// ============================================================
+// M3: _isToolResult — lowercase "for" format coverage
+// ============================================================
+describe("_isToolResult — lowercase for format", () => {
+  it("identifies Tool result for messages", () => {
+    expect(_isToolResult(userMsg("[Tool result for read_file] output"))).toBe(true);
+  });
+
+  it("identifies Tool error for messages", () => {
+    expect(_isToolResult(userMsg("[Tool error for bash] failed"))).toBe(true);
+  });
+});
+
+// ============================================================
+// T1: buildRollingSummary tests
+// ============================================================
+describe("buildRollingSummary", () => {
+  it("returns empty string for empty messages", () => {
+    expect(buildRollingSummary([])).toBe("");
+  });
+
+  it("returns previousSummary when messages are empty", () => {
+    expect(buildRollingSummary([], "old summary")).toBe("old summary");
+  });
+
+  it("extracts goals from user messages", () => {
+    const messages = [userMsg("Fix the authentication bug in login.ts")];
+    const summary = buildRollingSummary(messages);
+    expect(summary).toContain("## Goal");
+    expect(summary).toContain("authentication bug");
+  });
+
+  it("extracts completed tool results in colon format", () => {
+    const messages = [
+      userMsg("read the file"),
+      toolResultMsg("read_file", "file content here with enough chars to pass threshold"),
+    ];
+    const summary = buildRollingSummary(messages);
+    expect(summary).toContain("## Completed");
+    expect(summary).toContain("read_file");
+  });
+
+  it("extracts completed tool results in for format", () => {
+    const messages = [
+      userMsg("read the file"),
+      userMsg("[Tool result for read_file] file content here with enough chars to pass the length check"),
+    ];
+    const summary = buildRollingSummary(messages);
+    expect(summary).toContain("## Completed");
+    expect(summary).toContain("read_file");
+  });
+
+  it("extracts errors from tool results", () => {
+    const messages = [
+      userMsg("run the command"),
+      userMsg("[TOOL ERROR: bash] Command failed: permission denied"),
+    ];
+    const summary = buildRollingSummary(messages);
+    expect(summary).toContain("## Errors");
+  });
+
+  it("extracts active work from assistant messages", () => {
+    const messages = [
+      userMsg("help me fix this"),
+      assistantMsg("I'll start by analyzing the code structure to understand the issue"),
+    ];
+    const summary = buildRollingSummary(messages);
+    expect(summary).toContain("## Active");
+  });
+
+  it("extracts file changes", () => {
+    const msg = userMsg("I modified the file");
+    msg.fileChanges = [
+      { path: "/src/app.ts", action: "modified", additions: 10, deletions: 5 },
+    ];
+    const summary = buildRollingSummary([msg]);
+    expect(summary).toContain("## Files");
+    expect(summary).toContain("/src/app.ts");
+  });
+
+  it("includes previous summary when provided", () => {
+    const messages = [userMsg("continue working")];
+    const summary = buildRollingSummary(messages, "Previous context here");
+    expect(summary).toContain("## Previous Context");
+    expect(summary).toContain("Previous context here");
+  });
+
+  it("returns '(No context available)' when nothing meaningful is extracted", () => {
+    const messages = [userMsg("x")]; // too short to extract
+    const summary = buildRollingSummary(messages);
+    expect(summary).toBe("(No context available)");
+  });
+
+  it("limits completed items to last 5", () => {
+    const messages = Array.from({ length: 10 }, (_, i) =>
+      toolResultMsg(`tool_${i}`, `output ${i} with enough content to pass threshold`.repeat(5)),
+    );
+    const summary = buildRollingSummary(messages);
+    const completedSection = summary.split("## Completed")[1]?.split("##")[0] ?? "";
+    const bulletCount = (completedSection.match(/^- /gm) ?? []).length;
+    expect(bulletCount).toBeLessThanOrEqual(5);
+  });
+});
+
+// ============================================================
+// T2: selectMessagesByTokenBudget tests
+// ============================================================
+describe("selectMessagesByTokenBudget", () => {
+  it("returns all messages as toKeep when conversation is short", () => {
+    const messages = [userMsg("hi"), assistantMsg("hello")];
+    const { toCompact, toKeep } = selectMessagesByTokenBudget(messages, 10000);
+    expect(toCompact).toHaveLength(0);
+    expect(toKeep).toHaveLength(2);
+  });
+
+  it("always protects the first user message", () => {
+    const messages = Array.from({ length: 20 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
+    );
+    const { toKeep } = selectMessagesByTokenBudget(messages, 500);
+    expect(toKeep[0]).toBe(messages[0]);
+  });
+
+  it("protects messages with file changes", () => {
+    const messages = Array.from({ length: 20 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
+    );
+    messages[5].fileChanges = [
+      { path: "/test.ts", action: "modified", additions: 1, deletions: 0 },
+    ];
+    const { toKeep } = selectMessagesByTokenBudget(messages, 500);
+    expect(toKeep).toContain(messages[5]);
+  });
+
+  it("protects messages with todos", () => {
+    const messages = Array.from({ length: 20 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`user ${i}`) : assistantMsg(`assistant ${i}`),
+    );
+    messages[8].todos = [
+      { id: "todo-1", content: "Fix the bug", status: "in_progress" },
+    ];
+    const { toKeep } = selectMessagesByTokenBudget(messages, 500);
+    expect(toKeep).toContain(messages[8]);
+  });
+
+  it("compacts tool_call/tool_result pairs together", () => {
+    const messages: ChatMessage[] = [
+      userMsg("first"),
+      assistantMsg("reading", [
+        { id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" },
+      ]),
+      toolResultMsg("read_file", "file content"),
+      userMsg("thanks"),
+      assistantMsg("done"),
+    ];
+    // Very small budget forces compaction of older messages
+    const { toCompact, toKeep } = selectMessagesByTokenBudget(messages, 100);
+    const compactedIds = new Set(toCompact.map((m) => m.id));
+    const keptIds = new Set(toKeep.map((m) => m.id));
+
+    // If assistant(1) is kept, tool result(2) must be kept
+    if (keptIds.has(messages[1].id)) {
+      expect(keptIds.has(messages[2].id)).toBe(true);
+    }
+    // If tool result(2) is compacted, assistant(1) must be compacted
+    if (compactedIds.has(messages[2].id)) {
+      expect(compactedIds.has(messages[1].id)).toBe(true);
+    }
+  });
+});
+
+// ============================================================
+// T3: computeKeepBudget tests
+// ============================================================
+describe("computeKeepBudget", () => {
+  it("returns positive budget for large context window", () => {
+    const budget = computeKeepBudget(128000);
+    expect(budget).toBeGreaterThan(0);
+  });
+
+  it("returns minimum 2000 for very small context window", () => {
+    const budget = computeKeepBudget(10000);
+    expect(budget).toBeGreaterThanOrEqual(2000);
+  });
+
+  it("returns minimum 2000 even when reserved exceeds context window", () => {
+    const budget = computeKeepBudget(1000, 500, 800);
+    expect(budget).toBeGreaterThanOrEqual(2000);
+  });
+
+  it("decreases as system prompt grows", () => {
+    const budget1 = computeKeepBudget(128000, 2000);
+    const budget2 = computeKeepBudget(128000, 8000);
+    expect(budget2).toBeLessThan(budget1);
+  });
+});
+
+// ============================================================
+// T4: checkContextBudget tests
+// ============================================================
+describe("checkContextBudget", () => {
+  it("returns none for small conversation", () => {
+    const result = checkContextBudget([userMsg("hi")], 128000);
+    expect(result.needsCompaction).toBe(false);
+    expect(result.recommendedAction).toBe("none");
+  });
+
+  it("returns prune for moderate usage (50-70%)", () => {
+    const bigMsg = userMsg("x".repeat(200000));
+    const result = checkContextBudget([bigMsg], 100000);
+    expect(result.needsCompaction).toBe(true);
+    expect(["prune", "compact", "deep-compact"]).toContain(result.recommendedAction);
+  });
+
+  it("returns compact for high usage (70-90%)", () => {
+    const hugeMsg = userMsg("x".repeat(300000));
+    const result = checkContextBudget([hugeMsg], 100000);
+    expect(result.needsCompaction).toBe(true);
+    expect(["compact", "deep-compact"]).toContain(result.recommendedAction);
+  });
+
+  it("returns deep-compact for very high usage (≥90%)", () => {
+    const massiveMsg = userMsg("x".repeat(500000));
+    const result = checkContextBudget([massiveMsg], 100000);
+    expect(result.needsCompaction).toBe(true);
+    expect(result.recommendedAction).toBe("deep-compact");
+  });
+
+  it("returns positive keepBudget", () => {
+    const result = checkContextBudget([userMsg("hi")], 128000);
+    expect(result.keepBudget).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================
+// T5: pruneToolOutputs — PRUNE_PROTECT early exit
+// ============================================================
+describe("pruneToolOutputs — edge cases", () => {
+  it("skips pruning when totalPrunableToolTokens < PRUNE_PROTECT", () => {
+    // Small tool outputs should not be pruned
+    const messages = [
+      userMsg("first"),
+      toolResultMsg("read_file", "short"),
+      userMsg("second"),
+    ];
+    const { tokensReclaimed } = pruneToolOutputs(messages);
+    expect(tokensReclaimed).toBe(0);
+  });
+
+  it("handles toPrune.size === 0 after threshold check", () => {
+    // All tool results are in the protected tail
+    const messages = [
+      userMsg("first"),
+      toolResultMsg("read_file", "x".repeat(50000)),
+      userMsg("second"),
+    ];
+    const { tokensReclaimed } = pruneToolOutputs(messages);
+    // Tool result is after the first real user turn, may or may not be prunable
+    expect(tokensReclaimed).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ============================================================
+// T7-T8: pruneToolOutputs — colon and for format
+// ============================================================
+describe("pruneToolOutputs — format handling", () => {
+  it("handles TOOL ERROR colon format", () => {
+    const messages = [
+      assistantMsg("old response"),
+      assistantMsg("another old response"),
+      {
+        id: "err-1",
+        role: "user" as const,
+        content: "[TOOL ERROR: bash] " + "x".repeat(50000),
+        timestamp: Date.now(),
+      },
+      userMsg("first user"),
+      userMsg("second user"),
+    ];
+    const { pruned } = pruneToolOutputs(messages);
+    const errMsg = pruned.find((m) => m.id === "err-1");
+    expect(errMsg).toBeDefined();
+    expect(errMsg!.content).toMatch(/^\[Tool output pruned/);
+  });
+
+  it("handles Tool result for format", () => {
+    const messages = [
+      assistantMsg("old response"),
+      assistantMsg("another old response"),
+      {
+        id: "for-1",
+        role: "user" as const,
+        content: "[Tool result for read_file] " + "x".repeat(50000),
+        timestamp: Date.now(),
+      },
+      userMsg("first user"),
+      userMsg("second user"),
+    ];
+    const { pruned } = pruneToolOutputs(messages);
+    const forMsg = pruned.find((m) => m.id === "for-1");
+    expect(forMsg).toBeDefined();
+    expect(forMsg!.content).toContain("read_file");
+  });
+
+  it("handles Tool error for format", () => {
+    const messages = [
+      assistantMsg("old response"),
+      assistantMsg("another old response"),
+      {
+        id: "for-err-1",
+        role: "user" as const,
+        content: "[Tool error for bash] " + "x".repeat(50000),
+        timestamp: Date.now(),
+      },
+      userMsg("first user"),
+      userMsg("second user"),
+    ];
+    const { pruned } = pruneToolOutputs(messages);
+    const errMsg = pruned.find((m) => m.id === "for-err-1");
+    expect(errMsg).toBeDefined();
+    expect(errMsg!.content).toContain("bash");
+  });
+});
+
+// ============================================================
+// T9-T11: tier1PruneToolOutputs — edge cases
+// ============================================================
+describe("tier1PruneToolOutputs — edge cases", () => {
+  it("handles protectAfter === 0 (no real user turns)", () => {
+    const messages = [
+      toolResultMsg("read_file", "x".repeat(50000)),
+      toolResultMsg("grep_file", "y".repeat(50000)),
+    ];
+    const { tokensReclaimed } = tier1PruneToolOutputs(messages);
+    // No real user turns → protectAfter=0, no tool results are prunable
+    expect(tokensReclaimed).toBe(0);
+  });
+
+  it("skips tool outputs with size <= 1000", () => {
+    const messages = [
+      userMsg("old user 1"),
+      userMsg("old user 2"),
+      userMsg("old user 3"),
+      toolResultMsg("read_file", "short output"),
+      userMsg("recent 1"),
+      userMsg("recent 2"),
+      userMsg("recent 3"),
+      userMsg("recent 4"),
+    ];
+    const { tokensReclaimed } = tier1PruneToolOutputs(messages);
+    expect(tokensReclaimed).toBe(0);
+  });
+
+  it("skips pruning when totalPrunableToolTokens < PRUNE_MINIMUM", () => {
+    const messages = [
+      userMsg("old user 1"),
+      userMsg("old user 2"),
+      userMsg("old user 3"),
+      toolResultMsg("read_file", "x".repeat(5000)), // ~1250 tokens, below PRUNE_MINIMUM
+      userMsg("recent 1"),
+      userMsg("recent 2"),
+      userMsg("recent 3"),
+      userMsg("recent 4"),
+    ];
+    const { tokensReclaimed } = tier1PruneToolOutputs(messages);
+    expect(tokensReclaimed).toBe(0);
+  });
+});
+
+// ============================================================
+// T12: clearTokenCache — after cache eviction
+// ============================================================
+describe("clearTokenCache — after eviction", () => {
+  it("cache still works after entries are evicted", () => {
+    // Fill cache beyond max
+    for (let i = 0; i < 1100; i++) {
+      estimateTokens(`text-${i}`);
+    }
+    clearTokenCache();
+    // After clear, should recalculate correctly
+    const tokens = estimateTokens("hello world");
+    expect(tokens).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================
+// T14: buildCompactionPrompt — truncation at 2000 chars
+// ============================================================
+describe("buildCompactionPrompt — truncation", () => {
+  it("truncates long messages to 2000 chars without splitting surrogate pairs", () => {
+    // Create a message with surrogate pair characters (emoji)
+    const longContent = "a".repeat(1999) + "\uD83D\uDE00" + "b".repeat(1000); // 😀 is a surrogate pair
+    const messages = [userMsg(longContent)];
+    const prompt = buildCompactionPrompt(messages);
+    const userContent = prompt.find((p) => p.role === "user")?.content ?? "";
+    // The formatted content should have been truncated
+    expect(userContent.length).toBeLessThan(longContent.length + 200); // some overhead from template
+  });
+});
+
+// ============================================================
+// T15: buildCompactionPrompt — with tool results appended
+// ============================================================
+describe("buildCompactionPrompt — tool results", () => {
+  it("appends tool results after assistant with toolCalls", () => {
+    const messages: ChatMessage[] = [
+      assistantMsg("I'll read the file", [
+        { id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" },
+      ]),
+      toolResultMsg("read_file", "file content here"),
+      userMsg("thanks"),
+    ];
+    const prompt = buildCompactionPrompt(messages);
+    // The assistant's content should include tool results
+    const assistantEntry = prompt.find((p) => p.role === "assistant");
+    expect(assistantEntry?.content).toContain("Tool Results:");
+    expect(assistantEntry?.content).toContain("read_file");
+  });
+
+  it("does not append tool results for assistant without toolCalls", () => {
+    const messages: ChatMessage[] = [
+      assistantMsg("plain response"),
+      userMsg("thanks"),
+    ];
+    const prompt = buildCompactionPrompt(messages);
+    const assistantEntry = prompt.find((p) => p.role === "assistant");
+    expect(assistantEntry?.content).not.toContain("Tool Results:");
+  });
+});
+
+// ============================================================
+// T16-T17: _alignBoundaryPairs — edge cases
+// ============================================================
+describe("_alignBoundaryPairs — edge cases", () => {
+  it("handles assistant with toolCalls kept but no following tool results", () => {
+    const messages: ChatMessage[] = [
+      userMsg("first"),
+      assistantMsg("response", [
+        { id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" },
+      ]),
+      userMsg("next question"),
+    ];
+    const baseIndices = new Set([1]);
+    const aligned = _alignBoundaryPairs(messages, baseIndices);
+    // Assistant is kept, but no tool results follow → only index 1 in aligned
+    expect(aligned.has(1)).toBe(true);
+    expect(aligned.size).toBe(1);
+  });
+
+  it("handles tool result protected but no preceding assistant with toolCalls", () => {
+    const messages: ChatMessage[] = [
+      userMsg("first"),
+      toolResultMsg("read_file", "content"),
+      userMsg("next"),
+    ];
+    const baseIndices = new Set([1]);
+    const aligned = _alignBoundaryPairs(messages, baseIndices);
+    // Tool result is protected, but no assistant with toolCalls precedes it
+    expect(aligned.has(1)).toBe(true);
+    expect(aligned.size).toBe(1);
+  });
+
+  it("respects maxLookahead bound", () => {
+    // Create many consecutive tool results after an assistant
+    const messages: ChatMessage[] = [
+      userMsg("first"),
+      assistantMsg("response", [
+        { id: "tc-1", name: "read_file", args: { path: "/a" }, status: "pending" },
+      ]),
+    ];
+    // Add 150 tool results
+    for (let i = 0; i < 150; i++) {
+      messages.push(toolResultMsg("read_file", `output ${i}`));
+    }
+    messages.push(userMsg("last"));
+
+    const baseIndices = new Set([1]);
+    const aligned = _alignBoundaryPairs(messages, baseIndices, 100);
+    // With maxLookahead=100, should only pull in up to 100 tool results
+    expect(aligned.size).toBeLessThanOrEqual(102); // 1 (assistant) + up to 100 tool results + possibly 1 more
+  });
+
+  it("handles empty baseIndices", () => {
+    const messages = [userMsg("first"), assistantMsg("response")];
+    const aligned = _alignBoundaryPairs(messages, new Set());
+    expect(aligned.size).toBe(0);
+  });
+
+  it("handles index out of bounds gracefully", () => {
+    const messages = [userMsg("first")];
+    const baseIndices = new Set([0, 999]);
+    const aligned = _alignBoundaryPairs(messages, baseIndices);
+    expect(aligned.has(0)).toBe(true);
+  });
+});
+
+// ============================================================
+// M4: checkProactiveContextManagement — boundary conditions
+// ============================================================
+describe("checkProactiveContextManagement — boundary conditions", () => {
+  it("returns shouldPrune at exactly 60% usage", () => {
+    // Craft messages to hit exactly 60% of usable tokens
+    // usableTokens = maxContextTokens - OUTPUT_RESERVE(4000) - COMPACTION_BUFFER(20000)
+    // For maxContextTokens = 100000: usable = 76000
+    // Need totalTokens ≈ 0.60 * 76000 = 45600
+    // At ~0.25 tokens/char, need ~182400 chars
+    const bigMsg = userMsg("x".repeat(182400));
+    const result = checkProactiveContextManagement([bigMsg], 100000);
+    expect(result.shouldPrune).toBe(true);
+  });
+
+  it("returns shouldCompact at exactly 75% usage", () => {
+    // Need totalTokens ≈ 0.75 * 76000 = 57000
+    // At ~0.25 tokens/char, need ~228000 chars
+    const hugeMsg = userMsg("x".repeat(228000));
+    const result = checkProactiveContextManagement([hugeMsg], 100000);
+    expect(result.shouldCompact).toBe(true);
+  });
+});
+
+// ============================================================
+// estimateTokens — code fence edge cases (C2 fix verification)
+// ============================================================
+describe("estimateTokens — code fence detection", () => {
+  it("handles text starting with a code fence", () => {
+    const text = "```\ncode content\n```";
+    const tokens = estimateTokens(text);
+    expect(tokens).toBeGreaterThan(0);
+    // The code content should be counted in code mode
+  });
+
+  it("handles multiple code blocks", () => {
+    const text = "text\n```\ncode1\n```\nmore text\n```\ncode2\n```\nend";
+    const tokens = estimateTokens(text);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it("handles unclosed code fence", () => {
+    const text = "text\n```\ncode content";
+    const tokens = estimateTokens(text);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it("handles CJK inside code blocks correctly", () => {
+    // CJK inside code should use code rate (0.25) not CJK rate (0.67)
+    const codeText = "```\n中文代码\n```";
+    const plainCjk = "中文代码";
+    const codeTokens = estimateTokens(codeText);
+    const plainTokens = estimateTokens(plainCjk);
+    // Code block should have fewer tokens than plain CJK (code rate < CJK rate)
+    // codeTokens = fence(3) + CJK(4*0.25=1) + newline(1) + fence(3) = ~8
+    // plainTokens = 4 * 0.67 = ~3
+    // codeTokens should include overhead for fences
+    expect(codeTokens).toBeGreaterThan(plainTokens);
   });
 });

@@ -186,7 +186,8 @@ describe("confirmVersionRestore", () => {
       sessionVersions: {},
       compactionSummaries: {},
       pendingAttachments: [],
-      _userSelectedAgent: false,
+
+
       chatHistory: [],
       chatHistoryIdx: -1,
       activeSessionId: null,
@@ -269,7 +270,8 @@ describe("cancelVersionRestore", () => {
       sessionVersions: {},
       compactionSummaries: {},
       pendingAttachments: [],
-      _userSelectedAgent: false,
+
+
       chatHistory: [],
       chatHistoryIdx: -1,
       activeSessionId: null,
@@ -365,7 +367,8 @@ describe("saveVersion", () => {
       sessionVersions: {},
       compactionSummaries: {},
       pendingAttachments: [],
-      _userSelectedAgent: false,
+
+
       chatHistory: [],
       chatHistoryIdx: -1,
       activeSessionId: null,

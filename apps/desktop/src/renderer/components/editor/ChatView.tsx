@@ -63,6 +63,28 @@ import { AttachFileButton } from "@/components/editor/AttachFileButton";
 // AgentModeSelector — dropdown to switch between build/yolo/plan modes
 // ============================================================================
 
+const HELP_TEXT = `Available Slash Commands:
+  /help       - Show this help notification
+  /clear      - Start a fresh task/chat session
+  /compact    - Compresses history using compaction summaries
+  /cost       - Show token usage and cost breakdown for this session
+  /dream      - Run background memory consolidation cycle
+  /crystallize - Assess chat history for skill crystallization
+  /login      - Opens Settings -> Models to configure API keys
+  /model [id] - Switch the active model (e.g. /model gpt-4o)
+  /reasoning  - Toggles reasoning modes or shows details
+  /share      - Formats and copies conversation to clipboard
+  /init       - Scans workspace & creates/bootstraps DALAM.md
+
+Keyboard Shortcuts:
+  ${modKey()}K          - Open command palette
+  ${modKey()}B          - Toggle sidebar panel
+  ${modKey()}\\         - Toggle right panel
+  ${modKey()}N          - Start new task/chat
+  ${modKey()},          - Open settings panel
+  ${modKey()}[ / ${modKey()}]     - Navigate task history backward/forward
+  ?                     - Show shortcuts cheatsheet (when not typing)`;
+
 const AGENT_MODES = [
   {
     name: "build" as const,
@@ -110,6 +132,7 @@ function AgentModeSelector() {
         onClick={() => setOpen(!open)}
         className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors hover:bg-dalam-bg-hover ${currentMode.color}`}
         title={currentMode.description}
+        aria-label={`Agent mode: ${currentMode.label}`}
       >
         <currentMode.icon className="w-3 h-3" />
         <span>{currentMode.label}</span>
@@ -151,16 +174,15 @@ function AgentModeSelector() {
 }
 
 // ============================================================================
-// InlineQuestionDialog — shows question options above input (Claude Code style)
+// QuestionInput — replaces the chat input area when the AI asks a question
 // ============================================================================
 
-function InlineQuestionDialog() {
+function QuestionInput() {
   const { request, resolve } = useQuestion();
   const [selected, setSelected] = useState(0);
   const [customText, setCustomText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Reset state when a new question appears
   const prevRequestIdRef = useRef<string | undefined>(undefined);
   const optionCount = request?.options?.length ?? 0;
 
@@ -172,11 +194,9 @@ function InlineQuestionDialog() {
     }
   }, [request?.id]);
 
-  // Number key handler — pressing 1-9 submits immediately
   useEffect(() => {
     if (!request) return;
     const handler = (e: KeyboardEvent) => {
-      // Ignore if typing in input
       if (
         (e.target as HTMLElement)?.tagName === "INPUT" ||
         (e.target as HTMLElement)?.tagName === "TEXTAREA"
@@ -197,21 +217,79 @@ function InlineQuestionDialog() {
 
   if (!request) return null;
 
+  const handleSubmit = () => {
+    if (selected < optionCount) {
+      resolve({ selectedLabel: request.options[selected].label });
+    } else if (customText.trim() || !request.required) {
+      resolve({ selectedLabel: "Custom", customText: customText.trim() });
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    } else if (e.key === "Escape") {
+      resolve(null);
+    }
+  };
+
+  const inputType = request.type === "number" ? "number" : "text";
+
+  // For "confirm" type, show Yes/No buttons prominently
+  if (request.type === "confirm" && optionCount === 0) {
+    return (
+      <div className="flex flex-col animate-fade-in">
+        <div className="flex items-center justify-between px-4 pt-3 pb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[11px] font-medium text-amber-500 bg-amber-500/10 dark:text-amber-400 dark:bg-amber-400/10 px-2 py-0.5 rounded">
+              {request.header}
+            </span>
+            <span className="text-sm text-dalam-text-primary truncate font-medium">
+              {request.question}
+            </span>
+          </div>
+          <button
+            onClick={() => resolve(null)}
+            className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors"
+            title="Dismiss"
+            aria-label="Dismiss question"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="flex gap-2 px-4 pb-3">
+          <button
+            onClick={() => resolve({ selectedLabel: "Yes" })}
+            className="flex-1 px-4 py-2 rounded-lg text-sm font-medium bg-dalam-git-added/15 text-dalam-git-added hover:bg-dalam-git-added/25 transition-colors"
+          >
+            Yes
+          </button>
+          <button
+            onClick={() => resolve({ selectedLabel: "No" })}
+            className="flex-1 px-4 py-2 rounded-lg text-sm font-medium bg-dalam-git-removed/15 text-dalam-git-removed hover:bg-dalam-git-removed/25 transition-colors"
+          >
+            No
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="mb-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg overflow-hidden animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-dalam-border-primary/50">
+    <div className="flex flex-col animate-fade-in">
+      <div className="flex items-center justify-between px-4 pt-3 pb-1.5">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[11px] font-medium text-dalam-accent-primary bg-dalam-accent-subtle px-2 py-0.5 rounded">
+          <span className="text-[11px] font-medium text-amber-500 bg-amber-500/10 dark:text-amber-400 dark:bg-amber-400/10 px-2 py-0.5 rounded">
             {request.header}
           </span>
-          <span className="text-sm text-dalam-text-primary truncate">
+          <span className="text-sm text-dalam-text-primary truncate font-medium">
             {request.question}
           </span>
         </div>
         <button
           onClick={() => resolve(null)}
-          className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted"
+          className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors"
           title="Dismiss"
           aria-label="Dismiss question"
         >
@@ -219,103 +297,61 @@ function InlineQuestionDialog() {
         </button>
       </div>
 
-      {/* Options */}
-      <div className="px-4 py-2 space-y-0.5">
-        {request.options.map((opt, idx) => (
-          <button
-            key={opt.label}
-            onClick={() => {
-              setSelected(idx);
-              resolve({ selectedLabel: opt.label });
-            }}
-            onMouseEnter={() => setSelected(idx)}
-            className={`w-full text-left flex items-start gap-3 px-3 py-2 rounded-lg transition-colors cursor-pointer ${
-              selected === idx
-                ? "bg-dalam-accent-primary/10 border border-dalam-accent-primary/30"
-                : "hover:bg-dalam-bg-hover/50 border border-transparent"
-            }`}
-          >
-            <span className="text-xs text-dalam-accent-primary font-medium w-4 mt-0.5 text-center flex-shrink-0">
-              {idx + 1}.
-            </span>
-            <div className="flex-1 min-w-0">
-              <span className="text-sm text-dalam-text-primary font-medium">
-                {opt.label}
-              </span>
-              {opt.description && (
-                <span className="text-sm text-dalam-text-muted ml-2">
-                  {opt.description}
-                </span>
-              )}
-            </div>
-          </button>
-        ))}
-
-        {/* Custom answer input */}
-        {request.allowFreeText !== false && (
-          <div
-            className={`flex items-start gap-3 px-3 py-2 rounded-lg transition-colors ${
-              selected === optionCount
-                ? "bg-dalam-bg-hover"
-                : "hover:bg-dalam-bg-hover/50"
-            }`}
-            onClick={() => {
-              setSelected(optionCount);
-              inputRef.current?.focus();
-            }}
-          >
-            <span className="text-xs text-dalam-text-muted w-4 mt-2 text-center flex-shrink-0">
-              {optionCount + 1}.
-            </span>
-            <input
-              ref={inputRef}
-              type="text"
-              value={customText}
-              onChange={(e) => setCustomText(e.target.value)}
-              placeholder="Enter your answer..."
-              className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && customText.trim()) {
-                  e.preventDefault();
-                  resolve({
-                    selectedLabel: "Custom",
-                    customText: customText.trim(),
-                  });
-                }
-              }}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Footer */}
-      <div className="flex items-center justify-between px-4 py-2 border-t border-dalam-border-primary/50">
-        <div className="text-[10px] text-dalam-text-muted">
-          Click an option or press 1-{optionCount} to select
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => resolve(null)}
-            className="px-3 py-1 text-xs rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
-          >
-            Dismiss
-          </button>
+      {optionCount > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-4 pb-2" role="list">
+          {request.options.map((opt, idx) => (
+            <button
+              key={opt.label}
+              onClick={() => resolve({ selectedLabel: opt.label })}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                selected === idx
+                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/40"
+                  : "bg-dalam-bg-active text-dalam-text-secondary hover:bg-dalam-bg-hover"
+              }`}
+              onMouseEnter={() => setSelected(idx)}
+              role="listitem"
+            >
+              <span className="opacity-60">{idx + 1}.</span>
+              {opt.label}
+            </button>
+          ))}
           {request.allowFreeText !== false && (
             <button
-              onClick={() => {
-                if (customText.trim()) {
-                  resolve({
-                    selectedLabel: "Custom",
-                    customText: customText.trim(),
-                  });
-                }
-              }}
-              disabled={!customText.trim()}
-              className="px-3 py-1 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={() => { setSelected(optionCount); inputRef.current?.focus(); }}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                selected === optionCount
+                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/40"
+                  : "bg-dalam-bg-active text-dalam-text-secondary hover:bg-dalam-bg-hover"
+              }`}
+              role="listitem"
             >
-              Submit Custom
+              Other
             </button>
           )}
+        </div>
+      )}
+
+      <div className="px-4 pb-2.5">
+        <div className="flex items-center gap-2 bg-dalam-bg-active rounded-lg border border-dalam-border-primary/50 focus-within:border-dalam-accent-primary/50 transition-colors">
+          <input
+            ref={inputRef}
+            type={inputType}
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={optionCount > 0 ? "Or type your answer..." : (request.placeholder || "Type your answer...")}
+            className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted px-3 py-2 min-w-0"
+            autoFocus
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={!customText.trim() && request.required !== false && selected >= optionCount}
+            className="mr-1.5 p-1.5 rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30"
+            title="Submit answer"
+            aria-label="Submit answer"
+          >
+            <ArrowUp className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </div>
@@ -349,6 +385,7 @@ function ChatView() {
   const confirmVersionRestore = useChat((s) => s.confirmVersionRestore);
   const pendingAttachments = useChat((s) => s.pendingAttachments);
   const removePendingAttachment = useChat((s) => s.removePendingAttachment);
+  const clearPendingAttachments = useChat((s) => s.clearPendingAttachments);
   const messageQueue = useChat((s) => s.messageQueue);
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
@@ -496,6 +533,16 @@ function ChatView() {
   }, [messages, isUserScrolledUp, scrollRef]);
 
   const hasMessages = messages.length > 0;
+
+  // Clear input value when switching to a different session (preserves session isolation)
+  const prevSessionIdRef = useRef(activeSessionId);
+  useEffect(() => {
+    if (prevSessionIdRef.current !== activeSessionId) {
+      prevSessionIdRef.current = activeSessionId;
+      setValue("");
+      clearPendingAttachments();
+    }
+  }, [activeSessionId, clearPendingAttachments]);
 
   // Auto-focus the chat input on mount and when switching between empty/non-empty
   const prevMsgCountRef = useRef(messages.length);
@@ -755,28 +802,7 @@ function ChatView() {
     }
 
     if (trimmed === "/help") {
-      const helpText = `Available Slash Commands:
-  /help       - Show this help notification
-  /clear      - Start a fresh task/chat session
-  /compact    - Compresses history using compaction summaries
-  /cost       - Show token usage and cost breakdown for this session
-  /dream      - Run background memory consolidation cycle
-  /crystallize - Assess chat history for skill crystallization
-  /login      - Opens Settings -> Models to configure API keys
-  /model [id] - Switch the active model (e.g. /model gpt-4o)
-  /reasoning  - Toggles reasoning modes or shows details
-  /share      - Formats and copies conversation to clipboard
-  /init       - Scans workspace & creates/bootstraps DALAM.md
-
-Keyboard Shortcuts:
-  ${mod}K          - Open command palette
-  ${mod}B          - Toggle sidebar panel
-  ${mod}\\          - Toggle right panel
-  ${mod}N          - Start new task/chat
-  ${mod},          - Open settings panel
-  ${mod}[ / ${mod}]     - Navigate task history backward/forward
-  ?           - Show shortcuts cheatsheet (when not typing)`;
-      chat.injectSystemMessage(helpText);
+      chat.injectSystemMessage(HELP_TEXT);
       setValue("");
       return;
     }
@@ -1290,6 +1316,7 @@ Add your project's common commands here so Dalam knows how to build:
                           ? `Active workspace: ${workspace.name}`
                           : "Select a folder to start working"
                       }
+                      aria-label={workspace ? `Select workspace: ${workspace.name}` : "Select a folder"}
                     >
                       <FolderOpen
                         className={`w-4 h-4 ${workspace ? "text-dalam-text-muted" : "text-amber-400/80"}`}
@@ -1383,6 +1410,7 @@ Add your project's common commands here so Dalam knows how to build:
                           setShowWorkspaceDropdown(false);
                           setShowModelDropdown(false);
                         }}
+                        aria-label={`Git branch: ${gitStatus.branch}`}
                       >
                         <GitBranch className="w-3.5 h-3.5" />
                         <span>{gitStatus.branch}</span>
@@ -1401,11 +1429,12 @@ Add your project's common commands here so Dalam knows how to build:
                 </div>
                 <div className="px-4 py-2.5 relative">
                   {pendingAttachments.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-2">
+                    <div className="flex flex-wrap gap-1.5 mb-2" role="list">
                       {pendingAttachments.map((att) => (
                         <div
                           key={att.id}
                           className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary"
+                          role="listitem"
                         >
                           {att.mimeType.startsWith("image/") ? (
                             <img
@@ -1423,6 +1452,7 @@ Add your project's common commands here so Dalam knows how to build:
                             className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
                             onClick={() => removePendingAttachment(att.id)}
                             title={`Remove ${att.name}`}
+                            aria-label={`Remove ${att.name}`}
                           >
                             <X className="w-3 h-3" />
                           </button>
@@ -1471,6 +1501,7 @@ Add your project's common commands here so Dalam knows how to build:
                             setShowWorkspaceDropdown(false);
                             setShowBranchDropdown(false);
                           }}
+                          aria-label={`Select model: ${currentModel?.model?.name || selectedModelId || "none"}`}
                         >
                           <span
                             className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`}
@@ -1743,63 +1774,66 @@ Add your project's common commands here so Dalam knows how to build:
               onDismiss={handleDismissRestore}
             />
           )}
-          {/* Inline question dialog — appears above input when agent asks a question */}
-          <InlineQuestionDialog />
           {/* Message queue — follow-up messages waiting to be sent */}
           <MessageQueue />
-          <div className="max-w-2xl w-full mx-auto bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg">
-            <div className="px-4 py-3 relative">
-              {pendingAttachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {pendingAttachments.map((att) => (
-                    <div
-                      key={att.id}
-                      className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary"
-                    >
-                      {att.mimeType.startsWith("image/") ? (
-                        <img
-                          src={`data:${att.mimeType};base64,${att.content}`}
-                          alt={att.name}
-                          className="w-5 h-5 rounded object-cover"
-                        />
-                      ) : (
-                        <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
-                      )}
-                      <span className="max-w-[120px] truncate">{att.name}</span>
-                      <button
-                        className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
-                        onClick={() => removePendingAttachment(att.id)}
-                        title={`Remove ${att.name}`}
+          <div className="max-w-2xl w-full mx-auto bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-lg overflow-hidden">
+            {/* When a question is active, show QuestionInput instead of textarea */}
+            <QuestionInput />
+            {!useQuestion.getState().request && (
+              <div className="px-4 py-3 relative">
+                {pendingAttachments.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2" role="list">
+                    {pendingAttachments.map((att) => (
+                      <div
+                        key={att.id}
+                        className="flex items-center gap-1.5 px-2 py-1 bg-dalam-bg-active border border-dalam-border-primary rounded-md text-xs text-dalam-text-primary"
+                        role="listitem"
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <textarea
-                ref={followupTextareaRef}
-                className="chat-input w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-[400px]"
-                placeholder={
-                  messageQueue.length > 0
-                    ? "Keep typing to queue follow-up changes"
-                    : "Ask for follow-up changes"
-                }
-                aria-label="Follow-up message input"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                onKeyDown={handleFollowupKeyDown}
-                rows={1}
-              />
-              <PromptAutocomplete
-                value={value}
-                onChange={setValue}
-                textareaRef={followupTextareaRef}
-                fileTree={fileTree}
-                chatSessions={chatSessions}
-                keyHandlerRef={followupAutocompleteKey}
-              />
-            </div>
+                        {att.mimeType.startsWith("image/") ? (
+                          <img
+                            src={`data:${att.mimeType};base64,${att.content}`}
+                            alt={att.name}
+                            className="w-5 h-5 rounded object-cover"
+                          />
+                        ) : (
+                          <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
+                        )}
+                        <span className="max-w-[120px] truncate">{att.name}</span>
+                        <button
+                          className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
+                          onClick={() => removePendingAttachment(att.id)}
+                          title={`Remove ${att.name}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <textarea
+                  ref={followupTextareaRef}
+                  className="chat-input w-full bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted resize-none overflow-y-auto leading-relaxed min-h-[40px] max-h-[400px]"
+                  placeholder={
+                    messageQueue.length > 0
+                      ? "Keep typing to queue follow-up changes"
+                      : "Ask for follow-up changes"
+                  }
+                  aria-label="Follow-up message input"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  onKeyDown={handleFollowupKeyDown}
+                  rows={1}
+                />
+                <PromptAutocomplete
+                  value={value}
+                  onChange={setValue}
+                  textareaRef={followupTextareaRef}
+                  fileTree={fileTree}
+                  chatSessions={chatSessions}
+                  keyHandlerRef={followupAutocompleteKey}
+                />
+              </div>
+            )}
             <div className="flex items-center justify-between px-4 pb-3">
               <div className="flex items-center gap-2">
                 <AttachFileButton />
@@ -1812,6 +1846,7 @@ Add your project's common commands here so Dalam knows how to build:
                     onClick={() => {
                       setShowFollowupModelDropdown((v) => !v);
                     }}
+                    aria-label={`Select model: ${currentModel?.model?.name || selectedModelId || "none"}`}
                   >
                     <span
                       className={`w-2 h-2 rounded-full ${currentModel ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`}

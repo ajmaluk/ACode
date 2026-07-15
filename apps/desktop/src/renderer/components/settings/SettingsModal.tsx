@@ -186,9 +186,11 @@ export function SettingsModal() {
               return (
                 <button
                   key={t.id}
+                  id={`settings-tab-${t.id}`}
                   onClick={() => setActiveTab(t.id)}
                   role="tab"
                   aria-selected={active}
+                  aria-controls={`settings-panel-${t.id}`}
                   onKeyDown={(e) => {
                     const idx = TABS.findIndex((tab) => tab.id === activeTab);
                     if (e.key === "ArrowDown") {
@@ -212,18 +214,39 @@ export function SettingsModal() {
         </nav>
         <div className="flex-1 min-w-0 overflow-y-auto">
           <div className="max-w-5xl mx-auto py-8 px-10 w-full">
-            {activeTab === "general" && <GeneralTab />}
-            {activeTab === "code-preview" && <CodePreviewTab />}
-            {activeTab === "models" && <ModelsTab />}
-            {/* Agents/Permissions tabs removed — single-mode full-access */}
-            {activeTab === "instructions" && <InstructionsTab />}
-            {activeTab === "skills" && <SkillsTab />}
-            {activeTab === "mcp" && <McpTab />}
-            {activeTab === "memory-graph" && <MemoryGraphTab />}
-            {activeTab === "connectors" && <ConnectorsTab />}
-            {activeTab === "commands" && <CommandsTab />}
-            {activeTab === "indexing" && <IndexingTab />}
-            {activeTab === "onboard" && <OnboardTab />}
+            <div role="tabpanel" id="settings-panel-general" aria-labelledby="settings-tab-general" hidden={activeTab !== "general"}>
+              {activeTab === "general" && <GeneralTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-code-preview" aria-labelledby="settings-tab-code-preview" hidden={activeTab !== "code-preview"}>
+              {activeTab === "code-preview" && <CodePreviewTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-models" aria-labelledby="settings-tab-models" hidden={activeTab !== "models"}>
+              {activeTab === "models" && <ModelsTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-instructions" aria-labelledby="settings-tab-instructions" hidden={activeTab !== "instructions"}>
+              {activeTab === "instructions" && <InstructionsTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-skills" aria-labelledby="settings-tab-skills" hidden={activeTab !== "skills"}>
+              {activeTab === "skills" && <SkillsTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-mcp" aria-labelledby="settings-tab-mcp" hidden={activeTab !== "mcp"}>
+              {activeTab === "mcp" && <McpTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-memory-graph" aria-labelledby="settings-tab-memory-graph" hidden={activeTab !== "memory-graph"}>
+              {activeTab === "memory-graph" && <MemoryGraphTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-connectors" aria-labelledby="settings-tab-connectors" hidden={activeTab !== "connectors"}>
+              {activeTab === "connectors" && <ConnectorsTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-commands" aria-labelledby="settings-tab-commands" hidden={activeTab !== "commands"}>
+              {activeTab === "commands" && <CommandsTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-indexing" aria-labelledby="settings-tab-indexing" hidden={activeTab !== "indexing"}>
+              {activeTab === "indexing" && <IndexingTab />}
+            </div>
+            <div role="tabpanel" id="settings-panel-onboard" aria-labelledby="settings-tab-onboard" hidden={activeTab !== "onboard"}>
+              {activeTab === "onboard" && <OnboardTab />}
+            </div>
           </div>
         </div>
       </div>
