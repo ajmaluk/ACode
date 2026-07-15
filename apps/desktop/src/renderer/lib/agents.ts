@@ -84,7 +84,7 @@ export function mergeRulesets(
 
 const _globRegexCache = new Map<string, RegExp>();
 const MAX_GLOB_CACHE = 500;
-function globToRegex(pattern: string): RegExp {
+export function globToRegex(pattern: string): RegExp {
   const cached = _globRegexCache.get(pattern);
   if (cached) {
     // Touch to move to MRU position for true LRU eviction
@@ -155,7 +155,7 @@ export function evaluate(
         globalWildcard = r.action;
       } else if (globToRegex(r.pattern).test(pattern)) {
         // global glob — only used if no permission-level match
-        lastGlobMatch ??= r.action;
+        lastGlobMatch = r.action;
       }
     }
   }
@@ -371,7 +371,8 @@ const BASH_ARITY: Record<string, number> = {
  * arity-based permission detection. Metacharacters like |, ;, &&, ||, `, $()
  * let hidden commands execute that aren't visible to arity analysis.
  */
-const SHELL_METACHARACTERS = /[|;`$]|&&|\|\|/;
+/** Only flag $ when followed by { or ( (command substitution), not $VARIABLE patterns */
+const SHELL_METACHARACTERS = /[|;`]|\$\{|\$\(|&&|\|\|/;
 const SHELL_REDIRECT = /[<>]/;
 export function hasShellMetacharacters(command: string): boolean {
   return SHELL_METACHARACTERS.test(command) || SHELL_REDIRECT.test(command);
@@ -388,7 +389,7 @@ export function hasShellMetacharacters(command: string): boolean {
 export function canonicaliseBashCommand(command: string): string {
   const tokens = command.trim().split(/\s+/).filter(Boolean);
   const hasMetachars = tokens.length > 0 && hasShellMetacharacters(command);
-  for (let len = Math.min(tokens.length, 5); len > 0; len--) {
+  for (let len = Math.min(tokens.length, 8); len > 0; len--) {
     const prefix = tokens.slice(0, len).join(" ");
     if (BASH_ARITY[prefix] !== undefined) {
       return hasMetachars ? `${prefix} |` : prefix;

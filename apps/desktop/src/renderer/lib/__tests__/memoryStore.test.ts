@@ -460,6 +460,39 @@ describe("parseMarkdownMemory", () => {
     expect(entry!.id).toBe("mem1");
   });
 
+  it("does not strip brackets from non-tags fields like summary or id", () => {
+    // When summary value is literally "[]" (two characters: left and right bracket),
+    // the parser should NOT strip the brackets — they're part of the value, not an array.
+    const content = [
+      "---",
+      'id: "mem-bracket"',
+      'category: "project"',
+      'summary: "[]"',
+      'source_file: "src/lib/[utils]/helper.ts"',
+      "---",
+      "body",
+    ].join("\n");
+    const entry = parseMarkdownMemory(content);
+    expect(entry).not.toBeNull();
+    expect(entry!.summary).toBe("[]");
+    expect(entry!.sourceFile).toBe("src/lib/[utils]/helper.ts");
+  });
+
+  it("still strips brackets from tags field (JSON array format)", () => {
+    const content = [
+      "---",
+      'id: "mem-tags"',
+      'category: "project"',
+      "tags: [tag1, tag2]",
+      "---",
+      "body",
+    ].join("\n");
+    const entry = parseMarkdownMemory(content);
+    expect(entry).not.toBeNull();
+    expect(entry!.tags).toContain("tag1");
+    expect(entry!.tags).toContain("tag2");
+  });
+
   it("handles fields with colons in values", () => {
     // Colons are escaped as \: in the YAML frontmatter
     const content = [
@@ -790,5 +823,49 @@ describe("memory utilities", () => {
   it("enforceMemoryBudget with negative budget returns 0", async () => {
     const { enforceMemoryBudget } = await import("../memoryStore");
     expect(enforceMemoryBudget).toBeDefined();
+  });
+});
+
+// ============================================================
+// pending-write timer tests
+// ============================================================
+describe("pending-write timer", () => {
+  it("cancelPendingWriteTimer is a function and can be called safely without throwing", async () => {
+    const { cancelPendingWriteTimer } = await import("../memoryStore");
+    expect(typeof cancelPendingWriteTimer).toBe("function");
+    // In test mode (import.meta.env.MODE === 'test'), the timer is never started,
+    // so cancelPendingWriteTimer is a safe no-op (checks null ID, no clearInterval).
+    expect(() => cancelPendingWriteTimer()).not.toThrow();
+  });
+
+  it("cancelPendingWriteTimer can be called multiple times safely", async () => {
+    const { cancelPendingWriteTimer } = await import("../memoryStore");
+    // Calling multiple times should not throw (idempotent: second call finds null, does nothing)
+    cancelPendingWriteTimer();
+    cancelPendingWriteTimer();
+    cancelPendingWriteTimer();
+    expect(() => cancelPendingWriteTimer()).not.toThrow();
+  });
+
+  it("pending-write timer is not started in test mode (import.meta.env.MODE !== 'test' guard)", async () => {
+    // The timer setup in memoryStore.ts is guarded by:
+    //   if (typeof setInterval !== "undefined" && import.meta.env.MODE !== "test")
+    // Since this test runs with MODE === 'test', the setInterval timer is skipped.
+    // We verify this indirectly: if the timer were started, cancelPendingWriteTimer
+    // would call clearInterval on a real interval ID (which is safe, but
+    // we know the guard works because calling it doesn't throw and the
+    // function's null-check prevents any clearInterval call).
+    // Additionally, calling cancelPendingWriteTimer and confirming it doesn't
+    // call clearInterval on a null reference proves the timer was never started.
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+    const { cancelPendingWriteTimer } = await import("../memoryStore");
+    cancelPendingWriteTimer();
+
+    // Since the timer was never started (test mode guard), clearInterval
+    // should not have been called with any interval ID.
+    expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+    clearIntervalSpy.mockRestore();
   });
 });

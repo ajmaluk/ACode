@@ -201,6 +201,26 @@ pub async fn launch_app(
         }
     }
 
+    // FIX C-4: Validate cwd parameter — reject dangerous characters and canonicalize
+    let validated_cwd: Option<String> = if let Some(ref workdir) = cwd {
+        // Reject dangerous characters (same set as args)
+        if workdir.contains(';') || workdir.contains('|') || workdir.contains('&')
+            || workdir.contains('$') || workdir.contains('`') || workdir.contains('\n')
+            || workdir.contains('\r') || workdir.contains('\0')
+            || workdir.contains('{') || workdir.contains('}') || workdir.contains('~')
+            || workdir.contains('*') || workdir.contains('?') || workdir.contains('[')
+            || workdir.contains(']')
+        {
+            return Err(format!("Invalid working directory: {}", workdir));
+        }
+        // Canonicalize to resolve symlinks and validate existence
+        let canon = std::fs::canonicalize(std::path::Path::new(workdir))
+            .map_err(|e| format!("Invalid working directory '{}': {}", workdir, e))?;
+        Some(canon.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
     #[cfg(target_os = "macos")]
     {
         // On macOS, use `open -a` for .app bundles — this is the proper way to launch GUI apps.
@@ -465,6 +485,7 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
 // ---------------------------------------------------------------------------
 
 /// Reveal a file or directory in the native file manager.
+/// FIX C-8: Resolve symlinks before checking restricted paths.
 #[tauri::command]
 pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
@@ -473,9 +494,13 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
+        // Resolve symlinks to prevent bypass via symlinks pointing to restricted paths
+        let canon = std::fs::canonicalize(&path)
+            .unwrap_or_else(|_| p.to_path_buf());
+        let canon_str = canon.to_string_lossy();
         let restricted = ["/etc", "/sys", "/proc", "/var", "/tmp", "/private", "/usr/local/etc"];
         for r in &restricted {
-            if p.starts_with(r) {
+            if canon_str.starts_with(r) {
                 return Err(format!("Access to system path '{}' is not allowed", path));
             }
         }

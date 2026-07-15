@@ -8,9 +8,12 @@ export function isPrivateHost(hostname: string): boolean {
   if (hostname === "::1" || hostname === "[::1]") return true;
   // IPv6 link-local (fe80::/10), ULA (fc00::/7)
   if (/^\[?fe[89ab][0-9a-f]*:/i.test(hostname)) return true;
+  // L-20: IPv6 ULA — require exactly 2 hex digits after fc/fd
   if (/^\[?f[cd][0-9a-f]{2}:/i.test(hostname)) return true;
   // IPv6-mapped IPv4 (e.g. [::ffff:127.0.0.1] or ::ffff:127.0.0.1)
   if (/^\[?::ffff:\d+\.\d+\.\d+\.\d+\]?$/i.test(hostname)) return true;
+  // H-6: IPv6 transition mechanism (64:ff9b::/96, NAT64/DNS64)
+  if (/^\[?64:ff9b::/i.test(hostname)) return true;
   // IPv4 private ranges
   if (/^127\./.test(hostname)) return true;
   if (/^10\./.test(hostname)) return true;
@@ -24,8 +27,15 @@ export function isPrivateHost(hostname: string): boolean {
   if (/^22[4-9]\./.test(hostname) || /^23[0-9]\./.test(hostname)) return true;
   // Broadcast
   if (hostname === "255.255.255.255") return true;
-  // Octal IP (e.g. 0177.0.0.1 → 127.0.0.1) — require exactly 4 dot-separated octets
-  if (/^0[0-7]+\.[0-7]+\.[0-7]+\.[0-7]+$/.test(hostname)) return true;
+  // M-17: Octal/mixed octal-decimal IP (e.g. 0177.0.0.1 → 127.0.0.1)
+  // Match any combination of octal (0-prefixed) and decimal octets
+  if (/^(0[0-7]+|\d+)\.(0[0-7]+|\d+)\.(0[0-7]+|\d+)\.(0[0-7]+|\d+)$/.test(hostname)) {
+    const octets = hostname.split(".");
+    // If any octet starts with 0 and has more than 1 digit, it's octal → private
+    if (octets.some((o) => o.startsWith("0") && o.length > 1)) {
+      return true;
+    }
+  }
   // Cloud metadata endpoints
   if (/^metadata\.google\.internal$/i.test(hostname)) return true;
   if (/^instance-data\.local$/i.test(hostname)) return true;
@@ -74,6 +84,25 @@ export function validateMcpUrl(url: string): void {
 
   if (isPrivateHost(parsed.hostname)) {
     throw new Error("Private/internal URLs are not allowed for MCP servers");
+  }
+
+  // H-7: Path validation — check for SSRF-like patterns in the URL path
+  const path = parsed.pathname;
+  // Block path traversal sequences
+  if (/\.\./.test(path)) {
+    throw new Error("MCP server URL path must not contain path traversal sequences");
+  }
+  // Block tilde expansion (home directory reference)
+  if (/~/.test(path)) {
+    throw new Error("MCP server URL path must not contain tilde characters");
+  }
+  // Block URL-encoded CR/LF injection
+  if (/%0[ad]/i.test(path)) {
+    throw new Error("MCP server URL path must not contain CR/LF encoded characters");
+  }
+  // Block null byte injection
+  if (/%00/.test(path)) {
+    throw new Error("MCP server URL path must not contain null bytes");
   }
 }
 

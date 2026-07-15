@@ -94,6 +94,7 @@ export function getChangeStackSize(sessionId?: string): number {
  * Apply the last change in reverse (undo).
  * Writes the beforeContent back to the file and removes the record.
  * Returns a description of what was undone, or null if stack is empty.
+ * FIX M-2: Cache stack reference before push to avoid pushing to wrong stack.
  */
 export async function applyUndo(
   sessionId?: string,
@@ -110,9 +111,10 @@ export async function applyUndo(
     };
   } catch (err) {
     // If the file write fails, push the change back so it isn't lost
-    const stack = getStack(sessionId);
     const msg = (err as Error)?.message ?? String(err);
     console.warn(`[ChangeStack] Failed to undo ${change.filePath}: ${msg}`);
+    // getStack creates a new stack if session was cleared — that's better than losing the change
+    const stack = getStack(sessionId);
     stack.push(change);
     // Cap stack size
     if (stack.length > MAX_CHANGES_PER_SESSION) {

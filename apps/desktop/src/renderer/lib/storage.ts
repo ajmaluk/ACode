@@ -60,8 +60,17 @@ function openDB(): Promise<IDBDatabase> {
         }
       }
 
+      // Version 2: No schema changes — DB_VERSION was bumped to 2 to
+      // trigger the improved migration (migrateFromLocalStorage was updated
+      // to split arrays into individual documents with proper keyPath fields
+      // instead of storing everything under { id: "all" }). The migration
+      // runs independently via ensureDB() and does not need schema changes.
+      if (oldVersion < 2) {
+        // Schema unchanged between v1 and v2.
+        // Migration logic improvement lives in migrateFromLocalStorage().
+      }
+
       // Future version upgrades go here:
-      // if (oldVersion < 2) { ... }
       // if (oldVersion < 3) { ... }
     };
 

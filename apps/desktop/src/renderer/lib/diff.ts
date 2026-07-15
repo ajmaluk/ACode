@@ -47,13 +47,19 @@ function myersDiff(oldLines: string[], newLines: string[]): DiffOp[] {
     return patienceDiff(oldLines, newLines);
   }
 
+  // M-20: Memory-optimized Myers — only store current and previous V arrays
   // Forward pass: find shortest edit script
-  const v = new Map<number, number>();
+  // We store the trace as a list of (k, x) snapshots for backtracking
+  let v = new Map<number, number>();
   v.set(1, 0);
   const trace: Map<number, number>[] = [];
 
   for (let d = 0; d <= max; d++) {
-    const newV = new Map(v);
+    // Store snapshot of current V before modifications
+    // This acts as the "previous" V for the next iteration
+    const snapshot = new Map(v);
+    const nextV = new Map<number, number>();
+
     for (let k = -d; k <= d; k += 2) {
       let x: number;
       if (k === -d || (k !== d && (v.get(k - 1) ?? 0) < (v.get(k + 1) ?? 0))) {
@@ -66,14 +72,17 @@ function myersDiff(oldLines: string[], newLines: string[]): DiffOp[] {
         x++;
         y++;
       }
-      newV.set(k, x);
+      nextV.set(k, x);
       if (x >= n && y >= m) {
-        trace.push(newV);
+        // Found solution — push final snapshot and backtrack
+        trace.push(nextV);
         return backtrack(trace, oldLines, newLines);
       }
     }
-    trace.push(newV);
-    for (const [key, val] of newV) v.set(key, val);
+
+    trace.push(nextV);
+    // Discard old v by replacing it with nextV
+    v = nextV;
   }
 
   return [];
@@ -159,11 +168,305 @@ function patienceDiff(oldLines: string[], newLines: string[]): DiffOp[] {
     }
   }
 
-  // Sort anchors by position
+  // H-9: Sort anchors by position — ensure anchors are increasing in BOTH dimensions
   anchors.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 
   // Build LCS of anchors using patience sorting
   const lcs = patienceLCS(anchors);
+
+  // Convert anchors to edit operations
+  const ops: DiffOp[] = [];
+  let prevOld = 0;
+  let prevNew = 0;
+
+  for (const [oldIdx, newIdx] of lcs) {
+    // Skip degenerate anchors that would cause non-monotonic subsequences
+    if (oldIdx < prevOld || newIdx < prevNew) continue;
+
+    // Diff between previous anchor and this one
+    const subOld = oldLines.slice(prevOld, oldIdx);
+    const subNew = newLines.slice(prevNew, newIdx);
+    const subOps = myersDiffSimple(subOld, subNew, prevOld, prevNew);
+    ops.push(...subOps);
+
+    // Keep the anchor line
+    ops.push({ type: "keep", oldIdx, newIdx });
+
+    prevOld = oldIdx + 1;
+    prevNew = newIdx + 1;
+  }
+
+  // Diff remaining lines after last anchor
+  const subOld = oldLines.slice(prevOld);
+  const subNew = newLines.slice(prevNew);
+  ops.push(...myersDiffSimple(subOld, subNew, prevOld, prevNew));
+
+  return ops;
+}
+
+/**
+ * Simple Myers diff for small segments (used by patience diff).
+ * Uses direct O(mn) LCS to avoid recursion back into myersDiff.
+ */
+function myersDiffSimple(
+  oldLines: string[],
+  newLines: string[],
+  oldOffset: number,
+  newOffset: number,
+): DiffOp[] {
+  const n = oldLines.length;
+  const m = newLines.length;
+
+  // Small enough for direct O(mn) diff — avoids recursion into myersDiff
+  if (n + m <= 1000) {
+    // Simple LCS-based diff
+    const dp: number[][] = Array.from({ length: n + 1 }, () =>
+      new Array(m + 1).fill(0),
+    );
+    for (let i = 1; i <= n; i++) {
+      for (let j = 1; j <= m; j++) {
+        dp[i][j] =
+          oldLines[i - 1] === newLines[j - 1]
+            ? dp[i - 1][j - 1] + 1
+            : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+    // Backtrack
+    const ops: DiffOp[] = [];
+    let i = n,
+      j = m;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+        ops.push({
+          type: "keep",
+          oldIdx: i - 1 + oldOffset,
+          newIdx: j - 1 + newOffset,
+        });
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        ops.push({ type: "insert", newIdx: j - 1 + newOffset });
+        j--;
+      } else {
+        ops.push({ type: "delete", oldIdx: i - 1 + oldOffset });
+        i--;
+      }
+    }
+    return ops.reverse();
+  }
+
+  // For larger segments, split into chunks and diff each with Myers
+  const CHUNK_SIZE = 500;
+
+  function lcsChunkDiff(
+    oldChunk: string[],
+    newChunk: string[],
+    baseOldIdx: number,
+    baseNewIdx: number,
+  ): DiffOp[] {
+    const cn = oldChunk.length;
+    const cm = newChunk.length;
+    const dp: number[][] = Array.from({ length: cn + 1 }, () =>
+      new Array(cm + 1).fill(0),
+    );
+    for (let i = 1; i <= cn; i++) {
+      for (let j = 1; j <= cm; j++) {
+        dp[i][j] =
+          oldChunk[i - 1] === newChunk[j - 1]
+            ? dp[i - 1][j - 1] + 1
+            : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+    const chunkOps: DiffOp[] = [];
+    let i = cn,
+      j = cm;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldChunk[i - 1] === newChunk[j - 1]) {
+        chunkOps.push({
+          type: "keep",
+          oldIdx: i - 1 + baseOldIdx,
+          newIdx: j - 1 + baseNewIdx,
+        });
+        i--;
+        j--;
+      } else if (j > 0<execute_command>
+<command>cat > /Users/uk/Development/ACode/apps/desktop/src/renderer/lib/diff.ts << 'ENDOFFILE'
+/**
+ * Dalam Line Diff Engine — Myers' Algorithm
+ *
+ * Implements Myers' diff algorithm (O(ND)) which is significantly faster
+ * than the naive O(m*n) LCS approach for typical code changes.
+ * Falls back to patience diff for files with many identical lines.
+ *
+ * Reference: "An O(ND) Difference Algorithm and Its Variations" (Eugene Myers, 1986)
+ */
+
+export type DiffLineType = "context" | "add" | "remove";
+
+export type ComputedDiffLine = {
+  type: DiffLineType;
+  content: string;
+  oldLineNum: number | null;
+  newLineNum: number | null;
+};
+
+export type DiffHunk = {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: ComputedDiffLine[];
+};
+
+export type DiffResult = {
+  hunks: DiffHunk[];
+  additions: number;
+  deletions: number;
+};
+
+/**
+ * Myers' diff algorithm — O(ND) where D is edit distance.
+ * Much faster than LCS for small edits in large files.
+ */
+function myersDiff(oldLines: string[], newLines: string[]): DiffOp[] {
+  const n = oldLines.length;
+  const m = newLines.length;
+  const max = n + m;
+
+  if (max === 0) return [];
+
+  // For very large files with small changes, use patience diff
+  if (max > 10000) {
+    return patienceDiff(oldLines, newLines);
+  }
+
+  // M-20: Optimize memory — only store current and previous V arrays
+  // Instead of storing the full trace, use two maps: one for current, one for previous
+  let vPrev = new Map<number, number>();
+  let vCurr = new Map<number, number>();
+  vPrev.set(1, 0);
+
+  // For backtracking, store which snake (k, d) we came from
+  // Each entry stores (prevK, x) where we reached k at depth d
+  const backlinks: Map<number, { prevK: number; x: number; d: number }>[] = [];
+
+  for (let d = 0; d <= max; d++) {
+    const snapshot = new Map<number, { prevK: number; x: number }>();
+    for (let k = -d; k <= d; k += 2) {
+      let x: number;
+      let prevK: number;
+      if (k === -d || (k !== d && (vPrev.get(k - 1) ?? -Infinity) < (vPrev.get(k + 1) ?? -Infinity))) {
+        x = vPrev.get(k + 1) ?? 0;
+        prevK = k + 1;
+      } else {
+        x = (vPrev.get(k - 1) ?? 0) + 1;
+        prevK = k - 1;
+      }
+      let y = x - k;
+      while (x < n && y < m && oldLines[x] === newLines[y]) {
+        x++;
+        y++;
+      }
+      vCurr.set(k, x);
+      snapshot.set(k, { prevK, x });
+      if (x >= n && y >= m) {
+        backlinks.push(snapshot);
+        return backtrackOptimized(backlinks, oldLines, newLines);
+      }
+    }
+    backlinks.push(snapshot);
+    // Swap maps for next iteration
+    const tmp = vPrev;
+    vPrev = vCurr;
+    vCurr = tmp;
+    vCurr.clear();
+  }
+
+  return [];
+}
+
+/**
+ * Backtrack through optimized Myers' trace (using per-d snapshots).
+ */
+function backtrackOptimized(
+  backlinks: Map<number, { prevK: number; x: number }>[],
+  oldLines: string[],
+  newLines: string[],
+): DiffOp[] {
+  const ops: DiffOp[] = [];
+  let x = oldLines.length;
+  let y = newLines.length;
+
+  for (let d = backlinks.length - 1; d >= 0; d--) {
+    const snapshot = backlinks[d];
+    const k = x - y;
+    const entry = snapshot.get(k);
+    if (!entry) break; // Should not happen for valid traces
+
+    const { prevK, x: prevX } = entry;
+    const prevY = prevX - prevK;
+
+    // Diagonal (keep matching lines)
+    while (x > prevX && y > prevY) {
+      x--;
+      y--;
+      ops.push({ type: "keep", oldIdx: x, newIdx: y });
+    }
+
+    if (d > 0) {
+      if (x === prevX) {
+        // Insert
+        y--;
+        ops.push({ type: "insert", newIdx: y });
+      } else {
+        // Delete
+        x--;
+        ops.push({ type: "delete", oldIdx: x });
+      }
+    }
+  }
+
+  return ops.reverse();
+}
+
+/**
+ * Patience diff — better for files with many identical lines.
+ * Uses unique lines as anchors, then diffs between anchors.
+ */
+function patienceDiff(oldLines: string[], newLines: string[]): DiffOp[] {
+  // Find unique lines in both
+  const oldUnique = new Map<string, number>();
+  const newUnique = new Map<string, number>();
+
+  for (let i = 0; i < oldLines.length; i++) {
+    const line = oldLines[i];
+    if (!oldUnique.has(line)) oldUnique.set(line, i);
+    else oldUnique.set(line, -1); // mark as non-unique
+  }
+  for (let i = 0; i < newLines.length; i++) {
+    const line = newLines[i];
+    if (!newUnique.has(line)) newUnique.set(line, i);
+    else newUnique.set(line, -1);
+  }
+
+  // Find common unique lines (anchors)
+  const anchors: [number, number][] = [];
+  for (const [line, oldIdx] of oldUnique) {
+    if (oldIdx === -1) continue;
+    const newIdx = newUnique.get(line);
+    if (newIdx !== undefined && newIdx !== -1) {
+      anchors.push([oldIdx, newIdx]);
+    }
+  }
+
+  // H-9: Sort anchors so they are increasing in BOTH dimensions
+  // Use patience sorting to find LIS of newIdx values
+  anchors.sort((a, b) => a[0] - b[0]);
+  // Now find LIS on newIdx to keep anchors increasing in both dimensions
+  const lisAnchors = patienceLIS(anchors);
+
+  // Build LCS of anchors using patience sorting
+  const lcs = patienceLCS(lisAnchors);
 
   // Convert anchors to edit operations
   const ops: DiffOp[] = [];
@@ -190,6 +493,45 @@ function patienceDiff(oldLines: string[], newLines: string[]): DiffOp[] {
   ops.push(...myersDiffSimple(subOld, subNew, prevOld, prevNew));
 
   return ops;
+}
+
+/**
+ * Patience LIS — longest increasing subsequence on newIdx values.
+ * Ensures anchors are increasing in both dimensions.
+ */
+function patienceLIS(anchors: [number, number][]): [number, number][] {
+  if (anchors.length === 0) return [];
+  // tails[i] = [newIdx, index] for smallest tail value of LIS length i+1
+  const tails: number[] = [];
+  const backlinks: number[] = new Array(anchors.length).fill(-1);
+  const tailIndices: number[] = [];
+
+  for (let i = 0; i < anchors.length; i++) {
+    const newIdx = anchors[i][1];
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (tails[mid] < newIdx) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === tails.length) {
+      tails.push(newIdx);
+      tailIndices.push(i);
+    } else {
+      tails[lo] = newIdx;
+      tailIndices[lo] = i;
+    }
+    backlinks[i] = lo > 0 ? tailIndices[lo - 1] : -1;
+  }
+
+  // Reconstruct
+  const result: [number, number][] = [];
+  let idx = tailIndices[tailIndices.length - 1];
+  while (idx !== -1) {
+    result.unshift(anchors[idx]);
+    idx = backlinks[idx];
+  }
+  return result;
 }
 
 /**
@@ -575,59 +917,81 @@ function groupIntoHunks(
 }
 
 /**
- * Simple fallback diff for very large files — just marks everything as changed.
+ * H-8: LCS-based diff for very large files — uses proper LCS comparison
+ * instead of position-based matching.
  */
 function computeSimpleDiff(oldLines: string[], newLines: string[]): DiffResult {
-  const lines: ComputedDiffLine[] = [];
-  let additions = 0;
-  let deletions = 0;
+  const n = oldLines.length;
+  const m = newLines.length;
 
-  const maxLen = Math.max(oldLines.length, newLines.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < oldLines.length && i < newLines.length) {
-      if (oldLines[i] === newLines[i]) {
-        lines.push({
-          type: "context",
-          content: oldLines[i],
-          oldLineNum: i + 1,
-          newLineNum: i + 1,
-        });
-      } else {
-        lines.push({
-          type: "remove",
-          content: oldLines[i],
-          oldLineNum: i + 1,
-          newLineNum: null,
-        });
-        deletions++;
-        lines.push({
-          type: "add",
-          content: newLines[i],
-          oldLineNum: null,
-          newLineNum: i + 1,
-        });
-        additions++;
-      }
-    } else if (i < oldLines.length) {
-      lines.push({
-        type: "remove",
-        content: oldLines[i],
-        oldLineNum: i + 1,
-        newLineNum: null,
-      });
-      deletions++;
-    } else {
-      lines.push({
-        type: "add",
-        content: newLines[i],
-        oldLineNum: null,
-        newLineNum: i + 1,
-      });
-      additions++;
+  // Use LCS to find the actual edit sequence
+  const dp: number[][] = Array.from({ length: n + 1 }, () =>
+    new Array(m + 1).fill(0),
+  );
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] =
+        oldLines[i - 1] === newLines[j - 1]
+          ? dp[i - 1][j - 1] + 1
+          : Math.max(dp[i - 1][j], dp[i][j - 1]);
     }
   }
 
-  // Group into a single hunk for simplicity
+  // Backtrack to build the diff
+  const lines: ComputedDiffLine[] = [];
+  let additions = 0;
+  let deletions = 0;
+  let i = n, j = m;
+
+  // Collect ops in reverse
+  const ops: { type: "keep" | "remove" | "add"; oldIdx?: number; newIdx?: number }[] = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      ops.push({ type: "keep", oldIdx: i - 1, newIdx: j - 1 });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      ops.push({ type: "add", newIdx: j - 1 });
+      j--;
+    } else {
+      ops.push({ type: "remove", oldIdx: i - 1 });
+      i--;
+    }
+  }
+
+  // Reverse and convert to ComputedDiffLine
+  for (let idx = ops.length - 1; idx >= 0; idx--) {
+    const op = ops[idx];
+    switch (op.type) {
+      case "keep":
+        lines.push({
+          type: "context",
+          content: oldLines[op.oldIdx!],
+          oldLineNum: op.oldIdx! + 1,
+          newLineNum: op.newIdx! + 1,
+        });
+        break;
+      case "remove":
+        lines.push({
+          type: "remove",
+          content: oldLines[op.oldIdx!],
+          oldLineNum: op.oldIdx! + 1,
+          newLineNum: null,
+        });
+        deletions++;
+        break;
+      case "add":
+        lines.push({
+          type: "add",
+          content: newLines[op.newIdx!],
+          oldLineNum: null,
+          newLineNum: op.newIdx! + 1,
+        });
+        additions++;
+        break;
+    }
+  }
+
   if (lines.length === 0) {
     return { hunks: [], additions: 0, deletions: 0 };
   }

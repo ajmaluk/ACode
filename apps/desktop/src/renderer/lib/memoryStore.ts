@@ -41,6 +41,8 @@ function generateId(): string {
 
 // ─── Content-hash mutex for saveMemory() concurrency (fixes issue 1.1) ───
 const _saveMemoryLocks = new Map<string, Promise<{ action: "add" | "update" | "noop"; id: string }>>();
+// ─── Per-ID mutex to prevent concurrent UPDATEs from overwriting each other ───
+const _perIdLocks = new Set<string>();
 
 function contentHash(content: string): string {
   // Simple hash: first 32 chars of first line length + last 32 chars
@@ -71,9 +73,16 @@ function contentHash(content: string): string {
  * FIX 3.1: Writes markdown FIRST as source of truth, then SQLite.
  *   If SQLite fails, we have the markdown and can rebuild.
  */
+/**
+ * Maximum number of retry attempts when a per-ID lock collision is detected.
+ * Prevents infinite recursion if a concurrent save holds the lock for too long.
+ */
+const MAX_PER_ID_LOCK_RETRIES = 3;
+
 export async function saveMemory(
   entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">,
-  workspacePath: string
+  workspacePath: string,
+  _retryCount: number = 0,
 ): Promise<{ action: "add" | "update" | "noop"; id: string }> {
 
   // ── Content-hash mutex to serialize concurrent saves of same content ──
@@ -94,18 +103,38 @@ export async function saveMemory(
           return { action: "noop", id: e.id };
         }
         if (similarity > 0.65 && e.category === entry.category) {
-          // Update existing — newer truth wins
-          const now = Date.now();
-          const mergedTags = Array.from(new Set([...e.tags, ...entry.tags]));
-          // Write markdown FIRST (source of truth)
-          const updatedEntry = { ...e, ...entry, tags: mergedTags, updatedAt: now, stale: false };
-          await writeMemoryMarkdown(workspacePath, updatedEntry);
-          // Then SQLite
-          await getDb().execute(
-            `UPDATE memories SET content=?, summary=?, tags=?, tier=?, updated_at=?, stale=0 WHERE id=?`,
-            [entry.content, entry.summary, JSON.stringify(mergedTags), entry.tier, now, e.id]
-          );
-          return { action: "update", id: e.id };
+          // ── Per-ID mutex: prevent concurrent UPDATEs on the same memory ──
+          const idLockKey = `update:${e.id}`;
+          if (_perIdLocks.has(idLockKey)) {
+            if (_retryCount >= MAX_PER_ID_LOCK_RETRIES) {
+              console.warn(`[MemoryStore] Per-ID lock exhausted for ${e.id} after ${MAX_PER_ID_LOCK_RETRIES} retries, proceeding with update`);
+            } else {
+              // Another save is already updating this memory — wait briefly then retry
+              await new Promise(r => setTimeout(r, 50 * (_retryCount + 1)));
+              return saveMemory(entry, workspacePath, _retryCount + 1);
+            }
+          }
+          _perIdLocks.add(idLockKey);
+          try {
+            const now = Date.now();
+            const mergedTags = Array.from(new Set([...e.tags, ...entry.tags]));
+            // Write markdown FIRST (source of truth)
+            const updatedEntry = { ...e, ...entry, tags: mergedTags, updatedAt: now, stale: false };
+            try {
+              await writeMemoryMarkdown(workspacePath, updatedEntry);
+            } catch (mdErr) {
+              // Markdown write failed — will be retried by processPendingWrites
+              console.warn("[MemoryStore] Markdown write queued for retry, proceeding with SQLite:", mdErr);
+            }
+            // Then SQLite (always try, even if markdown was queued)
+            await getDb().execute(
+              `UPDATE memories SET content=?, summary=?, tags=?, tier=?, updated_at=?, stale=0 WHERE id=?`,
+              [entry.content, entry.summary, JSON.stringify(mergedTags), entry.tier, now, e.id]
+            );
+            return { action: "update", id: e.id };
+          } finally {
+            _perIdLocks.delete(idLockKey);
+          }
         }
       }
 
@@ -130,9 +159,14 @@ export async function saveMemory(
       };
 
       // Write markdown FIRST (source of truth)
-      await writeMemoryMarkdown(workspacePath, newEntry);
+      try {
+        await writeMemoryMarkdown(workspacePath, newEntry);
+      } catch (mdErr) {
+        // Markdown write failed — will be retried by processPendingWrites
+        console.warn("[MemoryStore] Markdown write queued for retry, proceeding with SQLite:", mdErr);
+      }
 
-      // Then SQLite
+      // Then SQLite (always try, even if markdown was queued)
       await getDb().execute(
         `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`,
@@ -794,8 +828,9 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
           default: return char;
         }
       });
-      // Parse arrays
-      if (value.startsWith("[") && value.endsWith("]")) {
+      // Parse arrays — only strip brackets for the tags field (which is written as a JSON array)
+      // Other fields like summary or id could legitimately contain [] bracketed content.
+      if (currentKey === "tags" && value.startsWith("[") && value.endsWith("]")) {
         value = value.slice(1, -1);
       }
       fields[currentKey] = value;
@@ -1502,22 +1537,56 @@ function findBalancedBracket(text: string, openChar: '[' | '{', closeChar: ']' |
  * - Strips markdown code fences (```json ... ```)
  * - Extracts JSON from surrounding text using balanced bracket matching
  * - Returns null on parse failure
+ *
+ * Strategy: find BOTH the first balanced [] and {} pair, then try the one
+ * that appears EARLIEST in the text first. If that fails JSON.parse,
+ * fall back to the other. This avoids incorrectly extracting inner arrays
+ * that appear inside outer objects (or vice versa).
+ * Raw top-level JSON primitives (bare strings, numbers) are rejected —
+ * LLM responses should always return objects or arrays.
  */
 export function parseLLMJson<T>(response: string): T | null {
+  let cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+  // If the entire response is a markdown fence with no JSON content, return null
+  if (!cleaned) return null;
+
   try {
-    const cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
-    // Try to extract JSON array using balanced bracket matching
+    // Find BOTH bracket types
     const arrMatch = findBalancedBracket(cleaned, '[', ']');
-    if (arrMatch) {
-      return JSON.parse(cleaned.slice(arrMatch.start, arrMatch.end + 1)) as T;
-    }
-    // Try to extract JSON object using balanced bracket matching
     const objMatch = findBalancedBracket(cleaned, '{', '}');
-    if (objMatch) {
-      return JSON.parse(cleaned.slice(objMatch.start, objMatch.end + 1)) as T;
+
+    // Determine which bracket pair appears first in the text
+    const candidates: Array<{ match: { start: number; end: number }; fallback: typeof arrMatch | typeof objMatch }> = [];
+    if (arrMatch) candidates.push({ match: arrMatch, fallback: objMatch });
+    if (objMatch) candidates.push({ match: objMatch, fallback: arrMatch });
+
+    if (candidates.length > 0) {
+      // Sort by start position (earliest first)
+      candidates.sort((a, b) => a.match.start - b.match.start);
+
+      // Try the earliest bracket pair
+      const firstCandidate = cleaned.slice(candidates[0].match.start, candidates[0].match.end + 1);
+      try {
+        return JSON.parse(firstCandidate) as T;
+      } catch {
+        // Earliest candidate failed to parse — try the other one
+        if (candidates.length > 1) {
+          const secondCandidate = cleaned.slice(candidates[1].match.start, candidates[1].match.end + 1);
+          try {
+            return JSON.parse(secondCandidate) as T;
+          } catch {
+            // Both failed — fall through to raw parse
+          }
+        }
+      }
     }
-    // Try raw parse
-    return JSON.parse(cleaned) as T;
+
+    // Raw parse — only accept objects or arrays
+    const raw = JSON.parse(cleaned);
+    if (raw !== null && typeof raw === "object") {
+      return raw as T;
+    }
+    return null;
   } catch (e) {
     console.warn("[Memory] parseLLMJson failed:", e);
     return null;

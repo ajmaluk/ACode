@@ -25,6 +25,16 @@ async function readFileBeforeEdit(path: string): Promise<string> {
   }
 }
 
+/** Read the actual file content after a write/edit for accurate undo tracking (FIX C-6) */
+async function readActualFileContent(path: string): Promise<string> {
+  try {
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    return await readTextFile(path);
+  } catch {
+    return "";
+  }
+}
+
 export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
@@ -175,13 +185,19 @@ const RETRYABLE_ERRORS = [
 /**
  * Per-tool timeouts in milliseconds.
  * Defines maximum execution time per tool before it is considered timed out.
+ * FIX M-5: All tools now have explicit timeouts.
  */
 const TOOL_TIMEOUTS: Record<string, number> = {
   read_file: 15_000,
   write_file: 30_000,
   edit_file: 30_000,
   run_command: 120_000,
+  bash: 120_000,
+  shell: 120_000,
+  execute: 120_000,
+  grep: 30_000,
   grep_file: 30_000,
+  search: 30_000,
   search_files: 60_000,
   list_dir: 15_000,
   git_status: 15_000,
@@ -197,7 +213,15 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   system_info: 5_000,
   open_url: 5_000,
   launch_app: 15_000,
-  reveal_in_finder: 5_000,
+  reveal_in_finder: 10_000,
+  webfetch: 60_000,
+  websearch: 60_000,
+  create_file: 30_000,
+  browser_navigate: 30_000,
+  browser_execute: 30_000,
+  run_preview: 120_000,
+  create_task_plan: 30_000,
+  kill_process: 10_000,
   memory_save: 10_000,
   memory_search: 10_000,
   memory_delete: 5_000,
@@ -209,6 +233,17 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   task: 300_000,
   mcp_tool: 60_000,
   question: 600_000,
+  open_panel: 5_000,
+  set_theme: 5_000,
+  toggle_theme: 5_000,
+  set_view_mode: 5_000,
+  toggle_view_mode: 5_000,
+  toggle_right_panel: 5_000,
+  toggle_bottom_panel: 5_000,
+  set_right_panel_tab: 5_000,
+  set_bottom_panel_tab: 5_000,
+  new_terminal: 10_000,
+  terminal_write: 30_000,
   default: 30_000,
 };
 
@@ -357,6 +392,8 @@ export function canRunInParallel(tool1: ToolCall, tool2: ToolCall): boolean {
 /**
  * Group tool calls into parallel batches.
  * Returns an array of batches, where each batch can be executed in parallel.
+ * Uses a next-fit approach: accumulate read tools together, flush on write tools.
+ * FIX M-4: Replaced suboptimal first-fit bin packing with next-fit approach.
  */
 export function groupToolCallsForExecution(
   toolCalls: ToolCall[],
@@ -364,25 +401,29 @@ export function groupToolCallsForExecution(
   if (toolCalls.length === 0) return [];
   if (toolCalls.length === 1) return [[toolCalls[0]]];
 
-  // First-fit bin packing: try to add each tool to an existing compatible batch
-  // This handles patterns like [read(A), write(B), read(C)] → [[read(A), read(C)], [write(B)]]
-  const batches: ToolCall[][] = [[toolCalls[0]]];
+  const batches: ToolCall[][] = [];
+  let currentReadBatch: ToolCall[] = [];
 
-  for (let i = 1; i < toolCalls.length; i++) {
-    const current = toolCalls[i];
-    let added = false;
-    for (const batch of batches) {
-      if (batch.every((tc) => canRunInParallel(tc, current))) {
-        batch.push(current);
-        added = true;
-        break;
-      }
-    }
-    if (!added) {
-      batches.push([current]);
+  function flushReadBatch() {
+    if (currentReadBatch.length > 0) {
+      batches.push(currentReadBatch);
+      currentReadBatch = [];
     }
   }
 
+  for (const tc of toolCalls) {
+    const dep = TOOL_DEPENDENCIES[tc.name];
+    if (dep?.readOnly) {
+      currentReadBatch.push(tc);
+    } else {
+      // Write tool (or unknown) — flush reads first, then this tool gets its own batch
+      flushReadBatch();
+      batches.push([tc]);
+    }
+  }
+
+  // Flush remaining reads
+  flushReadBatch();
   return batches;
 }
 
@@ -438,22 +479,23 @@ export async function executeToolWithRetry(
       );
       const durationMs = Date.now() - startTime;
 
-      // Record file changes for undo support (beforeContent was captured pre-execution)
+      // Record file changes for undo support (FIX C-6: read actual file content after write)
       if (toolCall.name === "write_file" || toolCall.name === "edit_file") {
         const path = String(validated.args.path ?? toolCall.args.path ?? "");
         if (path) {
           const callId = `${toolCall.name}-${crypto.randomUUID().slice(0, 8)}`;
-          const afterContent =
-            toolCall.name === "write_file"
-              ? String(toolCall.args.content ?? "")
-              : result;
-          recordChange({
-            filePath: path,
-            beforeContent,
-            afterContent,
-            toolCallId: callId,
-            messageId: sessionId ?? "unknown",
-          });
+          // Read actual file content after write so undo is accurate even if filesystem modified it
+          const afterContent = await readActualFileContent(path);
+          recordChange(
+            {
+              filePath: path,
+              beforeContent,
+              afterContent,
+              toolCallId: callId,
+              messageId: sessionId ?? "unknown",
+            },
+            sessionId ?? "unknown",
+          );
         }
       }
 
@@ -632,14 +674,20 @@ export async function executeToolCalls(
 
 /**
  * Format tool results for inclusion in conversation history.
+ * FIX L-7: Truncate each result to max 10000 characters to prevent context bloat.
  */
 export function formatToolResults(results: ToolResult[]): string {
   return results
     .map((r) => {
+      const truncatedResult = r.result
+        ? r.result.length > 10000
+          ? r.result.slice(0, 10000) + "\n... [truncated]"
+          : r.result
+        : "(no output)";
       if (r.success) {
-        return `[Tool result for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result ?? "(no output)"}`;
+        return `[Tool result for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${truncatedResult}`;
       } else {
-        return `[Tool error for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result}`;
+        return `[Tool error for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${truncatedResult}`;
       }
     })
     .join("\n\n");
@@ -647,6 +695,7 @@ export function formatToolResults(results: ToolResult[]): string {
 
 /**
  * Get statistics about tool execution.
+ * FIX M-6: Guard against division by zero when results.length === 0.
  */
 export function getToolStats(results: ToolResult[]): {
   total: number;

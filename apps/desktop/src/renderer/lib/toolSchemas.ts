@@ -448,8 +448,61 @@ function normalizeCommand(cmd: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ") // Collapse whitespace
     .replace(/["']/g, "") // Remove quotes (common bypass)
-    .replace(/\\/g, "") // Remove backslashes (Windows paths)
+    // M-19: Don't remove ALL backslashes — only remove backslash before specific chars (quotes, spaces for safety)
+    .replace(/\\(?=["'\\nrt])/g, "") // Only remove backslash before quotes, backslash, n, r, t
+    .replace(/\s+/g, " ") // Re-collapse after possible backslash-space removal
     .trim();
+}
+
+/**
+ * Recursively validate all string values in a nested object/array structure.
+ * Returns an array of error messages (empty if valid).
+ */
+function validateNestedValues(
+  val: unknown,
+  path: string[],
+  toolName: string,
+): string[] {
+  const errors: string[] = [];
+
+  if (typeof val === "string") {
+    // String validation
+    for (const pattern of DANGEROUS_PATH_PATTERNS) {
+      if (pattern.test(val)) {
+        errors.push(`MCP tool ${toolName}: arg '${path.join(".")}' path not allowed`);
+        break;
+      }
+    }
+    const normalizedCmd = normalizeCommand(val);
+    // H-4: NFC normalization — normalize Unicode for path checking
+    const normalizedPath = val.normalize("NFC");
+    for (const pattern of DANGEROUS_PATH_PATTERNS) {
+      if (pattern.test(normalizedPath)) {
+        errors.push(`MCP tool ${toolName}: arg '${path.join(".")}' path not allowed`);
+        break;
+      }
+    }
+    for (const dangerous of DANGEROUS_COMMANDS) {
+      const normalizedDangerous = normalizeCommand(dangerous);
+      if (
+        normalizedCmd === normalizedDangerous ||
+        normalizedCmd.startsWith(normalizedDangerous + " ")
+      ) {
+        errors.push(`MCP tool ${toolName}: arg '${path.join(".")}' dangerous command blocked`);
+        break;
+      }
+    }
+  } else if (Array.isArray(val)) {
+    for (let i = 0; i < val.length; i++) {
+      errors.push(...validateNestedValues(val[i], [...path, String(i)], toolName));
+    }
+  } else if (val !== null && typeof val === "object") {
+    for (const [key, childVal] of Object.entries(val as Record<string, unknown>)) {
+      errors.push(...validateNestedValues(childVal, [...path, key], toolName));
+    }
+  }
+
+  return errors;
 }
 
 /**
@@ -488,31 +541,10 @@ export function validateToolArgs(
           };
         }
       }
-      // Security scan for string arg values — block dangerous paths and commands
-      for (const val of Object.values(args)) {
-        if (typeof val === "string") {
-          for (const pattern of DANGEROUS_PATH_PATTERNS) {
-            if (pattern.test(val)) {
-              return {
-                valid: false,
-                error: `MCP tool ${toolName}: path not allowed`,
-              };
-            }
-          }
-          const normalizedCmd = normalizeCommand(val);
-          for (const dangerous of DANGEROUS_COMMANDS) {
-            const normalizedDangerous = normalizeCommand(dangerous);
-            if (
-              normalizedCmd === normalizedDangerous ||
-              normalizedCmd.startsWith(normalizedDangerous + " ")
-            ) {
-              return {
-                valid: false,
-                error: `MCP tool ${toolName}: dangerous command blocked`,
-              };
-            }
-          }
-        }
+      // M-18: Recursive validation for MCP tool args (check nested objects/arrays)
+      const nestedErrors = validateNestedValues(args, [], toolName);
+      if (nestedErrors.length > 0) {
+        return { valid: false, error: nestedErrors[0] };
       }
       return { valid: true, args };
     }
@@ -551,8 +583,10 @@ export function validateToolArgs(
   ];
   if (pathCheckedTools.includes(toolName)) {
     const path = String(args.path ?? "");
+    // H-4: NFC normalization for path checking
+    const normalizedPath = path.normalize("NFC");
     for (const pattern of DANGEROUS_PATH_PATTERNS) {
-      if (pattern.test(path)) {
+      if (pattern.test(normalizedPath)) {
         return {
           valid: false,
           error: `Path not allowed: ${path}`,
@@ -565,8 +599,9 @@ export function validateToolArgs(
   if (toolName === "launch_app") {
     const cwd = String(args.cwd ?? "");
     if (cwd) {
+      const normalizedCwd = cwd.normalize("NFC");
       for (const pattern of DANGEROUS_PATH_PATTERNS) {
-        if (pattern.test(cwd)) {
+        if (pattern.test(normalizedCwd)) {
           return {
             valid: false,
             error: `Path not allowed: ${cwd}`,

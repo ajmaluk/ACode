@@ -23,6 +23,7 @@ import {
   writeMemoryMarkdown,
   jaccardSimilarity,
   parseLLMJson,
+  cancelPendingWriteTimer,
 } from "./memoryStore";
 import { getDb, isDatabaseReady } from "./database";
 import { createDalamAPI } from "./dalamAPI";
@@ -783,6 +784,7 @@ export function triggerDreamCycleIfNeeded(
 
 function _onBeforeUnload(): void {
   cancelAllDreamCycles();
+  cancelPendingWriteTimer();
 }
 
 if (typeof window !== "undefined") {

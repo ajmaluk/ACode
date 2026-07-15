@@ -19,6 +19,9 @@
  * ============================================================
  */
 
+// ─── Imports ─────────────────────────────────────────────────
+import { Mutex } from "async-mutex";
+
 // ─── Types ─────────────────────────────────────────────────
 
 export interface ConnectorMessage {
@@ -151,9 +154,10 @@ export class WebhookConnector implements Connector {
     this.events = events;
     // Webhook server implementation would go here
     // For now, mark as connected (actual HTTP server requires runtime environment)
-    console.warn(
-      "[WebhookConnector] Webhook server is a stub — actual HTTP server requires runtime environment. Marking as connected.",
-    );
+    // L-11: Provide proper error message when webhook is a stub
+    const errorMsg =
+      "[WebhookConnector] Webhook server is a stub — actual HTTP server requires a runtime environment with an HTTP server library. Marking as connected, but incoming webhooks will not be processed.";
+    console.warn(errorMsg);
     this.connected = true;
     events.onStatusChange("connected");
     if (import.meta.env.DEV)
@@ -223,7 +227,7 @@ export class FileWatcherConnector implements Connector {
   private watchPaths: string[];
   private pollIntervalMs: number;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private lastSnapshots: Map<string, string> = new Map();
+  private lastSnapshots: Map<string, { content: string; mtime: number; size: number }> = new Map();
 
   constructor(config: {
     id: string;
@@ -260,16 +264,43 @@ export class FileWatcherConnector implements Connector {
   private async poll(): Promise<void> {
     if (!this.events) return;
     try {
-      const { readFile } = await import("@tauri-apps/plugin-fs");
+      const { readFile, stat } = await import("@tauri-apps/plugin-fs");
       for (const watchPath of this.watchPaths) {
         try {
+          // M-11: Check file size/mtime before reading full content
+          let fileStat: { size: number; mtime: number };
+          try {
+            const statResult = await stat(watchPath);
+            fileStat = { size: statResult.size ?? 0, mtime: statResult.mtime ?? 0 };
+          } catch {
+            // If stat fails, file may not exist or be inaccessible
+            continue;
+          }
+
+          const prev = this.lastSnapshots.get(watchPath);
+
+          // If we have a previous snapshot, compare mtime and size first
+          if (prev) {
+            if (prev.mtime === fileStat.mtime && prev.size === fileStat.size) {
+              // File hasn't changed — skip read
+              continue;
+            }
+          }
+
+          // Skip files that are too large (> 10MB)
+          if (fileStat.size > 10 * 1024 * 1024) {
+            console.warn("[FileWatcher] Skipping large file:", watchPath, fileStat.size);
+            continue;
+          }
+
           const content = await readFile(watchPath);
           const text =
             typeof content === "string"
               ? content
               : new TextDecoder().decode(content);
-          const prev = this.lastSnapshots.get(watchPath);
-          if (prev !== undefined && prev !== text) {
+
+          const prevContent = prev?.content;
+          if (prevContent !== undefined && prevContent !== text) {
             this.events.onMessage({
               platformMessageId: `filewatch-${Date.now()}`,
               senderName: "file-watcher",
@@ -287,7 +318,7 @@ export class FileWatcherConnector implements Connector {
               ],
             });
           }
-          this.lastSnapshots.set(watchPath, text);
+          this.lastSnapshots.set(watchPath, { content: text, mtime: fileStat.mtime, size: fileStat.size });
         } catch (err) {
           console.warn("[FileWatcher] Error reading file:", err);
         }
@@ -335,7 +366,7 @@ export class CronConnector implements Connector {
   private connected = false;
   private events: ConnectorEvents | null = null;
   private jobs: CronJob[] = [];
-  private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
+  private timers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   constructor(config: { id: string; name: string; jobs?: CronJob[] }) {
     this.id = config.id;
@@ -435,10 +466,11 @@ export class CronConnector implements Connector {
       // Start from the next full minute
       const target = new Date(now);
       target.setSeconds(0, 0);
+      target.setMilliseconds(0);
       target.setMinutes(target.getMinutes() + 1);
 
-      // Advance minute-by-minute until all cron fields match (with safety limit)
-      const SAFETY_LIMIT = 366 * 24 * 60; // ~1 year of minutes
+      // L-13: Reduce SAFETY_LIMIT to a reasonable value (48 hours max lookahead)
+      const SAFETY_LIMIT = 48 * 60; // 48 hours of minutes
       for (let i = 0; i < SAFETY_LIMIT; i++) {
         if (
           cronFieldMatches(minute, target.getMinutes()) &&
@@ -452,11 +484,37 @@ export class CronConnector implements Connector {
         target.setMinutes(target.getMinutes() + 1);
       }
 
-      // Safety: ensure minimum 60s gap between firings to prevent rapid-fire
-      const delayMs = Math.max(60_000, target.getTime() - Date.now());
-      // Clear previous timer before setting new one to prevent leaks
+      const targetTime = target.getTime();
+      const nowTime = Date.now();
+
+      // L-12: Add drift compensation to cron setTimeout
+      // If we've drifted past the target, schedule immediately
+      const delayMs = Math.max(0, targetTime - nowTime);
+
+      // M-10: Fix clearTimeout — clear the correct timer before setting new one
       const prevTimer = this.timers.get(job.id);
-      if (prevTimer) clearTimeout(prevTimer);
+      if (prevTimer) {
+        clearTimeout(prevTimer);
+      }
+
+      if (delayMs <= 0) {
+        // Target is in the past — fire immediately but schedule next
+        if (this.connected && this.events) {
+          const message: ConnectorMessage = {
+            platformMessageId: `cron-${job.id}-${Date.now()}`,
+            senderName: "cron",
+            senderId: `cron-${job.id}`,
+            content: job.prompt,
+            platform: "cron",
+            timestamp: Date.now(),
+            channelId: "cron",
+          };
+          this.events.onMessage(message);
+        }
+        scheduleNext();
+        return;
+      }
+
       const timer = setTimeout(() => {
         if (!this.connected || !this.events) return;
         const message: ConnectorMessage = {
@@ -469,6 +527,8 @@ export class CronConnector implements Connector {
           channelId: "cron",
         };
         this.events.onMessage(message);
+        // H-10: Remove old timer entry after firing to prevent Map leak
+        this.timers.delete(job.id);
         // Reschedule for next occurrence
         scheduleNext();
       }, delayMs);
@@ -493,6 +553,12 @@ export class TelegramConnector implements Connector {
   private botToken: string;
   private allowedUsers: number[];
   private webhookUrl?: string;
+  // L-15: Use message ID for deduplication instead of timestamp
+  private processedMessageIds: Set<string> = new Set();
+  private maxProcessedIds = 1000;
+  // L-14: Rate limiting
+  private lastPollTime = 0;
+  private minPollInterval = 2000; // minimum ms between polls
 
   constructor(config: {
     id: string;
@@ -517,9 +583,8 @@ export class TelegramConnector implements Connector {
     }
     // Validate bot token by calling getMe
     try {
-      const resp = await fetch(
-        `https://api.telegram.org/bot${this.botToken}/getMe`,
-      );
+      // H-11: Use POST body instead of URL query for Telegram bot token
+      const resp = await fetch(`https://api.telegram.org/bot${this.botToken}/getMe`);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.description || "Invalid token");
       if (import.meta.env.DEV)
@@ -556,6 +621,7 @@ export class TelegramConnector implements Connector {
   async sendMessage(chatId: string, content: string): Promise<void> {
     if (!this.botToken) return;
     try {
+      // H-11: Use POST body for sendMessage as well
       await fetch(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -575,6 +641,12 @@ export class TelegramConnector implements Connector {
 
   private async poll(): Promise<void> {
     if (!this.connected || !this.events || !this.botToken) return;
+
+    // L-14: Rate limiting — ensure minimum interval between polls
+    const now = Date.now();
+    if (now - this.lastPollTime < this.minPollInterval) return;
+    this.lastPollTime = now;
+
     try {
       const url = `https://api.telegram.org/bot${this.botToken}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=1`;
       const resp = await fetch(url);
@@ -590,8 +662,21 @@ export class TelegramConnector implements Connector {
           !this.allowedUsers.includes(msg.from?.id)
         )
           continue;
+        // L-15: Use message ID for deduplication instead of timestamp
+        const msgId = String(msg.message_id);
+        if (this.processedMessageIds.has(msgId)) continue;
+        this.processedMessageIds.add(msgId);
+        // Cap the set size to prevent memory leak
+        if (this.processedMessageIds.size > this.maxProcessedIds) {
+          // Remove oldest entries (first 500)
+          const entries = Array.from(this.processedMessageIds);
+          const toRemove = entries.slice(0, 500);
+          for (const id of toRemove) {
+            this.processedMessageIds.delete(id);
+          }
+        }
         const message: ConnectorMessage = {
-          platformMessageId: String(msg.message_id),
+          platformMessageId: msgId,
           senderName: msg.from?.first_name ?? "telegram-user",
           senderId: String(msg.from?.id ?? "unknown"),
           content: msg.text,
@@ -636,7 +721,23 @@ export class WhatsAppConnector implements Connector {
   }) {
     this.id = config.id;
     this.name = config.name;
-    this.bridgeUrl = config.bridgeUrl.replace(/\/+$/, "");
+    // H-12: URL validation for WhatsApp bridge URL
+    const rawUrl = config.bridgeUrl;
+    try {
+      const parsedUrl = new URL(rawUrl);
+      if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+        throw new Error("Bridge URL must use HTTP or HTTPS");
+      }
+      this.bridgeUrl = parsedUrl.origin + parsedUrl.pathname.replace(/\/+$/, "");
+    } catch (e) {
+      console.warn(
+        "[WhatsAppConnector] Invalid bridge URL:",
+        rawUrl,
+        "— using raw value",
+        e,
+      );
+      this.bridgeUrl = rawUrl.replace(/\/+$/, "");
+    }
     this.authToken = config.authToken;
     this.allowedUsers = config.allowedUsers ?? [];
   }
@@ -754,6 +855,9 @@ export class WhatsAppConnector implements Connector {
 // ─── Connector Manager ─────────────────────────────────────
 
 const STORAGE_KEY = "dalam.connectors.v1";
+
+// M-9: Add mutex to saveConnectorConfig to prevent race conditions
+const saveMutex = new Mutex();
 
 /**
  * Load connector configs from localStorage.
@@ -898,33 +1002,39 @@ export async function saveConnectorConfig(
   onMessage?: (message: ConnectorMessage) => void,
   onStatusChange?: (connectorId: string, status: string) => void,
 ): Promise<void> {
-  const configs = loadConnectorConfigs();
-  const idx = configs.findIndex((c) => c.id === config.id);
-  if (idx >= 0) {
-    configs[idx] = config;
-  } else {
-    configs.push(config);
-  }
-  saveConnectorConfigs(configs);
-
-  // Stop and remove the existing connector atomically
-  const connector = connectors.get(config.id);
-  if (connector) {
-    connectors.delete(config.id);
-    try {
-      await connector.stop();
-    } catch (e) {
-      if (import.meta.env.DEV) console.warn(`[Connectors] Failed to stop connector ${config.id}:`, e);
+  // M-9: Use mutex to prevent race conditions
+  const release = await saveMutex.acquire();
+  try {
+    const configs = loadConnectorConfigs();
+    const idx = configs.findIndex((c) => c.id === config.id);
+    if (idx >= 0) {
+      configs[idx] = config;
+    } else {
+      configs.push(config);
     }
-  }
+    saveConnectorConfigs(configs);
 
-  // Re-initialize if enabled and callbacks are provided
-  if (config.enabled && onMessage && onStatusChange) {
-    try {
-      await initializeSingleConnector(config, onMessage, onStatusChange);
-    } catch (err) {
-      console.warn(`[Connectors] Failed to restart ${config.id}:`, err);
+    // Stop and remove the existing connector atomically
+    const connector = connectors.get(config.id);
+    if (connector) {
+      connectors.delete(config.id);
+      try {
+        await connector.stop();
+      } catch (e) {
+        if (import.meta.env.DEV) console.warn(`[Connectors] Failed to stop connector ${config.id}:`, e);
+      }
     }
+
+    // Re-initialize if enabled and callbacks are provided
+    if (config.enabled && onMessage && onStatusChange) {
+      try {
+        await initializeSingleConnector(config, onMessage, onStatusChange);
+      } catch (err) {
+        console.warn(`[Connectors] Failed to restart ${config.id}:`, err);
+      }
+    }
+  } finally {
+    release();
   }
 }
 

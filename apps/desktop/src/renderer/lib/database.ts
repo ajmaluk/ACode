@@ -136,6 +136,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  * FIX 1.5: Root path "/" now produces "sqlite:///.dalam/project.db" (3 slashes after sqlite:
  *   ensures absolute path resolution on all platforms).
  * FIX 9.2: Empty path now logs a warning to help catch callers passing empty paths.
+ * FIX H-1: Added path traversal sanitization — rejects null bytes and ".." segments.
  */
 export function normalizeDbPath(workspacePath: string): string {
   // Guard against empty paths
@@ -143,8 +144,24 @@ export function normalizeDbPath(workspacePath: string): string {
     console.warn(`[Database] normalizeDbPath called with empty path, caller may be passing unexpected input. Stack: ${new Error().stack?.split('\n').slice(2, 5).join('\n')}`);
     return "sqlite:.dalam/project.db";
   }
+
+  // H-1: Reject null bytes (path traversal via null byte injection)
+  if (workspacePath.includes('\0')) {
+    console.warn(`[Database] normalizeDbPath called with null byte in path, rejecting`);
+    return "sqlite:.dalam/project.db";
+  }
+
   // Convert backslashes to forward slashes (Windows compatibility)
   let normalized = workspacePath.replace(/\\/g, "/");
+
+  // H-1: Reject path traversal segments ("..")
+  const segments = normalized.split('/');
+  for (const seg of segments) {
+    if (seg === '..') {
+      console.warn(`[Database] normalizeDbPath called with path traversal '..' in path, rejecting`);
+      return "sqlite:.dalam/project.db";
+    }
+  }
 
   // Strip trailing slashes (except root path "/" which stays as-is)
   if (normalized.length > 1) {
@@ -178,75 +195,73 @@ export function normalizeDbPath(workspacePath: string): string {
  *
  * The database file is stored at <workspacePath>/.dalam/project.db.
  * This file should be gitignored — it's a local cache.
+ *
+ * FIX C-1: Uses promise-chain mutex to prevent TOCTOU race conditions.
+ * Each call chains onto the previous init promise, guaranteeing serial execution.
  */
-let _initMutex: Promise<void> | null = null;
-let _resolveInitMutex: (() => void) | null = null;
+
+// Promise-chain mutex: each initDatabase call chains onto this promise
+let _initChain: Promise<void> = Promise.resolve();
 
 export async function initDatabase(
   workspacePath: string,
 ): Promise<SqlDatabase | null> {
   if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
 
-  // Serialize all concurrent initDatabase calls — only one at a time.
-  while (_initMutex) {
-    await _initMutex;
-    if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
-  }
-
-  _initMutex = new Promise<void>((r) => { _resolveInitMutex = r; });
-  try {
+  // Chain onto the mutex promise — guarantees serial execution without TOCTOU race
+  const myTurn = _initChain.then(async () => {
     // Re-check after acquiring the lock — another call may have raced ahead
-    if (dbInstance && currentWorkspacePath === workspacePath) return dbInstance;
+    if (dbInstance && currentWorkspacePath === workspacePath) return null;
 
     if (dbInstance) {
       await closeDatabase();
     }
 
-  let Database: { load(path: string): Promise<SqlDatabase> };
-  try {
-    Database = (await import("@tauri-apps/plugin-sql")).default as unknown as {
-      load(path: string): Promise<SqlDatabase>;
-    };
-  } catch (e) {
-    console.warn(
-      "[Database] SQLite plugin not available, memory search disabled:",
-      e,
-    );
-    return null;
-  }
+    // Import the SQLite plugin
+    let Database: { load(path: string): Promise<SqlDatabase> };
+    try {
+      const mod = await import("@tauri-apps/plugin-sql");
+      Database = mod.default as unknown as {
+        load(path: string): Promise<SqlDatabase>;
+      };
+    } catch (e) {
+      console.warn(
+        "[Database] SQLite plugin not available, memory search disabled:",
+        e,
+      );
+      return null;
+    }
 
-  const dbPath = normalizeDbPath(workspacePath);
+    const dbPath = normalizeDbPath(workspacePath);
 
-  // Ensure .dalam directory exists before opening database
-  try {
-    const { scopeSafeExists, scopeSafeMkdir } = await import("./dalamAPI");
-    // Use normalizeDbPath's internal logic: backslash -> /, then strip the sqlite: prefix
-    // to get the canonical path for filesystem operations
-    const dbPathForDir = normalizeDbPath(workspacePath).replace(/^sqlite:/, "");
-    const dotDalam = dbPathForDir.replace(/\/project\.db$/, "");
-    if (!(await scopeSafeExists(dotDalam))) {
-      const created = await scopeSafeMkdir(dotDalam, { recursive: true });
-      if (!created) {
+    // Ensure .dalam directory exists before opening database
+    try {
+      const { scopeSafeExists, scopeSafeMkdir } = await import("./dalamAPI");
+      const dbPathForDir = normalizeDbPath(workspacePath).replace(/^sqlite:/, "");
+      const dotDalam = dbPathForDir.replace(/\/project\.db$/, "");
+      if (!(await scopeSafeExists(dotDalam))) {
+        const created = await scopeSafeMkdir(dotDalam, { recursive: true });
+        if (!created) {
+          console.debug(
+            "[Database] Workspace inaccessible, memory disabled:",
+            workspacePath,
+          );
+          return null;
+        }
+      }
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      if (msg.includes("forbidden") || msg.includes("scope")) {
         console.debug(
           "[Database] Workspace inaccessible, memory disabled:",
           workspacePath,
         );
         return null;
       }
+      // mkdir may fail if already exists or permissions — proceed anyway
     }
-  } catch (e) {
-    const msg = (e as Error)?.message ?? String(e);
-    if (msg.includes("forbidden") || msg.includes("scope")) {
-      console.debug(
-        "[Database] Workspace inaccessible, memory disabled:",
-        workspacePath,
-      );
-      return null;
-    }
-    // mkdir may fail if already exists or permissions — proceed anyway
-  }
 
-  const initWork = async (): Promise<SqlDatabase | null> => {
+    // Initialize the database
     let db: SqlDatabase | null;
     try {
       db = await Database.load(dbPath);
@@ -305,7 +320,6 @@ export async function initDatabase(
     await db.execute(
       `CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`,
     );
-    // FIX 5.1: Composite index for enforceMemoryBudget() query
     await db.execute(
       `CREATE INDEX IF NOT EXISTS idx_mem_budget   ON memories(stale, access_count, updated_at);`,
     );
@@ -344,27 +358,19 @@ export async function initDatabase(
       `CREATE INDEX IF NOT EXISTS idx_code_lang ON code_index(language);`,
     );
 
+    // Atomically set the global instance
+    if (!dbInstance || currentWorkspacePath !== workspacePath) {
+      dbInstance = db;
+      currentWorkspacePath = workspacePath;
+    }
     return db;
-  };
+  });
 
-  let db: SqlDatabase | null;
-  try {
-    db = await initWork();
-  } catch (error) {
-    dbInstance = null;
-    throw error;
-  }
+  // Update the chain so the next call waits for this one
+  _initChain = myTurn.then(() => {}).catch(() => {});
 
-  if (db && (!dbInstance || currentWorkspacePath !== workspacePath)) {
-    dbInstance = db;
-    currentWorkspacePath = workspacePath;
-  }
-  return db;
-  } finally {
-    _resolveInitMutex?.();
-    _initMutex = null;
-    _resolveInitMutex = null;
-  }
+  const result = await myTurn;
+  return result;
 }
 
 /**
@@ -391,17 +397,20 @@ export function getDb(): SqlDatabase {
  *
  * FIX 3.5: Retry close once on failure, log full error with stack.
  * dbInstance is always set to null to prevent use-after-close.
+ * FIX M-1: Capture dbInstance in local variable before try/catch to prevent
+ * null reference on retry if another concurrent call sets dbInstance = null.
  */
 export async function closeDatabase(): Promise<void> {
-  if (dbInstance) {
+  const db = dbInstance;
+  if (db) {
     try {
-      await dbInstance.close();
+      await db.close();
     } catch (e) {
       console.warn("[Database] Failed to close database:", e);
       // Try once more with a brief delay
       try {
         await new Promise(r => setTimeout(r, 100));
-        await dbInstance.close();
+        await db.close();
       } catch (e2) {
         console.error("[Database] Retry close also failed. Possible resource leak:", e2);
       }
