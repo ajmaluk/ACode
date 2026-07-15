@@ -150,6 +150,8 @@ const TOOL_DEPENDENCIES: Record<string, ToolDependency> = {
   },
   new_terminal: { tool: "new_terminal", dependsOn: [], readOnly: false },
   terminal_write: { tool: "terminal_write", dependsOn: [], readOnly: false },
+  // MCP tools — read-only by default (tool name is dynamic)
+  mcp_tool: { tool: "mcp_tool", dependsOn: [], readOnly: true },
 };
 
 // Retry configuration
@@ -248,13 +250,13 @@ async function executeWithTimeout<T>(
       timeoutMs,
     );
     if (abortSignal) {
-      if (abortSignal.aborted) {
-        settled = true;
-        clearTimeout(timeoutId);
-        reject(new Error(`Tool "${toolName}" was aborted`));
-        return;
-      }
+      // Register handler BEFORE checking aborted to avoid race condition
+      // where abort fires between the check and addEventListener
       abortSignal.addEventListener("abort", abortHandler, { once: true });
+      if (abortSignal.aborted) {
+        // Handler already registered — it will fire and clean up via { once: true }
+        abortHandler();
+      }
     }
   });
   return Promise.race([promise, timeoutPromise]).finally(() => {
@@ -490,15 +492,21 @@ export async function executeToolWithRetry(
         if (abortSignal) {
           await new Promise<void>((resolve) => {
             if (abortSignal.aborted) return resolve();
-            const timer = setTimeout(resolve, delay);
-            abortSignal.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(timer);
-                resolve();
-              },
-              { once: true },
-            );
+            let onAbort: (() => void) | null = null;
+            const timer = setTimeout(() => {
+              // Timer fired first — clean up abort listener
+              if (onAbort) {
+                abortSignal.removeEventListener("abort", onAbort);
+                onAbort = null;
+              }
+              resolve();
+            }, delay);
+            onAbort = () => {
+              // Abort fired first — clean up timer
+              clearTimeout(timer);
+              resolve();
+            };
+            abortSignal.addEventListener("abort", onAbort, { once: true });
           });
         } else {
           await new Promise((resolve) => setTimeout(resolve, delay));
@@ -547,12 +555,21 @@ export async function executeToolBatch(
   abortSignal?: AbortSignal,
   sessionId?: string,
 ): Promise<ToolResult[]> {
-  const results = await Promise.all(
+  const results = await Promise.allSettled(
     batch.map((tc) =>
       executeToolWithRetry(tc, executeFn, emit, abortSignal, sessionId),
     ),
   );
-  return results;
+  return results.map((r) =>
+    r.status === "fulfilled"
+      ? r.value
+      : {
+          toolName: "unknown",
+          result: `Error: ${r.reason?.message || "Unknown error"}`,
+          success: false,
+          durationMs: 0,
+        },
+  );
 }
 
 /**
@@ -620,7 +637,7 @@ export function formatToolResults(results: ToolResult[]): string {
   return results
     .map((r) => {
       if (r.success) {
-        return `[Tool result for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result || "(no output)"}`;
+        return `[Tool result for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result ?? "(no output)"}`;
       } else {
         return `[Tool error for ${r.toolName}]${r.retries ? ` (retried ${r.retries} times)` : ""}\n${r.result}`;
       }

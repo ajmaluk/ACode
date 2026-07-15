@@ -551,8 +551,10 @@ async function* streamOpenAI(
   try {
     const fetchAbortController = new AbortController();
     const fetchTimeoutId = setTimeout(() => fetchAbortController.abort(), 120_000);
+    let fetchAbortHandler: (() => void) | undefined;
     if (signal) {
-      signal.addEventListener("abort", () => fetchAbortController.abort());
+      fetchAbortHandler = () => fetchAbortController.abort();
+      signal.addEventListener("abort", fetchAbortHandler);
     }
     try {
       resp = await fetchWithRetry(url, {
@@ -562,6 +564,9 @@ async function* streamOpenAI(
       }, 2, 1000, fetchAbortController.signal);
     } finally {
       clearTimeout(fetchTimeoutId);
+      if (signal && fetchAbortHandler) {
+        signal.removeEventListener("abort", fetchAbortHandler);
+      }
     }
   } catch (err) {
     _debugLog(`[streamOpenAI] fetchWithRetry failed:`, err);
@@ -753,7 +758,13 @@ async function* streamOpenAI(
     _tcArgBuffers.clear();
   } finally {
     _tcArgBuffers.clear();
-    reader.releaseLock();
+    // Wrap releaseLock in try/catch — reader.cancel() may have been called
+    // by the abort handler, which makes releaseLock throw TypeError
+    try {
+      reader.releaseLock();
+    } catch {
+      // Reader already cancelled — lock release is a no-op
+    }
     if (abortHandlerOpenAI && signal) {
       signal.removeEventListener("abort", abortHandlerOpenAI);
     }
@@ -897,7 +908,13 @@ async function* streamAnthropic(
     }
     _anthropicToolBuffers.clear();
   } finally {
-    reader.releaseLock();
+    // Wrap releaseLock in try/catch — reader.cancel() may have been called
+    // by the abort handler, which makes releaseLock throw TypeError
+    try {
+      reader.releaseLock();
+    } catch {
+      // Reader already cancelled — lock release is a no-op
+    }
     if (abortHandlerAnthropic && signal) {
       signal.removeEventListener("abort", abortHandlerAnthropic);
     }
@@ -1889,7 +1906,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     if (tc.name === "task") {
                       result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
                     } else {
-                      result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved);
+                      result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved, ac.signal);
                     }
                     const durationMs = Date.now() - toolStartTime;
                     emit({ type: "tool-result", toolCallId: tc.id, result });
@@ -1916,7 +1933,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                   }
                 } else if (ac.signal.aborted) {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                  toolResults.push(`[Tool result for ${tc.name}]\nAborted by user.`);
                 } else {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
                   toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
@@ -1928,7 +1945,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                   batchMetas.map(async (tc) => {
                     const decision = await waitForToolApproval(tc.id, ac.signal);
                     if (ac.signal.aborted) {
-                      return `[TOOL RESULT: ${tc.name}]\nAborted by user.`;
+                      return `[Tool result for ${tc.name}]\nAborted by user.`;
                     }
                     if (decision !== "approved") {
                       emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
@@ -1964,11 +1981,13 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     }
                   })
                 );
-                for (const result of parallelResults) {
+                for (let ri = 0; ri < parallelResults.length; ri++) {
+                  const result = parallelResults[ri];
+                  const tcName = batchMetas[ri]?.name ?? "unknown";
                   if (result.status === "fulfilled") {
                     toolResults.push(result.value);
                   } else {
-                    toolResults.push(`[Tool error]\n${result.reason?.message || "Unknown error"}`);
+                    toolResults.push(`[Tool error for ${tcName}]\n${result.reason?.message || "Unknown error"}`);
                   }
                 }
                 if (ac.signal.aborted) {
@@ -1985,7 +2004,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               for (const tc of toolCallMetas) {
                 if (!executedIds.has(tc.id)) {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
-                  toolResults.push(`[TOOL RESULT: ${tc.name}]\nAborted by user.`);
+                  toolResults.push(`[Tool result for ${tc.name}]\nAborted by user.`);
                 }
               }
             }
@@ -3323,7 +3342,9 @@ const TOOL_RESULT_LIMITS = {
 function truncateToolResult(result: string, toolName: string): string {
   const limit = (TOOL_RESULT_LIMITS as Record<string, number>)[toolName] ?? TOOL_RESULT_LIMITS.default;
   if (result.length <= limit) return result;
-  return result.slice(0, limit) + `\n\n[Truncated at ${limit} chars, showing first ${limit} of ${result.length} total]`;
+  // Use Array.from to avoid splitting surrogate pairs (emoji, CJK supplementary)
+  const truncated = Array.from(result).slice(0, limit).join('');
+  return truncated + `\n\n[Truncated at ${limit} chars, showing first ${limit} of ${result.length} total]`;
 }
 
 async function executeWithTimeout<T>(
@@ -4690,7 +4711,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             if (!resolved) {
               childProc?.kill().catch(() => {});
               _mcpStdioConnections.delete(serverName);
-              origReject(new Error("Timeout waiting for tools/call response (30s)"));
+              origReject(new Error("Timeout connecting to MCP server (30s)"));
             }
           }, 30000);
         });
