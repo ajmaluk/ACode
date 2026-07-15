@@ -390,7 +390,6 @@ function ChatView() {
   const { providers, getAllModels } = useModelProviders();
   const { status: gitStatus } = useGit();
   const toast = useToast();
-  const mod = modKey();
   const scrollRef = useRef<HTMLDivElement>(null);
   const mainTextareaRef = useRef<HTMLTextAreaElement>(null);
   const followupTextareaRef = useRef<HTMLTextAreaElement>(null);

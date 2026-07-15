@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Workspace, FileNode, McpServer, AppSettings, DalamAPI } from "@dalam/shared-types";
+import type { Workspace, FileNode, McpServer, DalamAPI } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename, toPosix, joinPath, detectLanguage } from "@/lib/pathUtils";
 import { loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
@@ -10,8 +10,6 @@ import { useSkillsMcp, loadMcpServers } from "./useSkillsMcp";
 import { usePermission } from "./usePermission";
 import { useTerminal } from "./useTerminal";
 import { useDiffView } from "./useDiffView";
-import { useUI } from "./useUI";
-
 const devWarn = import.meta.env.DEV
   ? (...args: unknown[]) => console.warn(...args)
   : () => {};
@@ -32,14 +30,6 @@ interface ProjectProviderConfig {
   enabled?: boolean;
   apiKey?: string;
   baseUrl?: string;
-}
-
-/** Shape of .dalam/config.json */
-interface WorkspaceConfig {
-  settings?: Partial<AppSettings>;
-  providers?: ProjectProviderConfig[];
-  mcpServers?: McpServer[];
-  alwaysAllowed?: Record<string, true>;
 }
 
 // ─── Workspace Persistence ────────────────────────────────────

@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// The `any` type is used here intentionally for mock implementations where
+// concrete database and filesystem types would be overly restrictive.
+
 /**
  * Tests for recoverDeadLetters() and processPendingWrites().
  *

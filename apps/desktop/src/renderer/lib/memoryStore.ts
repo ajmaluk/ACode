@@ -175,7 +175,7 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
 
   // Best-effort markdown cleanup after delete
   try {
-    const { remove, exists: fsExists, readDir: fsReadDir } = await import("@tauri-apps/plugin-fs");
+    const { remove, readDir: fsReadDir } = await import("@tauri-apps/plugin-fs");
     let wsPath = workspacePath;
     if (!wsPath) {
       try {

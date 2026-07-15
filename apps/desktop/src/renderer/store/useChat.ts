@@ -1,21 +1,20 @@
 import { create } from "zustand";
 import { logPermission } from "../lib/security";
 import type {
-  DalamAPI, AgentInfo, AgentMode, AgentSession, AppSettings, ChatMessage,
-  ChatSessionSummary, FileAttachment, FileChange, FileNode, GitStatus,
-  McpServer, PermissionAction, PermissionRule, PrimaryAgentName, Skill,
-  SkillInfo, StreamEvent, TerminalTab, TodoItem, ToolCall, Workspace
+  AgentSession, ChatMessage,
+  ChatSessionSummary, FileAttachment, FileChange,
+  PrimaryAgentName,
+  StreamEvent, TerminalTab, TodoItem, ToolCall
 } from "@dalam/shared-types";
-import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import type { SubAgentState } from "@dalam/shared-types";
 import { startRecording, stopRecording, recordUserMessage, recordAssistantMessage } from "@/lib/trajectoryRecorder";
-import { basename, toPosix, joinPath, detectLanguage } from "@/lib/pathUtils";
-import { ALL_AGENTS, PRIMARY_AGENTS, SUBAGENTS, getPrimaryAgent, mergeRulesets, evaluate, canonicaliseBashCommand } from "@/lib/agents";
-import { skillRegistry, BUNDLED_SKILLS, matchSkillInvocation, renderSkillForPrompt, loadProjectSkills, refreshProjectSkills } from "@/lib/skills";
+import { basename, joinPath } from "@/lib/pathUtils";
+import { canonicaliseBashCommand } from "@/lib/agents";
+
 import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, tier1PruneToolOutputs, buildCompactionPrompt, parseContextWindow, CTX } from "@/lib/contextManager";
 import { agentReducer, createInitialRuntimeState, type AgentRuntimeState } from "@/lib/agentRuntimeContract";
-import { stripXmlToolCallTags, parseXmlToolCalls, stripInlineXml, EDIT_TOOLS, BASH_TOOLS, READ_TOOLS } from "./xmlParser";
+import { parseXmlToolCalls, stripInlineXml, EDIT_TOOLS, BASH_TOOLS, READ_TOOLS } from "./xmlParser";
 import { 
   savePersistedSessionSummaries, savePersistedMessages, savePersistedMessagesImmediate,
   savePersistedAgents, savePersistedVersions, savePersistedCompactionSummaries,
@@ -32,7 +31,6 @@ import { usePermission } from "./usePermission";
 import { useQuestion } from "./useQuestion";
 import { useTerminal } from "./useTerminal";
 import { useUI } from "./useUI";
-import { useSkillsMcp } from "./useSkillsMcp";
 
 import { useToasts } from "@/components/ui/toastStore";
 
@@ -66,6 +64,25 @@ const _lastCompactionCounts: Record<string, number> = {};
 const COMPACTION_MIN_SAVINGS_PERCENT = 5; // Minimum 5% reduction to consider compaction effective
 const ANTI_THRASH_SKIP_MS = 60_000; // Skip compaction for 60s after ineffective attempt
 const _antiThrashTimestamps: Record<string, number> = {}; // sessionId → timestamp of last skip
+const MAX_COMPACTION_MAP_ENTRIES = 50; // Cap to prevent unbounded growth
+
+function _pruneCompactionMaps(sessionId: string) {
+  // Only prune when a new session is added that pushes us over the cap
+  const count = Object.keys(_lastCompactionAttempt).length;
+  if (count <= MAX_COMPACTION_MAP_ENTRIES) return;
+  // Find and remove the oldest entry (smallest timestamp)
+  let oldestKey = "";
+  let oldestTime = Infinity;
+  for (const [key, time] of Object.entries(_lastCompactionAttempt)) {
+    if (time < oldestTime) { oldestTime = time; oldestKey = key; }
+  }
+  if (oldestKey && oldestKey !== sessionId) {
+    delete _lastCompactionAttempt[oldestKey];
+    delete _compactionTier[oldestKey];
+    delete _lastCompactionCounts[oldestKey];
+    delete _antiThrashTimestamps[oldestKey];
+  }
+}
 
 // ============================================================================
 // Safety Timer Helper — eliminates 3× duplicated timer logic in sendMessage/appendStream
@@ -315,6 +332,7 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
   const statsBefore = computeContextStats(store.messages);
 
   void store.compactSessionHistory(sessionId).then(() => {
+    try {
     // Verify compaction was effective
     const currentStore = useChat.getState();
     const statsAfter = computeContextStats(currentStore.messages);
@@ -370,6 +388,10 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
         _sendInProgress: false,
       }));
     }
+    } catch (thenErr) {
+      devWarn("[Chat] Context overflow retry handler failed:", thenErr);
+      useChat.setState({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false });
+    }
   }).catch((compactErr) => {
     devWarn("[Chat] Compaction failed:", compactErr);
     useChat.setState({ isStreaming: false, streamingStartedAt: null, streamingContent: "", thinkingContent: "", pendingToolCalls: [], pendingActivities: [], _sendInProgress: false });
@@ -379,7 +401,6 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
 
 // Persist terminal state keyed by session ID (proper Map, not single cache)
 const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
-const MAX_TERMINAL_CACHE_SIZE = 20;
 
 export type TodoStatus = TodoItem["status"];
 
@@ -433,6 +454,8 @@ type ChatState = {
   subAgents: SubAgentState[];
   /** Track if we need to run verification after plan execution completes */
   _pendingVerification: { workspacePath: string; planContent: string } | null;
+  /** Recover stuck state flags (e.g., isStreaming=true without session) */
+  _recoverStuckState: () => void;
   compactSessionHistory: (sessionId: string) => Promise<void>;
   setSelectedModel: (id: string) => Promise<void>;
   startSession: (workspacePath: string, mode: import("@dalam/shared-types").AgentSessionMode) => Promise<void>;
@@ -528,6 +551,16 @@ export const useChat = create<ChatState>((set, get) => ({
     get()._autoRemoveTimers.clear();
   },
 
+  // State recovery: reset stuck flags on initialization
+  _recoverStuckState() {
+    const state = get();
+    // If isStreaming is true but there's no active session, it's stuck
+    if (state.isStreaming && !state.session) {
+      set({ isStreaming: false, _sendInProgress: false, streamingContent: "", thinkingContent: "" });
+    }
+    // If _sendInProgress is true but not streaming, it's stuck (safety timeout already covers this)
+  },
+
   async load() {
     try {
       const { idbGet, isIndexedDBAvailable } = await import("@/lib/storage");
@@ -547,6 +580,8 @@ export const useChat = create<ChatState>((set, get) => ({
       // Fallback: localStorage data is already loaded at store creation time
       devWarn("IndexedDB unavailable, using localStorage defaults:", e);
     }
+    // Recover any stuck state flags from previous sessions
+    get()._recoverStuckState();
   },
 
   async setSelectedModel(id) {
@@ -797,7 +832,11 @@ export const useChat = create<ChatState>((set, get) => ({
     const api = createDalamAPI();
     // Ensure stream listener is registered for the current session
     api.agent.cleanupStream(session.id);
-    api.agent.onStreamEvent(session.id, (event) => get().appendStream(event));
+    api.agent.onStreamEvent(session.id, (event) => {
+      try { get().appendStream(event); } catch (e) {
+        if (import.meta.env.DEV) console.error("[Chat] appendStream error:", e);
+      }
+    });
 
     const { pendingAttachments } = get();
     const userMsg: ChatMessage = {
@@ -2183,13 +2222,17 @@ export const useChat = create<ChatState>((set, get) => ({
     // Restore task plan from the last assistant message that had one
     let restoredTaskPlan: TaskPlanItem[] | null = null;
     let restoredTaskPlanSummary: string | null = null;
+    let restoredTodos: import("@dalam/shared-types").TodoItem[] = [];
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
-      if (msg.role === "assistant" && msg.taskPlan && msg.taskPlan.length > 0) {
+      if (msg.role === "assistant" && msg.taskPlan && msg.taskPlan.length > 0 && !restoredTaskPlan) {
         restoredTaskPlan = msg.taskPlan;
         restoredTaskPlanSummary = msg.taskPlanSummary ?? null;
-        break;
       }
+      if (msg.role === "assistant" && msg.todos && msg.todos.length > 0 && restoredTodos.length === 0) {
+        restoredTodos = msg.todos;
+      }
+      if (restoredTaskPlan && restoredTodos.length > 0) break;
     }
     // Reconstruct the AgentSession object from stored data
     const chatSession = get().chatSessions.find((cs) => cs.id === id);
@@ -2236,7 +2279,7 @@ export const useChat = create<ChatState>((set, get) => ({
       taskPlanSummary: restoredTaskPlanSummary,
       _sendInProgress: false,
       messageQueue: [],
-      todos: [],
+      todos: restoredTodos,
       _pendingChanges: [],
       _pendingVerification: null,
       subAgents: [],
@@ -2799,6 +2842,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const lastAttempt = _lastCompactionAttempt[sessionId] ?? 0;
     if (Date.now() - lastAttempt < COMPACTION_THROTTLE_MS) return;
     _lastCompactionAttempt[sessionId] = Date.now();
+    _pruneCompactionMaps(sessionId);
 
     // Minimum message count gate
     if (messages.length < COMPACTION_MIN_MESSAGES) return;
@@ -2920,6 +2964,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }
     } catch (e) {
       devWarn("Background compaction failed:", e);
+      pushWarningToast("Compaction failed", "Background compaction encountered an error. Context may grow beyond limits.");
     } finally {
       const remaining = new Set(get()._compactingSessions);
       remaining.delete(sessionId);
