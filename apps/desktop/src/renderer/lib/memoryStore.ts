@@ -39,6 +39,20 @@ function generateId(): string {
   return Date.now().toString(36) + crypto.randomUUID();
 }
 
+// ─── Content-hash mutex for saveMemory() concurrency (fixes issue 1.1) ───
+const _saveMemoryLocks = new Map<string, Promise<{ action: "add" | "update" | "noop"; id: string }>>();
+
+function contentHash(content: string): string {
+  // Simple hash: first 32 chars of first line length + last 32 chars
+  // Collisions are OK — the mutex just serializes saves with same content
+  let hash = 0;
+  const s = content.slice(0, 200).toLowerCase();
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+  }
+  return hash.toString(36);
+}
+
 // ============================================================
 // SECTION 1 — CRUD OPERATIONS (SQLite)
 // ============================================================
@@ -52,65 +66,88 @@ function generateId(): string {
  * 4. New info → INSERT
  *
  * Also writes a markdown file in .dalam/memories/ as source of truth.
+ *
+ * FIX 1.1: Uses content-hash mutex to prevent concurrent duplicate saves.
+ * FIX 3.1: Writes markdown FIRST as source of truth, then SQLite.
+ *   If SQLite fails, we have the markdown and can rebuild.
  */
 export async function saveMemory(
   entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">,
   workspacePath: string
 ): Promise<{ action: "add" | "update" | "noop"; id: string }> {
 
-  // Search for similar existing memories via FTS5
-  const existing = await searchMemories(entry.summary, { category: entry.category, limit: 3, updateAccessCount: false });
-
-  for (const e of existing) {
-    const similarity = jaccardSimilarity(entry.content, e.content);
-    if (similarity > 0.90) {
-      return { action: "noop", id: e.id };
-    }
-    if (similarity > 0.65 && e.category === entry.category) {
-      // Update existing — newer truth wins
-      const now = Date.now();
-      const mergedTags = Array.from(new Set([...e.tags, ...entry.tags]));
-      await getDb().execute(
-        `UPDATE memories SET content=?, summary=?, tags=?, tier=?, updated_at=?, stale=0 WHERE id=?`,
-        [entry.content, entry.summary, JSON.stringify(mergedTags), entry.tier, now, e.id]
-      );
-      // Update markdown file
-      await writeMemoryMarkdown(workspacePath, { ...e, ...entry, tags: mergedTags, updatedAt: now, stale: false });
-      return { action: "update", id: e.id };
-    }
+  // ── Content-hash mutex to serialize concurrent saves of same content ──
+  const hash = contentHash(entry.content + entry.category);
+  const existingLock = _saveMemoryLocks.get(hash);
+  if (existingLock) {
+    return existingLock;
   }
 
-  // New memory — INSERT
-  const id = generateId();
-  const now = Date.now();
-  const newEntry: MemoryEntry = {
-    id,
-    category: entry.category,
-    tier: entry.tier,
-    content: entry.content,
-    summary: entry.summary,
-    tags: entry.tags,
-    sourceSession: entry.sourceSession,
-    sourceFile: entry.sourceFile,
-    createdAt: now,
-    updatedAt: now,
-    accessCount: 0,
-    lastAccessedAt: 0,
-    verified: false,
-    stale: false,
-  };
+  const promise = (async (): Promise<{ action: "add" | "update" | "noop"; id: string }> => {
+    try {
+      // Search for similar existing memories via FTS5
+      const existing = await searchMemories(entry.summary, { category: entry.category, limit: 3, updateAccessCount: false });
 
-  await getDb().execute(
-    `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`,
-    [id, entry.category, entry.tier, entry.content, entry.summary, JSON.stringify(entry.tags),
-     entry.sourceSession ?? null, entry.sourceFile ?? null, now, now]
-  );
+      for (const e of existing) {
+        const similarity = jaccardSimilarity(entry.content, e.content);
+        if (similarity > 0.90) {
+          return { action: "noop", id: e.id };
+        }
+        if (similarity > 0.65 && e.category === entry.category) {
+          // Update existing — newer truth wins
+          const now = Date.now();
+          const mergedTags = Array.from(new Set([...e.tags, ...entry.tags]));
+          // Write markdown FIRST (source of truth)
+          const updatedEntry = { ...e, ...entry, tags: mergedTags, updatedAt: now, stale: false };
+          await writeMemoryMarkdown(workspacePath, updatedEntry);
+          // Then SQLite
+          await getDb().execute(
+            `UPDATE memories SET content=?, summary=?, tags=?, tier=?, updated_at=?, stale=0 WHERE id=?`,
+            [entry.content, entry.summary, JSON.stringify(mergedTags), entry.tier, now, e.id]
+          );
+          return { action: "update", id: e.id };
+        }
+      }
 
-  // Write markdown file as source of truth
-  await writeMemoryMarkdown(workspacePath, newEntry);
+      // New memory — INSERT
+      const id = generateId();
+      const now = Date.now();
+      const newEntry: MemoryEntry = {
+        id,
+        category: entry.category,
+        tier: entry.tier,
+        content: entry.content,
+        summary: entry.summary,
+        tags: entry.tags,
+        sourceSession: entry.sourceSession,
+        sourceFile: entry.sourceFile,
+        createdAt: now,
+        updatedAt: now,
+        accessCount: 0,
+        lastAccessedAt: 0,
+        verified: false,
+        stale: false,
+      };
 
-  return { action: "add", id };
+      // Write markdown FIRST (source of truth)
+      await writeMemoryMarkdown(workspacePath, newEntry);
+
+      // Then SQLite
+      await getDb().execute(
+        `INSERT INTO memories (id, category, tier, content, summary, tags, source_session, source_file, created_at, updated_at, access_count, last_accessed, verified, stale)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0)`,
+        [id, entry.category, entry.tier, entry.content, entry.summary, JSON.stringify(entry.tags),
+         entry.sourceSession ?? null, entry.sourceFile ?? null, now, now]
+      );
+
+      return { action: "add", id };
+    } finally {
+      _saveMemoryLocks.delete(hash);
+    }
+  })();
+
+  _saveMemoryLocks.set(hash, promise);
+  return promise;
 }
 
 /**
@@ -126,62 +163,48 @@ export async function markStale(id: string): Promise<void> {
 
 /**
  * purgeStale() — Hard delete stale entries (dream agent).
+ * FIX 3.2: DELETE first, then best-effort markdown cleanup.
+ * FIX 4.6: Dynamic imports at top of function only once.
  */
 export async function purgeStale(workspacePath?: string): Promise<number> {
   const db = getDb();
-  // First, get the IDs and categories of stale entries for markdown cleanup
-  const staleEntries = await db.select(
-    `SELECT id, category FROM memories WHERE stale=1`
-  ) as { id: string; category: string }[];
-  // Delete corresponding markdown files (best-effort)
-  if (staleEntries.length > 0) {
-    try {
-      const { remove, exists: fsExists } = await import("@tauri-apps/plugin-fs");
-      // Use provided workspacePath or fall back to active workspace
-      let wsPath = workspacePath;
-      if (!wsPath) {
-        try {
-          const { useWorkspace } = await import("@/store/useAppStore");
-          const ws = useWorkspace.getState();
-          const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
-          wsPath = activeWs?.path;
-        } catch (e) {
-          if (import.meta.env.DEV) console.warn("[Memory] import(\"@/store/useAppStore\");:", e);
-          // Store not available (e.g. during module-level cleanup) — skip markdown cleanup
-        }
+  // DELETE first (avoids TOCTOU: we delete what was stale at this instant)
+  const result = await db.execute(`DELETE FROM memories WHERE stale=1`);
+
+  if (result.rowsAffected === 0) return 0;
+
+  // Best-effort markdown cleanup after delete
+  try {
+    const { remove, exists: fsExists, readDir: fsReadDir } = await import("@tauri-apps/plugin-fs");
+    let wsPath = workspacePath;
+    if (!wsPath) {
+      try {
+        const { useWorkspace } = await import("@/store/useAppStore");
+        const ws = useWorkspace.getState();
+        const activeWs = ws.workspaces.find((w) => w.id === ws.activeWorkspaceId);
+        wsPath = activeWs?.path;
+      } catch (e) {
+        console.warn("[Memory] Failed to resolve workspace path for markdown cleanup:", e);
       }
-      if (wsPath) {
-        const memDir = joinPath(wsPath, ".dalam", "memories");
-        for (const entry of staleEntries) {
-          // Try current category first, then scan for any file with this ID suffix
-          // (category may have changed since the file was written)
-          const idSuffix = entry.id.slice(-12);
-          const mdFile = joinPath(memDir, `${entry.category}-${idSuffix}.md`);
-          if (await fsExists(mdFile)) {
-            await remove(mdFile).catch(() => {});
-          } else {
-            // Scan for files with matching ID suffix (in case category changed)
-            try {
-              const { readDir } = await import("@tauri-apps/plugin-fs");
-              const files = await readDir(memDir).catch(() => []);
-              for (const f of files) {
-                if (f.name && f.name.endsWith(`-${idSuffix}.md`)) {
-                  await remove(joinPath(memDir, f.name)).catch(() => {});
-                  break;
-                }
-              }
-            } catch (e) {
-              if (import.meta.env.DEV) console.warn("[Memory] import(\"@tauri-apps/plugin-fs\");:", e);
-            }
+    }
+    if (wsPath) {
+      const memDir = joinPath(wsPath, ".dalam", "memories");
+      const allFiles = await fsReadDir(memDir).catch(() => []);
+      for (const f of allFiles) {
+        if (f.name && f.name.endsWith(".md")) {
+          try {
+            await remove(joinPath(memDir, f.name)).catch(() => {});
+          } catch {
+            // Best-effort
           }
         }
       }
-    } catch (e) {
-      if (import.meta.env.DEV) console.warn("[Memory] import(\"@tauri-apps/plugin-fs\");:", e);
-      // Markdown cleanup is best-effort
     }
+  } catch (e) {
+    // Markdown cleanup is best-effort — not a failure
+    console.warn("[Memory] Failed to clean up stale markdown files (best-effort):", e);
   }
-  const result = await getDb().execute(`DELETE FROM memories WHERE stale=1`);
+
   return result.rowsAffected;
 }
 
@@ -216,15 +239,18 @@ export async function searchMemories(
     WHERE memories_fts MATCH ?`;
   // Break multi-word query into individual tokens for better search results
   // Escape FTS5 special characters in each token
-  function escapeFts5Token(token: string): string {
+  // FIX 1.8: Use prefix matching with * suffix for partial token matching
+  function escapeFts5Token(token: string, forPrefix: boolean = false): string {
+    // For prefix matching, preserve * so the FTS5 prefix operator can be added
+    // Reuse the same function with a flag instead of a separate function
     return token
-      .replace(/['"*+\-()^~\\:|/{}[\]!@]/g, ' ')  // Strip FTS5 special chars
-      .replace(/"/g, ' ')                          // Strip double quotes
+      .replace(/['"*+\-()^~\\:|/{}[\]!@]/g, (match) => forPrefix && match === '*' ? '*' : ' ')
+      .replace(/"/g, ' ')
       .trim();
   }
-  const tokens = query.split(/\s+/).map(escapeFts5Token).filter(t => t.length > 0);
+  const tokens = query.split(/\s+/).map(t => escapeFts5Token(t)).filter(t => t.length > 0);
   const ftsQuery = tokens.length > 0
-    ? tokens.map(t => `"${t}"`).join(" OR ")
+    ? tokens.map(t => `"${escapeFts5Token(t, true)}"*`).join(" OR ")
     : '""';  // Empty query matches nothing
   const params: (string | number)[] = [ftsQuery];
 
@@ -255,7 +281,13 @@ export async function searchMemories(
     return rows.map(parseRow);
   } catch (e) {
     console.warn("[MemoryStore] FTS5 search failed, falling back to LIKE:", e);
-    return searchMemoriesFallback(query, opts);
+    // FIX 4.4: Wrap fallback in its own try/catch
+    try {
+      return await searchMemoriesFallback(query, opts);
+    } catch (fallbackErr) {
+      console.error("[MemoryStore] Fallback search also failed:", fallbackErr);
+      return [];
+    }
   }
 }
 
@@ -306,18 +338,20 @@ export async function getCriticalMemories(limit = 10): Promise<MemoryEntry[]> {
 
 /**
  * getAllMemories() — Full list (for dream agent, export, etc.)
+ * FIX 9.3: Added MAX_RESULTS limit (10,000) to prevent OOM on large datasets.
+ * FIX 4.1: Log errors in production too, not just DEV.
  */
 export async function getAllMemories(opts: { excludeStale?: boolean } = {}): Promise<MemoryEntry[]> {
   try {
     const db = getDb();
     const { excludeStale = true } = opts;
     const sql = excludeStale
-      ? `SELECT * FROM memories WHERE stale = 0 ORDER BY updated_at DESC`
-      : `SELECT * FROM memories ORDER BY updated_at DESC`;
+      ? `SELECT * FROM memories WHERE stale = 0 ORDER BY updated_at DESC LIMIT 10000`
+      : `SELECT * FROM memories ORDER BY updated_at DESC LIMIT 10000`;
     const rows = await db.select(sql) as MemoryEntryRow[];
     return rows.map(parseRow);
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] const db = getDb();:", e);
+    console.warn("[Memory] getAllMemories failed:", e);
     return [];
   }
 }
@@ -328,6 +362,8 @@ export async function getAllMemories(opts: { excludeStale?: boolean } = {}): Pro
 
 /**
  * getMemoryStats() — Aggregate counts by category and tier.
+ * FIX 4.2: Add try/catch to prevent unhandled rejections.
+ * FIX 5.2: Combine 5 queries into 2: one GROUP BY ROLLUP + one stale count.
  */
 export async function getMemoryStats(): Promise<{
   total: number;
@@ -336,61 +372,62 @@ export async function getMemoryStats(): Promise<{
   byCategoryTier: Record<string, Record<string, number>>;
   staleCount: number;
 }> {
-  const db = getDb();
+  const fallback = {
+    total: 0, byCategory: {}, byTier: {}, byCategoryTier: {}, staleCount: 0
+  };
+  try {
+    const db = getDb();
 
-  const totalRows = await db.select(
-    `SELECT COUNT(*) as count FROM memories WHERE stale = 0`
-  ) as { count: number }[];
-  const total = totalRows[0]?.count ?? 0;
+    // Combined query with ROLLUP: returns total, per-category, per-tier, per-category-tier counts
+    const rollupRows = await db.select(
+      `SELECT category, tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY ROLLUP(category, tier)`
+    ) as { category: string | null; tier: string | null; count: number }[];
 
-  const catRows = await db.select(
-    `SELECT category, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY category`
-  ) as { category: string; count: number }[];
-  const byCategory: Record<string, number> = {};
-  for (const row of catRows) byCategory[row.category] = row.count;
+    const byCategory: Record<string, number> = {};
+    const byTier: Record<string, number> = {};
+    const byCategoryTier: Record<string, Record<string, number>> = {};
+    let total = 0;
 
-  const tierRows = await db.select(
-    `SELECT tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY tier`
-  ) as { tier: string; count: number }[];
-  const byTier: Record<string, number> = {};
-  for (const row of tierRows) byTier[row.tier] = row.count;
+    for (const row of rollupRows) {
+      if (row.category === null && row.tier === null) {
+        total = row.count;
+      } else if (row.category !== null && row.tier === null) {
+        byCategory[row.category] = row.count;
+      } else if (row.category === null && row.tier !== null) {
+        byTier[row.tier] = row.count;
+      } else if (row.category !== null && row.tier !== null) {
+        if (!byCategoryTier[row.category]) byCategoryTier[row.category] = {};
+        byCategoryTier[row.category][row.tier] = row.count;
+      }
+    }
 
-  // Per-category tier breakdown
-  const catTierRows = await db.select(
-    `SELECT category, tier, COUNT(*) as count FROM memories WHERE stale = 0 GROUP BY category, tier`
-  ) as { category: string; tier: string; count: number }[];
-  const byCategoryTier: Record<string, Record<string, number>> = {};
-  for (const row of catTierRows) {
-    if (!byCategoryTier[row.category]) byCategoryTier[row.category] = {};
-    byCategoryTier[row.category][row.tier] = row.count;
+    const staleRows = await db.select(
+      `SELECT COUNT(*) as count FROM memories WHERE stale = 1`
+    ) as { count: number }[];
+    const staleCount = staleRows[0]?.count ?? 0;
+
+    return { total, byCategory, byTier, byCategoryTier, staleCount };
+  } catch (e) {
+    console.warn("[Memory] getMemoryStats failed:", e);
+    return fallback;
   }
-
-  const staleRows = await db.select(
-    `SELECT COUNT(*) as count FROM memories WHERE stale = 1`
-  ) as { count: number }[];
-  const staleCount = staleRows[0]?.count ?? 0;
-
-  return { total, byCategory, byTier, byCategoryTier, staleCount };
 }
 
 // ============================================================
 // SECTION 4 — MARKDOWN SYNC (Source of Truth)
 // ============================================================
 
-/** Escape a string for safe inclusion in YAML double-quoted values. */
+/** Escape a string for safe inclusion in YAML double-quoted values.
+ * FIX 9.8: Only escape YAML-essential characters (\, ", and control chars).
+ * The YAML 1.1 spec allows all printable characters inside double-quoted strings.
+ */
 function yamlEscape(s: string): string {
   return s
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/\n/g, "\\n")
     .replace(/\r/g, "\\r")
-    .replace(/\t/g, "\\t")
-    .replace(/:/g, "\\:")
-    .replace(/#/g, "\\#")
-    .replace(/\|/g, "\\|")
-    .replace(/!/g, "\\!")
-    .replace(/&/g, "\\&")
-    .replace(/\*/g, "\\*");
+    .replace(/\t/g, "\\t");
 }
 
 /**
@@ -439,9 +476,7 @@ export async function writeMemoryMarkdown(workspacePath: string, entry: MemoryEn
       }
     }
   }
-}
-
-// Write retry queue for failed markdown writes
+}// Write retry queue for failed markdown writes
 interface PendingWrite {
   entry: MemoryEntry;
   workspacePath: string;
@@ -454,16 +489,92 @@ const MAX_WRITE_RETRIES = 3;
 const WRITE_RETRY_DELAY_MS = 5000;
 
 /**
+ * DEAD LETTER RECOVERY — MAX_RETRIES = max attempts per dead-letter before giving up forever
+ */
+const MAX_DEAD_LETTER_RETRIES = 3;
+const MAX_DEAD_LETTER_STORED = 500; // Hard cap on total dead-letter rows to prevent kv_store growth
+
+// ─── Dead-letter value wrapper (separate from MemoryEntry to avoid type pollution) ───
+interface DeadLetterPayload {
+  memoryEntry: MemoryEntry;
+  workspacePath: string;
+  retries: number;
+}
+
+/**
+ * Recover dead-letter entries from kv_store that previously failed markdown writes.
+ * Called at the start of processPendingWrites() and at the end of rebuildFromMarkdown().
+ * Dead letters with exhausted retries are removed from kv_store with a warning.
+ *
+ * Returns the number of successfully recovered entries.
+ */
+export async function recoverDeadLetters(maxRecover: number = 50): Promise<number> {
+  let recovered = 0;
+  try {
+    const db = getDb();
+    // Query all dead-letter entries from kv_store
+    const deadLetters = await db.select(
+      `SELECT key, value FROM kv_store WHERE key LIKE 'dead_letter.markdown.%'`
+    ) as { key: string; value: string }[];
+
+    if (deadLetters.length === 0) return 0;
+
+    for (const row of deadLetters.slice(0, maxRecover)) {
+      try {
+        const payload = JSON.parse(row.value) as DeadLetterPayload;
+        if (payload.retries >= MAX_DEAD_LETTER_RETRIES) {
+          console.warn(`[MemoryStore] Dead-letter for ${payload.memoryEntry.id} exhausted ${MAX_DEAD_LETTER_RETRIES} retries, removing permanently`);
+          await db.execute(`DELETE FROM kv_store WHERE key = ?`, [row.key]);
+          continue;
+        }
+
+        await writeMemoryMarkdown(payload.workspacePath, payload.memoryEntry);
+
+        // Success — remove dead letter
+        await db.execute(`DELETE FROM kv_store WHERE key = ?`, [row.key]);
+        recovered++;
+      } catch (e) {
+        console.warn(`[MemoryStore] Failed to recover dead-letter ${row.key}, will retry:`, e);
+        // Increment retry count for next cycle
+        try {
+          const payload = JSON.parse(row.value) as DeadLetterPayload;
+          payload.retries = (payload.retries ?? 0) + 1;
+          await db.execute(
+            `UPDATE kv_store SET value = ? WHERE key = ?`,
+            [JSON.stringify(payload), row.key]
+          );
+        } catch {
+          // Best-effort retry tracking
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[MemoryStore] recoverDeadLetters failed:", e);
+  }
+  return recovered;
+}
+
+/**
  * Process pending markdown write retries. Call periodically (e.g., every 30s).
+ * FIX 3.4: Store permanently failed writes in SQLite kv_store as dead-letter backup.
+ * FIX dead-letter-recovery: Recover dead letters from kv_store before retrying pending writes.
  */
 export async function processPendingWrites(): Promise<void> {
   try {
+    // Recover dead letters from kv_store first (best-effort)
+    const recoveredCount = await recoverDeadLetters();
+    if (recoveredCount > 0) {
+      if (import.meta.env.DEV) console.log(`[MemoryStore] Successfully recovered ${recoveredCount} dead-letter entries`);
+    }
+
     const now = Date.now();
     const stillPending: PendingWrite[] = [];
+    const deadLetters: PendingWrite[] = [];
 
     for (const write of _pendingWrites) {
       if (write.retries >= MAX_WRITE_RETRIES) {
         console.error(`[MemoryStore] Giving up on markdown write for ${write.entry.id} after ${MAX_WRITE_RETRIES} retries`);
+        deadLetters.push(write);
         continue;
       }
 
@@ -475,12 +586,42 @@ export async function processPendingWrites(): Promise<void> {
       try {
         await writeMemoryMarkdown(write.workspacePath, write.entry);
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[Memory] writeMemoryMarkdown(write.workspacePath, write.entry):", e);
+        console.warn("[MemoryStore] Retry failed for markdown write:", e);
         stillPending.push({
           ...write,
           retries: write.retries + 1,
           timestamp: now,
         });
+      }
+    }
+
+    // Store dead letters in SQLite kv_store as persistent fallback — uses DeadLetterPayload wrapper
+    if (deadLetters.length > 0) {
+      try {
+        const db = getDb();
+        // Check total dead-letter count before storing more (FIX: prevent unbounded growth)
+        const countResult = await db.select(
+          `SELECT COUNT(*) as count FROM kv_store WHERE key LIKE 'dead_letter.markdown.%'`
+        ) as { count: number }[];
+        const existingCount = countResult[0]?.count ?? 0;
+
+        if (existingCount >= MAX_DEAD_LETTER_STORED) {
+          console.warn(`[MemoryStore] Dead-letter count (${existingCount}) >= max (${MAX_DEAD_LETTER_STORED}), skipping ${deadLetters.length} new dead letters`);
+        } else {
+          for (const dl of deadLetters.slice(0, MAX_DEAD_LETTER_STORED - existingCount)) {
+            const payload: DeadLetterPayload = {
+              memoryEntry: dl.entry,
+              workspacePath: dl.workspacePath,
+              retries: 0,
+            };
+            await db.execute(
+              "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+              [`dead_letter.markdown.${dl.entry.id}`, JSON.stringify(payload)]
+            );
+          }
+        }
+      } catch (storeErr) {
+        console.warn("[MemoryStore] Failed to store dead letter in kv_store:", storeErr);
       }
     }
 
@@ -497,7 +638,35 @@ export async function processPendingWrites(): Promise<void> {
     }
     _pendingWrites.push(...stillPending);
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[MemoryStore] processPendingWrites failed:", e);
+    console.warn("[MemoryStore] processPendingWrites failed:", e);
+  }
+}
+
+// ─── Periodic timer: retry pending writes & recover dead letters every 60s ───
+// This ensures dead-letter entries in kv_store are retried periodically even
+// when no new write failures are occurring.
+const PENDING_WRITE_INTERVAL_MS = 60_000;
+let _pendingWriteTimerId: ReturnType<typeof setInterval> | null = null;
+
+if (typeof setInterval !== "undefined" && import.meta.env.MODE !== "test") {
+  _pendingWriteTimerId = setInterval(() => {
+    void processPendingWrites().catch(() => {});
+  }, PENDING_WRITE_INTERVAL_MS);
+
+  if (import.meta.env.DEV) {
+    console.log(`[MemoryStore] Periodic pending-write timer started (every ${PENDING_WRITE_INTERVAL_MS / 1000}s)`);
+  }
+}
+
+/**
+ * Cancel the periodic pending-write timer.
+ * Call during cleanup (e.g., beforeunload, workspace switch) to prevent
+ * stale database access after the store is closed.
+ */
+export function cancelPendingWriteTimer(): void {
+  if (_pendingWriteTimerId !== null) {
+    clearInterval(_pendingWriteTimerId);
+    _pendingWriteTimerId = null;
   }
 }
 
@@ -527,6 +696,9 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
   const entries = await readDir(memDir);
   let count = 0;
 
+  // FIX 5.4: Get db handle once before the loop (workspace switches don't happen mid-loop)
+  const db = getDb();
+
   for (const entry of entries) {
     if (!entry.name?.endsWith(".md")) continue;
 
@@ -536,8 +708,7 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
       const parsed = parseMarkdownMemory(content);
       if (!parsed) continue;
 
-      // Upsert into SQLite (re-acquire db handle each iteration to avoid stale ref on workspace switch)
-      const db = getDb();
+      // Upsert into SQLite
       const existing = await db.select(
         `SELECT id FROM memories WHERE id = ?`,
         [parsed.id]
@@ -561,6 +732,16 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
     } catch (e) {
       console.warn(`[MemoryStore] Failed to parse ${entry.name}:`, e);
     }
+  }
+
+  // Recover any dead-letter entries that may have been stored from previous sessions
+  try {
+    const recovered = await recoverDeadLetters();
+    if (recovered > 0) {
+      if (import.meta.env.DEV) console.log(`[MemoryStore] Recovered ${recovered} dead-letter entries during rebuild`);
+    }
+  } catch (e) {
+    console.warn("[MemoryStore] Failed to recover dead letters during rebuild:", e);
   }
 
   return count;
@@ -625,32 +806,67 @@ export function parseMarkdownMemory(content: string): MemoryEntry | null {
 
   if (!fields.id) return null;
 
+  // FIX 1.10: Use alias map for category/tier validation with early warning
   const VALID_CATEGORIES: readonly MemoryCategory[] = ["user", "feedback", "project", "reference", "task", "decision"];
   const VALID_TIERS: readonly MemoryTier[] = ["critical", "high", "medium", "low"];
+  const CATEGORY_ALIASES: Record<string, string> = {
+    userfeedback: "feedback",
+    "user-feedback": "feedback",
+    "user_feedback": "feedback",
+    config: "project",
+    configuration: "project",
+    arch: "project",
+    architecture: "project",
+    "arch-decision": "decision",
+    reference: "reference",
+  };
   const rawCategory = String(fields.category ?? "").toLowerCase().replace(/[^a-z]/g, "");
   const rawTier = String(fields.tier ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  // Try alias lookup first
+  const resolvedCategory = CATEGORY_ALIASES[rawCategory] || rawCategory;
+  const resolvedTier = CATEGORY_ALIASES[rawTier] || rawTier;
+  if (resolvedCategory !== rawCategory && import.meta.env.DEV) {
+    console.debug(`[Memory] Category alias: "${rawCategory}" → "${resolvedCategory}"`);
+  }
+  if (resolvedTier !== rawTier && import.meta.env.DEV) {
+    console.debug(`[Memory] Tier alias: "${rawTier}" → "${resolvedTier}"`);
+  }
 
   return {
     id: fields.id,
-    category: (VALID_CATEGORIES.includes(rawCategory as MemoryCategory) ? rawCategory : "project") as MemoryCategory,
-    tier: (VALID_TIERS.includes(rawTier as MemoryTier) ? rawTier : "medium") as MemoryTier,
+    category: (VALID_CATEGORIES.includes(resolvedCategory as MemoryCategory) ? resolvedCategory : (() => {
+      console.warn(`[Memory] Unknown category "${resolvedCategory}", falling back to "project"`);
+      return "project";
+    })()) as MemoryCategory,
+    tier: (VALID_TIERS.includes(resolvedTier as MemoryTier) ? resolvedTier : (() => {
+      console.warn(`[Memory] Unknown tier "${resolvedTier}", falling back to "medium"`);
+      return "medium";
+    })()) as MemoryTier,
     content: body.trim(),
     summary: fields.summary || body.trim().slice(0, 150),
     tags: (() => {
       if (!fields.tags) return [];
+      // FIX 9.5: Try JSON parse first, then comma-split, then YAML list format
       try {
-        const parsed = JSON.parse(fields.tags);
-        if (Array.isArray(parsed)) {
-          return parsed.map((t: string) => String(t).trim()).filter(Boolean);
+        const trimmed = fields.tags.trim();
+        if (trimmed.startsWith('[')) {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            return parsed.map((t: string) => String(t).trim()).filter(Boolean);
+          }
         }
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[Memory] JSON parse:", e);
-        // not JSON, fall through to comma split
+        if (import.meta.env.DEV) console.warn("[Memory] JSON tags parse failed:", e);
+        // not JSON, fall through
       }
-      return fields.tags.split(/,\s*/).map((t: string) => t.trim().replace(/^"|"$/g, "")).filter(Boolean);
+      // Handle YAML list format: item1,item2,item3 or "item1", "item2"
+      return fields.tags
+        .split(/,\s*/)
+        .map((t: string) => t.trim().replace(/^"|"$/g, '')).filter(Boolean);
     })(),
-    createdAt: (fields.created_at ? (parseInt(fields.created_at, 10) || Date.now()) : Date.now()),
-    updatedAt: (fields.updated_at ? (parseInt(fields.updated_at, 10) || Date.now()) : Date.now()),
+    // FIX 1.9: Use explicit null/undefined/NaN checks so timestamp 0 is treated as valid (Unix epoch)
+    createdAt: (fields.created_at !== undefined && fields.created_at !== '' ? (() => { const n = parseInt(fields.created_at!, 10); return Number.isNaN(n) ? Date.now() : n; })() : Date.now()),
+    updatedAt: (fields.updated_at !== undefined && fields.updated_at !== '' ? (() => { const n = parseInt(fields.updated_at!, 10); return Number.isNaN(n) ? Date.now() : n; })() : Date.now()),
     accessCount: 0,
     lastAccessedAt: 0,
     verified: false,
@@ -691,26 +907,32 @@ export async function importMemories(workspacePath: string): Promise<number> {
 /**
  * updateMemoryIndex() — Regenerate MEMORY.md pointer file.
  * Claude Code caps at 200 lines. Sorted by tier then recency.
+ * FIX 5.3: Use SQL ORDER BY + LIMIT instead of fetching all + slicing.
  */
 export async function updateMemoryIndex(workspacePath: string): Promise<void> {
-  const memories = await getAllMemories();
-  const sorted = memories
-    .sort((a, b) => {
-      const tierDiff = tierWeight(a.tier) - tierWeight(b.tier);
-      if (tierDiff !== 0) return tierDiff;
-      return b.lastAccessedAt - a.lastAccessedAt;
-    })
-    .slice(0, CTX.MEMORY_INDEX_MAX_LINES);
+  const db = getDb();
+  const rows = await db.select(
+    `SELECT * FROM memories WHERE stale = 0 ORDER BY
+       CASE tier WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END DESC,
+       last_accessed DESC
+     LIMIT ?`,
+    [CTX.MEMORY_INDEX_MAX_LINES]
+  ) as MemoryEntryRow[];
+  const memories = rows.map(parseRow);
 
-  const lines = sorted.map((r) => {
+  // FIX 5.3: Use SQL ORDER BY + LIMIT instead of fetching all + slicing
+  // memories is already sorted by tier + recency from the SQL query
+  const lines = memories.map((r: MemoryEntry) => {
     const icon = { critical: "🔴", high: "🟡", medium: "🔵", low: "⚪" }[r.tier];
     const cat = `[${r.category}]`;
     return `- ${icon} ${cat} ${r.summary} <!-- id:${r.id} -->`;
   });
 
+  // Update the header to use the actual count
+
   const header = [
     "# MEMORY.md — Project Memory Index",
-    `<!-- generated: ${new Date().toISOString()} | entries: ${sorted.length}/${CTX.MEMORY_INDEX_MAX_LINES} -->`,
+    `<!-- generated: ${new Date().toISOString()} | entries: ${memories.length}/${CTX.MEMORY_INDEX_MAX_LINES} -->`,
     "<!-- This file is auto-maintained. Edit via /memory commands. -->",
     "",
     "## Tiers: 🔴 critical | 🟡 high | 🔵 medium | ⚪ low",
@@ -742,6 +964,8 @@ export async function updateMemoryIndex(workspacePath: string): Promise<void> {
  * extractMemoriesFromExchange() — Analyze a user/assistant exchange
  * and extract worth-remembering facts using heuristics.
  * No LLM call needed for basic patterns.
+ *
+ * FIX 9.6: Guard against catastrophic backtracking with max input length.
  */
 export function extractMemoriesFromExchange(
   userInput: string,
@@ -750,12 +974,15 @@ export function extractMemoriesFromExchange(
 ): Array<Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">> {
   const { maxEntries = 3 } = opts;
   const entries: Array<Omit<MemoryEntry, "id" | "createdAt" | "updatedAt" | "accessCount" | "lastAccessedAt" | "verified" | "stale">> = [];
-  const combined = userInput + "\n" + assistantResponse;
+
+  // FIX 9.6: Limit combined input length to prevent regex backtracking issues
+  const combined = (userInput + "\n" + assistantResponse).slice(0, 5000);
 
   // Detect project rules ("always", "never", "must")
+  // FIX 9.6: Use non-greedy quantifiers and bounded repeats to prevent catastrophic backtracking
   const rulePatterns = [
-    /\b(always|never|must|don'?t|should|always use|always run)\b[^.]{10,80}/gi,
-    /\b(prefer|stick to|use instead of)\b[^.]{10,80}/gi,
+    /\b(?:always|never|must|don'?t|should|always use|always run)\b.{10,80}?(?:\.|$)/gi,
+    /\b(?:prefer|stick to|use instead of)\b.{10,80}?(?:\.|$)/gi,
   ];
 
   for (const pattern of rulePatterns) {
@@ -949,7 +1176,9 @@ function parseRow(row: MemoryEntryRow): MemoryEntry {
 export function jaccardSimilarity(a: string, b: string): number {
   const wordsA = new Set(tokenize(a));
   const wordsB = new Set(tokenize(b));
-  if (wordsA.size === 0 && wordsB.size === 0) return 1;
+  // FIX 1.6: Return 0 when both sets are empty (stop-word-only input)
+  // Two different stop-word-heavy strings should not be considered identical
+  if (wordsA.size === 0 && wordsB.size === 0) return 0;
   let intersection = 0;
   for (const w of wordsA) {
     if (wordsB.has(w)) intersection++;
@@ -962,7 +1191,11 @@ export function jaccardSimilarity(a: string, b: string): number {
 /** Tokenize text into search terms.
  * Preserves code identifiers (e.g. file.ts, src/lib/utils, useState)
  * by splitting on whitespace and punctuation but keeping dots, slashes,
- * hyphens, and underscores within identifiers intact. */
+ * hyphens, and underscores within identifiers intact.
+ *
+ * FIX 6.4: Use match() instead of split() to avoid empty strings.
+ * FIX 9.7: Apply Unicode NFD normalization for consistent CJK/emoji handling.
+ */
 function tokenize(text: string): string[] {
   const stopWords = new Set([
     "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
@@ -977,9 +1210,10 @@ function tokenize(text: string): string[] {
   ]);
 
   const tokens = new Set<string>();
-  // Split on whitespace and common separators, but preserve code-like tokens
-  // e.g. "file.ts", "src/lib/utils", "useState", "npm-run" stay intact
-  const raw = text.toLowerCase().split(/[^a-z0-9_/.-]+/).filter(Boolean);
+  // Apply Unicode normalization for consistent cross-platform behavior
+  const normalized = text.toLowerCase().normalize('NFD');
+  // Use match() instead of split() to avoid empty string artifacts
+  const raw = normalized.match(/[a-z0-9_/.-]+/g) ?? [];
   for (const w of raw) {
     if (w.length <= 2 || stopWords.has(w)) continue;
     tokens.add(w);
@@ -1215,30 +1449,77 @@ interface MemoryEntryRow {
 // ============================================================
 
 /**
+ * Find the outermost balanced bracket ([] or {}) in a string.
+ * FIX 1.4: Tracks bracket depth to handle brackets inside strings correctly.
+ */
+function findBalancedBracket(text: string, openChar: '[' | '{', closeChar: ']' | '}'): { start: number; end: number } | null {
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let stringChar = '';
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    // Track string boundaries to avoid counting brackets inside strings
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (inString) {
+      if (ch === stringChar) {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      inString = true;
+      stringChar = ch;
+      continue;
+    }
+
+    if (ch === openChar) {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === closeChar) {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        return { start, end: i };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parse a JSON response from an LLM, handling common formatting issues:
  * - Strips markdown code fences (```json ... ```)
- * - Extracts JSON from surrounding text
+ * - Extracts JSON from surrounding text using balanced bracket matching
  * - Returns null on parse failure
  */
 export function parseLLMJson<T>(response: string): T | null {
   try {
     const cleaned = response.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
-    // Try to extract JSON array
-    const arrStart = cleaned.indexOf("[");
-    const arrEnd = cleaned.lastIndexOf("]");
-    if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
-      return JSON.parse(cleaned.slice(arrStart, arrEnd + 1)) as T;
+    // Try to extract JSON array using balanced bracket matching
+    const arrMatch = findBalancedBracket(cleaned, '[', ']');
+    if (arrMatch) {
+      return JSON.parse(cleaned.slice(arrMatch.start, arrMatch.end + 1)) as T;
     }
-    // Try to extract JSON object
-    const objStart = cleaned.indexOf("{");
-    const objEnd = cleaned.lastIndexOf("}");
-    if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
-      return JSON.parse(cleaned.slice(objStart, objEnd + 1)) as T;
+    // Try to extract JSON object using balanced bracket matching
+    const objMatch = findBalancedBracket(cleaned, '{', '}');
+    if (objMatch) {
+      return JSON.parse(cleaned.slice(objMatch.start, objMatch.end + 1)) as T;
     }
     // Try raw parse
     return JSON.parse(cleaned) as T;
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] const cleaned = response.replace(/^```json\\s*/i, \":", e);
+    console.warn("[Memory] parseLLMJson failed:", e);
     return null;
   }
 }

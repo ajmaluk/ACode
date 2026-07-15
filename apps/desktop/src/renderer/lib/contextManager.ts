@@ -206,7 +206,6 @@ export function estimateTokens(text: string | null | undefined): number {
   if (cached !== null) return cached;
 
   let count = 0;
-  let codeMode = false;
 
   // Pre-scan for code fence boundaries (line-level detection)
   const lines = text.split("\n");
@@ -235,7 +234,7 @@ export function estimateTokens(text: string | null | undefined): number {
 
     // Determine if current line is inside a code block
     // Fences themselves are processed in outside mode; content between fences in inside mode
-    codeMode = inCodeBlock && !fenceLines.has(lineNum);
+    const codeMode = inCodeBlock && !fenceLines.has(lineNum);
 
     // CJK Unified Ideographs — ~1.5 chars per token
     if (

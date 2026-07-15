@@ -178,7 +178,8 @@ export function createProposal(
   },
 ): DreamProposal {
   _proposalCounter++;
-  const id = `dp-${Date.now().toString(36)}-${_proposalCounter}`;
+  // FIX 9.4: Use crypto.randomUUID() for globally unique IDs instead of counter-based approach
+  const id = `dp-${crypto.randomUUID()}`;
   const score = scoreProposal(type, affectedCount, scoreContext);
   const action = decideProposalAction(score);
 

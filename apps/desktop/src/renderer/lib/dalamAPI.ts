@@ -4235,18 +4235,22 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     const tasksText = args.tasks as string;
     const lines = tasksText.split("\n").filter((l: string) => l.trim());
     const { useChat } = await import("../store/useAppStore");
-    const tasks = lines.map((line: string, i: number) => ({
+    const newTasks = lines.map((line: string, i: number) => ({
       id: `task-${i + 1}`,
       title: line.replace(/^[-*]\s*/, "").trim(),
       status: "pending" as const,
     }));
-    if (tasks.length > 0) {
-      useChat.setState({ taskPlan: tasks, taskPlanSummary: null });
+    if (newTasks.length > 0) {
+      // Merge with existing task plan — preserve status of tasks that already exist
+      const existing = useChat.getState().taskPlan ?? [];
+      const existingMap = new Map(existing.map(t => [t.id, t]));
+      const merged = newTasks.map(t => existingMap.get(t.id) ?? t);
+      useChat.setState({ taskPlan: merged, taskPlanSummary: null });
       // Also open the progress panel so the user can see the tasks
       const { useUI } = await import("../store/useAppStore");
       useUI.getState().setRightPanelTab("progress");
       useUI.getState().setRightPanelOpen(true);
-      return `Created task plan with ${tasks.length} tasks. Progress panel opened.`;
+      return `Created task plan with ${newTasks.length} tasks. Progress panel opened.`;
     }
     return "Error: No valid tasks provided. Provide newline-separated task titles.";
   }
@@ -4693,9 +4697,15 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
           void doSpawn();
 
-          let connTimeoutId: ReturnType<typeof setTimeout> | undefined;
           const origResolve = resolve;
           const origReject = reject;
+          const connTimeoutId = setTimeout(() => {
+            if (!resolved) {
+              childProc?.kill().catch(() => {});
+              _mcpStdioConnections.delete(serverName);
+              origReject(new Error("Timeout connecting to MCP server (30s)"));
+            }
+          }, 30000);
           resolve = ((value: McpStdioConnection | PromiseLike<McpStdioConnection>) => {
             clearTimeout(connTimeoutId);
             resolved = true;
@@ -4706,14 +4716,6 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             resolved = true;
             origReject(reason);
           }) as typeof reject;
-
-          connTimeoutId = setTimeout(() => {
-            if (!resolved) {
-              childProc?.kill().catch(() => {});
-              _mcpStdioConnections.delete(serverName);
-              origReject(new Error("Timeout connecting to MCP server (30s)"));
-            }
-          }, 30000);
         });
 
         return connRecord;
@@ -4744,7 +4746,12 @@ async function executeToolInner(name: string, args: Record<string, string>, work
           conn.pendingRequests.delete(reqIdStr);
           reject(err);
         });
-        let reqTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        const reqTimeoutId = setTimeout(() => {
+          if (conn.pendingRequests.has(reqIdStr)) {
+            conn.pendingRequests.delete(reqIdStr);
+            reject(new Error("Timeout waiting for tools/call response (30s)"));
+          }
+        }, 30000);
         const origPending = conn.pendingRequests.get(reqIdStr);
         if (origPending) {
           conn.pendingRequests.set(reqIdStr, {
@@ -4752,12 +4759,6 @@ async function executeToolInner(name: string, args: Record<string, string>, work
             reject: (e) => { clearTimeout(reqTimeoutId); origPending.reject(e); },
           });
         }
-        reqTimeoutId = setTimeout(() => {
-          if (conn.pendingRequests.has(reqIdStr)) {
-            conn.pendingRequests.delete(reqIdStr);
-            reject(new Error("Timeout waiting for tools/call response (30s)"));
-          }
-        }, 30000);
       });
       return await resultPromise;
     }

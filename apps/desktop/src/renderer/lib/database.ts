@@ -132,10 +132,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
  *   "/home/user/project" → "/home/user/project"
  *
  * Returns the full sqlite: URI string.
+ *
+ * FIX 1.5: Root path "/" now produces "sqlite:///.dalam/project.db" (3 slashes after sqlite:
+ *   ensures absolute path resolution on all platforms).
+ * FIX 9.2: Empty path now logs a warning to help catch callers passing empty paths.
  */
 export function normalizeDbPath(workspacePath: string): string {
   // Guard against empty paths
   if (!workspacePath || workspacePath.trim() === "") {
+    console.warn(`[Database] normalizeDbPath called with empty path, caller may be passing unexpected input. Stack: ${new Error().stack?.split('\n').slice(2, 5).join('\n')}`);
     return "sqlite:.dalam/project.db";
   }
   // Convert backslashes to forward slashes (Windows compatibility)
@@ -147,7 +152,20 @@ export function normalizeDbPath(workspacePath: string): string {
   }
 
   // Ensure absolute path prefix for sqlite: URI scheme
-  const absPath = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  // FIX 1.5: For root path, use triple-slash (sqlite:///) for correct absolute path resolution
+  let absPath: string;
+  if (normalized === "/") {
+    absPath = "/"; // root → sqlite:///.dalam/project.db
+  } else if (normalized.startsWith("/")) {
+    absPath = normalized;
+  } else {
+    absPath = `/${normalized}`;
+  }
+  // For root path, absPath is "/" so sqlite: + / + /.dalam = sqlite://.dalam
+  // We need sqlite:///.dalam, so handle root path specially
+  if (absPath === "/") {
+    return "sqlite:///.dalam/project.db";
+  }
   return `sqlite:${absPath}/.dalam/project.db`;
 }
 
@@ -287,6 +305,10 @@ export async function initDatabase(
     await db.execute(
       `CREATE INDEX IF NOT EXISTS idx_mem_accessed ON memories(last_accessed);`,
     );
+    // FIX 5.1: Composite index for enforceMemoryBudget() query
+    await db.execute(
+      `CREATE INDEX IF NOT EXISTS idx_mem_budget   ON memories(stale, access_count, updated_at);`,
+    );
     await db.execute(
       `CREATE INDEX IF NOT EXISTS idx_genes_workspace ON genes(workspace_id);`,
     );
@@ -366,13 +388,23 @@ export function getDb(): SqlDatabase {
 /**
  * Close the database connection.
  * Call when the workspace is closed.
+ *
+ * FIX 3.5: Retry close once on failure, log full error with stack.
+ * dbInstance is always set to null to prevent use-after-close.
  */
 export async function closeDatabase(): Promise<void> {
   if (dbInstance) {
     try {
       await dbInstance.close();
     } catch (e) {
-      if (import.meta.env.DEV) console.warn("[Database] Failed to close database (may not exist on older plugin versions):", e);
+      console.warn("[Database] Failed to close database:", e);
+      // Try once more with a brief delay
+      try {
+        await new Promise(r => setTimeout(r, 100));
+        await dbInstance.close();
+      } catch (e2) {
+        console.error("[Database] Retry close also failed. Possible resource leak:", e2);
+      }
     }
     dbInstance = null;
     currentWorkspacePath = null;

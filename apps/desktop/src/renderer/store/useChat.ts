@@ -140,88 +140,6 @@ interface ToolCallRecord { name: string; args: string; }
 const _toolCallHistory: Record<string, ToolCallRecord[]> = {};
 const _toolFailureCounts: Record<string, Record<string, number>> = {};
 
-type DoomLoopResult = { message: string; severity: "warn" | "halt" };
-
-function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<string, unknown>): DoomLoopResult | null {
-  const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
-  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
-  const currentCount = (failures[sig] ?? 0) + 1;
-  failures[sig] = currentCount;
-  _toolFailureCounts[sessionId] = failures;
-  // Read threshold from user settings (configurable in Settings > General)
-  const threshold = useSettings.getState().settings.doomLoopThreshold ?? DOOM_LOOP_THRESHOLD;
-  const haltThreshold = threshold * 2;
-  if (currentCount >= haltThreshold) {
-    return { message: `Doom loop HALTED: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agentic loop has been stopped.`, severity: "halt" };
-  }
-  if (currentCount >= threshold) {
-    return { message: `Doom loop detected: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agent appears stuck in a death spiral.`, severity: "warn" };
-  }
-  return null;
-}
-
-function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
-  // Touch this session's recency slot BEFORE pruning, so an actively-used
-  // session is never the eviction candidate (previously, Object.keys()
-  // insertion order meant a long-lived active session could be treated as
-  // the "oldest" key and pruned out from under itself while a truly dormant
-  // session that happened to be added later survived).
-  _touchDoomLoopSession(sessionId);
-  _pruneDoomLoopMaps();
-  const history = [...(_toolCallHistory[sessionId] ?? [])];
-  history.push({ name: toolName, args: JSON.stringify(toolArgs, Object.keys(toolArgs).sort()) });
-  _toolCallHistory[sessionId] = history.slice(-50);
-  // Cap _toolFailureCounts to prevent unbounded growth across sessions
-  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
-  const keys = Object.keys(failures);
-  if (keys.length > 100) {
-    // Remove oldest entries (keep most recent 50)
-    const toRemove = keys.slice(0, keys.length - 50);
-    for (const k of toRemove) delete failures[k];
-    _toolFailureCounts[sessionId] = failures;
-  }
-}
-
-// Global cap: if too many sessions accumulate, prune the oldest ones.
-// _sessionRecency tracks true last-touched order via re-insertion (delete +
-// re-add moves a key to the end), independent of _toolCallHistory's own key
-// order, so pruning always evicts genuinely idle sessions instead of ones
-// that are merely old-but-still-active.
-const MAX_SESSIONS_IN_DOOM_MAPS = 20;
-const _sessionRecency = new Map<string, true>();
-function _touchDoomLoopSession(sessionId: string) {
-  _sessionRecency.delete(sessionId);
-  _sessionRecency.set(sessionId, true);
-}
-function _pruneDoomLoopMaps() {
-  if (_sessionRecency.size <= MAX_SESSIONS_IN_DOOM_MAPS) return;
-  const toRemove = _sessionRecency.size - MAX_SESSIONS_IN_DOOM_MAPS;
-  const it = _sessionRecency.keys();
-  for (let i = 0; i < toRemove; i++) {
-    const next = it.next();
-    if (next.done) break;
-    const id = next.value;
-    _sessionRecency.delete(id);
-    delete _toolCallHistory[id];
-    delete _toolFailureCounts[id];
-  }
-}
-
-function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
-  const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
-  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
-  delete failures[sig];
-  _toolFailureCounts[sessionId] = failures;
-}
-
-function _clearDoomLoopState(sessionId: string) {
-  delete _toolCallHistory[sessionId];
-  delete _toolFailureCounts[sessionId];
-  _sessionRecency.delete(sessionId);
-  delete _contextOverflowRetries[sessionId];
-  delete _contextBudgetFactor[sessionId];
-}
-
 // ============================================================================
 // Context Overflow Detection (matches OpenCode's comprehensive patterns)
 // ============================================================================
@@ -264,6 +182,82 @@ const CONTEXT_OVERFLOW_PATTERNS = [
 
 function _isContextOverflowError(errorMsg: string): boolean {
   return CONTEXT_OVERFLOW_PATTERNS.some((p) => p.test(errorMsg));
+}
+
+// ============================================================================
+// Doom Loop Detection (must be declared AFTER _contextOverflowRetries/_contextBudgetFactor)
+// ============================================================================
+
+type DoomLoopResult = { message: string; severity: "warn" | "halt" };
+
+const MAX_SESSIONS_IN_DOOM_MAPS = 20;
+const _sessionRecency = new Map<string, true>();
+function _touchDoomLoopSession(sessionId: string) {
+  _sessionRecency.delete(sessionId);
+  _sessionRecency.set(sessionId, true);
+}
+function _pruneDoomLoopMaps() {
+  if (_sessionRecency.size <= MAX_SESSIONS_IN_DOOM_MAPS) return;
+  const toRemove = _sessionRecency.size - MAX_SESSIONS_IN_DOOM_MAPS;
+  const it = _sessionRecency.keys();
+  for (let i = 0; i < toRemove; i++) {
+    const next = it.next();
+    if (next.done) break;
+    const id = next.value;
+    _sessionRecency.delete(id);
+    delete _toolCallHistory[id];
+    delete _toolFailureCounts[id];
+  }
+}
+
+function _checkDoomLoop(sessionId: string, toolName: string, toolArgs: Record<string, unknown>): DoomLoopResult | null {
+  const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
+  _touchDoomLoopSession(sessionId);
+  _pruneDoomLoopMaps();
+  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
+  const currentCount = (failures[sig] ?? 0) + 1;
+  failures[sig] = currentCount;
+  // Cap to prevent unbounded growth
+  const keys = Object.keys(failures);
+  if (keys.length > 100) {
+    const toRemove = keys.slice(0, keys.length - 50);
+    for (const k of toRemove) delete failures[k];
+  }
+  _toolFailureCounts[sessionId] = failures;
+  // Read threshold from user settings (configurable in Settings > General)
+  const threshold = useSettings.getState().settings.doomLoopThreshold ?? DOOM_LOOP_THRESHOLD;
+  const haltThreshold = threshold * 2;
+  if (currentCount >= haltThreshold) {
+    return { message: `Doom loop HALTED: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agentic loop has been stopped.`, severity: "halt" };
+  }
+  if (currentCount >= threshold) {
+    return { message: `Doom loop detected: tool "${toolName}" has failed ${currentCount} times consecutively with identical arguments. The agent appears stuck in a death spiral.`, severity: "warn" };
+  }
+  return null;
+}
+
+function _recordToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
+  // Touch this session's recency slot BEFORE pruning
+  _touchDoomLoopSession(sessionId);
+  _pruneDoomLoopMaps();
+  const history = [...(_toolCallHistory[sessionId] ?? [])];
+  history.push({ name: toolName, args: JSON.stringify(toolArgs, Object.keys(toolArgs).sort()) });
+  _toolCallHistory[sessionId] = history.slice(-50);
+}
+
+function _clearToolFailure(sessionId: string, toolName: string, toolArgs: Record<string, unknown>) {
+  const sig = `${toolName}:${JSON.stringify(toolArgs, Object.keys(toolArgs).sort())}`;
+  const failures = { ...(_toolFailureCounts[sessionId] ?? {}) };
+  delete failures[sig];
+  _toolFailureCounts[sessionId] = failures;
+}
+
+function _clearDoomLoopState(sessionId: string) {
+  delete _toolCallHistory[sessionId];
+  delete _toolFailureCounts[sessionId];
+  _sessionRecency.delete(sessionId);
+  delete _contextOverflowRetries[sessionId];
+  delete _contextBudgetFactor[sessionId];
 }
 
 const _contextOverflowRetries: Record<string, number> = {};
@@ -706,11 +700,15 @@ export const useChat = create<ChatState>((set, get) => ({
           thinkingContent: "",
           pendingToolCalls: [],
           pendingActivities: [],
+          pendingAttachments: [],
           _pendingChanges: [],
           _safetyTimer: null,
           _pendingVerification: null,
           subAgents: [],
           messageQueue: [],
+          taskPlan: null,
+          taskPlanSummary: null,
+          planApproval: null,
           chatSessions: get().chatSessions.map((s) =>
             s.id === sessionId ? { ...s, status: "aborted" as const, lastActivityAt: Date.now(), lastVisitedAt: Date.now() } : s
           ),
@@ -1837,7 +1835,7 @@ export const useChat = create<ChatState>((set, get) => ({
         } else if (event.command === "completed") {
           set((s) => ({
             taskPlan: s.taskPlan
-              ? s.taskPlan.map((t) => t.status === "running" ? { ...t, status: "completed" as const } : t)
+              ? s.taskPlan.map((t) => (t.status === "running" || t.status === "pending") ? { ...t, status: "completed" as const } : t)
               : s.taskPlan,
             taskPlanSummary: event.result || "Task completed",
           }));

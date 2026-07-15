@@ -65,9 +65,10 @@ describe("jaccardSimilarity", () => {
     expect(jaccardSimilarity("aaa bbb ccc", "xxx yyy zzz")).toBe(0);
   });
 
-  // Empty strings: both empty → empty intersection & union → returns 1.0 by convention
-  it("returns 1.0 for both empty (convention: empty ∩ empty / empty ∪ empty)", () => {
-    expect(jaccardSimilarity("", "")).toBe(1.0);
+  // Empty strings: both empty → empty intersection & union → returns 0
+  // (FIX 1.6: two different stop-word-heavy strings should not be considered identical)
+  it("returns 0 for both empty (stop-word-only input not considered identical)", () => {
+    expect(jaccardSimilarity("", "")).toBe(0);
   });
 
   it("handles partial overlap", () => {
@@ -738,8 +739,9 @@ describe("jaccardSimilarity edge cases", () => {
   });
 
   it("handles strings with only stop words", () => {
-    // After stop word filtering, these become empty → both empty → 1.0
-    expect(jaccardSimilarity("the a an is", "to of in for")).toBe(1.0);
+    // After stop word filtering, these become empty → both empty → 0
+    // (FIX 1.6: stop-word-only strings not considered identical)
+    expect(jaccardSimilarity("the a an is", "to of in for")).toBe(0);
   });
 
   it("handles code-like strings with dots and slashes", () => {
@@ -764,8 +766,9 @@ describe("jaccardSimilarity edge cases", () => {
   });
 
   it("handles strings with only length-2 words (should filter them)", () => {
-    // Words <= 2 chars are filtered out → both become empty → 1.0
-    expect(jaccardSimilarity("ab cd ef", "gh ij kl")).toBe(1.0);
+    // Words <= 2 chars are filtered out → both become empty → 0
+    // (FIX 1.6: empty sets not considered identical)
+    expect(jaccardSimilarity("ab cd ef", "gh ij kl")).toBe(0);
   });
 });
 

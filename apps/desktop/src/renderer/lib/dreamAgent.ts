@@ -132,9 +132,39 @@ export async function runDreamCycle(
     // 2. Validate file references (parallelized)
     const memories = await getAllMemories({ excludeStale: false });
     let validatedCount = 0;
+
+    // FIX 7.5: Invert check: list all existing project files once instead of one IPC call per memory
+    let existingFiles: Set<string> | null = null;
+    try {
+      const { readDir: fsReadDir } = await import("@tauri-apps/plugin-fs");
+      // Collect all source file dirs we need to check
+      const dirsToScan = new Set<string>();
+      for (const mem of memories) {
+        if (mem.sourceFile) {
+          const dir = mem.sourceFile.includes("/") ? mem.sourceFile.split("/").slice(0, -1).join("/") : ".";
+          dirsToScan.add(dir);
+        }
+      }
+      // Scan top-level directories only
+      const scannedFiles = new Set<string>();
+      for (const dir of dirsToScan) {
+        try {
+          const entries = await fsReadDir(dir.startsWith("/") ? dir : joinPath(workspacePath, dir)).catch(() => []);
+          for (const e of entries) {
+            if (e.name) scannedFiles.add(e.name);
+          }
+        } catch {
+          // Directory might not exist
+        }
+      }
+      existingFiles = scannedFiles;
+    } catch {
+      // Fall back to individual checks if inversion fails
+    }
+
     const { exists } = await import("@tauri-apps/plugin-fs");
 
-    // First, collect all stale-eligible IDs without applying marks
+    // Collect all stale-eligible IDs without applying marks
     const staleIds: string[] = [];
     const batchSize = 20;
     for (let i = 0; i < memories.length; i += batchSize) {
@@ -143,6 +173,12 @@ export async function runDreamCycle(
         batch.map(async (mem) => {
           if (!mem.sourceFile) return null;
           try {
+            if (existingFiles) {
+              // FIX 7.5: Use pre-scanned file list (single IPC call per directory)
+              const fileName = mem.sourceFile.split("/").pop() ?? mem.sourceFile;
+              return existingFiles.has(fileName) ? null : mem.id;
+            }
+            // Fall back to individual exists check
             const fullPath = mem.sourceFile.startsWith("/")
               ? mem.sourceFile
               : joinPath(workspacePath, mem.sourceFile);
@@ -177,18 +213,26 @@ export async function runDreamCycle(
         for (const id of staleIds) {
           await markStale(id);
         }
+        // FIX 7.2: Only update validatedCount AFTER actually marking stale
         validateProposal.status = "applied";
         validateProposal.appliedAt = Date.now();
+        validatedCount = staleIds.length;
+      } else {
+        // FIX 7.2: Don't report validatedCount if we didn't mark them
+        validatedCount = 0;
       }
       allProposals.push(validateProposal);
     }
 
     // 2.5. Re-score memories based on access patterns
     // Promote frequently accessed low-tier memories and demote rarely accessed high-tier ones
+    // FIX 1.7: Reset access_count to 0 after promotion to prevent re-promotion.
+    // FIX 7.3: Add cooldown period — only re-score if last_updated_at > 7 days ago.
     let reScoredPromoted = 0;
     let reScoredDemoted = 0;
     try {
       const allMemories = await getAllMemories({ excludeStale: true });
+      const COOLDOWN_MS = 7 * 86400000; // 7 days cooldown before re-evaluating
 
       const tierUpgrade: Record<string, string> = {
         low: "medium",
@@ -203,20 +247,25 @@ export async function runDreamCycle(
 
       // Promote frequently accessed low/medium tier memories
       const promoteCandidates = allMemories.filter(
-        (m) => m.tier !== "critical" && m.accessCount >= 5,
+        (m) =>
+          m.tier !== "critical" &&
+          m.accessCount >= 5 &&
+          // FIX 7.3: Skip if recently updated (cooldown)
+          Date.now() - m.updatedAt > COOLDOWN_MS,
       );
       for (const mem of promoteCandidates) {
         const newTier = tierUpgrade[mem.tier];
         if (newTier) {
           try {
-            await getDb().execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
+            const now = Date.now();
+            await getDb().execute(`UPDATE memories SET tier=?, updated_at=?, access_count=0 WHERE id=?`, [
               newTier,
-              Date.now(),
+              now,
               mem.id,
             ]);
             reScoredPromoted++;
           } catch (e) {
-            if (import.meta.env.DEV) console.warn("[DreamAgent] Promote failed:", e);
+            console.warn("[DreamAgent] Promote failed:", e);
           }
         }
       }
@@ -226,20 +275,23 @@ export async function runDreamCycle(
         (m) =>
           m.tier === "high" &&
           m.accessCount <= 1 &&
-          Date.now() - m.createdAt > 30 * 86400000,
+          Date.now() - m.createdAt > 30 * 86400000 &&
+          // FIX 7.3: Skip if recently updated (cooldown)
+          Date.now() - m.updatedAt > COOLDOWN_MS,
       );
       for (const mem of demoteCandidates) {
         const newTier = tierDowngrade[mem.tier];
         if (newTier) {
           try {
-            await getDb().execute(`UPDATE memories SET tier=?, updated_at=? WHERE id=?`, [
+            const now = Date.now();
+            await getDb().execute(`UPDATE memories SET tier=?, updated_at=?, access_count=0 WHERE id=?`, [
               newTier,
-              Date.now(),
+              now,
               mem.id,
             ]);
             reScoredDemoted++;
           } catch (e) {
-            if (import.meta.env.DEV) console.warn("[DreamAgent] Demote failed:", e);
+            console.warn("[DreamAgent] Demote failed:", e);
           }
         }
       }
@@ -273,9 +325,8 @@ export async function runDreamCycle(
     const activeMemories = await getAllMemories({ excludeStale: true });
 
     // 3. Relative date adjustments via LLM
-    // NOTE: Each memory has unique content and creation timestamp, requiring individual LLM calls.
-    // Batching is not feasible here because the prompt includes memory-specific timestamps and
-    // content that must be processed independently to produce accurate absolute date replacements.
+    // FIX 1.3: Use actual memory IDs in the LLM prompt and response instead of array indices.
+    // FIX 7.4: Pre-process common patterns with string replacement before calling LLM.
     let dateAdjustedCount = 0;
     const relativeTimeWords =
       /\b(recently|yesterday|last week|currently|now|tomorrow|ago|earlier today|this morning|a few days ago|last night|the other day)\b/i;
@@ -302,17 +353,45 @@ export async function runDreamCycle(
         dateProposal.status === "user-review"
       ) {
         if (dateProposal.status === "auto-accept") {
-          // Batch date adjustments: send up to 10 memories per LLM call
+          // FIX 7.4: Pre-process common simple patterns with direct replacement to reduce LLM calls
+          const today = new Date();
+          const yesterday = new Date(today);
+          yesterday.setDate(yesterday.getDate() - 1);
+
+          function replaceSimplePatterns(content: string): string {
+            return content
+              .replace(/\byesterday\b/gi, yesterday.toISOString().split('T')[0])
+              .replace(/\btoday\b/gi, today.toISOString().split('T')[0])
+              .replace(/\bnow\b/gi, new Date().toISOString());
+          }
+
+          // First pass: handle simple patterns without LLM
+          const preprocessed = dateCandidates.map(m => ({
+            ...m,
+            content: replaceSimplePatterns(m.content),
+            _needsLLM: relativeTimeWords.test(
+              replaceSimplePatterns(m.content)
+            ),
+          }));
+
+          // Re-check if any still need LLM adjustment
+          const needsLLM = preprocessed.filter((m: { _needsLLM: boolean }) => m._needsLLM);
+          if (needsLLM.length === 0) {
+            dateAdjustedCount = preprocessed.length;
+          }
+
+          // Batch date adjustments via LLM for remaining (FIX 1.3: use memory ID instead of index)
           const BATCH_SIZE = 10;
-          const toProcess = dateCandidates.slice(0, MAX_LLM_DATE_ADJUSTMENTS);
+          const toProcess = needsLLM.length > 0 ? needsLLM.slice(0, MAX_LLM_DATE_ADJUSTMENTS) : [];
 
           for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
             const batch = toProcess.slice(i, i + BATCH_SIZE);
             try {
+              // FIX 1.3: Include actual memory ID in prompt, use ID in response
               const memoryList = batch
                 .map(
-                  (m, idx) =>
-                    `[${idx}] Created: ${new Date(m.createdAt).toISOString()}\nContent: ${m.content}`,
+                  (m) =>
+                    `ID: ${m.id}\nCreated: ${new Date(m.createdAt).toISOString()}\nContent: ${m.content}`,
                 )
                 .join("\n\n");
 
@@ -324,19 +403,22 @@ export async function runDreamCycle(
                 },
                 {
                   role: "user",
-                  content: `Current date: ${new Date().toISOString()}\n\nFor each memory below, replace relative time references (recently, yesterday, last week, currently, now, tomorrow, ago, earlier today, this morning, a few days ago, last night, the other day) with absolute dates.\n\nMemories:\n${memoryList}\n\nReturn a JSON array where each item is: { "id": index, "content": "updated content" }\nKeep the index matching the input order. If no relative time expressions, return the original content.`,
+                  content: `Current date: ${new Date().toISOString()}\n\nFor each memory below, replace relative time references (recently, last week, ago, earlier today, this morning, a few days ago, last night, the other day) with absolute dates.\n\nMemories:\n${memoryList}\n\nReturn a JSON array where each item is: { "id": "<the ID string>", "content": "updated content" }\nKeep the ID matching the input exactly. If no relative time expressions, return the original content.`,
                 },
               ]);
 
+              // FIX 1.3: Parse with string IDs, map by ID
               const parsed =
-                parseLLMJson<Array<{ id: number; content: string }>>(
+                parseLLMJson<Array<{ id: string; content: string }>>(
                   responseText,
                 );
               if (Array.isArray(parsed)) {
+                // Build a map of memory ID → memory for fast lookup
+                const batchMap = new Map(batch.map((m) => [m.id, m]));
                 for (const item of parsed) {
-                  if (item && typeof item === "object" && typeof item.id === "number" && item.id >= 0 && item.id < batch.length) {
-                    const mem = batch[item.id];
-                    if (item.content && item.content !== mem.content) {
+                  if (item && typeof item === "object" && typeof item.id === "string") {
+                    const mem = batchMap.get(item.id);
+                    if (mem && item.content && item.content !== mem.content) {
                       const db = getDb();
                       const now = Date.now();
                       await db.execute(
@@ -534,13 +616,8 @@ export async function runDreamCycle(
     if (dedupProposal !== null) allProposals.push(dedupProposal);
 
     // Purge any newly marked stale memories
-    let purgedCount = 0;
-    if (validatedCount > 0 || deduplicatedCount > 0) {
-      purgedCount = await purgeStale(workspacePath);
-    } else if (staleCountForProposal > 0) {
-      // Also purge pre-existing stale entries
-      purgedCount = await purgeStale(workspacePath);
-    }
+    // FIX 4.5: Always call purgeStale() at end of dream cycle, not conditionally
+    const purgedCount = await purgeStale(workspacePath);
 
     // Run skill consolidation optimization (Refactoring redundant workspace skills)
     try {
@@ -704,10 +781,12 @@ export function triggerDreamCycleIfNeeded(
   };
 }
 
-// Clean up all dream cycle timeouts on page unload to prevent
-// background LLM calls and disk writes during or after shutdown.
+function _onBeforeUnload(): void {
+  cancelAllDreamCycles();
+}
+
 if (typeof window !== "undefined") {
-  window.addEventListener("beforeunload", cancelAllDreamCycles);
+  window.addEventListener("beforeunload", _onBeforeUnload);
 }
 
 /**
@@ -749,31 +828,48 @@ export async function executeWorkspaceDreamOptimization(
       }
     }
 
+    // FIX 7.1: Set hard limit on skill content size and track consolidated entries
+    const MAX_SKILL_CONTENT_SIZE = 50_000; // 50KB hard cap
+    // Track already-consolidated skill names to prevent cascading merges
+    const consolidatedNames = new Set<string>();
+
     // Double pointer lookup loop checking for overlapping signatures
     const removedIndices = new Set<number>();
     for (let i = 0; i < discoveredSkills.length; i++) {
       if (removedIndices.has(i)) continue;
+      if (consolidatedNames.has(discoveredSkills[i]?.name ?? '')) continue;
       for (let j = i + 1; j < discoveredSkills.length; j++) {
         if (removedIndices.has(j)) continue;
+        if (consolidatedNames.has(discoveredSkills[j]?.name ?? '')) continue;
         const skillA = discoveredSkills[i]!;
         const skillB = discoveredSkills[j]!;
 
+        // Skip if content is already over the limit
+        if (skillA.rawContent.length > MAX_SKILL_CONTENT_SIZE || skillB.rawContent.length > MAX_SKILL_CONTENT_SIZE) {
+          console.debug(`[DreamAgent] Skipping consolidation of ${skillA.name}/${skillB.name}: content exceeds size limit`);
+          continue;
+        }
+
         // Use jaccardSimilarity directly (no thin wrapper)
         const similarityScore = jaccardSimilarity(
-          skillA.rawContent,
-          skillB.rawContent,
+          skillA.rawContent.slice(0, MAX_SKILL_CONTENT_SIZE),
+          skillB.rawContent.slice(0, MAX_SKILL_CONTENT_SIZE),
         );
         if (similarityScore <= 0.65) continue;
+
+        // Truncate content to prevent huge prompts
+        const truncatedA = skillA.rawContent.slice(0, 10000);
+        const truncatedB = skillB.rawContent.slice(0, 10000);
 
         const consolidationPrompt = `You are a background compilation refactoring process.
 We found two highly similar, overlapping procedural instructions files inside our local project workspace configuration.
 Your task is to merge these two structural documents into a single comprehensive SKILL.md document.
 
 Skill Entry 1 [${skillA.name}]:
-${skillA.rawContent}
+${truncatedA}
 
 Skill Entry 2 [${skillB.name}]:
-${skillB.rawContent}
+${truncatedB}
 
 Generate an elegant unified version. Output the result in clean markdown with appropriate YAML headers.`;
 
@@ -788,6 +884,14 @@ Generate an elegant unified version. Output the result in clean markdown with ap
         if (!hasFrontmatter || response.length < 50) {
           console.warn(
             `[DreamAgent] LLM consolidation output for ${skillA.name} missing valid frontmatter — skipping write`,
+          );
+          continue;
+        }
+
+        // Guard against output exceeding max size (cascading growth prevention)
+        if (response.length > MAX_SKILL_CONTENT_SIZE) {
+          console.warn(
+            `[DreamAgent] LLM consolidation output for ${skillA.name} too large (${response.length} chars), skipping write`,
           );
           continue;
         }
@@ -844,13 +948,12 @@ Generate an elegant unified version. Output the result in clean markdown with ap
             continue;
           }
 
-          // Update skillA content IN the array so subsequent comparisons use merged version.
-          discoveredSkills[i] = {
-            ...discoveredSkills[i]!,
-            rawContent: response,
-          };
-
-          // Mark skillB for removal so subsequent comparisons skip it
+          // FIX 7.1: Do NOT update skillA's content in the array.
+          // Mark both skills as "already consolidated" to prevent cascading merges.
+          // The original content stays in the array but both names are put into consolidatedNames
+          // so subsequent iterations will skip them.
+          consolidatedNames.add(skillA.name);
+          consolidatedNames.add(skillB.name);
           removedIndices.add(j);
 
           skillConsolidateProposal.status = "applied";

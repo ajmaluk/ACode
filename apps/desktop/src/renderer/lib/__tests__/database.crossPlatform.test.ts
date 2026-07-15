@@ -184,7 +184,8 @@ describe("Cross-platform SQLite database initialization", () => {
 
     it("root path / → valid URI", () => {
       const uri = normalizeDbPath("/");
-      expect(uri).toBe("sqlite://.dalam/project.db");
+      // FIX 1.5: Root path uses triple-slash for correct absolute path resolution
+      expect(uri).toBe("sqlite:///.dalam/project.db");
     });
 
     it("relative path → gets / prefix", () => {
