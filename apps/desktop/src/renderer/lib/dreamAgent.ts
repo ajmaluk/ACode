@@ -150,9 +150,14 @@ export async function runDreamCycle(
       const scannedFiles = new Set<string>();
       for (const dir of dirsToScan) {
         try {
-          const entries = await fsReadDir(dir.startsWith("/") ? dir : joinPath(workspacePath, dir)).catch(() => []);
+          const fullDir = dir.startsWith("/") ? dir : joinPath(workspacePath, dir);
+          const entries = await fsReadDir(fullDir).catch(() => []);
           for (const e of entries) {
-            if (e.name) scannedFiles.add(e.name);
+            if (e.name) {
+              // Store full relative path to avoid false positives from duplicate filenames
+              const relPath = dir === "." ? e.name : dir + "/" + e.name;
+              scannedFiles.add(relPath);
+            }
           }
         } catch {
           // Directory might not exist
@@ -176,8 +181,8 @@ export async function runDreamCycle(
           try {
             if (existingFiles) {
               // FIX 7.5: Use pre-scanned file list (single IPC call per directory)
-              const fileName = mem.sourceFile.split("/").pop() ?? mem.sourceFile;
-              return existingFiles.has(fileName) ? null : mem.id;
+              // Match against full relative path (not just filename) to avoid false positives
+              return existingFiles.has(mem.sourceFile) ? null : mem.id;
             }
             // Fall back to individual exists check
             const fullPath = mem.sourceFile.startsWith("/")

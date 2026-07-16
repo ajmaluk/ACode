@@ -11,7 +11,17 @@ export function isPrivateHost(hostname: string): boolean {
   // L-20: IPv6 ULA — require exactly 2 hex digits after fc/fd
   if (/^\[?f[cd][0-9a-f]{2}:/i.test(hostname)) return true;
   // IPv6-mapped IPv4 (e.g. [::ffff:127.0.0.1] or ::ffff:127.0.0.1)
-  if (/^\[?::ffff:\d+\.\d+\.\d+\.\d+\]?$/i.test(hostname)) return true;
+  // Extract the IPv4 part and check if it's private
+  const ipv4MappedMatch = hostname.match(/^\[?::ffff:(\d+\.\d+\.\d+\.\d+)\]?$/i);
+  if (ipv4MappedMatch) {
+    const ipv4 = ipv4MappedMatch[1];
+    if (/^127\./.test(ipv4)) return true;
+    if (/^10\./.test(ipv4)) return true;
+    if (/^192\.168\./.test(ipv4)) return true;
+    if (/^169\.254\./.test(ipv4)) return true;
+    if (/^0\./.test(ipv4)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(ipv4)) return true;
+  }
   // H-6: IPv6 transition mechanism (64:ff9b::/96, NAT64/DNS64)
   if (/^\[?64:ff9b::/i.test(hostname)) return true;
   // IPv4 private ranges

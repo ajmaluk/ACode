@@ -137,6 +137,15 @@ export function stripXmlToolCallTags(content: string): string {
     // Match: tagName immediately followed by /> (no attributes, e.g. "screenshot/>")
     const orphanSelfCloseRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s*\\/?>`, "gi");
     result = result.replace(orphanSelfCloseRe, "");
+    // Match: partial tagName (missing first letter) followed by attributes and />
+    // e.g. "rowser_navigate url=..." or "creenshot/>"
+    if (tagName.length > 3) {
+      const partialTag = tagName.slice(1); // Remove first letter
+      const orphanPartialRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s+[^<]*?\\/?>\\s*`, "gi");
+      result = result.replace(orphanPartialRe, "");
+      const orphanPartialSelfRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s*\\/?>`, "gi");
+      result = result.replace(orphanPartialSelfRe, "");
+    }
   }
   // Strip orphaned partial tool name suffixes (e.g. "_navigate url=..." from split "browser")
   // and orphaned XML attribute text at line boundaries (e.g. 'url="http://..." />')
@@ -276,6 +285,14 @@ export function stripInlineXml(content: string, sessionId?: string): string {
     result = result.replace(orphanOpenRe, "");
     const orphanSelfCloseRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s*\\/?>`, "gi");
     result = result.replace(orphanSelfCloseRe, "");
+    // Match: partial tagName (missing first letter)
+    if (tagName.length > 3) {
+      const partialTag = tagName.slice(1);
+      const orphanPartialRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s+[^<]*?\\/?>\\s*`, "gi");
+      result = result.replace(orphanPartialRe, "");
+      const orphanPartialSelfRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s*\\/?>`, "gi");
+      result = result.replace(orphanPartialSelfRe, "");
+    }
   }
   const ORPHAN_SUFFIX_RE = /(?:^|\n)\s*(?:_navigate|_execute|_file|_command|_result|_status)\s+[^<]*?\/?>\s*/gi;
   result = result.replace(ORPHAN_SUFFIX_RE, "");

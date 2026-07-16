@@ -1543,6 +1543,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       let identicalToolCount = 0;
       // Guard: prevent compacting twice in a row (avoids infinite compaction loops)
       let didCompactThisTurn = false;
+      // Tool failure tracking: break after 3 consecutive iterations where all tools fail
+      let consecutiveToolErrors = 0;
+      const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 
       // Build messages from LIVE currentHistory (not pre-loop snapshot)
       // Token-budget-aware: uses estimateTokens for accurate counting
@@ -1893,6 +1896,12 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             // Execute tools with approval — parallel for read-only, sequential for write tools
             const toolResults: string[] = [];
             let abortedMidBatch = false;
+            // Track exactly which tool IDs were executed (fix #1: precise abort tracking)
+            const executedToolIds = new Set<string>();
+            let executedToolCount = 0;
+            // Track whether any tool in this iteration succeeded or errored (fix #2: failure counter)
+            let anyToolSucceeded = false;
+            let anyToolErrored = false;
 
             // Group tool calls into parallel batches using dependency analysis
             const executorToolCalls: (ExecutorToolCall & { originalIndex: number })[] = toolCallMetas.map((tc, idx) => ({
@@ -1943,6 +1952,9 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
                     const truncatedResult = truncateToolResult(result, tc.name);
                     toolResults.push(`[Tool result for ${tc.name}]\n${truncatedResult || "(no output)"}`);
+                    executedToolIds.add(tc.id);
+                    executedToolCount++;
+                    anyToolSucceeded = true;
                   } catch (err) {
                     const errMsg = (err as Error)?.message ?? String(err);
                     const { matchErrorPattern } = await import("./errorPatterns");
@@ -1951,13 +1963,20 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
                     await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
                     toolResults.push(`[Tool error for ${tc.name}]\nError: ${errMsg}${suggestion}`);
+                    executedToolIds.add(tc.id);
+                    executedToolCount++;
+                    anyToolErrored = true;
                   }
                 } else if (ac.signal.aborted) {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                   toolResults.push(`[Tool result for ${tc.name}]\nAborted by user.`);
+                  executedToolIds.add(tc.id);
+                  executedToolCount++;
                 } else {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Permission Denied by user." });
                   toolResults.push(`[Tool result for ${tc.name}]\nPermission Denied by user.`);
+                  executedToolIds.add(tc.id);
+                  executedToolCount++;
                 }
               } else {
                 // Multiple read-only tools: execute in parallel
@@ -1990,6 +2009,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                       }
                       await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result, durationMs, timestamp: Date.now() });
                       const truncatedResult = truncateToolResult(result, tc.name);
+                      anyToolSucceeded = true;
                       return `[Tool result for ${tc.name}]\n${truncatedResult || "(no output)"}`;
                     } catch (err) {
                       const errMsg = (err as Error)?.message ?? String(err);
@@ -1998,6 +2018,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                       const suggestion = errorMatch ? `\nSuggestion: ${errorMatch.suggestion}` : "";
                       emit({ type: "tool-result", toolCallId: tc.id, result: `Error: ${errMsg}` });
                       await hookBus.emit("PostToolUse", { sessionId, toolName: tc.name, toolArgs: tc.args, result: `Error: ${errMsg}`, error: errMsg, durationMs: Date.now() - toolStartTime, timestamp: Date.now() });
+                      anyToolErrored = true;
                       return `[Tool error for ${tc.name}]\nError: ${errMsg}${suggestion}`;
                     }
                   })
@@ -2009,7 +2030,10 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     toolResults.push(result.value);
                   } else {
                     toolResults.push(`[Tool error for ${tcName}]\n${result.reason?.message || "Unknown error"}`);
+                    anyToolErrored = true;
                   }
+                  executedToolIds.add(batchMetas[ri]!.id);
+                  executedToolCount++;
                 }
                 if (ac.signal.aborted) {
                   abortedMidBatch = true;
@@ -2021,20 +2045,37 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
 
             // Emit tool-result for any remaining tools skipped by abort
             if (abortedMidBatch) {
-              const executedIds = new Set(toolCallMetas.slice(0, toolResults.length).map(tc => tc.id));
               for (const tc of toolCallMetas) {
-                if (!executedIds.has(tc.id)) {
+                if (!executedToolIds.has(tc.id)) {
                   emit({ type: "tool-result", toolCallId: tc.id, result: "Aborted by user." });
                   toolResults.push(`[Tool result for ${tc.name}]\nAborted by user.`);
                 }
               }
             }
 
-            // Push combined tool results as single user message
+            // Push combined tool results as single user message (must happen before failure check so error messages aren't lost)
             if (toolResults.length > 0) {
               const toolResultContent = toolResults.join("\n\n");
               currentHistory.push({ id: "tr-" + crypto.randomUUID(), role: "user" as const, content: toolResultContent, timestamp: Date.now() });
-              totalToolCalls += parsedTools.length;
+              totalToolCalls += executedToolCount;
+            }
+
+            // Track consecutive tool failures (fix #2: break after 3 iterations with no successes)
+            // Note: this happens AFTER tool results are pushed to history so error messages aren't lost
+            if (toolResults.length > 0) {
+              if (anyToolSucceeded) {
+                consecutiveToolErrors = 0;
+              } else if (anyToolErrored) {
+                consecutiveToolErrors++;
+                if (consecutiveToolErrors >= MAX_CONSECUTIVE_TOOL_ERRORS) {
+                  const breakMsg = `\n\n[Loop breaker: Your tool calls have failed ${consecutiveToolErrors} consecutive times. The operations you're attempting are not working. Please try a completely different approach or verify the files and paths exist.]\n`;
+                  currentHistory.push({ id: "lb-" + crypto.randomUUID(), role: "user" as const, content: breakMsg, timestamp: Date.now() });
+                  emit({ type: "message-end", messageId: lastMessageId || sessionId });
+                  emittedEndInThisIteration = true;
+                  // Skip the rest of this iteration — consecutive failure break
+                  break;
+                }
+              }
             }
 
             // Loop breaker: detect repeated identical successful tool calls
@@ -5036,7 +5077,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
  * Spawns a child conversation loop with a derived system prompt and returns the result.
  * The sub-agent runs with its own iteration budget and shares the same workspace.
  */
-async function executeSubAgentTask(
+export async function executeSubAgentTask(
   args: Record<string, unknown>,
   parentSessionId: string,
   workspacePath: string,
@@ -5094,6 +5135,7 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
   let subResult = "";
   let subFailed = false;
   let consecutiveErrors = 0;
+  let consecutiveToolErrors = 0;
   let subError: string | undefined;
   const subToolCalls: ToolCall[] = [];
 
@@ -5108,8 +5150,6 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
   const { modelId, config } = providerConfig;
 
   for (let subLoop = 0; subLoop < MAX_SUB_ITERATIONS; subLoop++) {
-    // Check abort AFTER listener is registered to avoid race (listener is set up below)
-    if (signal.aborted) break;
     if (Date.now() - subStartTime > SUB_TIMEOUT_MS) break;
 
     const apiMessages: ApiMessage[] = subHistory.map((m) => ({
@@ -5124,16 +5164,10 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
       // Manual signal composition for broader browser compat (AbortSignal.any needs Chrome 120+)
       const onParentAbort = () => iterController.abort();
       signal.addEventListener("abort", onParentAbort, { once: true });
+      // Register listener BEFORE checking abort (fixes race: abort between check and addEventListener)
+      if (signal.aborted) break;
 
-      let stream: AsyncIterable<StreamEvent>;
-      try {
-        stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, apiMessages, iterController.signal, 4096);
-      } catch (streamErr) {
-        clearTimeout(iterTimer);
-        signal.removeEventListener("abort", onParentAbort);
-        if ((streamErr as Error)?.name === "AbortError") break;
-        throw streamErr;
-      }
+      const stream = streamChat(config.baseUrl, config.apiKey, config.apiFormat || "openai", modelId, apiMessages, iterController.signal, 4096);
 
       let fullContent = "";
       let iterTimedOut = false;
@@ -5149,7 +5183,6 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
       }
       if (iterTimedOut && !fullContent) break; // Clean exit, don't add timeout to sub-history
 
-      subResult += fullContent;
       consecutiveErrors = 0; // Reset on successful stream
 
       // Check if sub-agent is calling tools — merge inline and code-block sources
@@ -5166,6 +5199,14 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
           codeBlockKeys.add(key);
         }
       }
+
+      // Strip XML tool call tags from accumulated content for clean parent output (Fix #3)
+      let textOnlyContent = fullContent;
+      for (const pt of [...subToolsInline, ...subToolsCodeBlock]) {
+        if (pt.raw) textOnlyContent = textOnlyContent.replace(pt.raw, "");
+      }
+      subResult += textOnlyContent.trim();
+
       if (subTools.length === 0) {
         // No tools — sub-agent is done
         break;
@@ -5176,6 +5217,7 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
       subHistory.push({ role: "assistant", content: fullContent });
       // Enforce tool restrictions based on sub-agent type
       const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log"]);
+      let iterationToolError = false;
       for (const st of subTools) {
         if (signal.aborted) break;
         // Explore sub-agents are read-only — reject write tools
@@ -5204,11 +5246,23 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
           subHistory.push({ role: "user", content: `[Tool result for ${st.name}]\n${truncatedResult || "(no output)"}` });
         } catch (err) {
           const errMsg = (err as Error)?.message ?? String(err);
+          iterationToolError = true;
           const idx = subToolCalls.findIndex((t) => t.id === subToolId);
           if (idx !== -1) subToolCalls[idx] = { ...subToolCalls[idx], status: "failed", result: `Error: ${errMsg}` };
           emit({ type: "sub-agent-update", subAgentId, toolCalls: [...subToolCalls] });
           subHistory.push({ role: "user", content: `[Tool error for ${st.name}]\n${errMsg}` });
         }
+      }
+      // Track consecutive tool failures (Fix #1): if any tool failed this iteration
+      if (iterationToolError) {
+        consecutiveToolErrors++;
+        if (consecutiveToolErrors >= 3 && !subResult) {
+          subFailed = true;
+          subError = `Sub-agent tools failed ${consecutiveToolErrors} consecutive iterations`;
+          break;
+        }
+      } else {
+        consecutiveToolErrors = 0; // Reset on successful tool execution iteration
       }
       // Emit content update after each iteration
       emit({ type: "sub-agent-update", subAgentId, content: subResult });

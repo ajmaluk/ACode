@@ -206,15 +206,18 @@ function QuestionInput() {
       const n = parseInt(e.key);
       if (n >= 1 && n <= optionCount) {
         e.preventDefault();
-        resolve({ selectedLabel: request.options[n - 1].label });
+        setSelected(n - 1);
       } else if (e.key === "Escape") {
         e.preventDefault();
         resolve(null);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        handleSubmit();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [request, optionCount, resolve]);
+  }, [request, optionCount, resolve, selected, customText]);
 
   if (!request) return null;
 
@@ -236,6 +239,9 @@ function QuestionInput() {
   };
 
   const inputType = request.type === "number" ? "number" : "text";
+  const isLastOption = selected >= optionCount;
+  // Next/Submit button is active only when: an option is selected, OR "Other" is selected with text entered
+  const canProceed = selected < optionCount || (isLastOption && customText.trim());
 
   // For "confirm" type, show Yes/No buttons prominently
   if (request.type === "confirm" && optionCount === 0) {
@@ -246,13 +252,13 @@ function QuestionInput() {
             <span className="text-[11px] font-medium text-amber-500 bg-amber-500/10 dark:text-amber-400 dark:bg-amber-400/10 px-2 py-0.5 rounded">
               {request.header}
             </span>
-            <span className="text-sm text-dalam-text-primary truncate font-medium">
+            <span className="text-sm text-dalam-text-primary font-medium break-words">
               {request.question}
             </span>
           </div>
           <button
             onClick={() => resolve(null)}
-            className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors"
+            className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors flex-shrink-0"
             title="Dismiss"
             aria-label="Dismiss question"
           >
@@ -279,81 +285,118 @@ function QuestionInput() {
 
   return (
     <div className="flex flex-col animate-fade-in">
-      <div className="flex items-center justify-between px-4 pt-3 pb-1.5">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[11px] font-medium text-amber-500 bg-amber-500/10 dark:text-amber-400 dark:bg-amber-400/10 px-2 py-0.5 rounded">
+      {/* Header with progress indicator */}
+      <div className="flex items-start justify-between px-4 pt-3 pb-1.5 gap-3">
+        <div className="flex items-start gap-2 min-w-0 flex-1">
+          <span className="text-[11px] font-medium text-amber-500 bg-amber-500/10 dark:text-amber-400 dark:bg-amber-400/10 px-2 py-0.5 rounded flex-shrink-0">
             {request.header}
           </span>
-          <span className="text-sm text-dalam-text-primary truncate font-medium">
+          <span className="text-sm text-dalam-text-primary font-medium break-words">
             {request.question}
           </span>
         </div>
-        <button
-          onClick={() => resolve(null)}
-          className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors"
-          title="Dismiss"
-          aria-label="Dismiss question"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className="text-[10px] text-dalam-text-muted font-mono">
+            {selected + 1}/{optionCount || 1}
+          </span>
+          <button
+            onClick={() => resolve(null)}
+            className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors"
+            title="Dismiss"
+            aria-label="Dismiss question"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
+      {/* Options as vertical list */}
       {optionCount > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pb-2" role="list">
-          {request.options.map((opt, idx) => (
-            <button
-              key={opt.label}
-              onClick={() => resolve({ selectedLabel: opt.label })}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                selected === idx
-                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/40"
-                  : "bg-dalam-bg-active text-dalam-text-secondary hover:bg-dalam-bg-hover"
-              }`}
-              onMouseEnter={() => setSelected(idx)}
-              role="listitem"
-            >
-              <span className="opacity-60">{idx + 1}.</span>
-              {opt.label}
-            </button>
-          ))}
+        <ul className="px-4 pb-2 space-y-0.5" role="listbox">
+          {request.options.map((opt, idx) => {
+            const isSelected = selected === idx;
+            return (
+              <li key={opt.label}>
+                <button
+                  onClick={() => setSelected(idx)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all text-left ${
+                    isSelected
+                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/30"
+                      : "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+                  }`}
+                  role="option"
+                  aria-selected={isSelected}
+                >
+                  {isSelected ? (
+                    <ChevronRight className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                  ) : (
+                    <span className="w-3.5 h-3.5 flex-shrink-0 text-dalam-text-muted text-xs font-mono">
+                      {idx + 1}.
+                    </span>
+                  )}
+                  <span className={`break-words ${isSelected ? "font-medium" : ""}`}>{opt.label}</span>
+                </button>
+              </li>
+            );
+          })}
           {request.allowFreeText !== false && (
-            <button
-              onClick={() => { setSelected(optionCount); inputRef.current?.focus(); }}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                selected === optionCount
-                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/40"
-                  : "bg-dalam-bg-active text-dalam-text-secondary hover:bg-dalam-bg-hover"
-              }`}
-              role="listitem"
-            >
-              Other
-            </button>
+            <li>
+              <button
+                onClick={() => { setSelected(optionCount); inputRef.current?.focus(); }}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all text-left ${
+                  isLastOption
+                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 ring-1 ring-amber-500/30"
+                    : "text-dalam-text-secondary hover:bg-dalam-bg-hover"
+                }`}
+                role="option"
+                aria-selected={isLastOption}
+              >
+                {isLastOption ? (
+                  <ChevronRight className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                ) : (
+                  <span className="w-3.5 h-3.5 flex-shrink-0 text-dalam-text-muted text-xs font-mono">
+                    {optionCount + 1}.
+                  </span>
+                )}
+                <span className={isLastOption ? "font-medium" : ""}>Other</span>
+              </button>
+            </li>
           )}
-        </div>
+        </ul>
       )}
 
-      <div className="px-4 pb-2.5">
-        <div className="flex items-center gap-2 bg-dalam-bg-active rounded-lg border border-dalam-border-primary/50 focus-within:border-dalam-accent-primary/50 transition-colors">
+      {/* Custom text input when "Other" is selected */}
+      {isLastOption && request.allowFreeText !== false && (
+        <div className="px-4 pb-2">
           <input
             ref={inputRef}
             type={inputType}
             value={customText}
             onChange={(e) => setCustomText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={optionCount > 0 ? "Or type your answer..." : (request.placeholder || "Type your answer...")}
-            className="flex-1 bg-transparent border-0 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted px-3 py-2 min-w-0"
+            placeholder={request.placeholder || "Type your answer..."}
+            className="w-full bg-dalam-bg-active rounded-lg border border-dalam-border-primary/50 focus:border-dalam-accent-primary/50 outline-none text-sm text-dalam-text-primary placeholder:text-dalam-text-muted px-3 py-2 transition-colors"
             autoFocus
           />
-          <button
-            onClick={handleSubmit}
-            disabled={!customText.trim() && request.required !== false && selected >= optionCount}
-            className="mr-1.5 p-1.5 rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors disabled:opacity-30"
-            title="Submit answer"
-            aria-label="Submit answer"
-          >
-            <ArrowUp className="w-4 h-4" />
-          </button>
         </div>
+      )}
+
+      {/* Navigation buttons */}
+      <div className="flex items-center justify-between px-4 pb-3">
+        <button
+          onClick={() => setSelected(Math.max(0, selected - 1))}
+          disabled={selected === 0}
+          className="px-3 py-1.5 text-xs font-medium text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          ← Prev
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={!canProceed}
+          className="px-4 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25"
+        >
+          {isLastOption && request.allowFreeText !== false ? "Submit" : "Next →"}
+        </button>
       </div>
     </div>
   );

@@ -1111,7 +1111,7 @@ const ToolCallRow = React.memo(function ToolCallRow({
     "Searched": "Searching",
     "Listed": "Listing",
     "Navigated": "Navigating",
-    "Killed": "Killing",
+    "Kill Process": "Killing",
     "Fetched": "Fetching",
     "Opened": "Opening",
   };

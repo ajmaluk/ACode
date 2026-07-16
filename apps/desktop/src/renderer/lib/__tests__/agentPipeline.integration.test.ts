@@ -192,11 +192,11 @@ describe("Agent Runtime State Machine", () => {
     let state = createInitialRuntimeState();
     expect(state.phase).toBe("idle");
 
-    // idle → streaming (direct stream start)
+    // idle → streaming
     state = agentReducer(state, { type: "STREAM_START", messageId: "msg-1" });
     expect(state.phase).toBe("streaming");
 
-    // streaming → tool-call registered
+    // streaming → streaming (tool call registered)
     state = agentReducer(state, {
       type: "TOOL_CALL",
       toolCallId: "tc-1",
@@ -204,57 +204,35 @@ describe("Agent Runtime State Machine", () => {
     });
     expect(state.phase).toBe("streaming");
 
-    // streaming → tool-waiting-approval
-    state = agentReducer(state, {
-      type: "TOOL_APPROVAL_REQUESTED",
-      toolCallId: "tc-1",
-    });
-    expect(state.phase).toBe("tool-waiting-approval");
-
-    // tool-waiting-approval → tool-running
-    state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc-1" });
-    expect(state.phase).toBe("tool-running");
-
-    // tool-running → tool-results
+    // streaming → streaming (tool result received)
     state = agentReducer(state, {
       type: "TOOL_RESULT_RECEIVED",
       toolCallId: "tc-1",
       success: true,
     });
-    expect(state.phase).toBe("tool-results");
-
-    // tool-results → streaming (agent continues)
-    state = agentReducer(state, { type: "STREAM_START", messageId: "msg-2" });
     expect(state.phase).toBe("streaming");
 
-    // streaming → finalizing
-    state = agentReducer(state, { type: "FINALIZING", messageId: "msg-2" });
-    expect(state.phase).toBe("finalizing");
-
-    // finalizing → idle
-    state = agentReducer(state, { type: "COMPLETE", sessionId: "sess-1" });
-    expect(state.phase).toBe("idle");
+    // streaming → idle via message-end
+    state = agentReducer(state, {
+      type: "STREAM_MESSAGE_END",
+      messageId: "msg-1",
+      hasMoreTools: false,
+    });
+    expect(state.phase).toBe("streaming");
+    expect(state.currentMessageId).toBeNull();
   });
 
   it("rejects invalid transitions", async () => {
     const { agentReducer, createInitialRuntimeState } =
       await import("@/lib/agentRuntimeContract");
     const state = createInitialRuntimeState();
-    // Can't go from idle to tool-running directly
+    // Can't go from idle to TOOL_RESULT_RECEIVED directly (needs a stream)
     const nextState = agentReducer(state, {
-      type: "TOOL_RUNNING",
+      type: "TOOL_RESULT_RECEIVED",
       toolCallId: "tc-1",
+      success: true,
     });
     expect(nextState).toBe(state); // same reference = rejected
-  });
-
-  it("handles abort from any phase", async () => {
-    const { agentReducer, createInitialRuntimeState } =
-      await import("@/lib/agentRuntimeContract");
-    let state = createInitialRuntimeState();
-    state = agentReducer(state, { type: "STREAM_START", messageId: "msg-1" });
-    state = agentReducer(state, { type: "ABORT", sessionId: "sess-1" });
-    expect(state.phase).toBe("aborted");
   });
 
   it("supports multi-turn tool loop", async () => {
@@ -270,17 +248,12 @@ describe("Agent Runtime State Machine", () => {
       toolName: "read_file",
     });
     state = agentReducer(state, {
-      type: "TOOL_APPROVAL_REQUESTED",
-      toolCallId: "tc1",
-    });
-    state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc1" });
-    state = agentReducer(state, {
       type: "TOOL_RESULT_RECEIVED",
       toolCallId: "tc1",
       success: true,
     });
 
-    // Round 2: write_file (after reading, agent writes)
+    // Round 2: write_file (STREAM_START while still streaming)
     state = agentReducer(state, { type: "STREAM_START", messageId: "m2" });
     expect(state.phase).toBe("streaming");
     state = agentReducer(state, {
@@ -289,17 +262,12 @@ describe("Agent Runtime State Machine", () => {
       toolName: "write_file",
     });
     state = agentReducer(state, {
-      type: "TOOL_APPROVAL_REQUESTED",
-      toolCallId: "tc2",
-    });
-    state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc2" });
-    state = agentReducer(state, {
       type: "TOOL_RESULT_RECEIVED",
       toolCallId: "tc2",
       success: true,
     });
 
-    // Round 3: bash (after writing, agent tests)
+    // Round 3: bash
     state = agentReducer(state, { type: "STREAM_START", messageId: "m3" });
     state = agentReducer(state, {
       type: "TOOL_CALL",
@@ -307,19 +275,11 @@ describe("Agent Runtime State Machine", () => {
       toolName: "bash",
     });
     state = agentReducer(state, {
-      type: "TOOL_APPROVAL_REQUESTED",
-      toolCallId: "tc3",
-    });
-    state = agentReducer(state, { type: "TOOL_APPROVED", toolCallId: "tc3" });
-    state = agentReducer(state, {
       type: "TOOL_RESULT_RECEIVED",
       toolCallId: "tc3",
       success: true,
     });
-
-    state = agentReducer(state, { type: "FINALIZING", messageId: "m3" });
-    state = agentReducer(state, { type: "COMPLETE", sessionId: "sess-1" });
-    expect(state.phase).toBe("idle");
+    expect(state.phase).toBe("streaming");
   });
 });
 

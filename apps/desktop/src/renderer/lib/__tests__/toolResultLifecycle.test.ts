@@ -69,8 +69,6 @@ function resetStore() {
         string,
         import("../../lib/agentRuntimeContract").ToolCallStatus
       >(),
-      diffToToolCall: new Map<string, string>(),
-      pendingDiffToolCalls: [],
       transitionLog: [],
     },
   });

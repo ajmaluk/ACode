@@ -399,6 +399,9 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
   return true;
 }
 
+// Message queue retry tracking: prevent infinite re-enqueue when streaming never ends
+const _messageQueueRetries = new Map<string, number>();
+
 // Persist terminal state keyed by session ID (proper Map, not single cache)
 const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
 const MAX_TERMINAL_CACHE_SIZE = 20;
@@ -731,6 +734,7 @@ export const useChat = create<ChatState>((set, get) => ({
       // from waitForToolApproval that survive the session lifecycle.
       _pendingResolutions.clear();
       _toolCallResolvers.clear();
+      _messageQueueRetries.clear();
       const currentSession = get().session;
       const isStillOurSession = currentSession && currentSession.id === sessionId;
       if (isStillOurSession) {
@@ -1459,7 +1463,12 @@ export const useChat = create<ChatState>((set, get) => ({
               void get().sendMessage(next.content);
             } else {
               // Re-enqueue at front so it's tried again after streaming finishes
-              useChat.setState(s => ({ messageQueue: [next, ...s.messageQueue] }));
+              // Cap retries at 10 (≈3 seconds) to prevent infinite loop
+              const retryCount = _messageQueueRetries.get(next.id) ?? 0;
+              if (retryCount < 10) {
+                _messageQueueRetries.set(next.id, retryCount + 1);
+                useChat.setState(s => ({ messageQueue: [next, ...s.messageQueue] }));
+              }
             }
           }, 300);
         }
@@ -1713,6 +1722,8 @@ export const useChat = create<ChatState>((set, get) => ({
               } else {
                 // Reset doom loop failure counter for this specific signature on success
                 _clearToolFailure(sessionId, tc.name, tc.args);
+                // Reset doom loop warning count on any successful tool result
+                set({ doomLoopWarningCount: 0 });
               }
             }
           }
@@ -2150,6 +2161,7 @@ export const useChat = create<ChatState>((set, get) => ({
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
     _toolCallResolvers.clear();
+    _messageQueueRetries.clear();
     // Abort all in-flight operations to prevent stale writes
     const controllers = get()._abortControllers;
     for (const [, controller] of controllers) {
@@ -2204,12 +2216,12 @@ export const useChat = create<ChatState>((set, get) => ({
       useTerminal.getState().saveForSession(activeSessionId);
     }
     // Only abort if the current session is actually streaming
-    if (session && isStreaming) void abort(session.id).catch((err) => devWarn("[Store] abort during session switch failed:", err));
-    if (!id) {
-      if (useUI.getState().bottomPanelTab === "terminal") {
-        useUI.getState().setBottomPanelOpen(false);
-      }
-      set({
+    if (session && isStreaming) void abort(session.id).catch((err) => devWarn("[Store] abort during session switch failed:", err));      if (!id) {
+        if (useUI.getState().bottomPanelTab === "terminal") {
+          useUI.getState().setBottomPanelOpen(false);
+        }
+        _messageQueueRetries.clear();
+        set({
         activeSessionId: null,
         session: null,
         messages: [],
@@ -2283,6 +2295,7 @@ export const useChat = create<ChatState>((set, get) => ({
           status: chatSession.status === "completed" ? "idle" : chatSession.status,
         }
       : null;
+    _messageQueueRetries.clear();
     set({
       activeSessionId: id,
       session: restoredSession,
@@ -2611,6 +2624,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   clearQueue() {
+    _messageQueueRetries.clear();
     set({ messageQueue: [] });
   },
 
@@ -3150,6 +3164,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (useUI.getState().bottomPanelTab === "terminal") {
       useUI.getState().setBottomPanelOpen(false);
     }
+    _messageQueueRetries.clear();
     set({
       chatHistory: newHistory,
       chatHistoryIdx: -1,

@@ -195,7 +195,10 @@ export const CreateTaskPlanArgsSchema = z.object({
 });
 
 export const WebFetchArgsSchema = z.object({
-  url: z.string().url("must be a valid URL"),
+  url: z.string().url("must be a valid URL").refine(
+    (url) => /^https?:\/\//i.test(url),
+    "URL must use http or https protocol"
+  ),
   format: z.enum(["markdown", "text", "html"]).optional().default("markdown"),
 });
 

@@ -15,11 +15,6 @@ export default defineConfig({
     globals: true,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["src/test-setup.ts"],
-    poolOptions: {
-      forks: {
-        execArgv: ["--max-old-space-size=4096"],
-      },
-    },
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
