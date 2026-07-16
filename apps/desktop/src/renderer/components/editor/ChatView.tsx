@@ -187,6 +187,15 @@ function QuestionInput() {
   const prevRequestIdRef = useRef<string | undefined>(undefined);
   const optionCount = request?.options?.length ?? 0;
 
+  const handleSubmit = useCallback(() => {
+    if (!request) return;
+    if (selected < optionCount) {
+      resolve({ selectedLabel: request.options[selected].label });
+    } else if (customText.trim() || !request.required) {
+      resolve({ selectedLabel: "Custom", customText: customText.trim() });
+    }
+  }, [selected, optionCount, resolve, request, customText]);
+
   useEffect(() => {
     if (request?.id !== prevRequestIdRef.current) {
       prevRequestIdRef.current = request?.id;
@@ -217,17 +226,9 @@ function QuestionInput() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [request, optionCount, resolve, selected, customText]);
+  }, [request, optionCount, resolve, selected, customText, handleSubmit]);
 
   if (!request) return null;
-
-  const handleSubmit = () => {
-    if (selected < optionCount) {
-      resolve({ selectedLabel: request.options[selected].label });
-    } else if (customText.trim() || !request.required) {
-      resolve({ selectedLabel: "Custom", customText: customText.trim() });
-    }
-  };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
