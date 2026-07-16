@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 
 export default tseslint.config(
-  { ignores: ["dist/", "out/", "src-tauri/"] },
+  { ignores: ["dist/", "out/", "src-tauri/", "eslint.config.js", "postcss.config.js", "tailwind.config.js", "vite.config.ts", "vitest.config.ts", "src/test-setup.ts"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

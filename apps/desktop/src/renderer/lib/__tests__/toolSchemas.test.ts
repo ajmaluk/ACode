@@ -530,4 +530,756 @@ describe("validateToolArgs", () => {
       expect(result.valid).toBe(true);
     });
   });
+
+  // ============================================================================
+  // list_dir
+  // ============================================================================
+
+  describe("list_dir", () => {
+    it("accepts valid path", () => {
+      const result = validateToolArgs("list_dir", { path: "src/components" });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.path).toBe("src/components");
+    });
+
+    it("rejects empty path", () => {
+      const result = validateToolArgs("list_dir", { path: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects path traversal", () => {
+      const result = validateToolArgs("list_dir", { path: "../../etc" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks /etc/ path", () => {
+      const result = validateToolArgs("list_dir", { path: "/etc/nginx" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks tilde path", () => {
+      const result = validateToolArgs("list_dir", { path: "~/Documents" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // grep_file / grep
+  // ============================================================================
+
+  describe("grep_file", () => {
+    it("accepts valid path and pattern", () => {
+      const result = validateToolArgs("grep_file", {
+        path: "src/index.ts",
+        pattern: "import",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty path", () => {
+      const result = validateToolArgs("grep_file", { path: "", pattern: "foo" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects empty pattern", () => {
+      const result = validateToolArgs("grep_file", { path: "file.ts", pattern: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing path", () => {
+      const result = validateToolArgs("grep_file", { pattern: "foo" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts optional regex flag", () => {
+      const result = validateToolArgs("grep_file", {
+        path: "file.ts",
+        pattern: "import.*from",
+        regex: "true",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts optional max_results", () => {
+      const result = validateToolArgs("grep_file", {
+        path: "file.ts",
+        pattern: "test",
+        max_results: "50",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects non-numeric max_results", () => {
+      const result = validateToolArgs("grep_file", {
+        path: "file.ts",
+        pattern: "test",
+        max_results: "abc",
+      });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks path traversal", () => {
+      const result = validateToolArgs("grep_file", {
+        path: "../../etc/passwd",
+        pattern: "root",
+      });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("grep (alias)", () => {
+    it("accepts valid args as alias for grep_file", () => {
+      const result = validateToolArgs("grep", {
+        path: "src/index.ts",
+        pattern: "export",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects missing required fields", () => {
+      const result = validateToolArgs("grep", { pattern: "foo" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // search_files / search
+  // ============================================================================
+
+  describe("search_files", () => {
+    it("accepts valid pattern", () => {
+      const result = validateToolArgs("search_files", { pattern: "useEffect" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty pattern", () => {
+      const result = validateToolArgs("search_files", { pattern: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing pattern", () => {
+      const result = validateToolArgs("search_files", {});
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts optional path, glob, and max_results", () => {
+      const result = validateToolArgs("search_files", {
+        pattern: "useEffect",
+        path: "src/components",
+        glob: "*.tsx",
+        max_results: "20",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects non-numeric max_results", () => {
+      const result = validateToolArgs("search_files", {
+        pattern: "foo",
+        max_results: "not-a-number",
+      });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("search (alias)", () => {
+    it("accepts valid args as alias for search_files", () => {
+      const result = validateToolArgs("search", { pattern: "TODO" });
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // create_file (file operation)
+  // ============================================================================
+
+  describe("create_file", () => {
+    it("accepts valid path and content", () => {
+      const result = validateToolArgs("create_file", {
+        path: "new-file.ts",
+        content: "console.log('hello');",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty path", () => {
+      const result = validateToolArgs("create_file", {
+        path: "",
+        content: "data",
+      });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks path traversal", () => {
+      const result = validateToolArgs("create_file", {
+        path: "../escape.txt",
+        content: "data",
+      });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks /etc/ path", () => {
+      const result = validateToolArgs("create_file", {
+        path: "/etc/hosts",
+        content: "data",
+      });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // reveal_in_finder
+  // ============================================================================
+
+  describe("reveal_in_finder", () => {
+    it("accepts valid path", () => {
+      const result = validateToolArgs("reveal_in_finder", { path: "/home/user/file.ts" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty path", () => {
+      const result = validateToolArgs("reveal_in_finder", { path: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks path traversal", () => {
+      const result = validateToolArgs("reveal_in_finder", { path: "../../etc/shadow" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // webfetch / websearch (web tools)
+  // ============================================================================
+
+  describe("webfetch", () => {
+    it("accepts valid URL", () => {
+      const result = validateToolArgs("webfetch", { url: "https://example.com" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty URL", () => {
+      const result = validateToolArgs("webfetch", { url: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects invalid URL", () => {
+      const result = validateToolArgs("webfetch", { url: "not-a-url" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts format option", () => {
+      const result = validateToolArgs("webfetch", {
+        url: "https://example.com",
+        format: "text",
+      });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.format).toBe("text");
+    });
+
+    it("defaults format to markdown", () => {
+      const result = validateToolArgs("webfetch", { url: "https://example.com" });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.format).toBe("markdown");
+    });
+
+    it("rejects invalid format", () => {
+      const result = validateToolArgs("webfetch", {
+        url: "https://example.com",
+        format: "pdf",
+      });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("websearch", () => {
+    it("accepts valid query", () => {
+      const result = validateToolArgs("websearch", { query: "TypeScript best practices" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty query", () => {
+      const result = validateToolArgs("websearch", { query: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing query", () => {
+      const result = validateToolArgs("websearch", {});
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts optional fields", () => {
+      const result = validateToolArgs("websearch", {
+        query: "React hooks",
+        num_results: "10",
+        livecrawl: "always",
+        type: "web",
+      });
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // browser / preview tools
+  // ============================================================================
+
+  describe("browser_navigate", () => {
+    it("accepts valid URL", () => {
+      const result = validateToolArgs("browser_navigate", { url: "https://localhost:3000" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty URL", () => {
+      const result = validateToolArgs("browser_navigate", { url: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing URL", () => {
+      const result = validateToolArgs("browser_navigate", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("browser_execute", () => {
+    it("accepts valid script", () => {
+      const result = validateToolArgs("browser_execute", { script: "document.title" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty script", () => {
+      const result = validateToolArgs("browser_execute", { script: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing script", () => {
+      const result = validateToolArgs("browser_execute", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("run_preview", () => {
+    it("accepts valid command", () => {
+      const result = validateToolArgs("run_preview", { command: "npm run dev" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty command", () => {
+      const result = validateToolArgs("run_preview", { command: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts optional port", () => {
+      const result = validateToolArgs("run_preview", {
+        command: "npm run dev",
+        port: "5173",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("blocks dangerous commands in run_preview", () => {
+      const result = validateToolArgs("run_preview", { command: "rm -rf /" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("screenshot", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("screenshot", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // Agent tools: question, create_task_plan
+  // ============================================================================
+
+  describe("question", () => {
+    it("accepts valid question", () => {
+      const result = validateToolArgs("question", { question: "What version?" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty question", () => {
+      const result = validateToolArgs("question", { question: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing question", () => {
+      const result = validateToolArgs("question", {});
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts all optional fields", () => {
+      const result = validateToolArgs("question", {
+        question: "Confirm?",
+        options: "Yes,No",
+        type: "confirm",
+        allowFreeText: "false",
+        placeholder: "Enter answer",
+        defaultValue: "Yes",
+        required: "true",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts text type", () => {
+      const result = validateToolArgs("question", {
+        question: "Enter name",
+        type: "text",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts number type", () => {
+      const result = validateToolArgs("question", {
+        question: "Enter age",
+        type: "number",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects invalid type", () => {
+      const result = validateToolArgs("question", {
+        question: "Pick one",
+        type: "invalid",
+      });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("create_task_plan", () => {
+    it("accepts valid tasks", () => {
+      const result = validateToolArgs("create_task_plan", {
+        tasks: "Step 1\nStep 2\nStep 3",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty tasks", () => {
+      const result = validateToolArgs("create_task_plan", { tasks: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing tasks", () => {
+      const result = validateToolArgs("create_task_plan", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // clipboard / notify / system_info
+  // ============================================================================
+
+  describe("clipboard_read", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("clipboard_read", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("clipboard_write", () => {
+    it("accepts valid text", () => {
+      const result = validateToolArgs("clipboard_write", {
+        text: "Copied content",
+      });
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("notify", () => {
+    it("accepts valid title", () => {
+      const result = validateToolArgs("notify", { title: "Operation complete" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty title", () => {
+      const result = validateToolArgs("notify", { title: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts optional body", () => {
+      const result = validateToolArgs("notify", {
+        title: "Done",
+        body: "Operation completed successfully",
+      });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.body).toBe("Operation completed successfully");
+    });
+
+    it("defaults body to empty string", () => {
+      const result = validateToolArgs("notify", { title: "Done" });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.body).toBe("");
+    });
+  });
+
+  describe("system_info", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("system_info", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // Remaining git commands
+  // ============================================================================
+
+  describe("git_log", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("git_log", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("git_branch", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("git_branch", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("git_diff_file", () => {
+    it("accepts valid path", () => {
+      const result = validateToolArgs("git_diff_file", { path: "src/index.ts" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty path", () => {
+      const result = validateToolArgs("git_diff_file", { path: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing path", () => {
+      const result = validateToolArgs("git_diff_file", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("git_create_branch", () => {
+    it("accepts valid branch name", () => {
+      const result = validateToolArgs("git_create_branch", { branch: "feature/new-ui" });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.branch).toBe("feature/new-ui");
+    });
+
+    it("rejects empty branch", () => {
+      const result = validateToolArgs("git_create_branch", { branch: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing branch", () => {
+      const result = validateToolArgs("git_create_branch", {});
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts optional base_branch", () => {
+      const result = validateToolArgs("git_create_branch", {
+        branch: "new-feature",
+        base_branch: "main",
+      });
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.base_branch).toBe("main");
+    });
+  });
+
+  // ============================================================================
+  // Remaining memory commands
+  // ============================================================================
+
+  describe("memory_stats", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("memory_stats", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("memory_maintain", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("memory_maintain", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("memory_extract", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("memory_extract", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("memory_export", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("memory_export", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("memory_import", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("memory_import", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  // ============================================================================
+  // UI toggle / panel tab commands
+  // ============================================================================
+
+  describe("toggle_theme", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("toggle_theme", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("toggle_view_mode", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("toggle_view_mode", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("toggle_right_panel", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("toggle_right_panel", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("toggle_bottom_panel", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("toggle_bottom_panel", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("set_right_panel_tab", () => {
+    it("accepts valid tab", () => {
+      const result = validateToolArgs("set_right_panel_tab", { tab: "diff" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects invalid tab", () => {
+      const result = validateToolArgs("set_right_panel_tab", { tab: "invalid" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing tab", () => {
+      const result = validateToolArgs("set_right_panel_tab", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("set_bottom_panel_tab", () => {
+    it("accepts valid tab", () => {
+      const result = validateToolArgs("set_bottom_panel_tab", { tab: "terminal" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects invalid tab", () => {
+      const result = validateToolArgs("set_bottom_panel_tab", { tab: "invalid" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing tab", () => {
+      const result = validateToolArgs("set_bottom_panel_tab", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // Environment / system info tools
+  // ============================================================================
+
+  describe("get_env", () => {
+    it("accepts valid key", () => {
+      const result = validateToolArgs("get_env", { key: "PATH" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty key", () => {
+      const result = validateToolArgs("get_env", { key: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing key", () => {
+      const result = validateToolArgs("get_env", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("get_screen_info", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("get_screen_info", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("list_processes", () => {
+    it("accepts empty args", () => {
+      const result = validateToolArgs("list_processes", {});
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("kill_process", () => {
+    it("accepts valid pid", () => {
+      const result = validateToolArgs("kill_process", { pid: "1234" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty pid", () => {
+      const result = validateToolArgs("kill_process", { pid: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects missing pid", () => {
+      const result = validateToolArgs("kill_process", {});
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // Command aliases (bash, shell, execute)
+  // ============================================================================
+
+  describe("bash (alias for run_command)", () => {
+    it("accepts valid command", () => {
+      const result = validateToolArgs("bash", { command: "npm test" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects empty command", () => {
+      const result = validateToolArgs("bash", { command: "" });
+      expect(result.valid).toBe(false);
+    });
+
+    it("blocks dangerous commands", () => {
+      const result = validateToolArgs("bash", { command: "rm -rf /" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("shell (alias for run_command)", () => {
+    it("accepts valid command", () => {
+      const result = validateToolArgs("shell", { command: "ls -la" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("blocks dangerous commands", () => {
+      const result = validateToolArgs("shell", { command: "mkfs.ext4 /dev/sda" });
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("execute (alias for run_command)", () => {
+    it("accepts valid command", () => {
+      const result = validateToolArgs("execute", { command: "deploy.sh" });
+      expect(result.valid).toBe(true);
+    });
+
+    it("blocks dangerous commands", () => {
+      const result = validateToolArgs("execute", { command: ":(){ :|:& };:" });
+      expect(result.valid).toBe(false);
+    });
+  });
 });

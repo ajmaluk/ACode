@@ -41,6 +41,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { SessionCostTracker } from "@/components/chat/SessionCostTracker";
 import { MessageQueue } from "@/components/chat/MessageQueue";
+import { MultiFileDiffSummary } from "@/components/chat/MultiFileDiff";
 import { PromptAutocomplete } from "@/components/editor/PromptAutocomplete";
 import { formatTime } from "@/lib/chatUtils";
 import { modKey } from "@/lib/platform";
@@ -1704,6 +1705,7 @@ Add your project's common commands here so Dalam knows how to build:
                 isLast={idx === arr.length - 1}
               />
             ))}
+            <MultiFileDiffSummary />
             {planApproval && planApproval.status === "pending" && (
               <div className="mx-4 my-3 p-4 bg-dalam-accent-subtle border border-dalam-accent-primary/30 rounded-xl animate-fade-in">
                 <div className="flex items-center gap-2 mb-2">

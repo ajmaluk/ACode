@@ -41,6 +41,7 @@ let mockDb: MinimalDb;
 
 vi.mock("../database", () => ({
   getDb: vi.fn(() => mockDb),
+  isDatabaseReady: vi.fn(() => true),
 }));
 
 // ─── Tauri plugin-fs mock — override in beforeEach ───────────────────────

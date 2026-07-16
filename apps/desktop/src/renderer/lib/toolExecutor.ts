@@ -626,47 +626,28 @@ export async function executeToolCalls(
 ): Promise<ToolResult[]> {
   const batches = groupToolCallsForExecution(toolCalls);
   const allResults: ToolResult[] = [];
-  let abortedMidBatch = false;
 
-  // Register abort listener for mid-batch cancellation (complements per-batch polling)
-  const abortHandler = () => {
-    abortedMidBatch = true;
-  };
-  if (abortSignal && !abortSignal.aborted) {
-    abortSignal.addEventListener("abort", abortHandler, { once: true });
-  }
-
-  try {
-    for (const batch of batches) {
-      if (abortSignal?.aborted || abortedMidBatch) {
-        for (const tc of batch) {
-          allResults.push({
-            toolName: tc.name,
-            result: "Aborted by user.",
-            success: false,
-            durationMs: 0,
-          });
-        }
-        continue;
+  for (const batch of batches) {
+    if (abortSignal?.aborted) {
+      for (const tc of batch) {
+        allResults.push({
+          toolName: tc.name,
+          result: "Aborted by user.",
+          success: false,
+          durationMs: 0,
+        });
       }
+      continue;
+    }
 
-      const results = await executeToolBatch(
-        batch,
-        executeFn,
-        emit,
-        abortSignal,
-        sessionId,
-      );
-      allResults.push(...results);
-    }
-  } finally {
-    if (abortSignal && abortHandler) {
-      try {
-        abortSignal.removeEventListener("abort", abortHandler);
-      } catch (e) {
-        if (import.meta.env.DEV) console.warn("[ToolExecutor] Failed to remove batch abort listener:", e);
-      }
-    }
+    const results = await executeToolBatch(
+      batch,
+      executeFn,
+      emit,
+      abortSignal,
+      sessionId,
+    );
+    allResults.push(...results);
   }
 
   return allResults;

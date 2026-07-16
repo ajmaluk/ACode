@@ -866,7 +866,7 @@ async function* streamAnthropic(
           }
         } catch (e) {
           if (e instanceof ProviderError) throw e;
-          console.warn("SSE parse error (Anthropic):", e);
+          if (import.meta.env.DEV) console.warn("SSE parse error (Anthropic):", e);
         }
       }
     }
@@ -891,7 +891,7 @@ async function* streamAnthropic(
           }
         } catch (e) {
           if (e instanceof ProviderError) throw e;
-          console.warn("SSE parse error (Anthropic):", e);
+          if (import.meta.env.DEV) console.warn("SSE parse error (Anthropic):", e);
         }
       }
     }
@@ -1541,6 +1541,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       const MAX_IDENTICAL_TOOL_CALLS = 3;
       let lastToolSignature = "";
       let identicalToolCount = 0;
+      // Guard: prevent compacting twice in a row (avoids infinite compaction loops)
+      let didCompactThisTurn = false;
 
       // Build messages from LIVE currentHistory (not pre-loop snapshot)
       // Token-budget-aware: uses estimateTokens for accurate counting
@@ -1562,8 +1564,15 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           const COMPACT_RESERVE = localCompactionSummary && allMsgs.length > 10 ? estTokens(localCompactionSummary) + 100 : 0;
           const availableForHistory = MAX_TOKENS - systemTokenEst - OUTPUT_RESERVE - COMPACT_RESERVE;
           if (availableForHistory <= 0) {
-            // System prompt alone exceeds budget — send minimal context
-            return [{ role: "system", content: systemPrompt }];
+            // System prompt alone exceeds budget — send minimal context with at least one user message
+            // (most LLM APIs require at least one user message)
+            const lastUserMsg = allMsgs.find((m) => m.role === "user" && typeof m.content === "string" && !m.content.startsWith("[Tool "));
+            const fallbackMsgs: ApiMessage[] = [{ role: "system", content: systemPrompt }];
+            if (lastUserMsg) {
+              const content = typeof lastUserMsg.content === "string" ? lastUserMsg.content : "";
+              fallbackMsgs.push({ role: "user", content: content.slice(0, 2000) });
+            }
+            return fallbackMsgs;
           }
 
           // Always include the last message; work backward from there
@@ -1659,6 +1668,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         while (loopCount < MAX_LOOP_HARD) {
           loopCount++;
           emittedEndInThisIteration = false;
+          didCompactThisTurn = false;
 
           // Check abort signal at the top of each iteration to avoid wasting an LLM call
           if (ac.signal.aborted) {
@@ -1755,7 +1765,14 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           }
 
           if (totalEstTokens + maxTokens > ctxWindow * 0.9) {
+            // Guard: don't compact twice in a row — if we just compacted and still overflow,
+            // skip further compaction to avoid infinite loops
+            if (didCompactThisTurn) {
+              _debugLog(`[sendPrompt] Already compacted this turn, skipping repeat compaction.`);
+              break;
+            }
             _debugLog(`[sendPrompt] Pre-flight: estimated ${totalEstTokens} tokens + ${maxTokens} output > ${ctxWindow} context. Triggering compaction.`);
+            didCompactThisTurn = true;
             try {
               const { useChat: uc2 } = await import("../store/useAppStore");
               await uc2.getState().compactSessionHistory(sessionId);
@@ -2152,7 +2169,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         }
 
         if (err instanceof ProviderError) {
-          if (err.code === "credit") sessionRateLimitErrors.set(sessionId, (sessionRateLimitErrors.get(sessionId) ?? 0) + 1);
+          // Increment backoff for rate limits: "credit" for non-streaming 429, "network" for streaming 429
+          if (err.code === "credit" || err.message?.includes("429")) sessionRateLimitErrors.set(sessionId, (sessionRateLimitErrors.get(sessionId) ?? 0) + 1);
           emit({ type: "error", error: err.message });
           emit({ type: "message-end", messageId: sessionId });
           if (!emittedSessionEnds.has(sessionId)) {
@@ -3368,24 +3386,64 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
 }
 
 // Per-tool execution timeouts (ms)
+// FIX: Align with toolExecutor.ts to prevent timeout drift between the two execution paths.
 const TOOL_TIMEOUTS: Record<string, number> = {
-  read_file: 10_000,
+  read_file: 15_000,
   write_file: 30_000,
   edit_file: 30_000,
-  run_command: 60_000,
-  bash: 60_000,
-  shell: 60_000,
-  execute: 60_000,
+  run_command: 120_000,
+  bash: 120_000,
+  shell: 120_000,
+  execute: 120_000,
+  grep: 30_000,
   grep_file: 30_000,
+  search: 30_000,
   search_files: 60_000,
+  list_dir: 15_000,
   git_status: 15_000,
-  git_commit: 30_000,
   git_log: 15_000,
-  git_branch: 15_000,
-  git_checkout: 15_000,
+  git_branch: 10_000,
   git_diff_file: 15_000,
-  list_dir: 10_000,
+  git_commit: 30_000,
+  git_checkout: 15_000,
+  git_create_branch: 10_000,
+  clipboard_read: 5_000,
+  clipboard_write: 5_000,
+  notify: 5_000,
+  system_info: 5_000,
+  open_url: 5_000,
+  launch_app: 15_000,
+  reveal_in_finder: 10_000,
+  webfetch: 60_000,
+  websearch: 60_000,
+  create_file: 30_000,
+  browser_navigate: 30_000,
+  browser_execute: 30_000,
+  run_preview: 120_000,
+  create_task_plan: 30_000,
+  kill_process: 10_000,
+  memory_save: 10_000,
+  memory_search: 10_000,
+  memory_delete: 5_000,
+  memory_stats: 5_000,
+  memory_maintain: 30_000,
+  memory_extract: 60_000,
+  memory_export: 30_000,
+  memory_import: 30_000,
+  task: 300_000,
+  mcp_tool: 60_000,
   question: 600_000,
+  open_panel: 5_000,
+  set_theme: 5_000,
+  toggle_theme: 5_000,
+  set_view_mode: 5_000,
+  toggle_view_mode: 5_000,
+  toggle_right_panel: 5_000,
+  toggle_bottom_panel: 5_000,
+  set_right_panel_tab: 5_000,
+  set_bottom_panel_tab: 5_000,
+  new_terminal: 10_000,
+  terminal_write: 30_000,
   default: 30_000,
 };
 
@@ -4508,20 +4566,29 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       if (existingSessionId) {
         headers["Mcp-Session-Id"] = existingSessionId;
       }
-      // tools/call
-      const resp = await corsFetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/call",
-          params: {
-            name: toolName,
-            arguments: mcpArgs,
-          },
-          id: 2,
-        }),
-      });
+      // tools/call — wrap with timeout to prevent indefinite hangs
+      const MCP_CALL_TIMEOUT_MS = 30_000;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), MCP_CALL_TIMEOUT_MS);
+      let resp: Response;
+      try {
+        resp = await corsFetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            method: "tools/call",
+            params: {
+              name: toolName,
+              arguments: mcpArgs,
+            },
+            id: 2,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       if (!resp.ok) {
         // Invalidate stale session on client/server errors and retry with fresh init
         if (resp.status >= 400 && resp.status < 500) {

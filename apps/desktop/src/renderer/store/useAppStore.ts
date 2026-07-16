@@ -34,7 +34,7 @@ export { useQuestion } from "./useQuestion";
 export { useDiffView } from "./useDiffView";
 
 // XML tool call utilities
-export { stripXmlToolCallTags, parseXmlToolCalls } from "./xmlParser";
+export { stripXmlToolCallTags, parseXmlToolCalls, stripInlineXml, resetStreamingState } from "./xmlParser";
 
 // Persistence utilities
 export {

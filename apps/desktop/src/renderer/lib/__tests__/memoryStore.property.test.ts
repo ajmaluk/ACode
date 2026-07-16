@@ -41,6 +41,7 @@ vi.mock("../database", () => ({
   getDb: vi.fn(() => {
     throw new Error("Database not used in property tests");
   }),
+  isDatabaseReady: vi.fn(() => true),
 }));
 
 vi.mock("@/lib/pathUtils", () => ({

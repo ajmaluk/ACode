@@ -163,8 +163,6 @@ export function decideProposalAction(
 
 // ─── Proposal creation ───────────────────────────────────────
 
-let _proposalCounter = 0;
-
 export function createProposal(
   type: DreamProposalType,
   description: string,
@@ -177,7 +175,6 @@ export function createProposal(
     totalInCategory?: number;
   },
 ): DreamProposal {
-  _proposalCounter++;
   // FIX 9.4: Use crypto.randomUUID() for globally unique IDs instead of counter-based approach
   const id = `dp-${crypto.randomUUID()}`;
   const score = scoreProposal(type, affectedCount, scoreContext);

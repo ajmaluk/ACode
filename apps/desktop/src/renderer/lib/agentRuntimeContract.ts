@@ -76,6 +76,7 @@ const PHASE_TRANSITIONS: Record<AgentPhase, Record<string, AgentPhase>> = {
     STREAM_START: "streaming", // Multi-turn agent loop: new stream after tool results
     TOOL_CALL: "streaming",
     TOOL_APPROVAL_REQUESTED: "tool-waiting-approval",
+    TOOL_RESULT_RECEIVED: "streaming", // Auto-approved tools (e.g. question) skip approval and return results directly
     STREAM_MESSAGE_END: "streaming", // Reducer may override to streaming-pending-diffs via phase assignment
     FINALIZING: "finalizing",
     ERROR: "idle",

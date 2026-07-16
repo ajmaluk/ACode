@@ -27,6 +27,7 @@ import {
   X,
   Check,
   ChevronDown,
+  ChevronRight,
   Code2,
   Terminal,
   Search,
@@ -1100,6 +1101,23 @@ const ToolCallRow = React.memo(function ToolCallRow({
     return "";
   })();
 
+  // Progressive labels: show "Writing..." during streaming, "Wrote" after completion
+  const PROGRESS_LABELS: Record<string, string> = {
+    "Wrote": "Writing",
+    "Edited": "Editing",
+    "Created": "Creating",
+    "Read": "Reading",
+    "Ran": "Running",
+    "Searched": "Searching",
+    "Listed": "Listing",
+    "Navigated": "Navigating",
+    "Killed": "Killing",
+    "Fetched": "Fetching",
+    "Opened": "Opening",
+  };
+  const isRunning = toolCall.status === "running" || toolCall.status === "pending";
+  const displayLabel = isRunning ? (PROGRESS_LABELS[meta.label] ?? meta.label) : meta.label;
+
   const isEdit =
     toolCall.name === "edit_file" ||
     toolCall.name === "edit" ||
@@ -1130,9 +1148,19 @@ const ToolCallRow = React.memo(function ToolCallRow({
       className={isFailed ? "border-l-2 border-red-500/50" : undefined}
       label={
         <>
-          {meta.label}
+          {displayLabel}
           {target ? (
-            <span className="opacity-70 ml-1.5 font-mono">{target}</span>
+            <button
+              className="opacity-70 ml-1.5 font-mono text-left hover:underline hover:opacity-100 transition-opacity cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (typeof args.path === "string") {
+                  openDiff({ path: args.path, action: "modified", additions: 0, deletions: 0 });
+                }
+              }}
+            >
+              {target}
+            </button>
           ) : null}
         </>
       }
@@ -1754,36 +1782,34 @@ const QuestionItem = React.memo(function QuestionItem({
         />
       </button>
       {expanded && (
-        <div className="border-t border-dalam-border-primary/30 bg-dalam-bg-primary/50 px-3 py-2 space-y-2">
+        <div className="border-t border-dalam-border-primary/30 bg-dalam-bg-primary/50 px-3 py-2">
           {question.options.length > 0 && (
-            <div>
-              <div className="text-[10px] text-dalam-text-muted mb-1 font-medium">Options:</div>
-              <div className="flex flex-wrap gap-1.5">
-                {question.options.map((opt) => {
-                  const isSelected = opt === question.answer;
-                  return (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void navigator.clipboard.writeText(opt); }}
-                      className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
-                        isSelected
-                          ? "bg-dalam-accent-primary/15 border-dalam-accent-primary/40 text-dalam-accent-primary font-medium"
-                          : "bg-dalam-bg-secondary border-dalam-border-primary/30 text-dalam-text-muted hover:border-dalam-border-primary/60"
-                      }`}
-                      title={isSelected ? "Selected answer — click to copy" : "Click to copy"}
-                    >
-                      {isSelected && <Check className="w-3 h-3 flex-shrink-0" />}
-                      {opt}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <ul className="space-y-0.5">
+              {question.options.map((opt) => {
+                const isSelected = opt === question.answer;
+                return (
+                  <li
+                    key={opt}
+                    className={`flex items-center gap-2 text-[11px] px-2 py-1 rounded transition-colors ${
+                      isSelected
+                        ? "bg-dalam-accent-primary/10 text-dalam-accent-primary font-medium"
+                        : "text-dalam-text-muted"
+                    }`}
+                  >
+                    {isSelected ? (
+                      <ChevronRight className="w-3 h-3 flex-shrink-0 text-dalam-accent-primary" />
+                    ) : (
+                      <span className="w-3 h-3 flex-shrink-0" />
+                    )}
+                    <span className={isSelected ? "" : "opacity-60"}>{opt}</span>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-          <div className="text-[11px]">
-            <span className="font-medium text-dalam-text-primary">Answer:</span>{" "}
-            <span className="text-dalam-accent-primary">{question.answer}</span>
+          <div className="mt-2 pt-2 border-t border-dalam-border-primary/20 text-[11px]">
+            <span className="text-dalam-text-muted">Answer: </span>
+            <span className="text-dalam-accent-primary font-medium">{question.answer}</span>
           </div>
         </div>
       )}

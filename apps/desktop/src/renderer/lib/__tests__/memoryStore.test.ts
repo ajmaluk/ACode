@@ -10,6 +10,7 @@ vi.mock("../database", () => ({
     execute: vi.fn(),
     select: vi.fn().mockResolvedValue([]),
   })),
+  isDatabaseReady: vi.fn(() => true),
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({

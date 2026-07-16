@@ -35,6 +35,7 @@ vi.mock("../database", () => ({
     if (!_mockDbInstance) throw new Error("Database not initialized by beforeAll");
     return _mockDbInstance;
   }),
+  isDatabaseReady: vi.fn(() => true),
 }));
 
 // Mock @tauri-apps/plugin-fs so writeMemoryMarkdown doesn't touch real filesystem

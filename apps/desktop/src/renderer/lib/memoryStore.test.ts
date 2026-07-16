@@ -29,6 +29,7 @@ vi.mock("./database", () => ({
     select: vi.fn().mockResolvedValue([]),
     execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
   })),
+  isDatabaseReady: vi.fn(() => true),
 }));
 
 // ─── Imports (resolved after mocks are in place) ─────────────────────────

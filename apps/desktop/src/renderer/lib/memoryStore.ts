@@ -27,7 +27,7 @@ import type {
   MemoryTier,
 } from "./memoryTypes";
 import { CTX } from "./memoryTypes";
-import { getDb } from "./database";
+import { getDb, isDatabaseReady } from "./database";
 import { joinPath } from "@/lib/pathUtils";
 
 // ─── Constants ───────────────────────────────────────────────
@@ -561,6 +561,7 @@ interface DeadLetterPayload {
  * Returns the number of successfully recovered entries.
  */
 export async function recoverDeadLetters(maxRecover: number = 50): Promise<number> {
+  if (!isDatabaseReady()) return 0;
   let recovered = 0;
   try {
     const db = getDb();
@@ -612,6 +613,7 @@ export async function recoverDeadLetters(maxRecover: number = 50): Promise<numbe
  * FIX dead-letter-recovery: Recover dead letters from kv_store before retrying pending writes.
  */
 export async function processPendingWrites(): Promise<void> {
+  if (!isDatabaseReady()) return;
   try {
     // Recover dead letters from kv_store first (best-effort)
     const recoveredCount = await recoverDeadLetters();

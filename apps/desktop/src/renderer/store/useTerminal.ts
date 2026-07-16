@@ -22,6 +22,12 @@ type TerminalState = {
 
 const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
 const MAX_TERMINAL_CACHE_SIZE = 20;
+function _pruneTerminalCache(newSessionId: string) {
+  if (_terminalStateCache.size < MAX_TERMINAL_CACHE_SIZE) return;
+  if (_terminalStateCache.has(newSessionId)) return; // Don't prune just-used session
+  const firstKey = _terminalStateCache.keys().next().value;
+  if (firstKey !== undefined) _terminalStateCache.delete(firstKey);
+}
 
 export const useTerminal = create<TerminalState>((set, get) => ({
   tabs: [] as TerminalTab[],
@@ -84,10 +90,7 @@ export const useTerminal = create<TerminalState>((set, get) => ({
   },
   saveForSession(sessionId) {
     const { tabs, activeTabId } = get();
-    if (_terminalStateCache.size >= MAX_TERMINAL_CACHE_SIZE && !_terminalStateCache.has(sessionId)) {
-      const firstKey = _terminalStateCache.keys().next().value;
-      if (firstKey !== undefined) _terminalStateCache.delete(firstKey);
-    }
+    _pruneTerminalCache(sessionId);
     _terminalStateCache.set(sessionId, { tabs: tabs as TerminalTab[], activeTabId });
   },
   restoreForSession(sessionId) {

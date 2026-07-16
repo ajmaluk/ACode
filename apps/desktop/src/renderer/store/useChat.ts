@@ -14,7 +14,7 @@ import { canonicaliseBashCommand } from "@/lib/agents";
 
 import { computeContextStats, selectMessagesForCompaction, pruneToolOutputs, tier1PruneToolOutputs, buildCompactionPrompt, parseContextWindow, CTX } from "@/lib/contextManager";
 import { agentReducer, createInitialRuntimeState, type AgentRuntimeState } from "@/lib/agentRuntimeContract";
-import { parseXmlToolCalls, stripInlineXml, EDIT_TOOLS, BASH_TOOLS, READ_TOOLS } from "./xmlParser";
+import { parseXmlToolCalls, stripInlineXml, resetStreamingState, EDIT_TOOLS, BASH_TOOLS, READ_TOOLS } from "./xmlParser";
 import { 
   savePersistedSessionSummaries, savePersistedMessages, savePersistedMessagesImmediate,
   savePersistedAgents, savePersistedVersions, savePersistedCompactionSummaries,
@@ -401,6 +401,13 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
 
 // Persist terminal state keyed by session ID (proper Map, not single cache)
 const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
+const MAX_TERMINAL_CACHE_SIZE = 20;
+function _pruneTerminalCache(newSessionId: string) {
+  if (_terminalStateCache.size < MAX_TERMINAL_CACHE_SIZE) return;
+  if (_terminalStateCache.has(newSessionId)) return; // Don't prune just-used session
+  const firstKey = _terminalStateCache.keys().next().value;
+  if (firstKey !== undefined) _terminalStateCache.delete(firstKey);
+}
 
 export type TodoStatus = TodoItem["status"];
 
@@ -846,6 +853,7 @@ export const useChat = create<ChatState>((set, get) => ({
       timestamp: Date.now(),
       ...(pendingAttachments.length > 0 ? { attachments: pendingAttachments } : {}),
     };
+    resetStreamingState(session.id);
     set((s) => ({
       messages: [...s.messages, userMsg],
       isStreaming: true,
@@ -858,11 +866,16 @@ export const useChat = create<ChatState>((set, get) => ({
       restoredVersionId: null,
       preRestoreMessages: null,
       // Mark first pending task as "running" when agent starts working
-      taskPlan: s.taskPlan?.map((t, i) =>
-        t.status === "pending" && i === s.taskPlan!.findIndex(t => t.status === "pending")
-          ? { ...t, status: "running" as const }
-          : t
-      ) ?? s.taskPlan,
+      taskPlan: (() => {
+        const tp = s.taskPlan;
+        if (!tp || tp.length === 0) return s.taskPlan;
+        const firstPendingIdx = tp.findIndex(t => t.status === "pending");
+        return tp.map((t, i) =>
+          t.status === "pending" && i === firstPendingIdx
+            ? { ...t, status: "running" as const }
+            : t
+        );
+      })(),
       chatSessions: s.chatSessions.map((cs) =>
         cs.id === (session?.id ?? "")
           ? {
@@ -1109,7 +1122,8 @@ export const useChat = create<ChatState>((set, get) => ({
         const rawContent = event.content;
         // Strip XML tool call tags inline during streaming so partial
         // XML tags like <read_file path="... don't appear in the UI.
-        const cleanContent = stripInlineXml(rawContent);
+        const sid = get().activeSessionId ?? undefined;
+        const cleanContent = stripInlineXml(rawContent, sid);
         if (!cleanContent && !rawContent) break;
         set((s) => {
           const MAX_STREAM = 200000;
@@ -2333,6 +2347,7 @@ export const useChat = create<ChatState>((set, get) => ({
     delete _lastCompactionAttempt[id];
     delete _compactionTier[id];
     delete _antiThrashTimestamps[id];
+    _pruneTerminalCache(id);
     _terminalStateCache.delete(id);
     // Clean up tool cost records to prevent memory leaks
     try {

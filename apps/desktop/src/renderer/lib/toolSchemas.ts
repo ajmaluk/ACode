@@ -87,6 +87,11 @@ export const GitCheckoutArgsSchema = z.object({
   branch: z.string().min(1, "branch name is required"),
 });
 
+export const GitCreateBranchArgsSchema = z.object({
+  branch: z.string().min(1, "branch name is required"),
+  base_branch: z.string().optional(),
+});
+
 export const GitDiffFileArgsSchema = z.object({
   path: z.string().min(1, "path is required"),
 });
@@ -294,6 +299,7 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   git_log: { schema: GitLogArgsSchema, requiredFields: [] },
   git_branch: { schema: GitBranchArgsSchema, requiredFields: [] },
   git_checkout: { schema: GitCheckoutArgsSchema, requiredFields: ["branch"] },
+  git_create_branch: { schema: GitCreateBranchArgsSchema, requiredFields: ["branch"] },
   git_diff_file: { schema: GitDiffFileArgsSchema, requiredFields: ["path"] },
   clipboard_read: { schema: ClipboardReadArgsSchema, requiredFields: [] },
   clipboard_write: {
@@ -700,6 +706,7 @@ export const TOOL_REGISTRY: ToolRegistryEntry[] = [
   { tag: "git_log", tool: "git_log", category: "read" },
   { tag: "git_branch", tool: "git_branch", category: "read" },
   { tag: "git_checkout", tool: "git_checkout", category: "read" },
+  { tag: "git_create_branch", tool: "git_create_branch", category: "edit" },
   { tag: "git_diff_file", tool: "git_diff_file", category: "read" },
 
   // Clipboard & system

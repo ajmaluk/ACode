@@ -154,17 +154,100 @@ export function stripXmlToolCallTags(content: string): string {
   return result;
 }
 
+// ── Stateful streaming: suppress content inside body-bearing XML tags ────────
+// Tags whose body content must be hidden during streaming (file writes, etc.)
+const BODY_TAG_NAMES = new Set(["write_file", "edit_file", "clipboard_write", "memory_save", "browser_execute"]);
+
+/**
+ * Module-level Map tracking which body tag each session is currently inside.
+ * Keyed by sessionId (or "_default" for backward compatibility).
+ * Value is the body tag name (e.g. "write_file") or null if not inside a body tag.
+ * Using a Map avoids race conditions in multi-stream scenarios.
+ */
+const _bodyTagState = new Map<string, string | null>();
+const MAX_BODY_TAG_SESSIONS = 20;
+
+/** Get or create the body tag state for a session, with LRU pruning */
+function _getBodyTag(sessionId: string): string | null {
+  if (!_bodyTagState.has(sessionId)) {
+    // Prune oldest entry if at capacity before adding a new session
+    if (_bodyTagState.size >= MAX_BODY_TAG_SESSIONS) {
+      const firstKey = _bodyTagState.keys().next().value;
+      if (firstKey !== undefined) _bodyTagState.delete(firstKey);
+    }
+    _bodyTagState.set(sessionId, null);
+  }
+  return _bodyTagState.get(sessionId) ?? null;
+}
+
+/** Set the body tag state for a session */
+function _setBodyTag(sessionId: string, tag: string | null): void {
+  // Prune oldest entries if at capacity (only when adding a new session)
+  if (!_bodyTagState.has(sessionId) && _bodyTagState.size >= MAX_BODY_TAG_SESSIONS) {
+    const firstKey = _bodyTagState.keys().next().value;
+    if (firstKey !== undefined) _bodyTagState.delete(firstKey);
+  }
+  _bodyTagState.set(sessionId, tag);
+}
+
 /**
  * Fast inline XML tag stripper for streaming deltas.
  * Strips known tool call, model output, and MCP XML tags (opening, closing, self-closing, partial).
  * Designed to be called per `message-delta` event — avoids the full regex suite of
  * stripXmlToolCallTags for performance.
+ * Also suppresses content inside body-bearing tags (write_file, edit_file, etc.)
+ * across multiple streaming deltas.
+ *
+ * @param content - The streaming delta content to strip
+ * @param sessionId - Optional session ID for multi-stream isolation. If omitted, uses "_default".
  */
-export function stripInlineXml(content: string): string {
-  if (!content || !content.includes("<")) return content;
+export function stripInlineXml(content: string, sessionId?: string): string {
+  const sid = sessionId ?? "_default";
+  if (!content) return content;
+
+  // Stateful: if we're inside a body-bearing tag, suppress everything until closing tag
+  const currentBodyTag = _getBodyTag(sid);
+  if (currentBodyTag) {
+    const closeTag = `</${currentBodyTag}>`;
+    const closeIdx = content.indexOf(closeTag);
+    if (closeIdx !== -1) {
+      // Found closing tag — suppress everything before it, keep rest
+      _setBodyTag(sid, null);
+      const rest = content.slice(closeIdx + closeTag.length);
+      // Continue processing the rest normally
+      content = rest;
+    } else {
+      // Still inside the body tag — suppress entire delta
+      return "";
+    }
+  }
+
+  if (!content.includes("<")) return content;
   // Fast path: strip known tool call opening tags with attributes (most common leak)
   // e.g. <read_file path="/foo"> or <read_file path="/foo"/>
   let result = content;
+
+  // Check if an opening body-bearing tag appears in this delta
+  for (const bodyTag of BODY_TAG_NAMES) {
+    const openRe = new RegExp(`<${bodyTag}(?:\\s[^>]*)?>`, "gi");
+    const openMatch = openRe.exec(result);
+    if (openMatch) {
+      // Check if the closing tag also exists in this delta
+      const closeTag = `</${bodyTag}>`;
+      const afterOpen = result.slice(openMatch.index + openMatch[0].length);
+      if (afterOpen.includes(closeTag)) {
+        // Both tags in same delta — strip the whole block (handled by XML_STRIP_RE below)
+      } else {
+        // Opening tag without closing — we're now inside the body
+        _setBodyTag(sid, bodyTag);
+        // Strip everything from the opening tag onward (content will be suppressed in next deltas)
+        result = result.slice(0, openMatch.index);
+        // Also strip any content after the opening tag in this delta
+        return result.replace(/\s+$/, "");
+      }
+    }
+  }
+
   result = result.replace(XML_STRIP_RE, "");
   result = result.replace(XML_OPENING_TAG_RE, "");
   result = result.replace(XML_CLOSING_TAG_RE, "");
@@ -277,4 +360,21 @@ export function parseXmlToolCalls(content: string): {
   const cleanedContent = stripXmlToolCallTags(content);
 
   return { toolCalls, cleanedContent };
+}
+
+/**
+ * Reset the streaming body-tag state for a specific session.
+ * Call this when starting a new message to ensure leftover state
+ * from a previous stream doesn't carry over.
+ *
+ * @param sessionId - Optional session ID. If omitted, resets ALL sessions
+ *                    (safe catch-all for backward compatibility).
+ */
+export function resetStreamingState(sessionId?: string): void {
+  if (sessionId) {
+    _setBodyTag(sessionId, null);
+  } else {
+    // Full reset: clear all session state
+    _bodyTagState.clear();
+  }
 }
