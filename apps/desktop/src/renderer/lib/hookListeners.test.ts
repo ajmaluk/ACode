@@ -20,6 +20,16 @@ vi.mock("../store/useAppStore", () => ({
   useSettings: { getState: vi.fn(() => ({ settings: {} })) },
 }));
 
+vi.mock("@tauri-apps/plugin-fs", () => ({
+  exists: vi.fn().mockResolvedValue(false),
+  readFile: vi.fn(),
+  writeFile: vi.fn(),
+  readTextFile: vi.fn(),
+  readDir: vi.fn().mockResolvedValue([]),
+  mkdir: vi.fn(),
+  writeTextFile: vi.fn(),
+}));
+
 import { registerHookListeners } from "./hookListeners";
 
 describe("hookListeners", () => {

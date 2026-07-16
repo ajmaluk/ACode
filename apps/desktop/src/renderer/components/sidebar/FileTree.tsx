@@ -78,6 +78,7 @@ export function FileTree() {
   const { fileTree, activeWorkspaceId, workspaces } = useWorkspace();
   const toast = useToast();
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
+  const [expandAll, setExpandAll] = useState(false);
 
   const handleRootContextMenu = (e: React.MouseEvent) => {
     if (!activeWorkspace) return;
@@ -147,22 +148,41 @@ export function FileTree() {
     );
   }
   return (
-    <div
-      className="flex-1 min-h-0 overflow-y-auto py-0.5 text-[13px] scrollbar-thin"
-      onContextMenu={handleRootContextMenu}
-      role="tree"
-      aria-label="File tree"
-    >
-      {fileTree
-        .filter(
-          (n) =>
-            n.name !== "node_modules" &&
-            n.name !== ".git" &&
-            n.name !== ".DS_Store",
-        )
-        .map((node) => (
-          <TreeNode key={node.path} node={node} depth={0} />
-        ))}
+    <div className="flex-1 min-h-0 flex flex-col">
+      {/* Expand/Collapse all buttons */}
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-dalam-border-primary/30">
+        <button
+          onClick={() => setExpandAll(true)}
+          className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
+          title="Expand all"
+        >
+          <ChevronDown className="w-3 h-3" />
+        </button>
+        <button
+          onClick={() => setExpandAll(false)}
+          className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
+          title="Collapse all"
+        >
+          <ChevronRight className="w-3 h-3" />
+        </button>
+      </div>
+      <div
+        className="flex-1 min-h-0 overflow-y-auto py-0.5 text-[13px] scrollbar-thin"
+        onContextMenu={handleRootContextMenu}
+        role="tree"
+        aria-label="File tree"
+      >
+        {fileTree
+          .filter(
+            (n) =>
+              n.name !== "node_modules" &&
+              n.name !== ".git" &&
+              n.name !== ".DS_Store",
+          )
+          .map((node) => (
+            <TreeNode key={node.path} node={node} depth={0} expandAll={expandAll} />
+          ))}
+      </div>
     </div>
   );
 }
@@ -170,9 +190,11 @@ export function FileTree() {
 const TreeNode = React.memo(function TreeNode({
   node,
   depth,
+  expandAll,
 }: {
   node: FileNodeT;
   depth: number;
+  expandAll?: boolean;
 }) {
   const [open, setOpen] = useState(depth < 2);
   const {
@@ -189,6 +211,13 @@ const TreeNode = React.memo(function TreeNode({
   const isDir = node.type === "directory";
   const isActive = !isDir && activeFilePath === node.path;
   const indent = 4 + depth * 12;
+
+  // Handle expandAll/collapseAll prop changes
+  useEffect(() => {
+    if (isDir && expandAll !== undefined) {
+      setOpen(expandAll);
+    }
+  }, [expandAll, isDir]);
 
   // Reset open state when node path changes (e.g., workspace switch)
   const prevPathRef = useRef(node.path);
@@ -452,7 +481,7 @@ const TreeNode = React.memo(function TreeNode({
                 c.name !== ".git" &&
                 c.name !== ".DS_Store",
             )
-            .map((c) => <TreeNode key={c.path} node={c} depth={depth + 1} />)}
+            .map((c) => <TreeNode key={c.path} node={c} depth={depth + 1} expandAll={expandAll} />)}
       </div>
     );
   }
