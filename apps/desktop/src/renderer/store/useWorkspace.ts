@@ -225,7 +225,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     savePersistedWorkspaces(get().workspaces, id);
     if (ws) {
       void loadWorkspaceConfigAndSessions(ws.path);
-      void get().loadFileTree(ws.path);
+      void get().loadFileTree(ws.path).catch((err) => {
+        if (import.meta.env.DEV) console.error("Failed to load file tree:", err);
+      });
     }
   },
   removeWorkspace(id) {
@@ -333,13 +335,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   async refreshFileTree() {
-    const { activeWorkspaceId, workspaces } = get();
-    if (!activeWorkspaceId) return;
-    const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+    const activeWorkspaceIdAtStart = get().activeWorkspaceId;
+    if (!activeWorkspaceIdAtStart) return;
+    const ws = get().workspaces.find((w) => w.id === activeWorkspaceIdAtStart);
     if (!ws) return;
     try {
       const api = createDalamAPI();
       const tree = await api.fs.listDir(ws.path);
+      if (get().activeWorkspaceId !== activeWorkspaceIdAtStart) return;
       set({ fileTree: tree });
     } catch (err) {
       if (import.meta.env.DEV) console.error("Failed to refresh file tree:", err);
@@ -347,9 +350,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   async loadFileTree(path) {
+    const workspaceIdAtStart = get().activeWorkspaceId;
     try {
       const api = createDalamAPI();
       const tree = await api.fs.listDir(path);
+      if (get().activeWorkspaceId !== workspaceIdAtStart) return;
       set({ fileTree: tree });
     } catch (err) {
       if (import.meta.env.DEV) console.error("Failed to load file tree:", err);
@@ -460,20 +465,34 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 let _workspaceLoadPromise: Promise<void> | null = null;
 let _workspaceLoadPath: string | null = null;
 
-export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
-  if (_workspaceLoadPromise && _workspaceLoadPath === workspacePath) {
-    return _workspaceLoadPromise;
-  }
-  _workspaceLoadPath = workspacePath;
-  _workspaceLoadPromise = _doLoadWorkspaceConfigAndSessions(workspacePath);
-  try {
-    await _workspaceLoadPromise;
-  } finally {
-    if (_workspaceLoadPath === workspacePath) {
-      _workspaceLoadPromise = null;
-      _workspaceLoadPath = null;
+let _configLoadQueue: Array<{ path: string; resolve: () => void }> = [];
+let _configLoading = false;
+
+async function _processConfigLoadQueue() {
+  if (_configLoading) return;
+  _configLoading = true;
+  while (_configLoadQueue.length > 0) {
+    const { path, resolve } = _configLoadQueue.shift()!;
+    _workspaceLoadPath = path;
+    _workspaceLoadPromise = _doLoadWorkspaceConfigAndSessions(path);
+    try {
+      await _workspaceLoadPromise;
+    } finally {
+      if (_workspaceLoadPath === path) {
+        _workspaceLoadPromise = null;
+        _workspaceLoadPath = null;
+      }
+      resolve();
     }
   }
+  _configLoading = false;
+}
+
+export async function loadWorkspaceConfigAndSessions(workspacePath: string) {
+  return new Promise<void>((resolve) => {
+    _configLoadQueue.push({ path: workspacePath, resolve });
+    _processConfigLoadQueue();
+  });
 }
 
 async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
@@ -774,7 +793,7 @@ async function _doLoadWorkspaceConfigAndSessions(workspacePath: string) {
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     if (msg.includes("forbidden") || msg.includes("scope")) {
-      console.debug("[Workspace] Skipped inaccessible workspace:", workspacePath);
+      if (import.meta.env.DEV) console.debug("[Workspace] Skipped inaccessible workspace:", workspacePath);
     } else {
       devWarn("Failed to load workspace:", workspacePath, err);
     }

@@ -19,8 +19,9 @@ import {
 const KNOWN_TAG_NAMES = ALL_TOOL_NAMES;
 
 // Regex to strip ALL XML tool call tags (opening, closing, and self-closing) from content.
-// Uses a pattern that handles > inside quoted attribute values.
-const XML_ATTR_ANY = `(?:[^>"']*|"[^"]*"|'[^']*')*`;
+// Uses a simple non-backtracking pattern for attribute matching to avoid ReDoS.
+// For tag stripping purposes, matching > inside attribute values is not critical.
+const XML_ATTR_ANY = `[^>]*`;
 const XML_STRIP_RE = new RegExp(
   `<(${KNOWN_TAG_NAMES.join("|")})${XML_ATTR_ANY}>[\\s\\S]*?<\\/\\1>|<(${KNOWN_TAG_NAMES.join("|")})${XML_ATTR_ANY}\\/?>`,
   "gi"
@@ -53,6 +54,48 @@ const XML_STRUCTURED_ORPHAN_CLOSE_RE = /<\/(?:parameter|goal|subgoal|steps|step|
 
 function decodeXmlEntities(s: string): string {
   return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&#x27;/g, "'");
+}
+
+// ── Pre-computed Orphan Tag Cleanup Regexes ──────────────────────
+// Cache combined regexes built from ALL_TOOL_NAMES so we don't regenerate
+// them per-call (which would be 4+ new RegExp per tool name × 60+ tools = 240+ ops/call).
+let _orphanCombinedRe: RegExp | null = null;
+let _orphanPartialCombinedRe: RegExp | null = null;
+
+function _buildOrphanRegexes(): void {
+  if (!_orphanCombinedRe && KNOWN_TAG_NAMES.length > 0) {
+    const escaped = KNOWN_TAG_NAMES.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const alt = escaped.join('|');
+    // Matches full tool name at line start followed by: attributes+/>, attributes (no close), or optional whitespace+/>
+    _orphanCombinedRe = new RegExp(
+      `(?:^|\\n)\\s*(?:${alt})(?:(?:\\s+[^<]*?(?:\\/?>|$))|(?:\\s*\\/?\\s*))`,
+      'gi'
+    );
+    const partials: string[] = [];
+    for (const name of KNOWN_TAG_NAMES) {
+      if (name.length > 3) {
+        partials.push(name.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      }
+    }
+    if (partials.length > 0) {
+      _orphanPartialCombinedRe = new RegExp(
+        `(?:^|\\n)\\s*(?:${partials.join('|')})(?:\\s+[^<]*?(?:\\/?>|$)|\\s*\\/?>)`,
+        'gi'
+      );
+    }
+  }
+}
+
+function _cleanupOrphanToolTags(content: string): string {
+  _buildOrphanRegexes();
+  let result = content;
+  if (_orphanCombinedRe) {
+    result = result.replace(_orphanCombinedRe, '');
+  }
+  if (_orphanPartialCombinedRe) {
+    result = result.replace(_orphanPartialCombinedRe, '');
+  }
+  return result;
 }
 
 /**
@@ -126,27 +169,13 @@ export function stripXmlToolCallTags(content: string): string {
   result = result.replace(/<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*$/gi, "");
   // Clean up orphaned tool call text fragments — when an incomplete tag like <browser_navigate
   // was stripped during streaming, the remaining text (rowser_navigate url="..."/> ) leaks through
-  // because it doesn't start with <. Strip these known orphaned patterns.
-  for (const tagName of KNOWN_TAG_NAMES) {
-    // Match: tagName followed by attributes and />
-    const orphanRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*?\\/?>\\s*`, "gi");
-    result = result.replace(orphanRe, "");
-    // Match: tagName followed by attributes but no closing />
-    const orphanOpenRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*$`, "gi");
-    result = result.replace(orphanOpenRe, "");
-    // Match: tagName immediately followed by /> (no attributes, e.g. "screenshot/>")
-    const orphanSelfCloseRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s*\\/?>`, "gi");
-    result = result.replace(orphanSelfCloseRe, "");
-    // Match: partial tagName (missing first letter) followed by attributes and />
-    // e.g. "rowser_navigate url=..." or "creenshot/>"
-    if (tagName.length > 3) {
-      const partialTag = tagName.slice(1); // Remove first letter
-      const orphanPartialRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s+[^<]*?\\/?>\\s*`, "gi");
-      result = result.replace(orphanPartialRe, "");
-      const orphanPartialSelfRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s*\\/?>`, "gi");
-      result = result.replace(orphanPartialSelfRe, "");
-    }
-  }
+  // because it doesn't start with <. Strip these using pre-computed combined regexes.
+  //
+  // Build combined patterns once to avoid O(tool_names × n) regex operations.
+  // Each call creates the combined regex on first use; subsequent calls reuse the cached version.
+  result = _cleanupOrphanToolTags(result);
+  // Strip orphaned partial tool name suffixes (e.g. "_navigate url=..." from split "browser")
+  // and orphaned XML attribute text at line boundaries (e.g. 'url="http://..." />')
   // Strip orphaned partial tool name suffixes (e.g. "_navigate url=..." from split "browser")
   // and orphaned XML attribute text at line boundaries (e.g. 'url="http://..." />')
   const ORPHAN_SUFFIX_RE = /(?:^|\n)\s*(?:[a-z_]+(?:_navigate|_execute|_file|_command|_result|_status|_plan))\s*=?\s*[^<\n]*$/gim;
@@ -278,22 +307,7 @@ export function stripInlineXml(content: string, sessionId?: string): string {
   // Strip OpenAI internal channel tokens
   result = result.replace(/<\|(?:channel|message|start|end|system_call)\|>/gi, "");
   // Clean up orphaned tool call text fragments (same as stripXmlToolCallTags)
-  for (const tagName of KNOWN_TAG_NAMES) {
-    const orphanRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*?\\/?>\\s*`, "gi");
-    result = result.replace(orphanRe, "");
-    const orphanOpenRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s+[^<]*$`, "gi");
-    result = result.replace(orphanOpenRe, "");
-    const orphanSelfCloseRe = new RegExp(`(?:^|\\n)\\s*${tagName}\\s*\\/?>`, "gi");
-    result = result.replace(orphanSelfCloseRe, "");
-    // Match: partial tagName (missing first letter)
-    if (tagName.length > 3) {
-      const partialTag = tagName.slice(1);
-      const orphanPartialRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s+[^<]*?\\/?>\\s*`, "gi");
-      result = result.replace(orphanPartialRe, "");
-      const orphanPartialSelfRe = new RegExp(`(?:^|\\n)\\s*${partialTag}\\s*\\/?>`, "gi");
-      result = result.replace(orphanPartialSelfRe, "");
-    }
-  }
+  result = _cleanupOrphanToolTags(result);
   const ORPHAN_SUFFIX_RE = /(?:^|\n)\s*(?:_navigate|_execute|_file|_command|_result|_status)\s+[^<]*?\/?>\s*/gi;
   result = result.replace(ORPHAN_SUFFIX_RE, "");
   return result;
@@ -357,7 +371,7 @@ export function parseXmlToolCalls(content: string): {
 
     // Skip tool calls that have no meaningful arguments
     // (e.g., <read_file/> without path, <write_file/> without content)
-    if (!tagContent.trim() && Object.keys(args).length === 0 && !isSelfClosing) continue;
+    if (!tagContent.trim() && Object.keys(args).length === 0) continue;
 
     // If there's tag content, add it as "content" arg
     if (tagContent.trim()) {

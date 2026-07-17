@@ -354,26 +354,28 @@ async function flushBuffer(sessionId: string): Promise<void> {
 
     const jsonLine = JSON.stringify(record) + "\n";
 
-    // Append-only write: track cumulative content per session to avoid
-    // O(n²) read-modify-write pattern. Each flush appends only the new
-    // turns since the last flush, keeping file I/O linear.
+    // Append via writeFile (Tauri doesn't expose native append, so we buffer
+    // content in-memory to avoid re-reading the full file on every flush).
+    // Cap the buffer at 1MB to prevent unbounded memory growth.
+    const MAX_BUFFER_BYTES = 1_000_000;
     let writeSucceeded = false;
     try {
-      // Seed the cache on the first flush by reading existing file content
       if (!buffer._appendedContent) {
         try {
           const existing = await api.fs.readFile(filePath);
-          buffer._appendedContent = existing;
-        } catch (err) {
-          console.warn("[Trajectory] Flush error:", err);
-          // File doesn't exist yet — start fresh
+          buffer._appendedContent = existing.length > MAX_BUFFER_BYTES
+            ? existing.slice(-MAX_BUFFER_BYTES / 2) // keep tail half
+            : existing;
+        } catch {
           buffer._appendedContent = "";
         }
       }
-      const fullContent = buffer._appendedContent + jsonLine;
-      await api.fs.writeFile(filePath, fullContent);
-      // Only update cache AFTER successful write to prevent duplicates on retry
-      buffer._appendedContent = fullContent;
+      let pending = buffer._appendedContent + jsonLine;
+      if (pending.length > MAX_BUFFER_BYTES) {
+        pending = pending.slice(-MAX_BUFFER_BYTES);
+      }
+      await api.fs.writeFile(filePath, pending);
+      buffer._appendedContent = pending;
       writeSucceeded = true;
     } catch (e) {
       if (import.meta.env.DEV)
@@ -518,55 +520,23 @@ export async function getTrajectoryStats(workspacePath: string): Promise<{
 }
 
 // Clean up flush timer on page unload to prevent background writes during shutdown.
+// Also backs up buffered turns to sessionStorage so they can be recovered on next load.
+const TRAJECTORY_BACKUP_KEY = "dalam.trajectory.backup.v1";
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("beforeunload", () => {
     if (flushTimer) {
       clearInterval(flushTimer);
       flushTimer = null;
     }
-    // Synchronous best-effort: persist any remaining buffered turns
+    // Backup buffered turns to sessionStorage for crash recovery
+    const backup: Array<{ sessionId: string; workspacePath: string; turns: TrajectoryTurn[] }> = [];
     for (const [sessionId, buffer] of buffers) {
-      if (
-        buffer.turns.length > 0 &&
-        buffer.workspacePath &&
-        !flushing.has(sessionId)
-      ) {
-        const api = createDalamAPI();
-        const filePath = joinPath(
-          buffer.workspacePath,
-          ".dalam",
-          TRAJECTORY_DIR,
-          `trajectory-${sessionId}.jsonl`,
-        );
-        // Create valid TrajectoryRecord format for JSONL parsing
-        const record = {
-          conversations: buffer.turns,
-          timestamp: new Date().toISOString(),
-          model: "",
-          agent: "",
-          completed: false,
-          session: {
-            id: sessionId,
-            workspacePath: buffer.workspacePath,
-            startedAt: buffer.turns[0]?.ts ?? Date.now(),
-            messageCount: buffer.turns.length,
-          },
-        };
-        const newLines = JSON.stringify(record) + "\n";
-        // Best-effort flush: don't clear buffer until write completes
-        api.fs
-          .readFile(filePath)
-          .then((existing) => {
-            return api.fs.writeFile(filePath, existing + newLines).then(() => {
-              buffer.turns = [];
-            }).catch(() => {});
-          })
-          .catch(() => {
-            api.fs.writeFile(filePath, newLines).then(() => {
-              buffer.turns = [];
-            }).catch(() => {});
-          });
+      if (buffer.turns.length > 0 && buffer.workspacePath) {
+        backup.push({ sessionId, workspacePath: buffer.workspacePath, turns: buffer.turns });
       }
+    }
+    if (backup.length > 0) {
+      try { sessionStorage.setItem(TRAJECTORY_BACKUP_KEY, JSON.stringify(backup)); } catch { /* best-effort */ }
     }
   });
 }

@@ -42,12 +42,10 @@ export function FindBar({
   const debounceTimerRef = useRef<number>(0);
 
   useEffect(() => {
-    if (query) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = window.setTimeout(() => {
-        onSearch(query, { caseSensitive, wholeWord, regex: useRegex });
-      }, 150);
-    }
+    clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = window.setTimeout(() => {
+      onSearch(query, { caseSensitive, wholeWord, regex: useRegex });
+    }, 150);
     return () => clearTimeout(debounceTimerRef.current);
   }, [query, caseSensitive, wholeWord, useRegex, onSearch]);
 
@@ -92,21 +90,21 @@ export function FindBar({
           </div>
 
           {/* Toggle buttons */}
-          <button
+          <button type="button"
             className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${caseSensitive ? "bg-dalam-accent-subtle text-dalam-accent-primary" : "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
             onClick={() => setCaseSensitive((v) => !v)}
             title="Match Case (Alt+C)"
           >
             <CaseSensitive className="w-3 h-3" />
           </button>
-          <button
+          <button type="button"
             className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${wholeWord ? "bg-dalam-accent-subtle text-dalam-accent-primary" : "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
             onClick={() => setWholeWord((v) => !v)}
             title="Match Whole Word (Alt+W)"
           >
             <WholeWord className="w-3 h-3" />
           </button>
-          <button
+          <button type="button"
             className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${useRegex ? "bg-dalam-accent-subtle text-dalam-accent-primary" : "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
             onClick={() => setUseRegex((v) => !v)}
             title="Use Regular Expression (Alt+R)"
@@ -117,7 +115,7 @@ export function FindBar({
           <div className="w-px h-4 bg-dalam-border-primary mx-0.5" />
 
           {/* Replace toggle */}
-          <button
+          <button type="button"
             className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${showReplaceState ? "bg-dalam-accent-subtle text-dalam-accent-primary" : "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
             onClick={() => setShowReplace((v) => !v)}
             title="Toggle Replace (Alt+Tab)"
@@ -125,7 +123,7 @@ export function FindBar({
             <Replace className="w-3 h-3" />
           </button>
 
-          <button
+          <button type="button"
             className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
             onClick={onClose}
             title="Close (Escape)"
@@ -145,14 +143,14 @@ export function FindBar({
               className="w-56 h-6 px-2 text-xs bg-dalam-bg-primary border border-dalam-border-primary rounded text-dalam-text-primary placeholder:text-dalam-text-muted outline-none focus:border-dalam-accent-primary"
               placeholder="Replace"
             />
-            <button
+            <button type="button"
               className="h-6 px-2 text-[10px] text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors"
               onClick={() => onReplace(replacement)}
               title="Replace (Cmd+Shift+1)"
             >
               Replace
             </button>
-            <button
+            <button type="button"
               className="h-6 px-2 text-[10px] text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors"
               onClick={() => onReplaceAll(replacement)}
               title="Replace All (Cmd+Alt+Enter)"

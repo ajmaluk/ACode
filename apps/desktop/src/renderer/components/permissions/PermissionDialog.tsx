@@ -94,7 +94,14 @@ export function PermissionDialog() {
   }, [request, decide]);
 
   useEffect(() => {
-    if (request) containerRef.current?.focus();
+    if (request) {
+      containerRef.current?.focus();
+      // Focus the currently selected option button
+      const buttons = containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+      if (buttons && buttons[selectedRef.current]) {
+        buttons[selectedRef.current].focus();
+      }
+    }
   }, [request]);
 
   if (!request) return null;
@@ -112,8 +119,10 @@ export function PermissionDialog() {
       <div
         ref={containerRef}
         tabIndex={-1}
-        role="dialog"
+        role="alertdialog"
+        aria-modal="true"
         aria-label="Permission request"
+        aria-describedby="permission-dialog-description"
         className="w-[560px] max-w-[92vw] surface shadow-2xl outline-none"
         onKeyDown={(e) => e.stopPropagation()}
       >
@@ -132,14 +141,14 @@ export function PermissionDialog() {
         {/* Body */}
         <div className="px-4 py-4 space-y-3">
           {request.description && (
-            <p className="text-sm text-dalam-text-primary">
+            <p id="permission-dialog-description" className="text-sm text-dalam-text-primary">
               {request.description}
             </p>
           )}
 
           {request.kind === "bash" && (
             <div className="flex items-center gap-2 text-xs text-dalam-text-muted">
-              <Terminal className="w-3.5 h-3.5" />
+              <Terminal className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Awaiting approval</span>
             </div>
           )}
@@ -165,6 +174,9 @@ export function PermissionDialog() {
               return (
                 <button
                   key={opt.key}
+                  type="button"
+                  role="option"
+                  aria-selected={idx === selected}
                   onClick={() => {
                     setSelected(idx);
                     selectedRef.current = idx;
@@ -180,6 +192,7 @@ export function PermissionDialog() {
                   </span>
                   <Icon
                     className={`w-4 h-4 flex-shrink-0 ${opt.key === "deny" ? "text-dalam-git-deleted" : opt.key === "always" ? "text-dalam-git-added" : "text-dalam-accent-primary"}`}
+                    aria-hidden="true"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-dalam-text-primary font-medium">
@@ -198,10 +211,11 @@ export function PermissionDialog() {
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-dalam-border-primary">
           <div className="flex items-center gap-1.5 text-[11px] text-dalam-text-muted">
-            <AlertCircle className="w-3 h-3" />
+            <AlertCircle className="w-3 h-3" aria-hidden="true" />
             Use Tab / arrow keys to choose, then press Enter to confirm
           </div>
           <button
+            type="button"
             onClick={() => decide(selectedRef.current)}
             className="px-3 py-1.5 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
           >

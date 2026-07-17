@@ -57,7 +57,7 @@ export function ContextPressureIndicator({
   return (
     <div className={`flex items-center gap-2 ${className}`}>
       {/* Progress bar */}
-      <div className="relative h-1.5 flex-1 rounded-full bg-dalam-bg-muted overflow-hidden">
+      <div className="relative h-1.5 flex-1 rounded-full bg-dalam-bg-tertiary overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full transition-all duration-300 ease-out"
           style={{
@@ -122,7 +122,7 @@ export function ContextPressureBar({
 
   return (
     <div
-      className={`relative h-1 rounded-full bg-dalam-bg-muted overflow-hidden ${className}`}
+      className={`relative h-1 rounded-full bg-dalam-bg-tertiary overflow-hidden ${className}`}
       title={`Context: ${percentage}% — ${recommendation.action}`}
     >
       <div

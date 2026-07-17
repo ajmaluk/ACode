@@ -106,6 +106,9 @@ export async function saveMemory(
     return existingLock;
   }
 
+  // Lazy-start the periodic pending-write retry timer on first save
+  _startPendingWriteTimer();
+
   const promise = (async (): Promise<{ action: "add" | "update" | "noop"; id: string }> => {
     try {
       // Search for similar existing memories via FTS5
@@ -220,14 +223,19 @@ export async function markStale(id: string): Promise<void> {
  */
 export async function purgeStale(workspacePath?: string): Promise<number> {
   const db = getDb();
-  // DELETE first (avoids TOCTOU: we delete what was stale at this instant)
+
+  // First, query the IDs of stale entries so we can clean up their markdown files
+  const staleRows = await db.select(
+    `SELECT id, category FROM memories WHERE stale=1`
+  ) as MemoryEntryRow[];
+  if (staleRows.length === 0) return 0;
+
+  // DELETEstale (avoids TOCTOU: we delete what was stale at this instant)
   const result = await db.execute(`DELETE FROM memories WHERE stale=1`);
 
-  if (result.rowsAffected === 0) return 0;
-
-  // Best-effort markdown cleanup after delete
+  // Best-effort markdown cleanup for only the stale entries
   try {
-    const { remove, readDir: fsReadDir } = await import("@tauri-apps/plugin-fs");
+    const { remove } = await import("@tauri-apps/plugin-fs");
     let wsPath = workspacePath;
     if (!wsPath) {
       try {
@@ -241,14 +249,13 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
     }
     if (wsPath) {
       const memDir = joinPath(wsPath, ".dalam", "memories");
-      const allFiles = await fsReadDir(memDir).catch(() => []);
-      for (const f of allFiles) {
-        if (f.name && f.name.endsWith(".md")) {
-          try {
-            await remove(joinPath(memDir, f.name)).catch(() => {});
-          } catch {
-            // Best-effort
-          }
+      for (const row of staleRows) {
+        const shortId = row.id.length > 12 ? row.id.slice(-12) : row.id;
+        const filename = `${row.category}-${shortId}.md`;
+        try {
+          await remove(joinPath(memDir, filename));
+        } catch {
+          // Best-effort per-file
         }
       }
     }
@@ -257,7 +264,7 @@ export async function purgeStale(workspacePath?: string): Promise<number> {
     console.warn("[Memory] Failed to clean up stale markdown files (best-effort):", e);
   }
 
-  return result.rowsAffected;
+  return result.rowsAffected ?? staleRows.length;
 }
 
 // ============================================================
@@ -383,7 +390,7 @@ export async function getCriticalMemories(limit = 10): Promise<MemoryEntry[]> {
     ) as MemoryEntryRow[];
     return rows.map(parseRow);
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] const db = getDb();:", e);
+    if (import.meta.env.DEV) console.warn("[Memory] getCriticalMemories failed:", e);
     return [];
   }
 }
@@ -614,6 +621,8 @@ export async function recoverDeadLetters(maxRecover: number = 50): Promise<numbe
  */
 export async function processPendingWrites(): Promise<void> {
   if (!isDatabaseReady()) return;
+  if (_pendingWriteProcessing) return;
+  _pendingWriteProcessing = true;
   try {
     // Recover dead letters from kv_store first (best-effort)
     const recoveredCount = await recoverDeadLetters();
@@ -624,6 +633,7 @@ export async function processPendingWrites(): Promise<void> {
     const now = Date.now();
     const stillPending: PendingWrite[] = [];
     const deadLetters: PendingWrite[] = [];
+    const successfullyProcessed = new Set<string>();
 
     for (const write of _pendingWrites) {
       if (write.retries >= MAX_WRITE_RETRIES) {
@@ -639,6 +649,7 @@ export async function processPendingWrites(): Promise<void> {
 
       try {
         await writeMemoryMarkdown(write.workspacePath, write.entry);
+        successfullyProcessed.add(write.entry.id);
       } catch (e) {
         console.warn("[MemoryStore] Retry failed for markdown write:", e);
         stillPending.push({
@@ -682,9 +693,11 @@ export async function processPendingWrites(): Promise<void> {
     // Atomically swap to avoid race with concurrent push failures
     const oldQueue = _pendingWrites.splice(0, _pendingWrites.length);
     // Merge still-pending with any entries pushed by concurrent failures during processing
+    // Skip entries that were successfully processed in this cycle
     const seenKeys = new Set(stillPending.map(w => w.entry.id));
     for (const w of oldQueue) {
       if (w.retries >= MAX_WRITE_RETRIES) continue;
+      if (successfullyProcessed.has(w.entry.id)) continue;
       if (!seenKeys.has(w.entry.id)) {
         stillPending.push(w);
         seenKeys.add(w.entry.id);
@@ -693,6 +706,8 @@ export async function processPendingWrites(): Promise<void> {
     _pendingWrites.push(...stillPending);
   } catch (e) {
     console.warn("[MemoryStore] processPendingWrites failed:", e);
+  } finally {
+    _pendingWriteProcessing = false;
   }
 }
 
@@ -701,15 +716,16 @@ export async function processPendingWrites(): Promise<void> {
 // when no new write failures are occurring.
 const PENDING_WRITE_INTERVAL_MS = 60_000;
 let _pendingWriteTimerId: ReturnType<typeof setInterval> | null = null;
+/** Mutex guard to prevent concurrent processPendingWrites from interleaving */
+let _pendingWriteProcessing = false;
 
-if (typeof setInterval !== "undefined" && import.meta.env.MODE !== "test") {
+function _startPendingWriteTimer(): void {
+  if (_pendingWriteTimerId !== null) return;
+  if (typeof setInterval === "undefined") return;
+  if (import.meta.env.MODE === "test") return;
   _pendingWriteTimerId = setInterval(() => {
-    void processPendingWrites().catch(() => {});
+    processPendingWrites();
   }, PENDING_WRITE_INTERVAL_MS);
-
-  if (import.meta.env.DEV) {
-    console.log(`[MemoryStore] Periodic pending-write timer started (every ${PENDING_WRITE_INTERVAL_MS / 1000}s)`);
-  }
 }
 
 /**
@@ -770,8 +786,8 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
 
       if (existing.length > 0) {
         await db.execute(
-          `UPDATE memories SET category=?, tier=?, content=?, summary=?, tags=?, updated_at=?, stale=?, source_session=?, source_file=? WHERE id=?`,
-          [parsed.category, parsed.tier, parsed.content, parsed.summary, JSON.stringify(parsed.tags), parsed.updatedAt, parsed.stale ? 1 : 0, parsed.sourceSession ?? null, parsed.sourceFile ?? null, parsed.id]
+          `UPDATE memories SET category=?, tier=?, content=?, summary=?, tags=?, updated_at=?, stale=?, source_session=?, source_file=?, access_count=?, last_accessed=? WHERE id=?`,
+          [parsed.category, parsed.tier, parsed.content, parsed.summary, JSON.stringify(parsed.tags), parsed.updatedAt, parsed.stale ? 1 : 0, parsed.sourceSession ?? null, parsed.sourceFile ?? null, parsed.accessCount ?? 0, parsed.lastAccessedAt ?? 0, parsed.id]
         );
       } else {
         await db.execute(
@@ -1158,7 +1174,7 @@ export async function extractMemoriesWithLLM(
           const result = await saveMemory(entry, workspacePath);
           if (result.action === "add" || result.action === "update") saved++;
         } catch (e) {
-          if (import.meta.env.DEV) console.warn("[Memory] saveMemory(entry, workspacePath);:", e);
+          if (import.meta.env.DEV) console.warn("[Memory] extractMemoriesWithLLM: saveMemory failed:", e);
         }
       }
     }
@@ -1202,7 +1218,7 @@ function parseRow(row: MemoryEntryRow): MemoryEntry {
   try {
     tags = typeof row.tags === "string" ? JSON.parse(row.tags || "[]") : (row.tags ?? []);
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] JSON parse:", e);
+    if (import.meta.env.DEV) console.warn("[Memory] parseRow: failed to parse tags JSON:", e);
     tags = [];
   }
   const VALID_CATEGORIES: readonly string[] = ["user", "feedback", "project", "reference", "task", "decision"];
@@ -1390,7 +1406,7 @@ export async function detectStaleMemories(): Promise<string[]> {
 
     return [...new Set(staleIds)];
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] const db = getDb();:", e);
+    if (import.meta.env.DEV) console.warn("[Memory] detectStaleMemories failed:", e);
     return [];
   }
 }
@@ -1413,7 +1429,7 @@ export async function autoMarkStale(): Promise<number> {
     );
     return staleIds.length;
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] detectStaleMemories();:", e);
+    if (import.meta.env.DEV) console.warn("[Memory] autoMarkStale failed:", e);
     return 0;
   }
 }
@@ -1458,7 +1474,7 @@ export async function enforceMemoryBudget(
 
     return toPrune.length;
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[Memory] operation:", e);
+    if (import.meta.env.DEV) console.warn("[Memory] enforceMemoryBudget failed:", e);
     return 0;
   }
 }

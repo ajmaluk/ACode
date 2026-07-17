@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   useUI,
   useChat,
@@ -370,7 +370,7 @@ function useEditorMenus(): { label: string; items: MenuAction[] }[] {
   ];
 }
 
-export function TitleBar() {
+export const TitleBar = React.memo(function TitleBar() {
   const menus = useEditorMenus();
   const [openIdx, setOpenIdx] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -536,7 +536,7 @@ export function TitleBar() {
         <div className="flex items-center">
           {menus.map((m, i) => (
             <div key={m.label} className="relative">
-              <button
+              <button type="button"
                 className={`px-2.5 h-7 text-[11px] text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors ${
                   openIdx === i
                     ? "bg-dalam-bg-hover text-dalam-text-primary"
@@ -565,7 +565,7 @@ export function TitleBar() {
           }
           side="bottom"
         >
-          <button
+          <button type="button"
             className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
             onClick={toggleSidebar}
           >
@@ -574,7 +574,7 @@ export function TitleBar() {
         </Tooltip>
         <div className="w-px h-4 bg-dalam-border-primary mx-0.5" />
         <Tooltip content={`Back (${mod}[)`} side="bottom">
-          <button
+          <button type="button"
             className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             onClick={() => goBackChat()}
             disabled={!canGoBack}
@@ -583,7 +583,7 @@ export function TitleBar() {
           </button>
         </Tooltip>
         <Tooltip content={`Forward (${mod}])`} side="bottom">
-          <button
+          <button type="button"
             className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             onClick={() => goForwardChat()}
             disabled={!canGoForward}
@@ -604,7 +604,7 @@ export function TitleBar() {
             }
             side="bottom"
           >
-            <button
+            <button type="button"
               onClick={() => {
                 if (inChat) {
                   setFilePickerOpen((v) => !v);
@@ -636,7 +636,7 @@ export function TitleBar() {
                 Open with
               </div>
               {/* Always-available options */}
-              <button
+              <button type="button"
                 onClick={() => openInApp("terminal")}
                 role="menuitem"
                 className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors"
@@ -651,7 +651,7 @@ export function TitleBar() {
                   </div>
                 </div>
               </button>
-              <button
+              <button type="button"
                 onClick={() => openInApp("finder")}
                 role="menuitem"
                 className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-dalam-bg-hover transition-colors"
@@ -676,7 +676,7 @@ export function TitleBar() {
                     Detected editors
                   </div>
                   {detectedIdes.map((ide) => (
-                    <button
+                    <button type="button"
                       key={ide.command}
                       onClick={() => openInApp(ide.command)}
                       role="menuitem"
@@ -715,7 +715,7 @@ export function TitleBar() {
                 className="border-t border-dalam-border-primary"
                 role="separator"
               >
-                <button
+                <button type="button"
                   onClick={() => {
                     setFilePickerOpen(false);
                     void openWorkspace();
@@ -766,7 +766,7 @@ export function TitleBar() {
         <div
           className={`relative flex items-center bg-dalam-bg-tertiary rounded-full border border-dalam-border-primary p-0.5 ${!activeWorkspaceId ? "opacity-40" : ""}`}
         >
-          <button
+          <button type="button"
             className={`flex items-center gap-1 px-2.5 h-6 text-[11px] font-medium rounded-full transition-all duration-200 disabled:cursor-not-allowed relative z-10 ${
               viewMode === "chat"
                 ? "text-white"
@@ -783,7 +783,7 @@ export function TitleBar() {
             <MessageSquare className="w-3 h-3" />
             <span>Agent</span>
           </button>
-          <button
+          <button type="button"
             className={`flex items-center gap-1 px-2.5 h-6 text-[11px] font-medium rounded-full transition-all duration-200 disabled:cursor-not-allowed relative z-10 ${
               viewMode === "editor"
                 ? "text-white"
@@ -813,7 +813,7 @@ export function TitleBar() {
 
         {/* Theme */}
         <Tooltip content={`Theme: ${settings.theme}`} side="bottom">
-          <button
+          <button type="button"
             className="btn-icon"
             onClick={() => {
               const next =
@@ -838,7 +838,7 @@ export function TitleBar() {
         {/* Terminal */}
         {session && session.workspacePath && (
           <Tooltip content="Open terminal" side="bottom">
-            <button
+            <button type="button"
               className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
               onClick={() => {
                 const ui = useUI.getState();
@@ -856,7 +856,7 @@ export function TitleBar() {
 
         {/* Settings */}
         <Tooltip content={`Settings (${mod},)`} side="bottom">
-          <button
+          <button type="button"
             className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
             onClick={() => openSettings()}
           >
@@ -874,7 +874,7 @@ export function TitleBar() {
             }
             side="bottom"
           >
-            <button
+            <button type="button"
               className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${
                 rightPanelOpen
                   ? "text-dalam-text-secondary hover:bg-dalam-bg-hover"
@@ -889,7 +889,7 @@ export function TitleBar() {
       </div>
     </div>
   );
-}
+});
 
 function MenuPanel({
   items,
@@ -916,7 +916,7 @@ function MenuPanel({
         }
         if (action.type === "item") {
           return (
-            <button
+            <button type="button"
               key={idx}
               disabled={action.disabled}
               onClick={() => {

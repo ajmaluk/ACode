@@ -134,7 +134,7 @@ export function SessionCostTracker({
 
       {/* Detailed breakdown (toggle) */}
       {showBreakdown && (
-        <div className="hidden group-hover:block absolute bottom-full left-0 mb-2 p-2 bg-dalam-bg rounded shadow-lg border border-dalam-border text-[10px] whitespace-nowrap z-50">
+        <div className="hidden group-hover:block absolute bottom-full left-0 mb-2 p-2 bg-dalam-bg-primary rounded shadow-lg border border-dalam-border-primary text-[10px] whitespace-nowrap z-50">
           <div>
             Input: {formatTokens(costData.inputTokens)} (
             {formatCost(costData.inputCost)})

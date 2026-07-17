@@ -150,6 +150,7 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
             placeholder="Search files by name"
           />
           <button
+            type="button"
             onClick={onClose}
             className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
           >
@@ -168,6 +169,7 @@ export function QuickOpen({ onClose }: QuickOpenProps) {
             const isSelected = idx === safeIndex;
             return (
               <button
+                type="button"
                 key={path}
                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
                   isSelected

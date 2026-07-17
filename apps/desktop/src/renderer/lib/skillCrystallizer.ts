@@ -243,7 +243,7 @@ ${formattedHistory}`;
                   }
                   const backupFile = joinPath(
                     backupDir,
-                    `backup-${Date.now()}.md`,
+                    `backup-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.md`,
                   );
                   await api.fs.writeFile(backupFile, existingContent);
                 }

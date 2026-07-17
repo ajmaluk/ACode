@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { McpServer, Skill } from "@dalam/shared-types";
+import type { McpServer, SkillInfo } from "@dalam/shared-types";
 import { skillRegistry, BUNDLED_SKILLS } from "@/lib/skills";
 import { mcpHttpSessions } from "@/lib/dalamAPI";
 import { saveWorkspaceData } from "./useWorkspace";
@@ -8,12 +8,14 @@ const devWarn = import.meta.env.DEV
   ? (...args: unknown[]) => console.warn(...args)
   : () => {};
 
+type SkillEntry = SkillInfo & { enabled: boolean };
+
 type SkillsMcpState = {
-  skills: Skill[];
+  skills: SkillEntry[];
   mcpServers: McpServer[];
   toggleSkill: (name: string) => void;
   toggleMcp: (name: string) => void;
-  addSkill: (skill: Omit<Skill, "enabled" | "source">) => void;
+  addSkill: (skill: { name: string; description: string; content: string }) => void;
   removeSkill: (name: string) => void;
   addMcpServer: (server: Omit<McpServer, "enabled" | "status">) => void;
   removeMcpServer: (name: string) => void;
@@ -54,7 +56,22 @@ export function loadMcpServers(): McpServer[] {
   return [];
 }
 
-function loadSkills(): Skill[] {
+function migrateSkillEntry(raw: Record<string, unknown>): SkillEntry | null {
+  const name = String(raw.name ?? "");
+  if (!name) return null;
+  const description = String(raw.description ?? "");
+  const source = (raw.source as SkillEntry["source"]) ?? "user";
+  const enabled = raw.enabled === true;
+  if (raw.content) {
+    return { name, description, content: String(raw.content), location: String(raw.location ?? ""), source, enabled };
+  }
+  if (raw.prompt) {
+    return { name, description, content: String(raw.prompt), location: "", source, enabled };
+  }
+  return { name, description, content: "", location: "", source, enabled };
+}
+
+function loadSkills(): SkillEntry[] {
   const registrySkills = skillRegistry.list();
   const defaultBundledStates = BUNDLED_SKILLS.reduce((acc, bs) => {
     acc[bs.name] = true;
@@ -71,24 +88,19 @@ function loadSkills(): Skill[] {
     if (import.meta.env.DEV) devWarn("[Store] const raw = localStorage.getItem(BUNDLED_SKILLS_ST:", e);
   }
 
-  const mappedRegistrySkills: Skill[] = registrySkills.map((rs) => {
-    const isBundled = rs.source === "bundled";
-    const isProject = rs.source === "project";
-    return {
-      name: rs.name,
-      description: rs.description,
-      prompt: rs.content,
-      enabled: isProject ? true : (loadedBundledStates[rs.name] ?? true),
-      scope: isProject ? "workspace" : "global",
-      source: isProject ? "project" : isBundled ? "bundled" : "user",
-    };
-  });
+  const mappedRegistrySkills: SkillEntry[] = registrySkills.map((rs) => ({
+    ...rs,
+    enabled: rs.source === "project" ? true : (loadedBundledStates[rs.name] ?? true),
+  }));
 
-  let userSkills: Skill[] = [];
+  let userSkills: SkillEntry[] = [];
   try {
     const raw = localStorage.getItem(USER_SKILLS_STORAGE_KEY);
     if (raw) {
-      userSkills = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        userSkills = parsed.map(migrateSkillEntry).filter((s): s is SkillEntry => s !== null);
+      }
     }
   } catch (e) {
     if (import.meta.env.DEV) devWarn("[Store] const raw = localStorage.getItem(USER_SKILLS_STORA:", e);
@@ -149,7 +161,16 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
     cmd.stdout.on("data", stdoutHandler);
     cmd.stderr.on("data", stderrHandler);
 
+    const spawnTimeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        reject(new Error(`Timeout spawning MCP server '${commandName} ${commandArgs.join(" ")}' (15s)`));
+      }
+    }, 15000);
+
     void cmd.spawn().then(async (child) => {
+      clearTimeout(spawnTimeoutId);
       childRef = child;
       const req = JSON.stringify({ jsonrpc: "2.0", method: "tools/list", params: {}, id: 1 }) + "\n";
       await child.write(req);
@@ -163,6 +184,7 @@ const queryStdioTools = async (commandName: string, commandArgs: string[], env?:
         }
       }, 15000);
     }).catch((err) => {
+      clearTimeout(spawnTimeoutId);
       if (timeoutId !== undefined) clearTimeout(timeoutId);
       cleanup();
       reject(err);
@@ -181,7 +203,7 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
     }));
     const nextSkills = get().skills;
     const bundledStates: Record<string, boolean> = {};
-    const userSkillsOnly: Skill[] = [];
+    const userSkillsOnly: SkillEntry[] = [];
     nextSkills.forEach((sk) => {
       if (sk.source === "bundled") {
         bundledStates[sk.name] = sk.enabled;
@@ -219,7 +241,15 @@ export const useSkillsMcp = create<SkillsMcpState>((set, get) => ({
   addSkill(skill) {
     set((s) => {
       if (s.skills.some((sk) => sk.name === skill.name)) return s;
-      return { skills: [...s.skills, { ...skill, enabled: true, source: "user" as const }] };
+      const entry: SkillEntry = {
+        name: skill.name,
+        description: skill.description,
+        content: skill.content,
+        location: "",
+        source: "user",
+        enabled: true,
+      };
+      return { skills: [...s.skills, entry] };
     });
     const userSkillsOnly = get().skills.filter(sk => sk.source === "user");
     try {

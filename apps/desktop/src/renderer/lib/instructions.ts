@@ -374,11 +374,11 @@ function expandBraces(glob: string): string[] {
   return results;
 }
 
-function matchSingleGlob(normalizedGlob: string, normalizedPath: string): boolean {
-  if (!normalizedGlob || !normalizedPath) return false;
+function matchSingleGlob(originalGlob: string, normalizedPath: string): boolean {
+  if (!originalGlob || !normalizedPath) return false;
 
   // Step 1: Use unique placeholders for glob wildcards to prevent subsequent replacement clashes
-  let regexStr = normalizedGlob
+  let regexStr = originalGlob
     .replace(/\*\*\//g, "__GLOBSTAR_SLASH__")
     .replace(/\*\*/g, "__GLOBSTAR__")
     .replace(/\*/g, "__STAR__")
@@ -398,15 +398,14 @@ function matchSingleGlob(normalizedGlob: string, normalizedPath: string): boolea
   // If the glob does not contain any slashes (e.g. "*.test.ts"), it matches
   // any file with that name in any directory (like gitignore).
   // Otherwise, it must match the path from the root.
-  if (!normalizedGlob.includes("/")) {
+  const startsWithSlash = originalGlob.startsWith("/");
+  const hasSlash = originalGlob.includes("/");
+  if (!hasSlash) {
     regexStr = "(^|/)" + regexStr + "$";
+  } else if (startsWithSlash) {
+    regexStr = "^" + regexStr.slice(1) + "$";
   } else {
-    // If it starts with a slash, strip it since normalizedPath typically doesn't start with a slash
-    if (regexStr.startsWith("/")) {
-      regexStr = "^" + regexStr.slice(1) + "$";
-    } else {
-      regexStr = "^" + regexStr + "$";
-    }
+    regexStr = "^" + regexStr + "$";
   }
 
   try {

@@ -2,10 +2,11 @@
  * Error Patterns — matches common error messages and suggests fixes.
  */
 
-const SAFE_MODULE_RE = /^[a-zA-Z0-9@/\-_.]+$/;
+const SAFE_MODULE_RE = /^[a-zA-Z0-9@][a-zA-Z0-9@\-_.]*$/;
 
 function sanitizeModuleName(name: string): string | null {
   if (!SAFE_MODULE_RE.test(name)) return null;
+  if (name.includes("..") || name.includes("/") || name.includes("\\")) return null;
   return name;
 }
 
@@ -222,7 +223,7 @@ export function matchErrorPattern(errorMessage: string): {
       return {
         suggestion: suggestion.replace(
           /\$(\d+)/g,
-          (_, i) => match[parseInt(i)] ?? "",
+          (_, i) => match[parseInt(i, 10)] ?? "",
         ),
         autoFix: autoFix?.(match) ?? undefined,
       };

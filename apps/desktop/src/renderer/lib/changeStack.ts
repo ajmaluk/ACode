@@ -98,7 +98,7 @@ export function getChangeStackSize(sessionId?: string): number {
  */
 export async function applyUndo(
   sessionId?: string,
-): Promise<{ filePath: string; restoredContent: string } | null> {
+): Promise<{ filePath: string; restoredContent: string; toolCallId?: string; messageId?: string } | null> {
   const change = popChange(sessionId);
   if (!change) return null;
 
@@ -108,6 +108,8 @@ export async function applyUndo(
     return {
       filePath: change.filePath,
       restoredContent: change.beforeContent,
+      toolCallId: change.toolCallId,
+      messageId: change.messageId,
     };
   } catch (err) {
     // If the file write fails, push the change back so it isn't lost

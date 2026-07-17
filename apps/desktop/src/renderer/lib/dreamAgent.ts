@@ -368,7 +368,9 @@ export async function runDreamCycle(
             return content
               .replace(/\byesterday\b/gi, yesterday.toISOString().split('T')[0])
               .replace(/\btoday\b/gi, today.toISOString().split('T')[0])
-              .replace(/\bnow\b/gi, new Date().toISOString());
+              // Only replace standalone "now" when used as a temporal reference
+              // (preceded by "as of", "from", "until", "since", or at line start)
+              .replace(/(^|as of |from |until |since )now\b/gi, "$1" + new Date().toISOString());
           }
 
           // First pass: handle simple patterns without LLM
@@ -663,6 +665,7 @@ export async function runDreamCycle(
     };
   } finally {
     activeDreams.delete(workspacePath);
+    activeDreamTimeouts.delete(workspacePath);
   }
 }
 

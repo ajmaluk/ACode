@@ -74,7 +74,7 @@ describe("isPrivateHost", () => {
 
   it("detects octal IP representations", () => {
     expect(isPrivateHost("0177.0.0.1")).toBe(true); // 127.0.0.1
-    expect(isPrivateHost("010.0.0.1")).toBe(true); // 10.0.0.1
+    expect(isPrivateHost("010.0.0.1")).toBe(false); // 8.0.0.1 (not private)
   });
 
   it("rejects non-octal strings that start with 0", () => {

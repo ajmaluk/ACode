@@ -224,38 +224,44 @@ function _parseFences(text: string): FenceSegment[] {
   }
   if (last < text.length) {
     const rest = text.slice(last);
-    const fenceIdx = rest.indexOf("```");
-    if (fenceIdx !== -1) {
-      if (fenceIdx > 0)
-        out.push({ type: "text", content: rest.slice(0, fenceIdx) });
-      const codePart = rest.slice(fenceIdx + 3);
-      const newlineIdx = codePart.indexOf("\n");
-      if (newlineIdx !== -1) {
-        const headerLine = codePart.slice(0, newlineIdx).trim();
-        const content = codePart.slice(newlineIdx + 1);
-        const { language, filename } = parseFenceHeader(headerLine);
-        out.push({
-          type: "code",
-          content,
-          language: language || undefined,
-          filename: filename || undefined,
-        });
-        // If the content contains a closing fence, also parse any trailing text
-        if (content.includes("```")) {
-          const lastFence = content.lastIndexOf("```");
-          const restAfterFence = content.slice(lastFence + 3);
-          if (restAfterFence.trim()) {
-            out.push({ type: "text", content: restAfterFence });
-          }
+    // Look for a pair of ``` fences: opening ``` + content + closing ```
+    const firstFence = rest.indexOf("```");
+    if (firstFence !== -1) {
+      const afterFirstFence = rest.slice(firstFence + 3);
+      // Find the closing fence (second ```)
+      const closingFence = afterFirstFence.indexOf("```");
+      if (closingFence !== -1) {
+        // Two fences found — extract content between them
+        if (firstFence > 0)
+          out.push({ type: "text", content: rest.slice(0, firstFence) });
+        const codePart = afterFirstFence.slice(0, closingFence);
+        const newlineIdx = codePart.indexOf("\n");
+        if (newlineIdx !== -1) {
+          const headerLine = codePart.slice(0, newlineIdx).trim();
+          const rawContent = codePart.slice(newlineIdx + 1);
+          const { language, filename } = parseFenceHeader(headerLine);
+          out.push({
+            type: "code",
+            content: rawContent.replace(/\r?\n$/, ""),
+            language: language || undefined,
+            filename: filename || undefined,
+          });
+        } else {
+          const { language, filename } = parseFenceHeader(codePart.trim());
+          out.push({
+            type: "code",
+            content: "",
+            language: language || undefined,
+            filename: filename || undefined,
+          });
+        }
+        const trailingText = afterFirstFence.slice(closingFence + 3);
+        if (trailingText.trim()) {
+          out.push({ type: "text", content: trailingText });
         }
       } else {
-        const { language, filename } = parseFenceHeader(codePart.trim());
-        out.push({
-          type: "code",
-          content: "",
-          language: language || undefined,
-          filename: filename || undefined,
-        });
+        // Only one fence found — no closing fence, emit as text
+        out.push({ type: "text", content: rest });
       }
     } else {
       out.push({ type: "text", content: rest });

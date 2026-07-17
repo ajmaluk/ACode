@@ -82,11 +82,11 @@ export function ShortcutsCheatsheet() {
       >
         <header className="h-12 flex items-center justify-between px-4 border-b border-dalam-border-primary">
           <div className="flex items-center gap-2 text-sm font-medium text-dalam-text-primary">
-            <Keyboard className="w-4 h-4 text-dalam-accent-primary" />
+            <Keyboard className="w-4 h-4 text-dalam-accent-primary" aria-hidden="true" />
             Keyboard shortcuts
           </div>
-          <button className="btn-icon" onClick={() => setOpen(false)}>
-            <X className="w-4 h-4" />
+          <button type="button" className="btn-icon" onClick={() => setOpen(false)} aria-label="Close shortcuts">
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </header>
         <div className="grid grid-cols-2 gap-6 p-6 overflow-y-auto scrollbar-thin">

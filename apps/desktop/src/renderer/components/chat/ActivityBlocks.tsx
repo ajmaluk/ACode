@@ -115,6 +115,7 @@ function ActivityRow({
         {hasDetail ? (
           <ChevronDown
             className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
+            aria-hidden="true"
           />
         ) : (
           <span className="w-3 h-3 flex-shrink-0" />
@@ -228,15 +229,23 @@ export const ExploreBlock = React.memo(function ExploreBlock({
         {result.matches.map((m) => (
           <li
             key={m.path + (m.line ?? "")}
+            role="button"
+            tabIndex={0}
             className="flex items-center gap-2 hover:opacity-100 opacity-90 font-mono text-[11px] cursor-pointer hover:bg-dalam-bg-hover rounded px-1 py-0.5 transition-colors"
             onClick={() => {
               void useWorkspace.getState().openFile(m.path);
             }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                void useWorkspace.getState().openFile(m.path);
+              }
+            }}
           >
             {result.kind === "grep" || result.kind === "symbols" ? (
-              <Search className="w-3 h-3 flex-shrink-0" />
+              <Search className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
             ) : (
-              <FileText className="w-3 h-3 flex-shrink-0" />
+              <FileText className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
             )}
             <span className="truncate flex-1 min-w-0">{m.path}</span>
             {m.line !== undefined && (
@@ -288,7 +297,7 @@ export const ReadBlock = React.memo(function ReadBlock({
         {lines.map((line, i) => {
           const lineNum = start + i;
           return (
-            <div key={i} className="flex hover:bg-dalam-bg-hover/30">
+            <div key={lineNum} className="flex hover:bg-dalam-bg-hover/30">
               <span className="w-12 flex-shrink-0 text-right pr-2 opacity-50 select-none tabular-nums">
                 {lineNum}
               </span>
@@ -333,8 +342,9 @@ export const ContextGatheringGroup = React.memo(function ContextGatheringGroup({
       >
         <ChevronDown
           className={`w-3 h-3 text-dalam-text-muted/70 transition-transform flex-shrink-0 ${open ? "" : "-rotate-90"}`}
+          aria-hidden="true"
         />
-        <Search className="w-3 h-3 flex-shrink-0 opacity-80" />
+        <Search className="w-3 h-3 flex-shrink-0 opacity-80" aria-hidden="true" />
         <span className="truncate">Gathered context ({parts.join(", ")})</span>
         <span className="ml-auto text-[10px] tabular-nums opacity-70">
           {activities.length} items
@@ -754,18 +764,94 @@ export const ToolCallsList = React.memo(function ToolCallsList({
   toolCalls: ToolCall[];
 }) {
   if (!toolCalls.length) return null;
+
+  // Group consecutive tool calls of the same type
+  const groups: { tools: ToolCall[]; type: string }[] = [];
+  for (const tc of toolCalls) {
+    const lastGroup = groups[groups.length - 1];
+    if (lastGroup && lastGroup.type === tc.name) {
+      lastGroup.tools.push(tc);
+    } else {
+      groups.push({ tools: [tc], type: tc.name });
+    }
+  }
+
   return (
     <div className="my-1">
-      {toolCalls.map((tc) => (
-        <ToolCallRow key={tc.id} toolCall={tc} />
-      ))}
+      {groups.map((group, gi) =>
+        group.tools.length === 1 ? (
+          <ToolCallRow key={group.tools[0].id} toolCall={group.tools[0]} />
+        ) : (
+          <ToolCallGroup key={`group-${gi}`} tools={group.tools} />
+        )
+      )}
     </div>
   );
 });
 
 // ============================================================================
-// Smart tool result display — renders results as nice UI instead of raw JSON
+// Grouped tool calls — consecutive same-type tools shown as a single accordion
 // ============================================================================
+
+const ToolCallGroup = React.memo(function ToolCallGroup({
+  tools,
+}: {
+  tools: ToolCall[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const allDone = tools.every((t) => t.status === "completed");
+  const anyFailed = tools.some((t) => t.status === "failed");
+  const anyRunning = tools.some((t) => t.status === "running" || t.status === "pending");
+
+  const count = tools.length;
+  const toolLabel = tools[0].name === "write_file" ? "files" : tools[0].name === "edit_file" ? "edits" : "operations";
+
+  return (
+    <div className={`rounded-lg border overflow-hidden my-0.5 ${anyFailed ? "border-dalam-git-deleted/30" : "border-dalam-border-primary/40"}`}>
+      {/* Header row — clickable accordion toggle */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-dalam-bg-hover/30 transition-colors text-left"
+      >
+        {anyRunning ? (
+          <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0" />
+        ) : allDone ? (
+          <CheckCircle2 className="w-3 h-3 text-dalam-git-added flex-shrink-0" />
+        ) : anyFailed ? (
+          <X className="w-3 h-3 text-dalam-git-deleted flex-shrink-0" />
+        ) : (
+          <ChevronDown className="w-3 h-3 text-dalam-text-muted flex-shrink-0" />
+        )}
+        <span className="text-xs text-dalam-text-primary font-medium">
+          {displayGroupLabel(tools)}
+        </span>
+        <span className="text-[10px] text-dalam-text-muted ml-auto">
+          {count} {toolLabel}
+        </span>
+        <ChevronDown className={`w-3 h-3 text-dalam-text-muted transition-transform flex-shrink-0 ${expanded ? "rotate-180" : ""}`} />
+      </button>
+
+      {/* Expanded content — list of individual tool calls */}
+      {expanded && (
+        <div className="border-t border-dalam-border-primary/30">
+          {tools.map((tc) => (
+            <ToolCallRow key={tc.id} toolCall={tc} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function displayGroupLabel(tools: ToolCall[]): string {
+  const name = tools[0].name;
+  if (name === "write_file") return `Wrote ${tools.length} files`;
+  if (name === "edit_file") return `Edited ${tools.length} files`;
+  if (name === "read_file") return `Read ${tools.length} files`;
+  if (name === "run_command" || name === "bash") return `Ran ${tools.length} commands`;
+  if (name === "screenshot") return `Took ${tools.length} screenshots`;
+  return `${getToolMeta(name).label} × ${tools.length}`;
+}
 
 function ArgsDisplay({
   toolName,
@@ -1169,9 +1255,9 @@ const ToolCallRow = React.memo(function ToolCallRow({
           {toolCall.status === "running" || toolCall.status === "pending" ? (
             <Loader2 className="w-2.5 h-2.5 animate-spin" />
           ) : toolCall.status === "awaiting-approval" ? (
-            <Shield className="w-2.5 h-2.5 text-yellow-500" />
+            <Shield className="w-2.5 h-2.5 text-amber-400" />
           ) : isFailed ? (
-            <span className="text-red-400 font-medium">failed</span>
+            <span className="text-dalam-git-deleted font-medium">failed</span>
           ) : null}
           {!isFailed && <span>{statusText}</span>}
           {isEdit &&
@@ -1196,14 +1282,14 @@ const ToolCallRow = React.memo(function ToolCallRow({
                       action: isNewFile ? "created" : "modified",
                       additions:
                         toolCall.diff?.hunks?.reduce(
-                          (n: number, h: { newLines: number }) =>
-                            n + h.newLines,
+                          (n: number, h: { newCount: number }) =>
+                            n + h.newCount,
                           0,
                         ) ?? 0,
                       deletions:
                         toolCall.diff?.hunks?.reduce(
-                          (n: number, h: { oldLines: number }) =>
-                            n + h.oldLines,
+                          (n: number, h: { oldCount: number }) =>
+                            n + h.oldCount,
                           0,
                         ) ?? 0,
                     });

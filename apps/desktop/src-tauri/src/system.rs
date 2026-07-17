@@ -134,35 +134,65 @@ pub async fn open_with_system_handler(path_or_url: String) -> Result<(), String>
     if lower.starts_with('/') || lower.starts_with("file://") {
         let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
         let expanded = if lower.starts_with("file://") {
-            path_or_url.trim_start_matches("file://").to_string()
+            // Skip past "file://" (7 chars, same len regardless of case)
+            let after_scheme = &path_or_url[7..];
+            // Handle "localhost/" case-insensitively
+            let after_host = match after_scheme.to_lowercase().strip_prefix("localhost/") {
+                Some(_) => &after_scheme[10..],
+                None => after_scheme,
+            };
+            after_host.to_string()
         } else {
             path_or_url.clone()
         };
         let p = std::path::Path::new(&expanded);
-        let canonical = std::fs::canonicalize(p)
-            .map_err(|_| format!("Cannot access path: '{}'", path_or_url))?;
-        if !canonical.starts_with(&home) {
-            return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+        match std::fs::canonicalize(p) {
+            Ok(canonical) => {
+                if !canonical.starts_with(&home) {
+                    return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+                }
+                return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+            }
+            Err(_) => {
+                // File doesn't exist yet — validate parent directory is within home
+                let parent = p.parent().ok_or_else(|| format!("Invalid path: '{}'", path_or_url))?;
+                let canon_parent = std::fs::canonicalize(parent)
+                    .map_err(|_| format!("Cannot access path: '{}'", path_or_url))?;
+                if !canon_parent.starts_with(&home) {
+                    return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+                }
+                return opener::open(p).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+            }
         }
-        return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
     }
     // Windows: allow drive letters (C:\) and UNC paths (\\server\share)
     #[cfg(target_os = "windows")]
     if lower.starts_with("file://") || (path_or_url.len() >= 3 && path_or_url.as_bytes()[1] == b':' && (path_or_url.as_bytes()[2] == b'\\' || path_or_url.as_bytes()[2] == b'/')) || path_or_url.starts_with("\\\\") {
         let expanded = if lower.starts_with("file://") {
-            path_or_url.trim_start_matches("file://").to_string()
+            path_or_url[7..].to_string()
         } else {
             path_or_url.clone()
         };
         // Restrict to user's home directory on Windows too
         let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
         let p = std::path::Path::new(&expanded);
-        let canonical = std::fs::canonicalize(p)
-            .map_err(|_| format!("Cannot access path: '{}'", path_or_url))?;
-        if !canonical.starts_with(&home) {
-            return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+        match std::fs::canonicalize(p) {
+            Ok(canonical) => {
+                if !canonical.starts_with(&home) {
+                    return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+                }
+                return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+            }
+            Err(_) => {
+                let parent = p.parent().ok_or_else(|| format!("Invalid path: '{}'", path_or_url))?;
+                let canon_parent = std::fs::canonicalize(parent)
+                    .map_err(|_| format!("Cannot access path: '{}'", path_or_url))?;
+                if !canon_parent.starts_with(&home) {
+                    return Err(format!("Cannot open file outside home directory: '{}'", path_or_url));
+                }
+                return opener::open(p).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
+            }
         }
-        return opener::open(&canonical).map_err(|e| format!("Failed to open '{path_or_url}': {e}"));
     }
     Err(format!("Cannot open '{}': only http/https URLs and local files are allowed", path_or_url))
 }
@@ -178,13 +208,11 @@ pub async fn launch_app(
     args: Option<Vec<String>>,
     cwd: Option<String>,
 ) -> Result<String, String> {
-    // Validate app_name: allow alphanumeric, dot, dash, underscore, slash (for absolute paths)
-    if !app_name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_' || c == '/') {
+    // Validate app_name: allow only portable app names (no slashes — no direct binary execution).
+    // Absolute paths like "/bin/sh" are blocked to prevent command injection via the macOS fallback
+    // path where Command::new(app_name) is called directly with caller-supplied args.
+    if !app_name.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_') {
         return Err(format!("Invalid app name: {}", app_name));
-    }
-    // If it contains a slash, it must be an absolute path
-    if app_name.contains('/') && !app_name.starts_with('/') {
-        return Err(format!("Invalid app name: {} (must be absolute path if containing /)", app_name));
     }
     // Reject dangerous characters in arguments
     if let Some(ref cmd_args) = args {
@@ -201,7 +229,6 @@ pub async fn launch_app(
         }
     }
 
-    // FIX C-4: Validate cwd parameter — reject dangerous characters and canonicalize
     let validated_cwd: Option<String> = if let Some(ref workdir) = cwd {
         // Reject dangerous characters (same set as args)
         if workdir.contains(';') || workdir.contains('|') || workdir.contains('&')
@@ -231,18 +258,17 @@ pub async fn launch_app(
             cmd.arg("--args");
             cmd.args(cmd_args);
         }
-        if let Some(ref workdir) = cwd {
+        if let Some(ref workdir) = validated_cwd {
             cmd.current_dir(workdir);
         }
         let output = cmd.output().map_err(|e| format!("Failed to launch '{app_name}': {e}"))?;
         if !output.status.success() {
-        let _stderr = String::from_utf8_lossy(&output.stderr).to_string();
         // Fall back to direct command spawn if `open -a` fails (e.g., CLI tools like vim)
             let mut fallback = std::process::Command::new(&app_name);
             if let Some(ref cmd_args) = args {
                 fallback.args(cmd_args);
             }
-            if let Some(ref workdir) = cwd {
+            if let Some(ref workdir) = validated_cwd {
                 fallback.current_dir(workdir);
             }
             let child = fallback.spawn().map_err(|_| {
@@ -261,21 +287,7 @@ pub async fn launch_app(
         if let Some(ref cmd_args) = args {
             cmd.args(cmd_args);
         }
-        if let Some(ref workdir) = cwd {
-            cmd.current_dir(workdir);
-        }
-        let child = cmd.spawn().map_err(|e| format!("Failed to launch '{app_name}': {e}"))?;
-        Ok(format!("Launched '{}' (pid {})", app_name, child.id()))
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // On Linux, direct command spawn works well for most tools
-        let mut cmd = std::process::Command::new(&app_name);
-        if let Some(ref cmd_args) = args {
-            cmd.args(cmd_args);
-        }
-        if let Some(ref workdir) = cwd {
+        if let Some(ref workdir) = validated_cwd {
             cmd.current_dir(workdir);
         }
         let child = cmd.spawn().map_err(|e| format!("Failed to launch '{app_name}': {e}"))?;
@@ -380,9 +392,21 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
         use std::process::Command;
         // Use osascript to save clipboard image to a temp file, then read it
         let tmp_path = std::env::temp_dir().join(format!(
-            "dalam_clipboard_{}.png",
-            std::process::id()
+            "dalam_clipboard_{}_{}.png",
+            std::process::id(),
+            uuid::Uuid::new_v4()
         ));
+
+        // RAII guard: always clean up temp file, even on panic or early return
+        struct _TempGuard(std::path::PathBuf);
+        impl Drop for _TempGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _guard = _TempGuard(tmp_path.clone());
+
+        let path_str = tmp_path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             r#"set theFile to POSIX file "{}"
             try
@@ -396,7 +420,7 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
                 end try
                 error errMsg
             end try"#,
-            tmp_path.to_string_lossy()
+            path_str
         );
 
         let output = Command::new("osascript")
@@ -408,12 +432,8 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
             return Err("No image in clipboard".to_string());
         }
 
-        // Read the file and encode as base64
         let image_data = std::fs::read(&tmp_path)
             .map_err(|e| format!("Failed to read clipboard image file: {e}"))?;
-
-        // Clean up temp file
-        let _ = std::fs::remove_file(&tmp_path);
 
         use base64::Engine;
         Ok(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&image_data)))
@@ -488,29 +508,52 @@ pub async fn clipboard_read_image(_app: tauri::AppHandle) -> Result<String, Stri
 /// FIX C-8: Resolve symlinks before checking restricted paths.
 #[tauri::command]
 pub async fn reveal_in_finder(path: String) -> Result<(), String> {
-    let p = std::path::Path::new(&path);
-    if !p.exists() {
-        return Err(format!("Path does not exist: {}", path));
-    }
     #[cfg(unix)]
     {
-        // Resolve symlinks to prevent bypass via symlinks pointing to restricted paths
+        // Canonicalize FIRST (atomic: resolves symlinks, validates existence).
+        // This avoids TOCTOU between exists() and canonicalize() checks.
         let canon = std::fs::canonicalize(&path)
-            .unwrap_or_else(|_| p.to_path_buf());
+            .map_err(|_| format!("Path does not exist or is inaccessible: {}", path))?;
+        let canon_path = std::path::Path::new(&canon);
+        let restricted = ["/etc", "/sys", "/proc", "/var", "/private/var", "/private/etc", "/usr/local/etc", "/bin", "/sbin", "/usr/lib", "/System", "/cores", "/Volumes", "/dev"];
         let canon_str = canon.to_string_lossy();
-        let restricted = ["/etc", "/sys", "/proc", "/var", "/tmp", "/private", "/usr/local/etc"];
         for r in &restricted {
             if canon_str.starts_with(r) {
                 return Err(format!("Access to system path '{}' is not allowed", path));
             }
         }
+        // Open the canonicalized path (parent if file)
+        let target = if canon_path.is_file() {
+            canon_path.parent().unwrap_or(canon_path)
+        } else {
+            canon_path
+        };
+        return opener::open(target).map_err(|e| format!("Failed to reveal in Finder: {e}"));
     }
-    let target = if p.is_file() {
-        p.parent().unwrap_or(p)
-    } else {
-        p
-    };
-    opener::open(target).map_err(|e| format!("Failed to reveal in Finder: {e}"))
+
+    #[cfg(not(unix))]
+    {
+        // Canonicalize to resolve symlinks and validate existence — prevents TOCTOU and
+        // path traversal on Windows where no canonicalization was previously performed.
+        let canon = std::fs::canonicalize(&path)
+            .map_err(|_| format!("Path does not exist or is inaccessible: {}", path))?;
+        let canon_path = std::path::Path::new(&canon);
+        let restricted = ["C:\\Windows", "C:\\ProgramData", "C:\\Users\\Default",
+                          "C:\\Documents and Settings", "C:\\Config.Msi", "C:\\Recovery",
+                          "C:\\System Volume Information", "C:\\Windows\\System32\\drivers\\etc"];
+        let canon_str = canon.to_string_lossy();
+        for r in &restricted {
+            if canon_str.starts_with(r) {
+                return Err(format!("Access to system path '{}' is not allowed", path));
+            }
+        }
+        let target = if canon_path.is_file() {
+            canon_path.parent().unwrap_or(canon_path)
+        } else {
+            canon_path
+        };
+        opener::open(target).map_err(|e| format!("Failed to open: {e}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -535,11 +578,12 @@ pub async fn get_env(key: String) -> Result<String, String> {
     if blocked.iter().any(|b| upper == *b) {
         return Err(format!("Access to sensitive environment variable '{}' is restricted", key));
     }
-    // Check thread-safe local store first
-    if let Ok(map) = LOCAL_ENV.lock() {
-        if let Some(val) = map.get(&key) {
-            return Ok(val.clone());
-        }
+    // Check thread-safe local store first.
+    // Recover from poisoned mutex (another thread panicked while holding the lock)
+    // by extracting the inner data to keep the app running.
+    let map = LOCAL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(val) = map.get(&upper) {
+        return Ok(val.clone());
     }
     std::env::var(&key).map_err(|e| format!("Environment variable '{}' not set: {}", key, e))
 }
@@ -560,8 +604,10 @@ pub async fn set_env(key: String, value: String) -> Result<(), String> {
     if blocked.iter().any(|b| upper == *b) {
         return Err(format!("Cannot set restricted environment variable: {}", key));
     }
-    let mut map = LOCAL_ENV.lock().map_err(|e| format!("Env lock poisoned: {e}"))?;
-    map.insert(key, value);
+    // Recover from poisoned mutex to keep the app running
+    let mut map = LOCAL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    // Normalize to uppercase for case-insensitive cross-platform consistency
+    map.insert(upper, value);
     Ok(())
 }
 
@@ -614,7 +660,7 @@ pub async fn list_processes() -> Result<Vec<ProcessInfo>, String> {
 
     #[cfg(target_os = "macos")]
     let output = std::process::Command::new("ps")
-        .args(["-eo", "pid,pcpu,rss,comm", "-m", "-r"])
+        .args(["-eo", "pid,pcpu,rss,comm", "-r"])
         .output()
         .map_err(|e| format!("Failed to list processes: {e}"))?;
 
@@ -722,7 +768,8 @@ pub async fn get_disk_space(path: String) -> Result<DiskSpace, String> {
     #[cfg(target_os = "windows")]
     {
         // Use PowerShell Get-CimInstance (wmic is deprecated in Windows 10+)
-        let drive_letter = path.chars().next().unwrap_or('C');
+        let drive_letter = path.chars().next()
+            .ok_or_else(|| "Empty path provided".to_string())?;
         // Validate drive letter is a single ASCII alphanumeric character to prevent injection
         if !drive_letter.is_ascii_alphanumeric() {
             return Err(format!("Invalid drive letter: '{}'", drive_letter));
@@ -890,8 +937,7 @@ pub async fn detect_installed_ides() -> Result<Vec<InstalledIde>, String> {
     #[cfg(target_os = "macos")]
     {
         let apps_dir = std::path::PathBuf::from("/Applications");
-        let home = dirs::home_dir().unwrap_or_default();
-        let home_apps = home.join("Applications");
+        let home_apps = dirs::home_dir().map(|h| h.join("Applications"));
 
         // Check common .app bundles in /Applications and ~/Applications
         let ide_checks: Vec<(&str, &str, &str)> = vec![
@@ -920,13 +966,13 @@ pub async fn detect_installed_ides() -> Result<Vec<InstalledIde>, String> {
 
         for (app_bundle, cmd, display_name) in &ide_checks {
             let path = apps_dir.join(app_bundle);
-            let path2 = home_apps.join(app_bundle);
-            if path.exists() || path2.exists() {
+            let has_home_app = home_apps.as_ref().map_or(false, |p| p.join(app_bundle).exists());
+            if path.exists() || has_home_app {
                 // Try to get the actual binary path from the .app bundle
                 let actual_cmd = if let Some(c) = resolve_macos_app_cmd(&apps_dir.join(app_bundle)) {
                     c
-                } else if let Some(c) = resolve_macos_app_cmd(&path2) {
-                    c
+                } else if let Some(ref ha) = home_apps {
+                    resolve_macos_app_cmd(&ha.join(app_bundle)).unwrap_or_else(|| cmd.to_string())
                 } else {
                     cmd.to_string()
                 };

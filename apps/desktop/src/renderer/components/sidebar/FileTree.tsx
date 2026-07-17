@@ -151,14 +151,14 @@ export function FileTree() {
     <div className="flex-1 min-h-0 flex flex-col">
       {/* Expand/Collapse all buttons */}
       <div className="flex items-center gap-1 px-2 py-1 border-b border-dalam-border-primary/30">
-        <button
+        <button type="button"
           onClick={() => setExpandAll(true)}
           className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
           title="Expand all"
         >
           <ChevronDown className="w-3 h-3" />
         </button>
-        <button
+        <button type="button"
           onClick={() => setExpandAll(false)}
           className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
           title="Collapse all"
@@ -213,8 +213,10 @@ const TreeNode = React.memo(function TreeNode({
   const indent = 4 + depth * 12;
 
   // Handle expandAll/collapseAll prop changes
+  const prevExpandAllRef = useRef(expandAll);
   useEffect(() => {
-    if (isDir && expandAll !== undefined) {
+    if (isDir && expandAll !== undefined && expandAll !== prevExpandAllRef.current) {
+      prevExpandAllRef.current = expandAll;
       setOpen(expandAll);
     }
   }, [expandAll, isDir]);

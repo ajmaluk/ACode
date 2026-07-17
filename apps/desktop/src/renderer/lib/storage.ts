@@ -111,6 +111,8 @@ async function migrateFromLocalStorage(): Promise<void> {
       const req = migrationStore.get(MIGRATION_KEY);
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
+      migrationTx.onabort = () => reject(new Error("Migration check transaction aborted"));
+      migrationTx.onerror = () => reject(migrationTx.error || new Error("Migration check transaction failed"));
     });
     if (migrationCheck) {
       if (import.meta.env.DEV) console.debug("[IndexedDB] Migration already completed, skipping.");

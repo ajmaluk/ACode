@@ -213,6 +213,7 @@ export function CommandPalette() {
             />
             {query ? (
               <button
+                type="button"
                 className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5"
                 onClick={() => setQuery("")}
               >

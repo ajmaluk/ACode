@@ -43,9 +43,12 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 /**
  * Download and install the latest update, then relaunch the app.
  */
+let _installing = false;
 export async function installUpdate(
   onProgress?: (percent: number) => void,
 ): Promise<void> {
+  if (_installing) return;
+  _installing = true;
   try {
     const updater = (await import("@tauri-apps/plugin-updater")) as {
       check: () => Promise<{
@@ -92,5 +95,7 @@ export async function installUpdate(
     await process.relaunch();
   } catch (err) {
     console.warn("[Updater] Failed to install update:", err);
+  } finally {
+    _installing = false;
   }
 }

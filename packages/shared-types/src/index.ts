@@ -188,17 +188,17 @@ export type DiffProposal = {
 
 export type DiffHunk = {
   oldStart: number;
-  oldLines: number;
+  oldCount: number;
   newStart: number;
-  newLines: number;
+  newCount: number;
   lines: DiffLine[];
 };
 
 export type DiffLine = {
   type: "context" | "add" | "remove";
   content: string;
-  oldLineNumber?: number;
-  newLineNumber?: number;
+  oldLineNum: number | null;
+  newLineNum: number | null;
 };
 
 export type AgentSessionMode = "yolo" | "build" | "plan";
@@ -398,8 +398,6 @@ export type AgentCategory =
 
 export type PermissionAction = "allow" | "deny" | "ask";
 
-export type PermissionReply = "once" | "always" | "reject";
-
 /**
  * A single permission rule. Mirrors MiMo-Code's `Permission.Rule` shape.
  *
@@ -464,11 +462,6 @@ export type SkillInfo = {
   location: string; // absolute path to SKILL.md
   hidden?: boolean;
   source: "bundled" | "user-global" | "user-workspace" | "user" | "project";
-};
-
-export type SkillInvocation = {
-  name: string;
-  args?: string;
 };
 
 export type FileChangeAction = "created" | "modified" | "deleted" | "renamed";

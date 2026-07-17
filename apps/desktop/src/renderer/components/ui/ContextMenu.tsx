@@ -174,6 +174,7 @@ const ContextMenuPanel = forwardRef<
             >
               <button
                 id={`context-menu-item-${idx}`}
+                type="button"
                 className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-xs text-dalam-text-primary transition-colors ${isFocused ? "bg-dalam-accent-subtle" : "hover:bg-dalam-accent-subtle"}`}
                 role="menuitem"
                 aria-haspopup="menu"
@@ -181,13 +182,13 @@ const ContextMenuPanel = forwardRef<
               >
                 <span className="flex items-center gap-2">
                   {item.icon && (
-                    <span className="w-4 flex-shrink-0 flex justify-center">
+                    <span className="w-4 flex-shrink-0 flex justify-center" aria-hidden="true">
                       {item.icon}
                     </span>
                   )}
                   {item.label}
                 </span>
-                <ChevronRight className="w-3 h-3 text-dalam-text-muted" />
+                <ChevronRight className="w-3 h-3 text-dalam-text-muted" aria-hidden="true" />
               </button>
               {openSub === idx && (
                 <div
@@ -209,6 +210,7 @@ const ContextMenuPanel = forwardRef<
                       return (
                         <button
                           key={si}
+                          type="button"
                           id={`context-menu-sub-${idx}-${si}`}
                           disabled={sub.disabled}
                           onClick={() => {
@@ -224,7 +226,7 @@ const ContextMenuPanel = forwardRef<
                         >
                           <span className="flex items-center gap-2">
                             {sub.icon && (
-                              <span className="w-4 flex-shrink-0 flex justify-center">
+                              <span className="w-4 flex-shrink-0 flex justify-center" aria-hidden="true">
                                 {sub.icon}
                               </span>
                             )}
@@ -247,6 +249,7 @@ const ContextMenuPanel = forwardRef<
         return (
           <button
             key={idx}
+            type="button"
             id={`context-menu-item-${idx}`}
             disabled={item.disabled}
             onClick={() => {
@@ -267,7 +270,7 @@ const ContextMenuPanel = forwardRef<
           >
             <span className="flex items-center gap-2">
               {item.icon && (
-                <span className="w-4 flex-shrink-0 flex justify-center">
+                <span className="w-4 flex-shrink-0 flex justify-center" aria-hidden="true">
                   {item.icon}
                 </span>
               )}

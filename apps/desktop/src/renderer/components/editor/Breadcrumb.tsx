@@ -173,7 +173,7 @@ export function Breadcrumb() {
           key={`${idx}-${part}`}
           className="flex items-center flex-shrink-0"
         >
-          <button
+          <button type="button"
             className={`px-1 py-0.5 text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover rounded transition-colors ${focused === idx ? focusClass : ""}`}
             onClick={() => handleSegmentClick(idx)}
             onContextMenu={(e) => handleSegmentContextMenu(e, idx)}
@@ -184,7 +184,7 @@ export function Breadcrumb() {
           <ChevronRight className="w-3 h-3 mx-0.5 text-dalam-text-muted/50" />
         </span>
       ))}
-      <button
+      <button type="button"
         className={`flex items-center gap-1.5 text-dalam-text-primary font-medium flex-shrink-0 px-1 py-0.5 rounded transition-colors cursor-pointer ${focused === pathParts.length ? focusClass : "hover:bg-dalam-bg-hover"}`}
         onClick={() => copyToClipboard(fileFullPath, toast)}
         onContextMenu={handleFileContextMenu}

@@ -1,9 +1,9 @@
-import type { DalamAPI, AgentSessionMode, AppSettings, ChatMessage, DiffProposal, FileNode, StreamEvent, ToolCall } from "@dalam/shared-types";
+import type { DalamAPI, AgentSessionMode, AppSettings, ChatMessage, DiffLine, DiffProposal, FileNode, StreamEvent, ToolCall } from "@dalam/shared-types";
 import type { TimerState } from "./safetyTimer";
 import { DEFAULT_SETTINGS } from "@dalam/shared-types";
 import { matchSkillInvocation, renderSkillForPrompt, loadSkillContent } from "./skills";
 import { loadInstructions, formatInstructionsForPrompt } from "./instructions";
-import { hookBus } from "./hookBus";
+import { hookBus, emitPreToolUse } from "./hookBus";
 import { groupToolCallsForExecution, type ToolCall as ExecutorToolCall } from "./toolExecutor";
 import { isWindows, platform } from "./platform";
 import { joinPath as joinPathUtil } from "./pathUtils";
@@ -751,8 +751,8 @@ async function* streamOpenAI(
         yield { type: "message-delta", messageId: "", content: "\n" + xmlTag + "\n" };
       } catch (e) {
         if (import.meta.env.DEV) console.warn("[DALAM] JSON parse:", e);
-        // Emit as raw text fallback so the tool call isn't silently dropped
-        yield { type: "message-delta", messageId: "", content: "\n<" + buf.name + ">" + buf.args + "</" + buf.name + ">\n" };
+        const escapedArgs = buf.args.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        yield { type: "message-delta", messageId: "", content: "\n<" + buf.name + ">" + escapedArgs + "</" + buf.name + ">\n" };
       }
     }
     _tcArgBuffers.clear();
@@ -1216,15 +1216,7 @@ const dalamAPI: DalamAPI = {
       async function assembleContext(cleanPrompt: string): Promise<string> {
         const { useChat, useSkillsMcp, useWorkspace } = await import("../store/useAppStore");
         const skillsState = useSkillsMcp.getState();
-        const enabledSkills = skillsState.skills.filter((sk) => sk.enabled);
-
-        const skillInfos = enabledSkills.map((sk) => ({
-          name: sk.name,
-          description: sk.description,
-          content: sk.prompt,
-          location: sk.source === "bundled" ? `bundled://${sk.name}/SKILL.md` : `user://${sk.name}/SKILL.md`,
-          source: (sk.source === "bundled" ? "bundled" : sk.source === "project" ? "project" : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
-        }));
+        const skillInfos = skillsState.skills.filter((sk) => sk.enabled);
 
         const matched = matchSkillInvocation(cleanPrompt, skillInfos);
         let activeSkillPrompt = "";
@@ -1502,14 +1494,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       // Skill matching
       const { useSkillsMcp } = await import("../store/useAppStore");
       const skillsState = useSkillsMcp.getState();
-      const enabledSkills = skillsState.skills.filter((sk) => sk.enabled);
-      const skillInfos = enabledSkills.map((sk) => ({
-        name: sk.name,
-        description: sk.description,
-        content: sk.prompt,
-        location: sk.source === "bundled" ? `bundled://${sk.name}/SKILL.md` : `user://${sk.name}/SKILL.md`,
-        source: (sk.source === "bundled" ? "bundled" : sk.source === "project" ? "project" : "user-global") as "bundled" | "project" | "user-global" | "user-workspace",
-      }));
+      const skillInfos = skillsState.skills.filter((sk) => sk.enabled);
       const matched = matchSkillInvocation(prompt, skillInfos);
       let cleanPrompt = prompt;
       if (matched) {
@@ -1546,6 +1531,10 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
       // Tool failure tracking: break after 3 consecutive iterations where all tools fail
       let consecutiveToolErrors = 0;
       const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
+      // Silent burn tracking: break after 5 consecutive tool-only turns with no reasoning text.
+      // Prevents the agent from silently iterating through tool calls without visible progress.
+      let silentToolTurns = 0;
+      const MAX_SILENT_TOOL_TURNS = 5;
 
       // Build messages from LIVE currentHistory (not pre-loop snapshot)
       // Token-budget-aware: uses estimateTokens for accurate counting
@@ -1930,6 +1919,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                 }
                 if (decision === "approved") {
                   const isAutoApproved = autoApprovedTools.has(tc.id);
+                  // Emit PreToolUse hook for security/audit listeners
+                  await emitPreToolUse(sessionId, tc.id, tc.name, tc.args);
                   const toolStartTime = Date.now();
                   try {
                     let result: string;
@@ -1992,6 +1983,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                       return `[Tool result for ${tc.name}]\nPermission Denied by user.`;
                     }
                     const isAutoApproved = autoApprovedTools.has(tc.id);
+                    // Emit PreToolUse hook for security/audit listeners
+                    await emitPreToolUse(sessionId, tc.id, tc.name, tc.args);
                     const toolStartTime = Date.now();
                     try {
                       let result: string;
@@ -2060,12 +2053,27 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               totalToolCalls += executedToolCount;
             }
 
-            // Track consecutive tool failures (fix #2: break after 3 iterations with no successes)
-            // Note: this happens AFTER tool results are pushed to history so error messages aren't lost
-            if (toolResults.length > 0) {
-              if (anyToolSucceeded) {
-                consecutiveToolErrors = 0;
-              } else if (anyToolErrored) {
+      // Track consecutive tool failures (fix #2: break after 3 iterations with no successes)
+      // Note: this happens AFTER tool results are pushed to history so error messages aren't lost
+      if (toolResults.length > 0) {
+        // Also track "silent burn" — N consecutive tool-only turns with no model thought text
+        // (fullContent is just tool tags, no reasoning/analysis text)
+        const hasTextContent = parsedTools.length === 0 || fullContent.replace(/<[^>]+>/g, '').trim().length > 20;
+        if (!hasTextContent) {
+          silentToolTurns++;
+          if (silentToolTurns >= MAX_SILENT_TOOL_TURNS) {
+            const breakMsg = `\n\n[Loop breaker: ${silentToolTurns} consecutive tool-only turns with no analysis text. Please provide a summary of what was accomplished.]\n`;
+            currentHistory.push({ id: "lb-" + crypto.randomUUID(), role: "user" as const, content: breakMsg, timestamp: Date.now() });
+            emit({ type: "message-end", messageId: lastMessageId || sessionId });
+            emittedEndInThisIteration = true;
+            break;
+          }
+        } else {
+          silentToolTurns = 0;
+        }
+        if (anyToolSucceeded) {
+          consecutiveToolErrors = 0;
+        } else if (anyToolErrored) {
                 consecutiveToolErrors++;
                 if (consecutiveToolErrors >= MAX_CONSECUTIVE_TOOL_ERRORS) {
                   const breakMsg = `\n\n[Loop breaker: Your tool calls have failed ${consecutiveToolErrors} consecutive times. The operations you're attempting are not working. Please try a completely different approach or verify the files and paths exist.]\n`;
@@ -2403,8 +2411,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             change: {
               path: pending.filePath,
               action: pending.oldContent === "" ? "created" : "modified",
-              additions: pending.hunks.reduce((n, h) => n + h.newLines, 0),
-              deletions: pending.hunks.reduce((n, h) => n + h.oldLines, 0),
+              additions: pending.hunks.reduce((n, h) => n + h.newCount, 0),
+              deletions: pending.hunks.reduce((n, h) => n + h.oldCount, 0),
             },
           });
         }
@@ -2418,7 +2426,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             const approvalMsg: import("@dalam/shared-types").ChatMessage = {
               id: "diff-approval-" + crypto.randomUUID(),
               role: "user",
-              content: `User approved the file write. ${pending.filePath} has been updated (${pending.hunks.reduce((n, h) => n + h.newLines, 0)} lines added, ${pending.hunks.reduce((n, h) => n + h.oldLines, 0)} removed). Continue with your task.`,
+              content: `User approved the file write. ${pending.filePath} has been updated (${pending.hunks.reduce((n, h) => n + h.newCount, 0)} lines added, ${pending.hunks.reduce((n, h) => n + h.oldCount, 0)} removed). Continue with your task.`,
               timestamp: Date.now(),
             };
             const newMsgs = [...msgs, approvalMsg];
@@ -2799,6 +2807,8 @@ const REGEX_KILL_PROCESS = /<kill_process\s+([^>]*)\/?>/gi;
 const REGEX_GET_DISK_SPACE = /<get_disk_space\s+([^>]*)\/?>/gi;
 
 export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
+  // Fast path: no XML angle brackets means no tool calls
+  if (!text.includes('<')) return [];
 
   const toolCalls: ParsedToolCall[] = [];
   let match: RegExpExecArray | null;
@@ -3402,7 +3412,8 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
       finish("denied");
     });
 
-    // Listen for abort signal (must assign handler before addEventListener to avoid race)
+    // Listen for abort signal — double-check aborted state after addEventListener
+    // to close the race between .aborted check and .addEventListener.
     if (abortSignal) {
       abortHandler = () => finish("denied");
       if (abortSignal.aborted) {
@@ -3410,15 +3421,22 @@ function waitForToolApproval(toolCallId: string, abortSignal?: AbortSignal): Pro
         return;
       }
       abortSignal.addEventListener("abort", abortHandler, { once: true });
+      // Re-check: abort could have fired between the check above and addEventListener
+      if (abortSignal.aborted) {
+        abortSignal.removeEventListener("abort", abortHandler);
+        finish("denied");
+        return;
+      }
     }
 
     // Safety timeout
     timer = setTimeout(() => {
       if (!resolved) {
         _debugLog(`waitForToolApproval: timed out after ${TIMEOUT_MS}ms for tool ${toolCallId}`);
-        // Notify the store so the UI tool status is updated
-        void import("../store/useAppStore").then(({ useChat }) => {
-          try {            void useChat.getState().resolveToolApproval(toolCallId, "denied");} catch (e) { if (import.meta.env.DEV) console.warn("[DALAM] useChat.getState().resolveToolApproval(toolCallId,", e); }
+        // Write to pending resolutions so the store can update tool status
+        import("../store/useAppStore").then(({ _pendingResolutions, _toolCallResolvers }) => {
+          _pendingResolutions.set(toolCallId, "denied");
+          _toolCallResolvers.delete(toolCallId);
         }).catch(() => { });
         finish("denied");
       }
@@ -3632,6 +3650,7 @@ async function executeToolInner(name: string, args: Record<string, string>, work
 
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
+      if (abortSignal?.aborted) return "Error: Tool execution aborted";
       await writeFile(args.path, new TextEncoder().encode(newContent));
       // Record change for undo support
       try {
@@ -3670,8 +3689,8 @@ async function executeToolInner(name: string, args: Record<string, string>, work
       }
     }
     const hunks = computed.hunks.length > 0
-      ? computed.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: h.lines.map(l => ({ type: l.type === "remove" ? "remove" as const : "add" as const, content: l.content })) }))
-      : [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: newContent.split("\n").length, lines: newContent.split("\n").map(l => ({ type: "add" as const, content: l })) }];
+      ? computed.hunks.map(h => ({ oldStart: h.oldStart, oldCount: h.oldCount, newStart: h.newStart, newCount: h.newCount, lines: h.lines.map(l => ({ type: l.type === "remove" ? "remove" as const : "add" as const, content: l.content, oldLineNum: l.oldLineNum, newLineNum: l.newLineNum })) }))
+      : [{ oldStart: 1, oldCount: 0, newStart: 1, newCount: newContent.split("\n").length, lines: newContent.split("\n").map(l => ({ type: "add" as const, content: l, oldLineNum: null, newLineNum: null })) }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent, newContent, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });
@@ -3769,20 +3788,20 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     // Use proper Myers diff algorithm instead of crude all-removes-then-adds
     const { computeDiff: computeDiffEdit } = await import("./diff");
     const computedEdit = computeDiffEdit(original, updated);
-    const diffLines: Array<{ type: "remove" | "add"; content: string }> = [];
+    const diffLines: DiffLine[] = [];
     for (const hunk of computedEdit.hunks) {
       for (const line of hunk.lines) {
         if (line.type === "remove") {
-          diffLines.push({ type: "remove", content: line.content });
+          diffLines.push({ type: "remove", content: line.content, oldLineNum: line.oldLineNum, newLineNum: line.newLineNum });
         } else if (line.type === "add") {
-          diffLines.push({ type: "add", content: line.content });
+          diffLines.push({ type: "add", content: line.content, oldLineNum: line.oldLineNum, newLineNum: line.newLineNum });
         }
       }
     }
     const searchLine = searchIdx >= 0 ? original.substring(0, searchIdx).split("\n").length : 1;
     const hunks = computedEdit.hunks.length > 0
-      ? computedEdit.hunks.map(h => ({ oldStart: h.oldStart, oldLines: h.oldCount, newStart: h.newStart, newLines: h.newCount, lines: h.lines.map(l => ({ type: l.type === "remove" ? "remove" as const : "add" as const, content: l.content })) }))
-      : [{ oldStart: searchLine, oldLines: oldLines.length, newStart: searchLine, newLines: newLines.length, lines: diffLines }];
+      ? computedEdit.hunks.map(h => ({ oldStart: h.oldStart, oldCount: h.oldCount, newStart: h.newStart, newCount: h.newCount, lines: h.lines.map(l => ({ type: l.type === "remove" ? "remove" as const : "add" as const, content: l.content, oldLineNum: l.oldLineNum, newLineNum: l.newLineNum })) }))
+      : [{ oldStart: searchLine, oldCount: oldLines.length, newStart: searchLine, newCount: newLines.length, lines: diffLines }];
     const proposal: DiffProposal = { diffId, filePath: args.path, oldContent: original, newContent: updated, hunks, createdAt: Date.now() };
     pendingDiffProposals.set(diffId, proposal);
     emit({ type: "diff-proposed", proposal });

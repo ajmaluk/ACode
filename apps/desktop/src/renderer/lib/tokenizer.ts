@@ -128,7 +128,8 @@ export function computeTokenBudget(
   modelContextWindow: number,
   model: string,
 ): TokenBudget {
-  const conversationTokens = countMessageTokens(messages, model);
+  const nonToolMessages = messages.filter((m) => m.role !== "tool");
+  const conversationTokens = countMessageTokens(nonToolMessages, model);
   const toolResultTokens = messages
     .filter((m) => m.role === "tool")
     .reduce((sum, m) => sum + countTokens(m.content, model), 0);

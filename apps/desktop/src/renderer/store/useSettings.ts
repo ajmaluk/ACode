@@ -46,17 +46,24 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
   async updateSettings(updates) {
     const api = createDalamAPI();
+    const entries = Object.entries(updates);
     const results = await Promise.allSettled(
-      Object.entries(updates).map(([key, value]) =>
+      entries.map(([key, value]) =>
         api.settings.set(key as keyof AppSettings, value as AppSettings[keyof AppSettings])
       )
     );
+    const applied: Record<string, unknown> = {};
     for (let i = 0; i < results.length; i++) {
-      if (results[i].status === "rejected") {
-        devWarn(`Failed to save setting ${Object.keys(updates)[i]}:`, (results[i] as PromiseRejectedResult).reason);
+      const r = results[i];
+      if (r.status === "fulfilled") {
+        applied[entries[i][0]] = entries[i][1];
+      } else {
+        devWarn(`Failed to save setting ${entries[i][0]}:`, (r as PromiseRejectedResult).reason);
       }
     }
-    set((s) => ({ settings: { ...s.settings, ...updates } }));
+    if (Object.keys(applied).length > 0) {
+      set((s) => ({ settings: { ...s.settings, ...applied } }));
+    }
   },
   effectiveTheme() {
     const { theme } = get().settings;

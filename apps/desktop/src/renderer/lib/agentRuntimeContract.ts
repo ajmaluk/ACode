@@ -169,6 +169,7 @@ export function agentReducer(
     case "STREAM_MESSAGE_END":
       if (!event.hasMoreTools) {
         newState.currentMessageId = null;
+        newState.phase = "idle";
       }
       break;
   }
@@ -188,7 +189,7 @@ export function agentReducer(
       ? (event as { toolCallId: string }).toolCallId
       : undefined;
 
-  const newLog = [
+  let newLog = [
     ...newState.transitionLog,
     {
       timestamp: Date.now(),
@@ -203,7 +204,7 @@ export function agentReducer(
 
   // Keep only the last MAX_TRANSITION_LOG entries to prevent memory leak
   if (newLog.length > MAX_TRANSITION_LOG) {
-    newLog.splice(0, newLog.length - MAX_TRANSITION_LOG);
+    newLog = newLog.slice(-MAX_TRANSITION_LOG);
   }
   newState.transitionLog = newLog;
 

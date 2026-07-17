@@ -38,8 +38,8 @@ function loadEnabledSkills(): Set<string> {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return new Set(defaults);
     return new Set(parsed as string[]);
-  } catch (err) {
-    devWarn("[useAgents] Failed to load persisted data:", err);
+  } catch {
+    // Silently fall back — localStorage may be unavailable in test/SSR environments
     return new Set(defaults);
   }
 }

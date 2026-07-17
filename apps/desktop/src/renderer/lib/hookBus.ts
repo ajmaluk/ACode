@@ -129,6 +129,8 @@ export type HookHandler<K extends HookEventName = HookEventName> = (
 
 class HookEventBus {
   private listeners = new Map<HookEventName, Set<HookHandler>>();
+  /** Maximum listeners per event to prevent memory leaks from .on() accumulation */
+  private static readonly MAX_LISTENERS_PER_EVENT = 50;
   private executionLog: Array<{
     event: HookEventName;
     handler: string;
@@ -149,7 +151,16 @@ class HookEventBus {
     if (!this.listeners.has(eventName)) {
       this.listeners.set(eventName, new Set());
     }
-    this.listeners.get(eventName)!.add(handler as HookHandler);
+    const set = this.listeners.get(eventName)!;
+    // Cap listeners per event to prevent memory leaks from repeated .on() without .off()
+    if (set.size >= HookEventBus.MAX_LISTENERS_PER_EVENT) {
+      console.warn(
+        `[HookBus] Reached max listeners (${HookEventBus.MAX_LISTENERS_PER_EVENT}) for "${eventName}" — removing oldest listener`,
+      );
+      const first = set.values().next().value;
+      if (first) set.delete(first);
+    }
+    set.add(handler as HookHandler);
     return () => this.off(eventName, handler);
   }
 

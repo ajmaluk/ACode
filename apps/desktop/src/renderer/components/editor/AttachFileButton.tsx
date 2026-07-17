@@ -66,6 +66,7 @@ export function AttachFileButton() {
       />
       <Tooltip content="Add context" side="top">
         <button
+          type="button"
           className="w-7 h-7 flex items-center justify-center rounded-md text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
           onClick={() => inputRef.current?.click()}
           aria-label="Add context"

@@ -261,7 +261,7 @@ function SessionRow({
             {formatRelative(session.lastActivityAt, now)}
           </span>
           <div className="relative" ref={menuRef} data-session-menu>
-            <button
+            <button type="button"
               className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-dalam-bg-hover transition-all"
               onClick={(e) => {
                 e.stopPropagation();
@@ -289,7 +289,7 @@ function SessionRow({
                   data-session-menu
                   role="menu"
                 >
-                  <button
+                  <button type="button"
                     className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2"
                     role="menuitem"
                     onClick={(e) => {
@@ -300,7 +300,7 @@ function SessionRow({
                   >
                     <Pencil className="w-3 h-3" /> Rename
                   </button>
-                  <button
+                  <button type="button"
                     className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover flex items-center gap-2"
                     role="menuitem"
                     onClick={(e) => {
@@ -315,7 +315,7 @@ function SessionRow({
                     className="border-t border-dalam-border-primary my-1"
                     role="separator"
                   />
-                  <button
+                  <button type="button"
                     className="w-full text-left px-3 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
                     role="menuitem"
                     onClick={(e) => {
@@ -383,7 +383,7 @@ function ConnectorsSection() {
 
   return (
     <div className="border-t border-dalam-border-primary mt-1 pt-1">
-      <button
+      <button type="button"
         className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
@@ -419,7 +419,7 @@ function ConnectorsSection() {
               <span
                 className={`w-1.5 h-1.5 rounded-full ${c.enabled ? "bg-dalam-git-added" : "bg-dalam-text-muted"}`}
               />
-              <button
+              <button type="button"
                 className="opacity-0 group-hover:opacity-100 p-0.5"
                 onClick={() => handleRemove(c.id)}
               >
@@ -453,13 +453,13 @@ function ConnectorsSection() {
                 <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-dalam-text-muted pointer-events-none" />
               </div>
               <div className="flex gap-1.5 pt-0.5 justify-end">
-                <button
+                <button type="button"
                   className="text-xs px-2.5 py-1 rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors font-medium"
                   onClick={() => setShowAdd(false)}
                 >
                   Cancel
                 </button>
-                <button
+                <button type="button"
                   className="text-xs px-3 py-1 rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white font-medium transition-colors"
                   onClick={handleAdd}
                 >
@@ -468,7 +468,7 @@ function ConnectorsSection() {
               </div>
             </div>
           ) : (
-            <button
+            <button type="button"
               className="w-full flex items-center gap-1.5 px-2 py-1 rounded text-xs text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-secondary transition-colors"
               onClick={() => setShowAdd(true)}
             >
@@ -690,7 +690,7 @@ export function Sidebar() {
       <aside className="h-full flex flex-col bg-dalam-bg-secondary">
         <FileTree />
         <div className="p-3 flex-shrink-0 border-t border-dalam-border-primary">
-          <button
+          <button type="button"
             className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
             onClick={() => openSettings()}
             title={`Open Settings (${shortcut(",")})`}
@@ -711,7 +711,7 @@ export function Sidebar() {
     <aside className="h-full flex flex-col bg-dalam-bg-secondary">
       {/* Primary actions */}
       <div className="px-3 py-2.5 flex flex-col gap-1 border-b border-dalam-border-primary flex-shrink-0">
-        <button
+        <button type="button"
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
           onClick={() => {
             cancelPermission();
@@ -729,7 +729,7 @@ export function Sidebar() {
             {shortcut("N")}
           </span>
         </button>
-        <button
+        <button type="button"
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
           onClick={() => useCommandPalette.getState().toggle()}
           aria-label="Search command palette"
@@ -740,7 +740,7 @@ export function Sidebar() {
             {shortcut("K")}
           </span>
         </button>
-        <button
+        <button type="button"
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
           onClick={() => openSettings("skills")}
           aria-label="Open skills settings"
@@ -765,7 +765,7 @@ export function Sidebar() {
               Reordering...
             </span>
           )}
-          <button
+          <button type="button"
             className="btn-icon"
             onClick={openWorkspace}
             title="Add workspace"
@@ -817,7 +817,7 @@ export function Sidebar() {
                 <div className="absolute left-0 top-0 bottom-0 w-5 flex items-center justify-center opacity-0 group-hover/workspace:opacity-100 transition-opacity cursor-grab active:cursor-grabbing">
                   <GripVertical className="w-3 h-3 text-dalam-text-muted/50" />
                 </div>
-                <button
+                <button type="button"
                   className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer overflow-hidden"
                   draggable={false}
                   onClick={() => {
@@ -854,7 +854,7 @@ export function Sidebar() {
                   draggable={false}
                 >
                   <Tooltip content="Show files" side="top">
-                    <button
+                    <button type="button"
                       className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                       draggable={false}
                       onClick={() => {
@@ -868,7 +868,7 @@ export function Sidebar() {
                     </button>
                   </Tooltip>
                   <Tooltip content="New task" side="top">
-                    <button
+                    <button type="button"
                       className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                       draggable={false}
                       onClick={() => handleNewTask(ws.id)}
@@ -879,7 +879,7 @@ export function Sidebar() {
                   </Tooltip>
                   <div className="relative" data-workspace-menu>
                     <Tooltip content="More" side="top">
-                      <button
+                      <button type="button"
                         className="p-1 rounded hover:bg-dalam-bg-hover transition-colors"
                         draggable={false}
                         onClick={(e) => {
@@ -918,7 +918,7 @@ export function Sidebar() {
                           data-workspace-menu
                           role="menu"
                         >
-                          <button
+                          <button type="button"
                             className="w-full text-left px-2.5 py-1.5 text-xs text-dalam-git-deleted hover:bg-dalam-bg-hover flex items-center gap-2"
                             role="menuitem"
                             onClick={(e) => {
@@ -953,7 +953,7 @@ export function Sidebar() {
                         />
                       ))}
                       {hasMore && !showAllSessions && (
-                        <button
+                        <button type="button"
                           className="text-[10px] text-dalam-text-muted hover:text-dalam-text-secondary px-1.5 py-0.5 transition-colors"
                           onClick={() =>
                             setShowAll((prev) => ({ ...prev, [ws.id]: true }))
@@ -964,7 +964,7 @@ export function Sidebar() {
                         </button>
                       )}
                       {hasMore && showAllSessions && (
-                        <button
+                        <button type="button"
                           className="text-[10px] text-dalam-text-muted hover:text-dalam-text-secondary px-1.5 py-0.5 transition-colors"
                           onClick={() =>
                             setShowAll((prev) => ({ ...prev, [ws.id]: false }))
@@ -1002,7 +1002,7 @@ export function Sidebar() {
       </div>
 
       <div className="p-3 flex-shrink-0">
-        <button
+        <button type="button"
           className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
           onClick={() => openSettings()}
           title={`Open Settings (${shortcut(",")})`}
@@ -1092,7 +1092,7 @@ function VersionHistory({
           >
             Version History
           </h3>
-          <button className="btn-icon" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">
             <XCircle className="w-4 h-4" />
           </button>
         </div>
@@ -1119,14 +1119,14 @@ function VersionHistory({
                     </div>
                   </div>
                   <div className="hidden group-hover:flex items-center gap-1">
-                    <button
+                    <button type="button"
                       className="btn-icon !p-1"
                       title="Restore this version"
                       onClick={() => onRestore(v.id)}
                     >
                       <Undo2 className="w-3.5 h-3.5" />
                     </button>
-                    <button
+                    <button type="button"
                       className="btn-icon !p-1"
                       title="Delete version"
                       onClick={() => onDelete(v.id)}

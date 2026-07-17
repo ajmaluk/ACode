@@ -52,7 +52,7 @@ const MemoizedOpenFileButton = React.memo(function MemoizedOpenFileButton({
     }
   }, [firstFile, openFile, toast]);
   return (
-    <button
+    <button type="button"
       className={`px-3 h-full transition-colors ${firstFile ? "text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover" : "text-dalam-text-muted/40 cursor-not-allowed"}`}
       onClick={handleClick}
       disabled={!firstFile}
@@ -205,9 +205,9 @@ export function EditorPane() {
       }
 
       if (mod && !shift && e.key.toLowerCase() === "w") {
+        e.preventDefault();
         const { activeFilePath } = useWorkspace.getState();
         if (activeFilePath) {
-          e.preventDefault();
           closeTab(activeFilePath);
         }
       }
@@ -255,7 +255,7 @@ export function EditorPane() {
         ui.setBottomPanelOpen(true);
       }
 
-      if (alt && e.key.toLowerCase() === "z" && !mod) {
+      if (alt && (e.key.toLowerCase() === "z" || e.code === "KeyZ") && !mod) {
         e.preventDefault();
         const { settings, update } = useSettings.getState();
         void update("wordWrap", !settings.wordWrap);
@@ -467,7 +467,7 @@ export function EditorPane() {
                   )}
                   <FileCode className="w-3.5 h-3.5 flex-shrink-0" />
                   <span className="text-xs whitespace-nowrap">{t.name}</span>
-                  <button
+                  <button type="button"
                     className={`ml-1 rounded p-0.5 ${active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100"} hover:bg-dalam-bg-active transition-opacity`}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -484,7 +484,7 @@ export function EditorPane() {
             <MemoizedOpenFileButton fileTree={fileTree} openFile={openFile} />
             <div className="flex-1" />
             <div className="flex items-center gap-0.5 pr-1">
-              <button
+              <button type="button"
                 className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                 title="Toggle word wrap"
                 onClick={() => {
@@ -498,7 +498,7 @@ export function EditorPane() {
               >
                 <span className="text-xs">W</span>
               </button>
-              <button
+              <button type="button"
                 className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                 title="Toggle minimap"
                 onClick={() => {
@@ -679,7 +679,7 @@ function EditorStatusBar() {
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
         <span className="flex-shrink-0">UTF-8</span>
         <div className="w-px h-3 bg-dalam-border-primary flex-shrink-0" />
-        <button
+        <button type="button"
           className="flex-shrink-0 hover:text-dalam-text-primary transition-colors"
           onClick={() => {
             void useSettings.getState().update("wordWrap", !wordWrap);
@@ -691,7 +691,7 @@ function EditorStatusBar() {
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {activeTab?.dirty ? (
-          <button
+          <button type="button"
             onClick={async () => {
               try {
                 const api = createDalamAPI();
@@ -842,7 +842,7 @@ function TabContextMenu({
             <div key={idx} className="h-px bg-dalam-border-primary my-1 mx-1" />
           );
         return (
-          <button
+          <button type="button"
             key={idx}
             className="w-full flex items-center justify-between gap-3 px-2.5 py-1 text-[11px] text-dalam-text-primary hover:bg-dalam-accent-subtle hover:text-dalam-text-primary transition-colors"
             onClick={() => item.action()}

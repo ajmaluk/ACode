@@ -233,6 +233,15 @@ export function MemoryGraph() {
     };
   }, [graphData, canvasSize]);
 
+  // Sync canvas resolution to container size (avoids redundant reset in render loop)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasSize.width * dpr;
+    canvas.height = canvasSize.height * dpr;
+  }, [canvasSize]);
+
   // Render loop (stable — only restarts on graphData/isDark/canvasSize changes)
   useEffect(() => {
     if (!graphData) return;
@@ -248,9 +257,7 @@ export function MemoryGraph() {
       timeRef.current = timestamp * 0.001;
 
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = canvasSize.width * dpr;
-      canvas.height = canvasSize.height * dpr;
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       const w = canvasSize.width;
       const h = canvasSize.height;
@@ -567,6 +574,7 @@ export function MemoryGraph() {
             </span>
           )}
           <button
+            type="button"
             onClick={handleReset}
             className="px-2 py-0.5 rounded bg-dalam-bg-tertiary hover:bg-dalam-bg-hover transition-colors"
           >

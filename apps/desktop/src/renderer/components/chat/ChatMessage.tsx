@@ -19,7 +19,7 @@ class MarkdownErrorBoundary extends Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="p-3 my-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+        <div className="p-3 my-2 bg-dalam-git-deleted/10 border border-dalam-git-deleted/20 rounded-lg text-xs text-dalam-git-deleted">
           Could not render this content. The raw text is available to copy.
         </div>
       );
@@ -96,8 +96,8 @@ export const ChatMessage = React.memo(
     // System message: styled notification box
     if (message.role === "system") {
       return (
-        <div className="py-2.5 px-3.5 my-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl text-xs text-dalam-text-secondary flex items-start gap-3 animate-fade-in shadow-sm max-w-2xl mx-auto">
-          <Info className="w-4 h-4 text-dalam-accent-primary mt-0.5 flex-shrink-0" />
+        <div role="alert" className="py-2.5 px-3.5 my-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl text-xs text-dalam-text-secondary flex items-start gap-3 animate-fade-in shadow-sm max-w-2xl mx-auto">
+          <Info className="w-4 h-4 text-dalam-accent-primary mt-0.5 flex-shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-dalam-text-primary mb-1">
               System Notification
@@ -114,7 +114,7 @@ export const ChatMessage = React.memo(
     if (message.role === "user") {
       if (!message.content && !message.attachments?.length) return null;
       return (
-        <div className="group/usermsg py-2 animate-fade-in">
+        <div className="group/usermsg py-2 message-enter">
           <div className="flex justify-end">
             <div className="max-w-[80%]">
               {message.attachments && message.attachments.length > 0 && (
@@ -132,7 +132,7 @@ export const ChatMessage = React.memo(
                         />
                       ) : (
                         <>
-                          <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
+                          <FileText className="w-3.5 h-3.5 text-dalam-text-muted" aria-hidden="true" />
                           <span className="max-w-[120px] truncate">
                             {att.name}
                           </span>
@@ -143,7 +143,7 @@ export const ChatMessage = React.memo(
                 </div>
               )}
               <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl rounded-tr-sm px-4 py-2.5 relative">
-                <p className="text-[13px] text-dalam-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
+                <p className="text-sm text-dalam-text-primary leading-relaxed whitespace-pre-wrap break-words text-left">
                   {message.content}
                 </p>
                 <div className="absolute -bottom-7 right-0 flex items-center gap-0.5 opacity-0 group-hover/usermsg:opacity-100 transition-opacity z-10">
@@ -156,7 +156,7 @@ export const ChatMessage = React.memo(
                       toast.success("Copied");
                     }}
                   >
-                    <Copy className="w-3 h-3" />
+                    <Copy className="w-3 h-3" aria-hidden="true" />
                   </button>
                   <button
                     className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
@@ -170,7 +170,7 @@ export const ChatMessage = React.memo(
                       )
                     }
                   >
-                    <RotateCcw className="w-3 h-3" />
+                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -201,7 +201,7 @@ export const ChatMessage = React.memo(
     }
 
     return (
-      <div className="group/msg py-2 animate-fade-in">
+      <div className="group/msg py-2 message-enter">
         {/* Thinking block — model's reasoning, collapsed by default */}
         {!pending && message.thinking && (
           <ThinkingBlock content={message.thinking} />
@@ -248,10 +248,10 @@ export const ChatMessage = React.memo(
         {/* Main assistant message — rendered with markdown */}
         {hasContent && (
           <div className="text-[13px] text-dalam-text-primary leading-relaxed my-0.5">
-            {segments
+              {segments
               .filter((seg) => seg.type !== "text" || seg.content.trim())
-              .map((seg, idx) => (
-                <MarkdownErrorBoundary key={`seg-${idx}`}>
+              .map((seg) => (
+                <MarkdownErrorBoundary key={seg.type + seg.content.substring(0, 40)}>
                   {seg.type === "code" ? (
                     <div>
                       {pending ? (
@@ -350,9 +350,10 @@ export const ChatMessage = React.memo(
           isLast &&
           (message.content || hasToolCalls || hasFileChanges) && (
             <div className="flex items-center gap-2 mt-1 opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100 transition-opacity">
-              <div className="ml-auto flex items-center gap-0.5">
+                <div className="ml-auto flex items-center gap-0.5">
                 {message.content && (
                   <button
+                    aria-label="Copy message"
                     className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
                     title="Copy"
                     onClick={() => {
@@ -360,7 +361,7 @@ export const ChatMessage = React.memo(
                       toast.success("Copied");
                     }}
                   >
-                    <Copy className="w-3 h-3" />
+                    <Copy className="w-3 h-3" aria-hidden="true" />
                   </button>
                 )}
               </div>

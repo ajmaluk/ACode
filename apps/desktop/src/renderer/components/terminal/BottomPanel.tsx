@@ -19,12 +19,16 @@ const TABS: { id: BottomTab; icon: React.ElementType; label: string }[] = [
 ];
 
 function OutputTab() {
-  const [output, setOutput] = useState<string[]>([]);
+  const [output, setOutput] = useState<Array<{ id: number; text: string }>>([]);
+  const idCounter = useRef(0);
 
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.text) setOutput((prev) => [...prev.slice(-200), detail.text]);
+      if (detail?.text) {
+        const id = idCounter.current++;
+        setOutput((prev) => [...prev.slice(-200), { id, text: detail.text }]);
+      }
     };
     window.addEventListener("dalam:build-output", handler);
     return () => window.removeEventListener("dalam:build-output", handler);
@@ -37,9 +41,9 @@ function OutputTab() {
           No output yet. Build output will appear here.
         </p>
       ) : (
-        output.map((line, i) => (
-          <div key={i} className="whitespace-pre-wrap">
-            {line}
+        output.map((line) => (
+          <div key={line.id} className="whitespace-pre-wrap">
+            {line.text}
           </div>
         ))
       )}
@@ -49,13 +53,20 @@ function OutputTab() {
 
 function ProblemsTab() {
   const [problems, setProblems] = useState<
-    Array<{ severity: string; message: string; file?: string; line?: number }>
+    Array<{ id: number; severity: string; message: string; file?: string; line?: number }>
   >([]);
+  const problemIdCounter = useRef(0);
 
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (detail?.problems) setProblems(detail.problems);
+      if (detail?.problems) {
+        const withIds = detail.problems.map((p: { severity: string; message: string; file?: string; line?: number }) => ({
+          ...p,
+          id: problemIdCounter.current++,
+        }));
+        setProblems(withIds);
+      }
     };
     window.addEventListener("dalam:problems-update", handler);
     return () => window.removeEventListener("dalam:problems-update", handler);
@@ -68,14 +79,14 @@ function ProblemsTab() {
           No problems detected.
         </div>
       ) : (
-        problems.map((p, i) => (
+        problems.map((p) => (
           <div
-            key={i}
+            key={p.id}
             className="flex items-start gap-2 px-3 py-1.5 text-xs hover:bg-dalam-bg-hover border-b border-dalam-border-primary/30"
           >
             <span
               className={
-                p.severity === "error" ? "text-red-400" : "text-yellow-400"
+                p.severity === "error" ? "text-dalam-git-deleted" : "text-amber-400"
               }
             >
               {p.severity === "error" ? "✕" : "⚠"}
@@ -236,6 +247,7 @@ export function BottomPanel() {
         <div className="flex items-center gap-0.5">
           <Tooltip content={`Hide (${modKey()}\`)`} side="top">
             <button
+              type="button"
               onClick={() => setBottomPanelOpen(false)}
               className="w-6 h-6 flex items-center justify-center rounded text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
             >

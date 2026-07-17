@@ -53,6 +53,7 @@ export function GoToLine({ maxLine, onGoToLine, onClose }: GoToLineProps) {
             max={maxLine}
           />
           <button
+            type="button"
             onClick={onClose}
             className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
           >

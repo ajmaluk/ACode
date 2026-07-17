@@ -387,6 +387,8 @@ export function computeDiff(
   newText: string,
   contextLines: number = 3,
 ): DiffResult {
+  oldText = oldText.replace(/\r\n/g, "\n");
+  newText = newText.replace(/\r\n/g, "\n");
   if (oldText === newText) {
     return { hunks: [], additions: 0, deletions: 0 };
   }

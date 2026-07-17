@@ -55,6 +55,20 @@ async function runShellCommand(command: string, cwd?: string): Promise<{ exitCod
     return _terminalCommandRunner(command, cwd);
   }
 
+  // Security: validate the command to prevent shell injection via malicious package.json scripts.
+  // Commands from DoneCriteria.verificationCommands are auto-detected from package.json,
+  // so they may contain shell metacharacters. Reject any command that tries to chain,
+  // redirect, or inject additional commands.
+  if (/[;|&$`(){}<>\n\r\0]/.test(command)) {
+    console.warn("[Verify] Rejected dangerous verification command:", command);
+    return { exitCode: 1, stdout: "", stderr: "Verification command rejected: unsafe characters" };
+  }
+  // Also reject absolute paths / commands that start with a path separator
+  if (command.startsWith("/") || command.startsWith("\\") || command.startsWith(".")) {
+    console.warn("[Verify] Rejected path-based verification command:", command);
+    return { exitCode: 1, stdout: "", stderr: "Verification command rejected: path-based command not allowed" };
+  }
+
   // Real Tauri environment: use the shell plugin with working directory
   try {
     const { Command } = await import("@tauri-apps/plugin-shell");
@@ -416,7 +430,7 @@ export async function buildDefaultCriteria(
 
   // Build checklist based on what commands were detected
   const checklist: string[] = [];
-  if (commands.some(c => c.label.includes("type check") || c.label.includes("check"))) {
+  if (commands.some(c => /\btype.?check\b/i.test(c.label) || /\btypecheck\b/i.test(c.label) || c.label.toLowerCase().includes("compile"))) {
     checklist.push("Changes compile without errors");
   }
   if (commands.some(c => c.label.includes("test"))) {

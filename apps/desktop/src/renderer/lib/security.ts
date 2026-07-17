@@ -38,12 +38,18 @@ export function isPrivateHost(hostname: string): boolean {
   // Broadcast
   if (hostname === "255.255.255.255") return true;
   // M-17: Octal/mixed octal-decimal IP (e.g. 0177.0.0.1 → 127.0.0.1)
-  // Match any combination of octal (0-prefixed) and decimal octets
+  // Parse each octet in any notation and check if resulting IP is private
   if (/^(0[0-7]+|\d+)\.(0[0-7]+|\d+)\.(0[0-7]+|\d+)\.(0[0-7]+|\d+)$/.test(hostname)) {
-    const octets = hostname.split(".");
-    // If any octet starts with 0 and has more than 1 digit, it's octal → private
-    if (octets.some((o) => o.startsWith("0") && o.length > 1)) {
-      return true;
+    // Only recurse if there's actually an octal component (leading zero)
+    if (/(^|\.)0\d/.test(hostname)) {
+      const octets = hostname.split(".");
+      const parsed = octets.map((o) =>
+        o.startsWith("0") && o.length > 1 ? parseInt(o, 8) : parseInt(o, 10)
+      );
+    if (parsed.length === 4 && parsed.every((n) => n >= 0 && n <= 255)) {
+      const ip = parsed.join(".");
+      if (ip !== hostname && isPrivateHost(ip)) return true;
+    }
     }
   }
   // Cloud metadata endpoints

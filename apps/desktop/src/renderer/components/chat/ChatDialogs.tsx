@@ -41,6 +41,7 @@ export function VersionRestoreBar({
           </span>
         </div>
         <button
+          type="button"
           className="flex items-center gap-1 px-2 py-1 bg-dalam-accent-primary/10 hover:bg-dalam-accent-primary/20 text-dalam-accent-primary rounded-md transition-colors"
           title="Reset to this version"
           onClick={onConfirm}
@@ -49,6 +50,7 @@ export function VersionRestoreBar({
           <span>Reset</span>
         </button>
         <button
+          type="button"
           className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
           title="Cancel and return to current"
           onClick={onCancel}
@@ -186,12 +188,14 @@ export function ResetConfirmDialog({
         </div>
         <div className="px-4 py-3 border-t border-dalam-border-primary flex items-center justify-end gap-2">
           <button
+            type="button"
             className="px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-lg transition-colors"
             onClick={onCancel}
           >
             Cancel
           </button>
           <button
+            type="button"
             className="px-3 py-1.5 text-xs bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
             onClick={onConfirm}
             disabled={loading}
@@ -234,12 +238,14 @@ export function RestorePopup({
           removed ({userMsgCount} user, {assistantMsgCount} assistant)
         </div>
         <button
+          type="button"
           className="px-2 py-1 text-[11px] bg-dalam-accent-primary/10 hover:bg-dalam-accent-primary/20 text-dalam-accent-primary rounded-md transition-colors font-medium"
           onClick={onRestore}
         >
           Restore
         </button>
         <button
+          type="button"
           className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
           onClick={onDismiss}
           title="Dismiss"

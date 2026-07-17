@@ -10,25 +10,25 @@ const KIND_STYLES: Record<
     ring: "border-l-dalam-git-added",
     text: "text-dalam-git-added",
     bar: "bg-dalam-git-added",
-    icon: <CheckCircle2 className="w-4 h-4" />,
+    icon: <CheckCircle2 className="w-4 h-4" aria-hidden="true" />,
   },
   error: {
     ring: "border-l-dalam-git-deleted",
     text: "text-dalam-git-deleted",
     bar: "bg-dalam-git-deleted",
-    icon: <XCircle className="w-4 h-4" />,
+    icon: <XCircle className="w-4 h-4" aria-hidden="true" />,
   },
   warning: {
     ring: "border-l-dalam-git-modified",
     text: "text-dalam-git-modified",
     bar: "bg-dalam-git-modified",
-    icon: <AlertTriangle className="w-4 h-4" />,
+    icon: <AlertTriangle className="w-4 h-4" aria-hidden="true" />,
   },
   info: {
     ring: "border-l-dalam-accent-primary",
     text: "text-dalam-accent-primary",
     bar: "bg-dalam-accent-primary",
-    icon: <Info className="w-4 h-4" />,
+    icon: <Info className="w-4 h-4" aria-hidden="true" />,
   },
 };
 
@@ -63,6 +63,7 @@ export function Toaster() {
                     {t.actions.map((act) => (
                       <button
                         key={act.label}
+                        type="button"
                         className={`px-2 py-0.5 rounded text-xs font-semibold select-none cursor-pointer transition-colors ${
                           act.variant === "primary"
                             ? "bg-dalam-accent-primary text-white hover:bg-opacity-90"
@@ -86,11 +87,12 @@ export function Toaster() {
                 )}
               </div>
               <button
+                type="button"
                 className="btn-icon"
                 onClick={() => dismiss(t.id)}
                 aria-label="Dismiss notification"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </div>
             <div

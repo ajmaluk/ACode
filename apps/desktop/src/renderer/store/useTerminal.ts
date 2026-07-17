@@ -96,6 +96,9 @@ export const useTerminal = create<TerminalState>((set, get) => ({
   restoreForSession(sessionId) {
     const cached = _terminalStateCache.get(sessionId);
     if (cached) {
+      // Re-insert to maintain LRU order so recently restored sessions aren't evicted first
+      _terminalStateCache.delete(sessionId);
+      _terminalStateCache.set(sessionId, cached);
       set({ tabs: cached.tabs as TerminalTab[], activeTabId: cached.activeTabId });
     } else {
       const { activeWorkspaceId, workspaces } = useWorkspace.getState();

@@ -49,13 +49,15 @@ function getEmptyCost(): SessionCost {
 }
 
 function getPrice(modelId: string): { input: number; output: number } {
-  // Try exact match, then partial match
   if (_pricing[modelId]) return _pricing[modelId];
   const lower = modelId.toLowerCase();
-  for (const [key, val] of Object.entries(_pricing)) {
-    if (lower.includes(key) || key.includes(lower)) return val;
+  const sorted = Object.entries(_pricing).sort(
+    (a, b) => b[0].length - a[0].length,
+  );
+  for (const [key, val] of sorted) {
+    if (lower.includes(key)) return val;
   }
-  return { input: 3.0, output: 15.0 }; // Default fallback
+  return { input: 3.0, output: 15.0 };
 }
 
 /**

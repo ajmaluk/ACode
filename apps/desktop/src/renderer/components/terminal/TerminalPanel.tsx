@@ -23,6 +23,7 @@ import "@xterm/xterm/css/xterm.css";
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { basename } from "@/lib/pathUtils";
 import { isWindows } from "@/lib/platform";
+import type { ShellType } from "@dalam/shared-types";
 
 const DALAM_TERM_DARK_THEME = {
   background: "#0d0d0d",
@@ -86,8 +87,6 @@ function getTermTheme(isDark: boolean) {
   return isDark ? DALAM_TERM_DARK_THEME : DALAM_TERM_LIGHT_THEME;
 }
 
-type ShellType = "bash" | "zsh" | "fish" | "powershell" | "cmd" | "pwsh" | "sh";
-
 interface ShellOption {
   value: ShellType;
   label: string;
@@ -124,9 +123,10 @@ function TerminalTabContent({
         ? `${settings.terminalFont}, SF Mono, Menlo, monospace`
         : "JetBrains Mono, SF Mono, Menlo, monospace";
       term.options.fontSize = settings.terminalFontSize || 13;
-      setTimeout(() => {
+      const tid = setTimeout(() => {
         fitAddonRef.current?.fit();
       }, 50);
+      return () => clearTimeout(tid);
     }
   }, [
     settings.terminalFont,
@@ -178,7 +178,7 @@ function TerminalTabContent({
     terminalsMapRef.current.set(tabId, term);
     fitAddonRef.current = fit;
 
-    setTimeout(() => {
+    const initialFitTimer = setTimeout(() => {
       fit.fit();
       if (active) term.focus();
     }, 50);
@@ -279,6 +279,7 @@ function TerminalTabContent({
     window.addEventListener("resize", handleResize);
 
     return () => {
+      clearTimeout(initialFitTimer);
       isCleanedUp = true;
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
       window.removeEventListener("resize", handleResize);
@@ -504,6 +505,7 @@ export function TerminalPanel() {
             </span>
             {tabs.length > 1 && (
               <button
+                type="button"
                 className="ml-1 opacity-0 group-hover:opacity-100 hover:bg-dalam-bg-active rounded p-0.5"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -520,6 +522,7 @@ export function TerminalPanel() {
         <div className="relative" data-dropdown>
           <Tooltip content="New terminal in this project" side="top">
             <button
+              type="button"
               className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex items-center gap-0.5"
               onClick={() => {
                 setShowShellDropdown(false);
@@ -542,6 +545,7 @@ export function TerminalPanel() {
               </div>
               {availableShells.map((shell) => (
                 <button
+                  type="button"
                   key={shell.value}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                   onClick={() => handleAddTab(shell.value)}
@@ -553,6 +557,7 @@ export function TerminalPanel() {
               ))}
               <div className="border-t border-dalam-border-primary mt-1 pt-1">
                 <button
+                  type="button"
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
                   onClick={() => handleAddTab()}
                 >
@@ -571,6 +576,7 @@ export function TerminalPanel() {
           <div className="relative" data-dropdown>
             <Tooltip content="Change shell type" side="top">
               <button
+                type="button"
                 className="flex items-center gap-1 px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors text-[10px]"
                 onClick={() => {
                   setShowAddDropdown(false);
@@ -591,6 +597,7 @@ export function TerminalPanel() {
               >
                 {availableShells.map((shell) => (
                   <button
+                    type="button"
                     key={shell.value}
                     className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
                       shell.value === activeTab.shell
@@ -632,6 +639,7 @@ export function TerminalPanel() {
         {/* Clear */}
         <Tooltip content="Clear (Ctrl+L)" side="top">
           <button
+            type="button"
             className="px-3 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors"
             onClick={() => {
               if (!activeTabId) return;
@@ -672,6 +680,7 @@ export function TerminalPanel() {
               </p>
               {cwd && (
                 <button
+                  type="button"
                   onClick={() => ensureTabForCwd(cwd)}
                   className="px-3 py-1.5 text-[11px] bg-dalam-accent-primary text-white rounded-md hover:bg-dalam-accent-hover transition-colors"
                 >

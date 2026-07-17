@@ -1,21 +1,19 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::process::Command;
 use tauri::command;
 
 /// Validate that a path exists and is a valid directory (for git repo paths).
+/// Canonicalizes the path atomically — no prior exists()/is_dir() check to avoid TOCTOU.
 /// Returns a canonicalized path string or an error.
 fn validate_git_path(raw_path: &str) -> Result<String, String> {
-    let p = Path::new(raw_path);
-    if !p.exists() {
-        return Err(format!("Path does not exist: {}", raw_path));
-    }
-    if !p.is_dir() {
+    // Canonicalize atomically: resolves symlinks, validates existence,
+    // and resolves all .. components in a single OS call.
+    let canonical = std::fs::canonicalize(std::path::Path::new(raw_path))
+        .map_err(|_| format!("Path does not exist or is not accessible: {}", raw_path))?;
+    // Verify it's a directory
+    if !canonical.is_dir() {
         return Err(format!("Path is not a directory: {}", raw_path));
     }
-    // Canonicalize to resolve symlinks and .. components
-    let canonical = std::fs::canonicalize(p)
-        .map_err(|e| format!("Failed to resolve path '{}': {}", raw_path, e))?;
     Ok(canonical.to_string_lossy().to_string())
 }
 
@@ -44,17 +42,30 @@ pub struct GitLogEntry {
 }
 
 fn count_ahead_behind(path: &str, branch: &str) -> (i32, i32) {
+    if branch.is_empty() || branch == "HEAD" {
+        return (0, 0);
+    }
     let output = Command::new("git")
         .args(["rev-list", "--left-right", "--count", &format!("{}...{}@{{upstream}}", branch, branch)])
         .current_dir(path)
         .output();
     match output {
         Ok(out) if out.status.success() => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.trim().is_empty() {
+                log::warn!("[git] count_ahead_behind stderr: {stderr}");
+            }
             let s = String::from_utf8_lossy(&out.stdout);
             let parts: Vec<&str> = s.trim().split('\t').collect();
             if parts.len() == 2 {
-                let ahead = parts[0].parse().unwrap_or(0);
-                let behind = parts[1].parse().unwrap_or(0);
+                let ahead = parts[0].parse::<i32>().unwrap_or_else(|e| {
+                    log::warn!("[git] count_ahead_behind: failed to parse ahead value '{}': {e}", parts[0]);
+                    0
+                });
+                let behind = parts[1].parse::<i32>().unwrap_or_else(|e| {
+                    log::warn!("[git] count_ahead_behind: failed to parse behind value '{}': {e}", parts[1]);
+                    0
+                });
                 (ahead, behind)
             } else {
                 (0, 0)
@@ -71,7 +82,7 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(&path)
         .output()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("git rev-parse failed: {e}"))?;
 
     if !branch_output.status.success() {
         let err = String::from_utf8_lossy(&branch_output.stderr).to_string();
@@ -84,7 +95,7 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
         .args(["status", "--porcelain"])
         .current_dir(&path)
         .output()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("git status failed: {e}"))?;
 
     if !status_output.status.success() {
         let err = String::from_utf8_lossy(&status_output.stderr).to_string();
@@ -104,7 +115,7 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
 
         // Handle rename/copy entries: "R  oldname -> newname" → just "newname"
         if (status_code.starts_with('R') || status_code.starts_with('C')) && file_path.contains(" -> ") {
-            if let Some(new_path) = file_path.split(" -> ").nth(1) {
+            if let Some(new_path) = file_path.splitn(2, " -> ").nth(1) {
                 file_path = new_path.to_string();
             }
         }
@@ -143,6 +154,9 @@ pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
     if message.len() > 4096 {
         return Err("Commit message too long (max 4096 bytes)".to_string());
     }
+    if message.trim().is_empty() {
+        return Err("Commit message cannot be empty".to_string());
+    }
     let output = Command::new("git")
         .args(["commit", "-m", &message, "--"])
         .current_dir(&path)
@@ -168,7 +182,7 @@ pub fn git_commit(path: String, message: String) -> Result<GitCommit, String> {
 #[command]
 pub fn git_log(path: String, limit: Option<i32>) -> Result<Vec<GitLogEntry>, String> {
     let path = validate_git_path(&path)?;
-    let count = limit.unwrap_or(20).min(1000);
+    let count = limit.unwrap_or(20).max(1).min(1000);
     let output = Command::new("git")
         .args([
             "log",
@@ -245,7 +259,7 @@ pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
     let path = validate_git_path(&path)?;
     // Block dangerous branch names that could be misinterpreted
     let lower = branch.to_lowercase();
-    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || branch.starts_with('-') || branch.ends_with(".lock") || (branch == ".git" || branch.contains("/.git")) || branch.contains("..") || branch.contains('\\') || branch.contains('@') || branch.contains('{') || branch.contains(' ') {
+    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || branch.starts_with('-') || branch.ends_with(".lock") || (branch == ".git" || branch.contains("/.git")) || branch.contains("..") || branch.contains('\\') || branch.contains('@') || branch.contains('{') || branch.contains(' ') || branch.contains(':') {
         return Err(format!("Invalid branch name: '{}'", branch));
     }
     let output = Command::new("git")
@@ -266,7 +280,7 @@ pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
 pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
     let path = validate_git_path(&path)?;
     let lower = name.to_lowercase();
-    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || name.starts_with('-') || name.ends_with(".lock") || (name == ".git" || name.contains("/.git")) || name.contains("..") || name.contains('\\') || name.contains('@') || name.contains('{') || name.contains(' ') {
+    if ["head", "orig_head", "fetch_head", "merge_head", "index", "..", "."].contains(&lower.as_str()) || name.starts_with('-') || name.ends_with(".lock") || (name == ".git" || name.contains("/.git")) || name.contains("..") || name.contains('\\') || name.contains('@') || name.contains('{') || name.contains(' ') || name.contains(':') {
         return Err(format!("Invalid branch name: '{}'", name));
     }
     let output = Command::new("git")
@@ -287,8 +301,11 @@ pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
 pub fn git_diff_file(path: String, file_path: String) -> Result<String, String> {
     let path = validate_git_path(&path)?;
     // Block path traversal in file_path
-    if file_path.contains("..") || file_path.starts_with('/') {
+    if file_path.starts_with('/') || file_path.contains('\0') || (cfg!(not(target_os = "windows")) && file_path.contains('\\')) {
         return Err(format!("Invalid file path: '{}'", file_path));
+    }
+    if std::path::Path::new(&file_path).components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("Path traversal detected: '{}'", file_path));
     }
     let output = Command::new("git")
         .args(["diff", "--no-color", "--", &file_path])
@@ -301,5 +318,8 @@ pub fn git_diff_file(path: String, file_path: String) -> Result<String, String> 
         return Err(format!("git diff failed: {}", stderr));
     }
 
+    if output.stdout.contains(&0u8) {
+        return Err(format!("Cannot diff binary file: '{}'", file_path));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

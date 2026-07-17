@@ -44,12 +44,12 @@ function setupChatState() {
               hunks: [
                 {
                   oldStart: 1,
-                  oldLines: 1,
+                  oldCount: 1,
                   newStart: 1,
-                  newLines: 1,
+                  newCount: 1,
                   lines: [
-                    { type: "remove", content: "old", oldLineNumber: 1 },
-                    { type: "add", content: "new", newLineNumber: 1 },
+                    { type: "remove", content: "old", oldLineNum: 1, newLineNum: null },
+                    { type: "add", content: "new", oldLineNum: null, newLineNum: 1 },
                   ],
                 },
               ],
@@ -70,11 +70,11 @@ function setupChatState() {
               hunks: [
                 {
                   oldStart: 0,
-                  oldLines: 0,
+                  oldCount: 0,
                   newStart: 1,
-                  newLines: 1,
+                  newCount: 1,
                   lines: [
-                    { type: "add", content: "new content", newLineNumber: 1 },
+                    { type: "add", content: "new content", oldLineNum: null, newLineNum: 1 },
                   ],
                 },
               ],

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useId } from "react";
 import ReactDOM from "react-dom";
 
 interface TooltipProps {
@@ -17,7 +17,8 @@ export function Tooltip({
   const [visible, setVisible] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLDivElement>(null);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipId = useId();
 
   const updateCoords = () => {
     if (!triggerRef.current) return;
@@ -96,6 +97,7 @@ export function Tooltip({
     <div
       ref={triggerRef}
       className="relative inline-flex"
+      aria-describedby={visible ? tooltipId : undefined}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}
@@ -107,6 +109,8 @@ export function Tooltip({
         typeof document !== "undefined" &&
         ReactDOM.createPortal(
           <div
+            id={tooltipId}
+            role="tooltip"
             style={{
               position: "absolute",
               top: `${coords.top}px`,

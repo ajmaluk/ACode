@@ -603,10 +603,10 @@ export async function loadSkillContent(
     const raw = await fsAdapter.readFile(skill.location);
     const { body } = parseFrontmatter(raw);
     // Cache the loaded content back into the registry so subsequent
-    // invocations don't re-read from disk.
+    // invocations don't re-read from disk. Return a copy to avoid
+    // mutating the caller's SkillInfo reference.
     const registered = registry.get(skill.name);
     if (registered) registered.content = body;
-    skill.content = body;
     return body;
   } catch (e) {
     console.warn(`Failed to load skill content from ${skill.location}:`, e);

@@ -28,7 +28,7 @@ export type { ModelProvider, SettingsTab } from "./useModelProviders";
 export { useSettingsView } from "./useSettingsView";
 export { useShortcuts } from "./useShortcuts";
 export { useUI } from "./useUI";
-export { usePermission, _toolCallResolvers, _pendingResolutions, withPermission } from "./usePermission";
+export { usePermission, _toolCallResolvers, _pendingResolutions } from "./usePermission";
 export type { PermissionKind, PermissionRequest } from "./usePermission";
 export { useQuestion } from "./useQuestion";
 export { useDiffView } from "./useDiffView";

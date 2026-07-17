@@ -106,6 +106,7 @@ function normalizeBrowserUrl(input: string): string | null {
     if (isPrivateHost(testUrl.hostname)) return null;
   } catch (e) {
     if (import.meta.env.DEV) devWarn("[Store] const testUrl = new URL(`https://${raw}`);:", e);
+    return null;
   }
 
   if (/\s/.test(raw)) return "https://www.google.com/search?q=" + encodeURIComponent(raw);
@@ -255,8 +256,13 @@ export const useUI = create<UIState>((set, get) => ({
   },
 }));
 
-void import("./events").then(({ eventBus }) => {
-  eventBus.on("workspace:file-opened", () => {
-    useUI.getState().setViewMode("editor");
+{
+  let _fileOpenedListenerRegistered = false;
+  void import("./events").then(({ eventBus }) => {
+    if (_fileOpenedListenerRegistered) return;
+    _fileOpenedListenerRegistered = true;
+    eventBus.on("workspace:file-opened", () => {
+      useUI.getState().setViewMode("editor");
+    });
   });
-});
+}

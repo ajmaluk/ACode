@@ -35,7 +35,7 @@ function detectPlatform(): Platform {
     ua.includes("ubuntu") ||
     ua.includes("fedora") ||
     ua.includes("debian") ||
-    ua.includes("arch") ||
+    /\barch\b/i.test(ua) ||
     ua.includes("manjaro") ||
     ua.includes("nixos") ||
     ua.includes("alpine")

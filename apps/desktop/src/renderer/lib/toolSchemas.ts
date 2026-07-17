@@ -426,12 +426,6 @@ const DANGEROUS_COMMANDS = [
   "mv /* ",
   "mv /etc/",
   "mv /usr/",
-  // Unix - downloading and executing (piped to shell)
-  // Must match "curl ... | sh" even with intermediate args
-  "pipe_curl_sh",
-  "pipe_curl_bash",
-  "pipe_wget_sh",
-  "pipe_wget_bash",
   // Windows - destructive operations
   "Format-Volume",
   "Remove-Item -Recurse -Force C:\\",
@@ -446,6 +440,15 @@ const DANGEROUS_COMMANDS = [
   "Stop-Computer",
   "Restart-Computer",
   "Set-ExecutionPolicy Unrestricted",
+];
+
+/** Pattern-based dangerous commands (regex instead of string matching) */
+const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; description: string }> = [
+  // Unix - downloading and executing (piped to shell): curl ... | sh, wget ... | bash, etc.
+  { pattern: /\b(curl|wget)\b[^|]*\|[^|]*\bsh\b/, description: "pipe_curl_sh" },
+  { pattern: /\b(curl|wget)\b[^|]*\|[^|]*\bbash\b/, description: "pipe_curl_bash" },
+  { pattern: /\bwget\b[^|]*\|[^|]*\bsh\b/, description: "pipe_wget_sh" },
+  { pattern: /\bwget\b[^|]*\|[^|]*\bbash\b/, description: "pipe_wget_bash" },
 ];
 
 /**
@@ -630,14 +633,10 @@ export function validateToolArgs(
       // Block "rm -rf /" and "echo && rm -rf /" but allow "rm -rf /tmp/build"
       // Use negative lookahead to ensure the pattern is NOT followed by path chars
       let matched: boolean;
-      if (normalizedDangerous === "pipe_curl_sh") {
-        matched = /\b(curl|wget)\b[^|]*\|[^|]*\bsh\b/.test(cmd);
-      } else if (normalizedDangerous === "pipe_curl_bash") {
-        matched = /\b(curl|wget)\b[^|]*\|[^|]*\bbash\b/.test(cmd);
-      } else if (normalizedDangerous === "pipe_wget_sh") {
-        matched = /\bwget\b[^|]*\|[^|]*\bsh\b/.test(cmd);
-      } else if (normalizedDangerous === "pipe_wget_bash") {
-        matched = /\bwget\b[^|]*\|[^|]*\bbash\b/.test(cmd);
+      // Check pattern-based dangerous commands first (e.g., pipe-to-shell)
+      const patternMatch = DANGEROUS_PATTERNS.find((p) => p.pattern.test(cmd));
+      if (patternMatch) {
+        matched = true;
       } else if (normalizedDangerous.endsWith("/")) {
         const escaped = normalizedDangerous.replace(
           /[.*+?^${}()|[\]\\]/g,

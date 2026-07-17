@@ -117,7 +117,7 @@ export function globToRegex(pattern: string): RegExp {
     .replace(/\?/g, "[^/]")
     .replace(/__GLOBSTAR__/g, ".*")
     // Step 4: Restore brace groups
-    .replace(/__BRACE(\d+)__/g, (_, idx) => braceGroups[parseInt(idx)] || "");
+    .replace(/__BRACE(\d+)__/g, (_, idx) => braceGroups[parseInt(idx, 10)] || "");
   const regex = new RegExp("^" + regexStr + "$");
   _globRegexCache.set(pattern, regex);
   return regex;

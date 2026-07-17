@@ -228,7 +228,7 @@ export function estimateTokens(text: string | null | undefined): number {
         inCodeBlock = !inCodeBlock;
       }
       lineNum++;
-      count += 1;
+      count += 100;
       continue;
     }
 
@@ -243,7 +243,7 @@ export function estimateTokens(text: string | null | undefined): number {
       (code >= 0xf900 && code <= 0xfaff)
     ) {
       // CJK Compatibility
-      count += 0.67;
+      count += 67;
     }
     // CJK punctuation and fullwidth forms — ~2 chars per token
     else if (
@@ -251,11 +251,11 @@ export function estimateTokens(text: string | null | undefined): number {
       (code >= 0xff00 && code <= 0xffef)
     ) {
       // Fullwidth forms
-      count += 0.5;
+      count += 50;
     }
     // Whitespace
     else if (code === 32 || code === 9) {
-      count += 1;
+      count += 100;
     }
     // Code identifiers — ~4 chars per token (realistic for mixed code)
     else if (
@@ -265,15 +265,15 @@ export function estimateTokens(text: string | null | undefined): number {
       (code >= 48 && code <= 57) ||
       code === 95
     ) {
-      count += 0.25;
+      count += 25;
     }
     // Other characters — ~4 chars per token
     else {
-      count += 0.25;
+      count += 25;
     }
   }
 
-  const result = Math.ceil(count);
+  const result = Math.ceil(count / 100);
 
   // Cache the result
   setCachedTokenCount(text, result);

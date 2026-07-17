@@ -23,36 +23,45 @@ function escapeHtml(s: string): string {
 
 // Sanitize highlighted HTML output to prevent XSS via crafted code content
 // or AI-generated output that includes markdown with embedded HTML.
+// highlight.js only produces <span class="..."> tags, so we use a whitelist
+// approach: only allow <span> with class attribute, strip everything else.
 function sanitizeHighlightedHtml(html: string): string {
-  return (
-    html
-      // Strip all data: URIs in attribute values (cannot distinguish safe from dangerous)
-      .replace(
-        /((?:href|src|action|srcset|poster|data)\s*=\s*)(["'])data:[^"']*\2/gi,
-        "$1$2#",
-      )
-      // Strip javascript:, vbscript:, and other dangerous URI schemes in href/src/action
-      .replace(
-        /((?:href|src|action|formaction|srcset|poster|ping)\s*=\s*)(["'])\s*(?:javascript|vbscript|livescript|data):[^"']*\2/gi,
-        "$1$2#",
-      )
-      // Strip xlink:href attribute (SVG-based XSS vector)
-      .replace(/\s+xlink:href\s*=\s*(?:"[^"]*"|'[^']*')/gi, "")
-      // Strip event handler attributes (onclick, onerror, onload, onmouseover, etc.)
-      .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-      // Strip style attributes that can contain XSS via expression/javascript
-      .replace(/\s+style\s*=\s*(?:"[^"]*"|'[^']*')/gi, "")
-      // Remove <script>, <iframe>, <object>, <embed>, <form>, <svg>, <math>, <template> tags
-      .replace(/<script\b[^>]*>/gi, "<!-- ")
-      .replace(/<\/script\b[^>]*>/gi, " -->")
-      .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "<!-- removed iframe -->")
-      .replace(/<object\b[^>]*>[\s\S]*?<\/object>/gi, "<!-- removed object -->")
-      .replace(/<embed\b[^>]*>/gi, "<!-- removed embed -->")
-      .replace(/<form\b[^>]*>[\s\S]*?<\/form>/gi, "<!-- removed form -->")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, "<!-- removed svg -->")
-      .replace(/<math\b[^>]*>[\s\S]*?<\/math>/gi, "<!-- removed math -->")
-      .replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, "<!-- removed template -->")
-  );
+  // Normalize Unicode to prevent homoglyph-based bypasses
+  let normalized: string;
+  try {
+    normalized = html.normalize("NFKC");
+  } catch {
+    normalized = html;
+  }
+
+  // Recursively strip dangerous elements (handles nesting like <svg><foreignObject><script>)
+  const DANGEROUS_TAGS =
+    /<(script|iframe|object|embed|form|svg|math|template|style|link|base|meta)\b[^>]*>[\s\S]*?<\/\1>/gi;
+  let prev = "";
+  let cleaned = normalized;
+  while (cleaned !== prev) {
+    prev = cleaned;
+    cleaned = cleaned.replace(DANGEROUS_TAGS, "<!-- removed -->");
+  }
+
+  // Strip self-closing dangerous tags
+  cleaned = cleaned
+    .replace(/<(script|iframe|object|embed|form|svg|math|template|style|link|base|meta)\b[^>]*\/?>/gi, "<!-- removed -->")
+    // Remove event handlers, javascript: URIs, style attributes on remaining elements
+    .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+style\s*=\s*(?:"[^"]*"|'[^']*')/gi, "")
+    .replace(/\s+xlink:href\s*=\s*(?:"[^"]*"|'[^']*')/gi, "")
+    // Strip dangerous URI schemes
+    .replace(
+      /((?:href|src|action|formaction|srcset|poster|ping|xlink:href)\s*=\s*)(["'])\s*(?:javascript|vbscript|livescript|data):[^"']*\2/gi,
+      "$1$2#",
+    )
+    .replace(
+      /((?:href|src|action|srcset|poster|data)\s*=\s*)(["'])data:[^"']*\2/gi,
+      "$1$2#",
+    );
+
+  return cleaned;
 }
 
 // Named link component (extracted to satisfy React hooks rules)
@@ -65,6 +74,7 @@ function LinkComponent({
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const firstMenuItemRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!showMenu) return;
@@ -72,8 +82,16 @@ function LinkComponent({
       if (menuRef.current && !menuRef.current.contains(e.target as Node))
         setShowMenu(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowMenu(false);
+    };
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    firstMenuItemRef.current?.focus();
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [showMenu]);
 
   const safeUrl = (() => {
@@ -91,27 +109,44 @@ function LinkComponent({
       ) {
         return { isExternal: false, isNavigable: false, safeHref: "#" };
       }
-      // Check for obfuscated javascript: using control characters or other tricks
       // eslint-disable-next-line no-control-regex
       const stripped = href.replace(/[\x00-\x20\x7f-\x9f]/g, "").trim().toLowerCase();
       if (stripped.startsWith("javascript:") || stripped.startsWith("data:") || stripped.startsWith("vbscript:")) {
         return { isExternal: false, isNavigable: false, safeHref: "#" };
       }
-      // Relative links — navigable within the app
       return { isExternal: false, isNavigable: true, safeHref: href };
     }
   })();
 
+  if (!safeUrl.isNavigable) {
+    return (
+      <span className="relative inline-block">
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={typeof children === "string" ? children : "Link"}
+          className="text-dalam-accent-primary hover:underline cursor-pointer"
+          onClick={(e) => {
+            e.preventDefault();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+            }
+          }}
+        >
+          {children}
+        </span>
+      </span>
+    );
+  }
+
   return (
     <span className="relative inline-block">
       <a
-        href={safeUrl.isNavigable ? safeUrl.safeHref : "#"}
+        href={safeUrl.safeHref}
         {...props}
         onClick={(e) => {
-          if (!safeUrl.isNavigable) {
-            e.preventDefault();
-            return;
-          }
           setShowMenu(!showMenu);
           if (safeUrl.isExternal) e.preventDefault();
         }}
@@ -122,9 +157,12 @@ function LinkComponent({
       {showMenu && safeUrl.isExternal && (
         <div
           ref={menuRef}
+          role="menu"
           className="absolute z-50 bottom-full left-0 mb-1 w-52 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-lg py-1 animate-fade-in"
         >
           <button
+            ref={firstMenuItemRef}
+            role="menuitem"
             className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover flex items-center gap-2"
             onClick={() => {
               const ui = useUI.getState();
@@ -134,9 +172,10 @@ function LinkComponent({
               setShowMenu(false);
             }}
           >
-            <Globe className="w-3.5 h-3.5" /> Open in Dalam
+            <Globe className="w-3.5 h-3.5" aria-hidden="true" /> Open in Dalam
           </button>
           <button
+            role="menuitem"
             className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover flex items-center gap-2"
             onClick={() => {
               try {
@@ -147,16 +186,17 @@ function LinkComponent({
               setShowMenu(false);
             }}
           >
-            <ExternalLink className="w-3.5 h-3.5" /> Open in external browser
+            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /> Open in external browser
           </button>
           <button
+            role="menuitem"
             className="w-full text-left px-3 py-1.5 text-xs text-dalam-text-primary hover:bg-dalam-bg-hover flex items-center gap-2"
             onClick={() => {
               navigator.clipboard.writeText(href || "").catch(() => {});
               setShowMenu(false);
             }}
           >
-            <Copy className="w-3.5 h-3.5" /> Copy URL
+            <Copy className="w-3.5 h-3.5" aria-hidden="true" /> Copy URL
           </button>
         </div>
       )}
@@ -344,9 +384,10 @@ export const CodeBlock = React.memo(function CodeBlock({
     <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
         <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted min-w-0">
-          <FileCode className="w-3 h-3 shrink-0" />
+          <FileCode className="w-3 h-3 shrink-0" aria-hidden="true" />
           {filename ? (
             <button
+              type="button"
               className="font-medium text-dalam-accent-primary hover:text-dalam-accent-hover truncate flex items-center gap-1 transition-colors"
               title={`Open ${filename} in Review`}
               onClick={() => openInReview(filename, content)}
@@ -363,6 +404,8 @@ export const CodeBlock = React.memo(function CodeBlock({
         </div>
         <div className="flex items-center gap-1">
           <button
+            type="button"
+            aria-label="Copy code block"
             className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
             onClick={() => {
               navigator.clipboard.writeText(content).then(
@@ -375,6 +418,8 @@ export const CodeBlock = React.memo(function CodeBlock({
           </button>
           {isLong && (
             <button
+              type="button"
+              aria-expanded={expanded}
               className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
               onClick={() => setExpanded(!expanded)}
             >
@@ -382,6 +427,8 @@ export const CodeBlock = React.memo(function CodeBlock({
             </button>
           )}
           <button
+            type="button"
+            aria-label="Apply code to editor"
             className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
             onClick={handleApply}
           >
@@ -401,6 +448,7 @@ export const CodeBlock = React.memo(function CodeBlock({
       </pre>
       {isLong && !expanded && (
         <button
+          type="button"
           className="w-full py-1.5 text-[10px] text-dalam-accent-primary hover:bg-dalam-bg-hover border-t border-dalam-border-primary transition-colors"
           onClick={() => setExpanded(true)}
         >
@@ -436,6 +484,7 @@ export const StreamingCodeBlock = React.memo(function StreamingCodeBlock({
     <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden relative">
       {/* Shimmer overlay — active while streaming content arrives */}
       <div
+        aria-hidden="true"
         className={`absolute inset-0 pointer-events-none z-10 rounded-lg overflow-hidden transition-opacity duration-500 ${
           hasContent ? "opacity-0" : "opacity-100"
         }`}
@@ -445,7 +494,7 @@ export const StreamingCodeBlock = React.memo(function StreamingCodeBlock({
 
       <div className="flex items-center justify-between px-3 py-1.5 bg-dalam-bg-tertiary border-b border-dalam-border-primary">
         <div className="flex items-center gap-1.5 text-[10px] text-dalam-text-muted min-w-0">
-          <FileCode className="w-3 h-3 shrink-0" />
+          <FileCode className="w-3 h-3 shrink-0" aria-hidden="true" />
           {filename ? (
             <span className="font-medium text-dalam-text-secondary truncate" title={filename}>
               {filename}
@@ -465,6 +514,8 @@ export const StreamingCodeBlock = React.memo(function StreamingCodeBlock({
         <div className="flex items-center gap-1">
           {isLong && (
             <button
+              type="button"
+              aria-expanded={expanded}
               className="text-[10px] text-dalam-text-muted hover:text-dalam-text-primary px-1.5 py-0.5 rounded hover:bg-dalam-bg-hover transition-colors"
               onClick={() => setExpanded(!expanded)}
             >
@@ -485,6 +536,7 @@ export const StreamingCodeBlock = React.memo(function StreamingCodeBlock({
       </pre>
       {isLong && !expanded && (
         <button
+          type="button"
           className="w-full py-1.5 text-[10px] text-dalam-accent-primary hover:bg-dalam-bg-hover border-t border-dalam-border-primary transition-colors"
           onClick={() => setExpanded(true)}
         >

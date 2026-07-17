@@ -231,6 +231,7 @@ export const useModelProviders = create<ModelProvidersState>((set, get) => ({
     for (const p of providers) {
       if (!p.enabled) continue;
       for (const m of p.models) {
+        if (m.enabled === false) continue;
         result.push({ providerName: p.name, model: m });
       }
     }

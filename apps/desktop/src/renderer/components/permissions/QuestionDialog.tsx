@@ -11,7 +11,7 @@ export function QuestionDialog() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const optionCount = request?.options?.length ?? 0;
-  const maxIndex = optionCount; // last index = custom input
+  const maxIndex = request?.allowFreeText !== false ? optionCount : optionCount - 1;
 
   // Reset state when a new question appears
   const prevRequestIdRef = useRef<string | undefined>(undefined);
@@ -25,7 +25,14 @@ export function QuestionDialog() {
   }, [request?.id]);
 
   useLayoutEffect(() => {
-    if (request) containerRef.current?.focus();
+    if (request) {
+      containerRef.current?.focus();
+      // Focus the first option when dialog opens
+      const buttons = containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+      if (buttons && buttons[0]) {
+        buttons[0].focus();
+      }
+    }
   }, [request]);
 
   // All keyboard handling lives in the container's onKeyDown so stopPropagation
@@ -45,21 +52,21 @@ export function QuestionDialog() {
         setSelected((prev) => {
           const next = Math.min(prev + 1, maxIndex);
           if (next === maxIndex) {
-            setInputFocused(true);
             requestAnimationFrame(() => inputRef.current?.focus());
           }
           return next;
         });
+        setInputFocused(false);
       } else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
         e.preventDefault();
         setSelected((prev) => {
           const next = Math.max(prev - 1, 0);
           if (next < maxIndex) {
-            setInputFocused(false);
             inputRef.current?.blur();
           }
           return next;
         });
+        setInputFocused(false);
       } else if (e.key === "Enter" || (e.key === " " && !inputFocused)) {
         e.preventDefault();
         if (inputFocused && customText.trim()) {
@@ -105,6 +112,7 @@ export function QuestionDialog() {
         ref={containerRef}
         tabIndex={-1}
         role="dialog"
+        aria-modal="true"
         aria-label={request.question}
         className="w-[760px] max-w-[96vw] surface shadow-2xl outline-none overflow-hidden"
         onKeyDown={handleKeyDown}
@@ -122,23 +130,25 @@ export function QuestionDialog() {
           <div className="flex items-center gap-1.5 text-xs text-dalam-text-muted flex-shrink-0">
             {request.workspaceName && (
               <>
-                <FolderOpen className="w-3.5 h-3.5" />
+                <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{request.workspaceName}</span>
               </>
             )}
             {request.branch && (
               <>
-                <GitBranch className="w-3.5 h-3.5 ml-2" />
+                <GitBranch className="w-3.5 h-3.5 ml-2" aria-hidden="true" />
                 <span>{request.branch}</span>
               </>
             )}
             <span className="ml-2 text-dalam-text-muted/60">1 / 1</span>
             <button
+              type="button"
               className="ml-2 btn-icon p-1"
               onClick={() => resolve(null)}
               title="Close"
+              aria-label="Close"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -150,6 +160,9 @@ export function QuestionDialog() {
             return (
               <button
                 key={opt.label}
+                type="button"
+                role="option"
+                aria-selected={idx === selected && !inputFocused}
                 onClick={() => {
                   setSelected(idx);
                   setInputFocused(false);
@@ -219,17 +232,19 @@ export function QuestionDialog() {
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-dalam-border-primary">
           <div className="flex items-center gap-1.5 text-[11px] text-dalam-text-muted">
-            <Info className="w-3 h-3" />
+            <Info className="w-3 h-3" aria-hidden="true" />
             Use Tab / arrow keys to choose, then Enter or Space to select
           </div>
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => resolve(null)}
               className="px-3 py-1.5 text-xs rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
             >
               Dismiss
             </button>
             <button
+              type="button"
               onClick={handleSubmit}
               className="px-3 py-1.5 text-xs rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
             >

@@ -113,7 +113,7 @@ export function WelcomeScreen() {
                 </p>
               </div>
             </div>
-            <button className="btn-icon" onClick={close} title="Skip" aria-label="Close welcome screen">
+            <button type="button" className="btn-icon" onClick={close} title="Skip" aria-label="Close welcome screen">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -155,6 +155,7 @@ export function WelcomeScreen() {
             </div>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 className="px-3 py-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-primary"
                 onClick={close}
                 aria-label="Skip onboarding"
@@ -162,6 +163,7 @@ export function WelcomeScreen() {
                 Skip
               </button>
               <button
+                type="button"
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs rounded-md transition-colors"
                 onClick={next}
                 aria-label={isLast ? "Open workspace" : current.cta}

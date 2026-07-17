@@ -105,8 +105,8 @@ export function invalidateCache(serverName: string): void {
  * Clear all MCP caches.
  */
 export function clearAllCaches(): void {
-  memoryCache.clear();
   try {
+    memoryCache.clear();
     const keys = Object.keys(localStorage).filter((k) =>
       k.startsWith(CACHE_KEY_PREFIX),
     );

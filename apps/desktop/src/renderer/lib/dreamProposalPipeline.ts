@@ -229,16 +229,16 @@ export async function processProposals(
       case "auto-accept":
         try {
           await applyFn(proposal);
-          proposal.status = "applied";
-          proposal.appliedAt = Date.now();
-          result.autoAccepted.push(proposal);
+          // Copy to avoid mutating the caller's original proposal object
+          const appliedProposal = { ...proposal, status: "applied" as const, appliedAt: Date.now() };
+          result.autoAccepted.push(appliedProposal);
         } catch (err) {
           console.warn(
             `[DreamProposal] Auto-apply failed for ${proposal.id}:`,
             err,
           );
-          proposal.status = "rejected";
-          result.rejected.push(proposal);
+          const rejectedProposal = { ...proposal, status: "rejected" as const };
+          result.rejected.push(rejectedProposal);
         }
         break;
 

@@ -114,11 +114,11 @@ export async function indexWorkspace(
           await db.execute(`DELETE FROM code_index WHERE file_path = ?`, [row.file_path]);
         }
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[CodeIndex] exists(fullPath))) {:", e);
+        if (import.meta.env.DEV) console.warn("[CodeIndex] File existence check failed:", e);
       }
     }
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[CodeIndex] exists(fullPath))) {:", e);
+    if (import.meta.env.DEV) console.warn("[CodeIndex] File existence check failed:", e);
   }
 
   async function walkDir(dir: string, depth = 0): Promise<void> {
@@ -128,7 +128,7 @@ export async function indexWorkspace(
     try {
       entries = await readDir(dir);
     } catch (e) {
-      if (import.meta.env.DEV) console.warn("[CodeIndex] readDir(dir);:", e);
+      if (import.meta.env.DEV) console.warn("[CodeIndex] readDir failed:", e);
       return; // Permission denied or not a directory
     }
 
@@ -183,7 +183,7 @@ export async function indexWorkspace(
         indexed++;
         onProgress?.(indexed, indexed + skipped);
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[CodeIndex] operation:", e);
+        if (import.meta.env.DEV) console.warn("[CodeIndex] indexWorkspace: file indexing error:", e);
         errors++;
       }
     }
@@ -250,7 +250,7 @@ export async function searchCodeIndex(
       language: row.language,
     }));
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[CodeIndex] operation:", e);
+    if (import.meta.env.DEV) console.warn("[CodeIndex] searchCodeIndex failed:", e);
     return [];
   }
 }
@@ -284,7 +284,7 @@ export async function getCodeIndexStats(): Promise<{
 
     return { totalFiles, totalSize, languages };
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[CodeIndex] db.select(\"SELECT COUNT(*) as count FROM code_inde:", e);
+    if (import.meta.env.DEV) console.warn("[CodeIndex] getCodeIndexStats failed:", e);
     return { totalFiles: 0, totalSize: 0, languages: {} };
   }
 }
@@ -298,7 +298,7 @@ export async function clearCodeIndex(): Promise<void> {
     const db = getDb();
     await db.execute("DELETE FROM code_index");
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[CodeIndex] if (!isDatabaseReady()) return;:", e);
+    if (import.meta.env.DEV) console.warn("[CodeIndex] clearCodeIndex failed:", e);
     // Silently ignore — index will be rebuilt on next scan
   }
 }

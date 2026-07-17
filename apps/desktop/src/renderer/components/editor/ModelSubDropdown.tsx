@@ -66,6 +66,7 @@ export function ModelSubDropdown({
       <div className="max-h-64 overflow-y-auto">
         {enabledModels.map((m) => (
           <button
+            type="button"
             key={m.modelId}
             className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm transition-colors ${selectedModelId === m.modelId ? "bg-dalam-bg-hover text-dalam-accent-primary" : "text-dalam-text-primary hover:bg-dalam-bg-hover"}`}
             onClick={() => {

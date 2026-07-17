@@ -53,34 +53,53 @@ export function RightPanel() {
     browserTabs,
     activeBrowserTabId,
     rightPanelTab: tab,
+    rightPanelOpen,
     setRightPanelTab: setTab,
+    setRightPanelOpen,
   } = useUI();
   const changeCount =
     (status?.modified?.length ?? 0) +
     (status?.added?.length ?? 0) +
     (status?.deleted?.length ?? 0) +
     (status?.untracked?.length ?? 0);
+  const wasDiffOpenRef = useRef(false);
+  const wasBrowserActiveRef = useRef(false);
 
   useEffect(() => {
     void refresh();
   }, [refresh, activeWorkspaceId]);
 
-  // Unified tab-switching + panel-opening effect with priority: diff > browser > git
-  // Note: `tab` is NOT in deps — it's read from the store snapshot via `useUI.getState()`
-  // to avoid the infinite loop caused by setTab() re-triggering this effect.
+  // Auto-switch tab when a diff is opened or browser becomes active.
+  // Uses previous-state refs to avoid overriding an explicit user choice:
+  // only auto-switch when the condition transitions false→true or the panel
+  // was just opened, not when it is continuously true while user is on another tab.
   useEffect(() => {
     const currentTab = useUI.getState().rightPanelTab;
-    const needsOpen = !useUI.getState().rightPanelOpen;
+    const panelClosed = !rightPanelOpen;
+
     if (diffOpen && diffCurrent) {
-      if (currentTab !== "diff") setTab("diff");
-      if (needsOpen) useUI.getState().setRightPanelOpen(true);
+      const justOpened = !wasDiffOpenRef.current;
+      wasDiffOpenRef.current = true;
+      wasBrowserActiveRef.current = false;
+      if (currentTab !== "diff" && (justOpened || panelClosed)) {
+        setTab("diff");
+      }
+      if (panelClosed) setRightPanelOpen(true);
       return;
     }
+    wasDiffOpenRef.current = false;
+
     if (activeBrowserTabId && browserTabs.length > 0) {
-      if (currentTab !== "browser") setTab("browser");
-      if (needsOpen) useUI.getState().setRightPanelOpen(true);
+      const justActivated = !wasBrowserActiveRef.current;
+      wasBrowserActiveRef.current = true;
+      if (currentTab !== "browser" && (justActivated || panelClosed)) {
+        setTab("browser");
+      }
+      if (panelClosed) setRightPanelOpen(true);
       return;
     }
+    wasBrowserActiveRef.current = false;
+
     // Only set a default tab if current isn't one of the main tabs
     if (
       currentTab !== "git" &&
@@ -97,7 +116,9 @@ export function RightPanel() {
     diffCurrent,
     activeBrowserTabId,
     browserTabs.length,
+    rightPanelOpen,
     setTab,
+    setRightPanelOpen,
   ]);
 
   return (
@@ -112,6 +133,7 @@ export function RightPanel() {
             return (
               <button
                 key={t.id}
+                type="button"
                 onClick={() => {
                   setTab(t.id);
                   if (!useUI.getState().rightPanelOpen)
@@ -124,7 +146,7 @@ export function RightPanel() {
                     : "text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-primary"
                 }`}
               >
-                <Icon className="w-[18px] h-[18px]" />
+                <Icon className="w-[18px] h-[18px]" aria-hidden="true" />
                 {hasChanges && (
                   <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-dalam-accent-primary" />
                 )}
@@ -140,11 +162,13 @@ export function RightPanel() {
         </div>
         <div className="pt-2 border-t border-dalam-border-primary/50 w-full flex flex-col items-center gap-1">
           <button
+            type="button"
             onClick={() => useUI.getState().toggleRightPanel()}
             title="Close panel"
+            aria-label="Close panel"
             className="w-9 h-9 flex items-center justify-center rounded-lg text-dalam-text-muted hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-all"
           >
-            <PanelRightClose className="w-[18px] h-[18px]" />
+            <PanelRightClose className="w-[18px] h-[18px]" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -158,11 +182,12 @@ export function RightPanel() {
           <div className="flex items-center gap-0.5">
             {tab === "git" && (
               <button
+                type="button"
                 className="btn-icon !p-1"
                 onClick={() => void refresh()}
                 title="Refresh"
               >
-                <RefreshCw className="w-3 h-3" />
+                <RefreshCw className="w-3 h-3" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -354,7 +379,7 @@ function DiffTab() {
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
-            <Columns className="w-7 h-7 text-dalam-accent-primary" />
+            <Columns className="w-7 h-7 text-dalam-accent-primary" aria-hidden="true" />
           </div>
           <p className="text-sm text-dalam-text-primary font-medium mb-1">
             No diff selected
@@ -372,7 +397,7 @@ function DiffTab() {
     <div className="flex-1 flex flex-col min-h-0">
       <div className="flex items-center justify-between px-3 py-2 border-b border-dalam-border-primary bg-dalam-bg-tertiary/50 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
+          <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" aria-hidden="true" />
           <span className="text-xs text-dalam-text-primary font-mono truncate">
             {current.path}
           </span>
@@ -382,46 +407,50 @@ function DiffTab() {
         </div>
         <div className="flex items-center gap-1 flex-shrink-0 ml-2">
           <button
+            type="button"
             className="btn-icon"
             onClick={prev}
             disabled={history.length === 0}
             title="Previous change"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
+            <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <button
+            type="button"
             className="btn-icon"
             onClick={next}
             disabled={forwardStack.length === 0}
             title="Next change"
           >
-            <ArrowRight className="w-3.5 h-3.5" />
+            <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <div className="w-px h-4 bg-dalam-border-primary mx-1" />
           <button
+            type="button"
             className={`btn-icon ${view === "unified" ? "text-dalam-accent-primary" : ""}`}
             onClick={() => setView("unified")}
             title="Unified view"
           >
-            <Code2 className="w-3.5 h-3.5" />
+            <Code2 className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <button
+            type="button"
             className={`btn-icon ${view === "split" ? "text-dalam-accent-primary" : ""}`}
             onClick={() => setView("split")}
             title="Split view"
           >
-            <Columns className="w-3.5 h-3.5" />
+            <Columns className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <div className="w-px h-4 bg-dalam-border-primary mx-1" />
-          <button className="btn-icon" onClick={close} title="Close diff">
-            <X className="w-3.5 h-3.5" />
+          <button type="button" className="btn-icon" onClick={close} title="Close diff">
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
       </div>
 
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-5 h-5 text-dalam-accent-primary animate-spin" />
+          <Loader2 className="w-5 h-5 text-dalam-accent-primary animate-spin" aria-hidden="true" />
         </div>
       ) : (
         <DiffContent
@@ -453,7 +482,7 @@ function DiffContent({
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" />
+          <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" aria-hidden="true" />
           <p className="text-sm text-dalam-text-muted">No differences</p>
           <p className="text-xs text-dalam-text-muted/60 mt-1">
             Files are identical
@@ -736,7 +765,7 @@ function ReviewTab() {
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center">
             <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-accent-subtle flex items-center justify-center">
-              <WandSparkles className="w-7 h-7 text-dalam-accent-primary" />
+              <WandSparkles className="w-7 h-7 text-dalam-accent-primary" aria-hidden="true" />
             </div>
             <p className="text-sm text-dalam-text-primary font-medium mb-1">
               No Changes Yet
@@ -772,7 +801,7 @@ function ReviewTab() {
               });
             }}
           >
-            <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" />
+            <FileCode className="w-3.5 h-3.5 text-dalam-text-muted flex-shrink-0" aria-hidden="true" />
             <div className="flex-1 min-w-0">
               <div className="text-xs text-dalam-text-primary truncate">
                 {fc.path.split("/").pop()}
@@ -827,7 +856,7 @@ function ProgressTab() {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <ListTodo className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" />
+          <ListTodo className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" aria-hidden="true" />
           <p className="text-sm text-dalam-text-muted">No tasks yet</p>
           <p className="text-xs text-dalam-text-muted/60 mt-1">
             The agent will create a task plan when working on complex tasks
@@ -841,7 +870,7 @@ function ProgressTab() {
     <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
       {isStreaming && activeTasks.length === 0 && (
         <div className="flex items-center gap-2 px-3 py-2 bg-dalam-bg-tertiary rounded-lg">
-          <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin" />
+          <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin" aria-hidden="true" />
           <span className="text-xs text-dalam-text-secondary">
             Processing...
           </span>
@@ -850,7 +879,7 @@ function ProgressTab() {
       {activeTasks.length > 0 && (
         <div>
           <div className="text-[10px] uppercase tracking-wider text-dalam-accent-primary mb-2 flex items-center gap-2">
-            <Loader2 className="w-3 h-3 animate-spin" />
+            <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
             In progress
           </div>
           {activeTasks.map((t) => (
@@ -858,7 +887,7 @@ function ProgressTab() {
               key={t.id}
               className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
             >
-              <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin mt-0.5 flex-shrink-0" />
+              <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin mt-0.5 flex-shrink-0" aria-hidden="true" />
               <span className="text-xs text-dalam-text-primary">{t.title}</span>
             </div>
           ))}
@@ -874,7 +903,7 @@ function ProgressTab() {
               key={t.id}
               className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
             >
-              <Circle className="w-3.5 h-3.5 text-dalam-text-muted mt-0.5 flex-shrink-0" />
+              <Circle className="w-3.5 h-3.5 text-dalam-text-muted mt-0.5 flex-shrink-0" aria-hidden="true" />
               <span className="text-xs text-dalam-text-muted">{t.title}</span>
             </div>
           ))}
@@ -890,7 +919,7 @@ function ProgressTab() {
               key={t.id}
               className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
             >
-              <Check className="w-3.5 h-3.5 text-dalam-git-added mt-0.5 flex-shrink-0" />
+              <Check className="w-3.5 h-3.5 text-dalam-git-added mt-0.5 flex-shrink-0" aria-hidden="true" />
               <span className="text-xs text-dalam-text-primary line-through opacity-70">
                 {t.title}
               </span>
@@ -908,7 +937,7 @@ function ProgressTab() {
               key={t.id}
               className="flex items-start gap-2 px-3 py-2 hover:bg-dalam-bg-hover rounded-lg transition-colors"
             >
-              <X className="w-3.5 h-3.5 text-dalam-git-deleted mt-0.5 flex-shrink-0" />
+              <X className="w-3.5 h-3.5 text-dalam-git-deleted mt-0.5 flex-shrink-0" aria-hidden="true" />
               <span className="text-xs text-dalam-git-deleted">{t.title}</span>
             </div>
           ))}
@@ -998,7 +1027,7 @@ function GitTab({
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <Loader2 className="w-6 h-6 mx-auto mb-3 text-dalam-text-muted/50 animate-spin" />
+          <Loader2 className="w-6 h-6 mx-auto mb-3 text-dalam-text-muted/50 animate-spin" aria-hidden="true" />
           <p className="text-sm text-dalam-text-muted">Loading git status...</p>
         </div>
       </div>
@@ -1010,7 +1039,7 @@ function GitTab({
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-bg-tertiary flex items-center justify-center">
-            <GitBranch className="w-7 h-7 text-dalam-text-muted/50" />
+            <GitBranch className="w-7 h-7 text-dalam-text-muted/50" aria-hidden="true" />
           </div>
           <p className="text-sm text-dalam-text-primary font-medium mb-1">
             No git repository
@@ -1022,6 +1051,7 @@ function GitTab({
           </p>
           {ws && (
             <button
+              type="button"
               onClick={async () => {
                 let confirmed;
                 try {
@@ -1056,7 +1086,7 @@ function GitTab({
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs font-medium rounded-lg transition-colors mx-auto"
             >
-              <GitBranch className="w-3.5 h-3.5" />
+              <GitBranch className="w-3.5 h-3.5" aria-hidden="true" />
               Initialize Git Repository
             </button>
           )}
@@ -1070,7 +1100,7 @@ function GitTab({
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-dalam-bg-tertiary flex items-center justify-center">
-            <GitBranch className="w-7 h-7 text-dalam-text-muted/50" />
+            <GitBranch className="w-7 h-7 text-dalam-text-muted/50" aria-hidden="true" />
           </div>
           <p className="text-sm text-dalam-text-primary font-medium mb-1">
             Git error
@@ -1090,7 +1120,7 @@ function GitTab({
         <div className="px-3 pt-2.5 pb-1.5 border-b border-dalam-border-primary">
           <div className="flex items-center gap-2 mb-1.5">
             <div className="flex items-center gap-1.5 px-2 py-0.5 bg-dalam-accent-subtle rounded-md">
-              <GitBranch className="w-3 h-3 text-dalam-accent-primary" />
+              <GitBranch className="w-3 h-3 text-dalam-accent-primary" aria-hidden="true" />
               <span className="text-[11px] font-medium text-dalam-accent-primary font-mono">
                 {status.branch}
               </span>
@@ -1098,13 +1128,13 @@ function GitTab({
             <div className="flex items-center gap-1 text-[10px] text-dalam-text-muted">
               {status.ahead > 0 && (
                 <span className="flex items-center gap-0.5">
-                  <ArrowUp className="w-2.5 h-2.5" />
+                  <ArrowUp className="w-2.5 h-2.5" aria-hidden="true" />
                   {status.ahead}
                 </span>
               )}
               {status.behind > 0 && (
                 <span className="flex items-center gap-0.5">
-                  <ArrowDown className="w-2.5 h-2.5" />
+                  <ArrowDown className="w-2.5 h-2.5" aria-hidden="true" />
                   {status.behind}
                 </span>
               )}
@@ -1134,11 +1164,12 @@ function GitTab({
               rows={2}
             />
             <button
+              type="button"
               onClick={handleCommit}
               disabled={!commitMsg.trim()}
               className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-colors"
             >
-              <GitCommitHorizontal className="w-3.5 h-3.5" />
+              <GitCommitHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
               Commit
               <span className="text-[9px] opacity-60 ml-1">
                 ({totalChanges})
@@ -1170,6 +1201,7 @@ function GitTab({
                 ))}
                 {status.modified.length > 20 && !showAllModified && (
                   <button
+                    type="button"
                     onClick={() => setShowAllModified(true)}
                     className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
                   >
@@ -1199,6 +1231,7 @@ function GitTab({
                 )}
                 {status.added.length > 20 && !showAllAdded && (
                   <button
+                    type="button"
                     onClick={() => setShowAllAdded(true)}
                     className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
                   >
@@ -1229,6 +1262,7 @@ function GitTab({
                 ))}
                 {status.deleted.length > 20 && !showAllDeleted && (
                   <button
+                    type="button"
                     onClick={() => setShowAllDeleted(true)}
                     className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
                   >
@@ -1259,6 +1293,7 @@ function GitTab({
                 ))}
                 {status.untracked.length > 20 && !showAllUntracked && (
                   <button
+                    type="button"
                     onClick={() => setShowAllUntracked(true)}
                     className="text-xs text-dalam-accent-primary hover:underline px-3 py-1"
                   >
@@ -1272,7 +1307,7 @@ function GitTab({
       ) : (
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center">
-            <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" />
+            <Check className="w-8 h-8 mx-auto mb-3 text-dalam-git-added" aria-hidden="true" />
             <p className="text-sm text-dalam-text-muted">No changes</p>
             <p className="text-xs text-dalam-text-muted/60 mt-1">
               Working tree is clean
@@ -1302,6 +1337,7 @@ function GitSection({
   return (
     <div>
       <button
+        type="button"
         onClick={onToggle}
         className="flex items-center gap-1.5 w-full px-3 py-1.5 text-[10px] uppercase tracking-wider text-dalam-text-muted hover:bg-dalam-bg-hover transition-colors"
       >
@@ -1309,6 +1345,7 @@ function GitSection({
           className={`w-2.5 h-2.5 transition-transform ${collapsed ? "" : "rotate-90"}`}
           viewBox="0 0 12 12"
           fill="currentColor"
+          aria-hidden="true"
         >
           <path d="M4.5 2L9.5 6L4.5 10V2Z" />
         </svg>
@@ -1359,11 +1396,12 @@ function FileRow({
         )}
       </div>
       <button
+        type="button"
         className="opacity-0 group-hover:opacity-100 transition-opacity btn-icon text-dalam-text-muted hover:text-dalam-text-primary"
         title="Open diff"
         onClick={handleOpenDiff}
       >
-        <Eye className="w-3 h-3" />
+        <Eye className="w-3 h-3" aria-hidden="true" />
       </button>
     </div>
   );
@@ -1423,13 +1461,14 @@ function BrowserTab() {
     return (
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="text-center">
-          <Globe className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" />
+          <Globe className="w-8 h-8 mx-auto mb-3 text-dalam-text-muted/50" aria-hidden="true" />
           <p className="text-sm text-dalam-text-muted">No browser tabs</p>
           <button
+            type="button"
             className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs rounded-md transition-colors mx-auto"
             onClick={() => addBrowserTab()}
           >
-            <Plus className="w-3 h-3" />
+            <Plus className="w-3 h-3" aria-hidden="true" />
             New tab
           </button>
         </div>
@@ -1451,24 +1490,26 @@ function BrowserTab() {
             }`}
             onClick={() => setActiveBrowserTab(t.id)}
           >
-            <Globe className="w-3 h-3 flex-shrink-0" />
+            <Globe className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
             <span className="truncate max-w-[100px]">{t.title}</span>
             <button
+              type="button"
               className="ml-1 rounded p-0.5 opacity-0 hover:opacity-100 hover:bg-dalam-bg-active transition-opacity"
               onClick={(e) => {
                 e.stopPropagation();
                 removeBrowserTab(t.id);
               }}
             >
-              <X className="w-2.5 h-2.5" />
+              <X className="w-2.5 h-2.5" aria-hidden="true" />
             </button>
           </div>
         ))}
         <button
+          type="button"
           className="px-2 h-full text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-hover transition-colors flex-shrink-0"
           onClick={() => addBrowserTab()}
         >
-          <Plus className="w-3 h-3" />
+          <Plus className="w-3 h-3" aria-hidden="true" />
         </button>
       </div>
 
@@ -1484,7 +1525,7 @@ function BrowserTab() {
           onClick={() => activeTab && goBackBrowser(activeTab.id)}
           title="Back"
         >
-          <ArrowLeft className="w-3 h-3" />
+          <ArrowLeft className="w-3 h-3" aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -1495,7 +1536,7 @@ function BrowserTab() {
           onClick={() => activeTab && goForwardBrowser(activeTab.id)}
           title="Forward"
         >
-          <ArrowRight className="w-3 h-3" />
+          <ArrowRight className="w-3 h-3" aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -1503,7 +1544,7 @@ function BrowserTab() {
           onClick={() => activeTab && refreshBrowser(activeTab.id)}
           title="Refresh"
         >
-          <RefreshCw className="w-3 h-3" />
+          <RefreshCw className="w-3 h-3" aria-hidden="true" />
         </button>
         {activeTab?.loading && (
           <button
@@ -1520,7 +1561,7 @@ function BrowserTab() {
             className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
             title="Stop loading"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         )}
         <input
@@ -1533,14 +1574,14 @@ function BrowserTab() {
       </form>
 
       {/* Content area */}
-      <div className="flex-1 min-h-0 relative bg-white">
+      <div className="flex-1 min-h-0 relative bg-dalam-bg-primary">
         {activeTab?.url ? (
           <>
             <iframe
               ref={iframeRef}
               src={activeTab.url}
               title={activeTab.title}
-              className="w-full h-full border-0 bg-white"
+              className="w-full h-full border-0 bg-dalam-bg-primary"
               sandbox="allow-scripts allow-popups allow-forms"
               onLoad={() => {
                 const currentTab = useUI
@@ -1563,14 +1604,14 @@ function BrowserTab() {
             />
             {activeTab.loading && (
               <div className="absolute inset-0 bg-dalam-bg-primary/50 flex items-center justify-center backdrop-blur-[1px]">
-                <Loader2 className="w-6 h-6 text-dalam-accent-primary animate-spin" />
+                <Loader2 className="w-6 h-6 text-dalam-accent-primary animate-spin" aria-hidden="true" />
               </div>
             )}
           </>
         ) : (
           <div className="w-full h-full flex items-center justify-center p-8 bg-dalam-bg-primary">
             <div className="text-center">
-              <Globe className="w-10 h-10 mx-auto mb-3 text-dalam-text-muted/40" />
+              <Globe className="w-10 h-10 mx-auto mb-3 text-dalam-text-muted/40" aria-hidden="true" />
               <p className="text-sm text-dalam-text-muted">
                 Enter a URL to browse
               </p>

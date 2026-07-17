@@ -72,11 +72,12 @@ const COMPLEX_KEYWORDS = [
 ];
 
 /** Keywords that indicate code generation tasks */
+// Note: "add" is intentionally omitted — it's too common in natural language
+// ("add a comment", "add a note") and causes false positives for code detection.
 const CODE_KEYWORDS = [
   "write",
   "create",
   "implement",
-  "add",
   "build",
   "generate",
   "function",
@@ -110,9 +111,6 @@ export function classifyPromptComplexity(prompt: string): TaskComplexity {
   const words = lower.split(/\s+/);
   const wordCount = words.length;
 
-  // Very short prompts are usually simple
-  if (wordCount <= 5) return "simple";
-
   // Count keyword matches per category
   let simpleScore = 0;
   let complexScore = 0;
@@ -141,12 +139,16 @@ export function classifyPromptComplexity(prompt: string): TaskComplexity {
   if (wordCount > 50) complexScore += 1;
   if (wordCount > 100) complexScore += 2;
 
-  // Questions ending with ? tend to be simple
-  if (prompt.trim().endsWith("?") && wordCount < 20) simpleScore += 2;
+  // Questions ending with ? tend to be simple (only if not already flagged as complex)
+  if (prompt.trim().endsWith("?") && wordCount < 20 && complexScore === 0) simpleScore += 1;
 
   // Select highest scoring category
   const max = Math.max(simpleScore, complexScore, codeScore);
-  if (max === 0) return "code"; // Default to code for a coding assistant
+  if (max === 0) {
+    // For zero-match prompts (e.g. "hi", "thanks"), route to the cheapest tier.
+    // Using "code" would route to the most expensive code model unnecessarily.
+    return wordCount <= 5 ? "simple" : "complex";
+  }
   if (simpleScore === max) return "simple";
   if (complexScore === max) return "complex";
   return "code";
@@ -169,7 +171,12 @@ export function selectModelForPrompt(
   );
 
   if (matching.length === 0) {
-    return { modelId: defaultModelId, providerId: "", complexity };
+    const defaultProfile = profiles.find((p) => p.modelId === defaultModelId);
+    return {
+      modelId: defaultModelId,
+      providerId: defaultProfile?.providerId ?? "",
+      complexity,
+    };
   }
 
   // Pick the first matching profile (user can order by priority)

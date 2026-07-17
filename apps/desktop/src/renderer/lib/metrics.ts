@@ -108,9 +108,17 @@ export function formatMetrics(): string {
  * Reset all metrics.
  */
 export function resetMetrics(): void {
-  metrics.llmCalls = { count: 0, totalMs: 0, errors: 0 };
+  metrics.llmCalls.count = 0;
+  metrics.llmCalls.totalMs = 0;
+  metrics.llmCalls.errors = 0;
   metrics.toolCalls.clear();
-  metrics.tokenUsage = { input: 0, output: 0 };
-  metrics.compactions = { count: 0, totalMs: 0, errors: 0 };
-  metrics.memoryExtractions = { count: 0, totalMs: 0, errors: 0, gated: 0 };
+  metrics.tokenUsage.input = 0;
+  metrics.tokenUsage.output = 0;
+  metrics.compactions.count = 0;
+  metrics.compactions.totalMs = 0;
+  metrics.compactions.errors = 0;
+  metrics.memoryExtractions.count = 0;
+  metrics.memoryExtractions.totalMs = 0;
+  metrics.memoryExtractions.errors = 0;
+  metrics.memoryExtractions.gated = 0;
 }

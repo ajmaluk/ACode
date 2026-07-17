@@ -1,15 +1,6 @@
 import { createDalamAPI } from "@/lib/dalamAPI";
 import { joinPath } from "@/lib/pathUtils";
 import type { ChatSessionSummary, PrimaryAgentName } from "@dalam/shared-types";
-import {
-  useWorkspace,
-  useChat,
-  useSettings,
-  useModelProviders,
-  useSkillsMcp,
-  usePermission,
-} from "./useAppStore";
-
 // ============================================================================
 // Development-only console helpers
 // ============================================================================
@@ -271,15 +262,20 @@ export function loadPersistedSessionSummaries(): ChatSessionSummary[] {
   } catch (err) { devWarn("[useChat] Failed to load persisted data:", err); return []; }
 }
 
-const _pendingSummariesRef: { sessions: ChatSessionSummary[] } | null = null;
+let _pendingSummaries: ChatSessionSummary[] | null = null;
 let _saveSummariesTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function savePersistedSessionSummaries(sessions: ChatSessionSummary[]) {
+  _pendingSummaries = sessions;
   if (_saveSummariesTimer) clearTimeout(_saveSummariesTimer);
   _saveSummariesTimer = setTimeout(() => {
     _saveSummariesTimer = null;
-    try { localStorage.setItem(SESSION_SUMMARIES_KEY, JSON.stringify(sessions)); } catch (e) { devWarn("Failed to save session summaries:", e); }
-    _idbWriteThrough("sessions", { id: "all", data: sessions });
+    const toSave = _pendingSummaries;
+    _pendingSummaries = null;
+    if (toSave) {
+      try { localStorage.setItem(SESSION_SUMMARIES_KEY, JSON.stringify(toSave)); } catch (e) { devWarn("Failed to save session summaries:", e); }
+      _idbWriteThrough("sessions", { id: "all", data: toSave });
+    }
     void saveWorkspaceData();
   }, 300);
 }
@@ -300,129 +296,7 @@ export function savePersistedCompactionSummaries(summaries: Record<string, strin
 }
 
 // ─── Workspace Data (write-through to .dalam/sessions.json + .dalam/config.json) ──
-let _saveWorkspaceDataTimer: ReturnType<typeof setTimeout> | null = null;
-
-export async function saveWorkspaceData() {
-  if (_saveWorkspaceDataTimer) clearTimeout(_saveWorkspaceDataTimer);
-  _saveWorkspaceDataTimer = setTimeout(() => void _doSaveWorkspaceData(), 100);
-}
-
-/** Immediately flush any pending workspace data save (called on beforeunload). */
-export function flushSaveWorkspaceData(): void {
-  if (_saveWorkspaceDataTimer) {
-    clearTimeout(_saveWorkspaceDataTimer);
-    _saveWorkspaceDataTimer = null;
-    void _doSaveWorkspaceData();
-  }
-}
-
-/** Shape of .dalam/config.json */
-interface WorkspaceConfig {
-  settings?: Partial<import("@dalam/shared-types").AppSettings>;
-  providers?: {
-    id: string;
-    enabled?: boolean;
-    apiKey?: string;
-    baseUrl?: string;
-  }[];
-  mcpServers?: import("@dalam/shared-types").McpServer[];
-  alwaysAllowed?: Record<string, true>;
-}
-
-async function _doSaveWorkspaceData() {
-  const activeWorkspaceId = useWorkspace.getState().activeWorkspaceId;
-  if (!activeWorkspaceId) return;
-  const ws = useWorkspace.getState().workspaces.find((w) => w.id === activeWorkspaceId);
-  if (!ws) return;
-
-  const api = createDalamAPI();
-  const dotDalam = joinPath(ws.path, ".dalam");
-  const sessionsPath = joinPath(dotDalam, "sessions.json");
-  const configPath = joinPath(dotDalam, "config.json");
-
-  try {
-    const { scopeSafeExists, scopeSafeMkdir } = await import("@/lib/dalamAPI");
-    try {
-      if (!(await scopeSafeExists(dotDalam))) {
-        await scopeSafeMkdir(dotDalam, { recursive: true });
-      }
-    } catch (e) {
-      const msg = (e as Error)?.message ?? String(e);
-      if (!msg.includes("forbidden") && !msg.includes("scope") && import.meta.env.DEV) {
-        devWarn("[Store] Failed to ensure .dalam directory:", e);
-      }
-      // Path outside Tauri scope — skip saving for this workspace
-      return;
-    }
-
-    const chatState = useChat.getState();
-    const sessionsData = {
-      chatSessions: chatState.chatSessions,
-      sessionMessages: chatState.sessionMessages,
-      sessionVersions: chatState.sessionVersions,
-      compactionSummaries: chatState.compactionSummaries,
-    };
-    await api.fs.writeFile(sessionsPath, JSON.stringify(sessionsData, null, 2));
-
-    const currentSettings = useSettings.getState().settings;
-    const currentProviders = useModelProviders.getState().providers;
-    const providerConfigs = currentProviders.map(p => ({
-      id: p.id,
-      enabled: p.enabled,
-      apiKey: p.apiKey,
-      baseUrl: p.baseUrl,
-    }));
-
-    const projectMcpServers = useSkillsMcp.getState().mcpServers
-      .filter((m) => m.scope === "project")
-      .map(({ status: _status, tools: _tools, error: _error, ...rest }) => ({
-        ...rest,
-        // Preserve current connection status instead of forcing disconnected
-        status: _status || "disconnected",
-      }));
-
-    // Read existing config first to preserve alwaysAllowed and other fields
-    let existingConfig: WorkspaceConfig = {};
-    try {
-      const { scopeSafeExists, scopeSafeReadFile } = await import("@/lib/dalamAPI");
-      if (await scopeSafeExists(configPath)) {
-        const raw = await scopeSafeReadFile(configPath);
-        if (raw) existingConfig = JSON.parse(raw);
-      }
-    } catch (e) {
-      const msg = (e as Error)?.message ?? String(e);
-      if (!msg.includes("forbidden") && !msg.includes("scope") && import.meta.env.DEV) {
-        devWarn("[Store] Failed to read existing config:", e);
-      }
-    }
-    const configData = {
-      ...existingConfig,
-      settings: {
-        selectedModel: currentSettings.selectedModel,
-        selectedProvider: currentSettings.selectedProvider,
-      },
-      providers: providerConfigs,
-      mcpServers: projectMcpServers,
-      // Preserve alwaysAllowed from existing config (managed by usePermission)
-      alwaysAllowed: existingConfig.alwaysAllowed ?? usePermission.getState().alwaysAllowed,
-    };
-    await api.fs.writeFile(configPath, JSON.stringify(configData, null, 2));
-
-    // Save editor state (open tabs, active file, explorer state)
-    const editorStatePath = joinPath(dotDalam, "editor.json");
-    const wsState = useWorkspace.getState();
-    const editorState = {
-      openTabs: wsState.openTabs.map((t) => ({
-        path: t.path,
-        name: t.name,
-        dirty: t.dirty,
-        language: t.language,
-        cursor: t.cursor,
-      })),
-      activeFilePath: wsState.activeFilePath,
-    };
-    await api.fs.writeFile(editorStatePath, JSON.stringify(editorState, null, 2));
-  } catch (e) {
-    devWarn("Failed to save workspace data:", e);
-  }
-}
+// Import and re-export from useWorkspace to avoid competing debounce timers
+import { saveWorkspaceData as _saveWorkspaceData, flushSaveWorkspaceData as _flushSaveWorkspaceData } from "./useWorkspace";
+export const saveWorkspaceData = _saveWorkspaceData;
+export const flushSaveWorkspaceData = _flushSaveWorkspaceData;

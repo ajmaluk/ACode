@@ -39,11 +39,24 @@ const devWarn = import.meta.env.DEV
   : () => {};
 
 function pushErrorToast(title: string, description: string) {
-  try { useToasts.getState().push({ kind: "error", title, description, durationMs: 8000 }); } catch {}
+  try { useToasts.getState().push({ kind: "error", title, description, durationMs: 8000 }); } catch (e) {
+    devWarn("[Chat] Failed to push error toast:", e);
+  }
 }
 
+const _lastCumulativeToastTime: Record<string, number> = {};
 function pushWarningToast(title: string, description: string) {
-  try { useToasts.getState().push({ kind: "warning", title, description, durationMs: 8000 }); } catch {}
+  try {
+    const now = Date.now();
+    const lastTime = _lastCumulativeToastTime[title] ?? 0;
+    // Throttle duplicate warning toasts to at most once per 60 seconds
+    // to prevent toast spam when the warning check fires on every delta
+    if (now - lastTime < 60_000) return;
+    _lastCumulativeToastTime[title] = now;
+    useToasts.getState().push({ kind: "warning", title, description, durationMs: 8000 });
+  } catch (e) {
+    devWarn("[Chat] Failed to push warning toast:", e);
+  }
 }
 
 // Compaction throttle: avoid redundant computeContextStats + summarization calls
@@ -374,7 +387,7 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
         if (state._sendInProgress) return; // User already retried manually
         if (state.isStreaming) return; // Already streaming
         if (state.streamingContent !== snapshotStreamingContent) return; // Content changed
-        void useChat.getState().sendMessage(retryMsg.content);
+        void useChat.getState().sendMessage(retryMsg.content).catch(e => devWarn("[Chat] Overflow retry send failed:", e));
       }, 500);
     } else {
       const sysMsg: ChatMessage = {
@@ -402,15 +415,9 @@ function _handleContextOverflowRetry(sessionId: string): boolean {
 // Message queue retry tracking: prevent infinite re-enqueue when streaming never ends
 const _messageQueueRetries = new Map<string, number>();
 
-// Persist terminal state keyed by session ID (proper Map, not single cache)
-const _terminalStateCache = new Map<string, { tabs: TerminalTab[]; activeTabId: string | null }>();
-const MAX_TERMINAL_CACHE_SIZE = 20;
-function _pruneTerminalCache(newSessionId: string) {
-  if (_terminalStateCache.size < MAX_TERMINAL_CACHE_SIZE) return;
-  if (_terminalStateCache.has(newSessionId)) return; // Don't prune just-used session
-  const firstKey = _terminalStateCache.keys().next().value;
-  if (firstKey !== undefined) _terminalStateCache.delete(firstKey);
-}
+// Streaming content buffer: accumulate chunks in an array to avoid O(n²) string concatenation
+// per delta. Flushed to streamingContent on each set() via join() which is amortized O(1) per char.
+const _streamingParts: Record<string, string[]> = {};
 
 export type TodoStatus = TodoItem["status"];
 
@@ -628,7 +635,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // Check pending tool calls for a diff
     for (const tc of pendingToolCalls) {
       if (tc.diff && tc.diff.filePath === path) {
-        change = { path, action: "modified", additions: tc.diff.hunks.reduce((n, h) => n + h.newLines, 0), deletions: tc.diff.hunks.reduce((n, h) => n + h.oldLines, 0) };
+        change = { path, action: "modified", additions: tc.diff.hunks.reduce((n, h) => n + h.newCount, 0), deletions: tc.diff.hunks.reduce((n, h) => n + h.oldCount, 0) };
         break;
       }
     }
@@ -724,7 +731,14 @@ export const useChat = create<ChatState>((set, get) => ({
     // Clear all auto-remove timers to prevent leaked timers firing on stale state
     get()._clearAutoRemoveTimers();
     try {
-      await api.agent.abort(sessionId);
+      // Add a timeout to the abort call to prevent _sendInProgress from
+      // staying stuck forever if the backend never responds.
+      await Promise.race([
+        api.agent.abort(sessionId),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error("Abort timed out after 10s")), 10_000)
+        ),
+      ]);
     } finally {
       // Cleanup stream AFTER abort completes to avoid race with final stream events
       api.agent.cleanupStream(sessionId);
@@ -735,6 +749,7 @@ export const useChat = create<ChatState>((set, get) => ({
       _pendingResolutions.clear();
       _toolCallResolvers.clear();
       _messageQueueRetries.clear();
+      delete _streamingParts[sessionId];
       const currentSession = get().session;
       const isStillOurSession = currentSession && currentSession.id === sessionId;
       if (isStillOurSession) {
@@ -810,14 +825,16 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     if (sendBlocked) return;
 
-    // Safety timeout: if _sendInProgress gets stuck true (e.g., unhandled exception), reset after 30s
+    // Safety timeout: if _sendInProgress gets stuck true (e.g., unhandled exception), reset after 30s.
+    // Extended to 60s to cover the initial session-creation phase where isStreaming is not yet set,
+    // preventing the safety timer from clearing _sendInProgress during startSession or setup.
     const sendInProgressSafety = setTimeout(() => {
       const s = get();
       if (s._sendInProgress && !s.isStreaming) {
         devWarn("[useChat] _sendInProgress safety timeout — resetting stuck state");
         set({ _sendInProgress: false });
       }
-    }, 30_000);
+    }, 60_000);
 
     let { session } = get();
     if (!session) {
@@ -918,6 +935,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const agentName = useAgents.getState().activeAgentName;
       await api.agent.sendPrompt(session.id, content, get().messages, agentName, pendingAttachments);
     } catch (err: unknown) {
+      api.agent.cleanupStream(sendSessionId);
       // Re-read timer from state (not local ref) — appendStream may have replaced it
       const timer = get()._safetyTimer;
       if (timer) clearTimeout(timer);
@@ -928,6 +946,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if (sendSessionId && _isContextOverflowError(msg)) {
         if (_handleContextOverflowRetry(sendSessionId)) {
           // Clear flags so user can interact while compaction runs async
+          api.agent.cleanupStream(sendSessionId);
           clearTimeout(sendInProgressSafety);
           set({ isStreaming: false, _sendInProgress: false, streamingContent: "", thinkingContent: "" });
           return;
@@ -939,7 +958,13 @@ export const useChat = create<ChatState>((set, get) => ({
       // but only if there's already an error message in the store (avoid silent failure)
       if (!isStreaming) {
         const lastMsg = get().messages[get().messages.length - 1];
-        if (lastMsg?.role === "assistant" || lastMsg?.role === "system") {
+        // Only suppress the error if the last message IS an error message (not just any assistant/system message).
+        // This prevents real errors from being silently swallowed when the last message happens to be
+        // an assistant response from a previous turn.
+        const lastContent = lastMsg?.content ?? "";
+        if (lastMsg?.role === "assistant" && !lastMsg.id.startsWith("err-")) {
+          // The last message is a real assistant response, not an error — don't suppress
+        } else if (lastMsg?.role === "system" && lastContent.includes("**Error**")) {
           set({ _sendInProgress: false });
           return;
         }
@@ -980,6 +1005,7 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     // Clear safety timer and reset _sendInProgress
     clearTimeout(sendInProgressSafety);
+    api.agent.cleanupStream(sendSessionId);
     set({ _sendInProgress: false });
   },
 
@@ -1106,6 +1132,10 @@ export const useChat = create<ChatState>((set, get) => ({
       case "message-start": {
         const pending = get().pendingToolCalls;
         const hasUnresolved = pending.some(tc => tc.status === "awaiting-approval" || tc.status === "pending");
+        const sid = get().activeSessionId ?? "_default";
+        if (!hasUnresolved) {
+          _streamingParts[sid] = [];
+        }
         set(() => ({
           ...(hasUnresolved ? {} : { streamingContent: "", thinkingContent: "", pendingActivities: [], _pendingChanges: [] }),
           // Don't clear taskPlan or todos here — they persist across turns within a session
@@ -1124,21 +1154,19 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       case "message-delta": {
         const rawContent = event.content;
-        // Strip XML tool call tags inline during streaming so partial
-        // XML tags like <read_file path="... don't appear in the UI.
-        const sid = get().activeSessionId ?? undefined;
+        const sid = get().activeSessionId ?? "_default";
         const cleanContent = stripInlineXml(rawContent, sid);
         if (!cleanContent && !rawContent) break;
-        set((s) => {
+        // Use array buffer to avoid O(n²) string concatenation per delta
+        if (!_streamingParts[sid]) _streamingParts[sid] = [];
+        _streamingParts[sid].push(cleanContent);
+        const newContent = _streamingParts[sid].join('');
+        set(() => {
           const MAX_STREAM = 200000;
-          const prev = s.streamingContent;
-          if (prev.length >= MAX_STREAM) {
-            const newContent = prev.slice(prev.length - MAX_STREAM / 2) + cleanContent;
-            return { streamingContent: newContent.length > MAX_STREAM ? newContent.slice(-MAX_STREAM) : newContent };
-          }
-          const newContent = prev + cleanContent;
           if (newContent.length > MAX_STREAM) {
-            return { streamingContent: newContent.slice(-MAX_STREAM) };
+            const keep = newContent.slice(-MAX_STREAM);
+            _streamingParts[sid] = [keep];
+            return { streamingContent: keep };
           }
           return { streamingContent: newContent };
         });
@@ -1253,8 +1281,8 @@ export const useChat = create<ChatState>((set, get) => ({
         useDiffView.getState().openFile({
           path: proposal.filePath,
           action: proposal.oldContent === "" ? "created" : "modified",
-          additions: proposal.hunks.reduce((n: number, h: { newLines: number }) => n + h.newLines, 0),
-          deletions: proposal.hunks.reduce((n: number, h: { oldLines: number }) => n + h.oldLines, 0),
+          additions: proposal.hunks.reduce((n: number, h: { newCount: number }) => n + h.newCount, 0),
+          deletions: proposal.hunks.reduce((n: number, h: { oldCount: number }) => n + h.oldCount, 0),
         });
         break;
       }
@@ -1320,7 +1348,8 @@ export const useChat = create<ChatState>((set, get) => ({
             streamingContent: "",
             thinkingContent: "",
             _pendingChanges: [],
-            _sendInProgress: false,
+            // Keep _sendInProgress as-is — the agentic loop continues
+            // (tools were just executed, results will be sent back to API).
           });
           if (sessionId) savePersistedMessages(newSessionMessages);
           break;
@@ -1460,7 +1489,7 @@ export const useChat = create<ChatState>((set, get) => ({
             // Double-check: only send if still not streaming
             const state = get();
             if (!state.isStreaming && !state._sendInProgress) {
-              void get().sendMessage(next.content);
+              void get().sendMessage(next.content).catch(e => devWarn("[Chat] Queue send failed:", e));
             } else {
               // Re-enqueue at front so it's tried again after streaming finishes
               // Cap retries at 10 (≈3 seconds) to prevent infinite loop
@@ -1501,9 +1530,9 @@ export const useChat = create<ChatState>((set, get) => ({
           }
         }
         if (sessionId) {
-          void get().compactSessionHistory(sessionId);
+          void get().compactSessionHistory(sessionId).catch(e => devWarn("[Chat] Post-turn compaction failed:", e));
           // Post-turn verification: if a plan was just executed, run verification
-          void get().verifyAfterPlanExecution();
+          void get().verifyAfterPlanExecution().catch(e => devWarn("[Chat] Post-turn verification failed:", e));
 
           // Post-turn memory consolidation: async memory sync after each conversation turn
           // Inspired by Hermes memory lifecycle — extracts key facts from the conversation
@@ -1529,7 +1558,7 @@ export const useChat = create<ChatState>((set, get) => ({
               }
             } catch (err) {
               // Memory extraction is best-effort — don't break the main flow
-              console.debug("[Chat] Post-turn memory extraction skipped:", err);
+              if (import.meta.env.DEV) console.debug("[Chat] Post-turn memory extraction skipped:", err);
             }
           })();
         }
@@ -1547,7 +1576,9 @@ export const useChat = create<ChatState>((set, get) => ({
         // Question tools always auto-approved — they inherently require user interaction and show their own dialog
         if (tool.name === "question") {
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, tool] }));
-          void get().resolveToolApproval(tool.id, "approved");
+          get().resolveToolApproval(tool.id, "approved").catch((e) => {
+            if (import.meta.env.DEV) console.error("resolveToolApproval failed:", e);
+          });
           break;
         }
         const permissionKey: PermissionKind = EDIT_TOOLS.has(tool.name)
@@ -1576,7 +1607,9 @@ export const useChat = create<ChatState>((set, get) => ({
           });
           const deniedTool = { ...tool, status: "failed" as const, result: "Denied by permission policy" };
           set((s) => ({ pendingToolCalls: [...s.pendingToolCalls, deniedTool] }));
-          void get().resolveToolApproval(tool.id, "denied", "Denied by permission policy");
+          get().resolveToolApproval(tool.id, "denied", "Denied by permission policy").catch((e) => {
+            if (import.meta.env.DEV) console.error("resolveToolApproval denied failed:", e);
+          });
           // Auto-remove denied tools from UI after a short delay
           const _autoRemoveTimer = setTimeout(() => {
             set((s) => ({ pendingToolCalls: s.pendingToolCalls.filter((tc) => tc.id !== tool.id) }));
@@ -1592,14 +1625,16 @@ export const useChat = create<ChatState>((set, get) => ({
         if (needsApproval) {
           const description = `Dalam (${useAgents.getState().activeAgentName} agent) wants to use \`${tool.name}\`.`;
           const activeSession = get().session;
-          void usePermission.getState().ask({
+          usePermission.getState().ask({
             kind: permissionKey,
             title: tool.name,
             description,
             ...(commandStr ? { command: commandStr } : {}),
             ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
           }).then((decision) => {
-            void get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied");
+            get().resolveToolApproval(tool.id, decision === "allow" || decision === "always" ? "approved" : "denied").catch((err) => {
+              if (import.meta.env.DEV) console.error("resolveToolApproval after ask failed:", err);
+            });
             // Log audit trail
             logPermission({
               timestamp: Date.now(),
@@ -1624,7 +1659,9 @@ export const useChat = create<ChatState>((set, get) => ({
           }).catch((err) => {
             if (import.meta.env.DEV) console.error("Permission dialog error:", err);
             // If the dialog was dismissed/closed, deny the tool to unblock waitForToolApproval
-            void get().resolveToolApproval(tool.id, "denied");
+            get().resolveToolApproval(tool.id, "denied").catch((e) => {
+              if (import.meta.env.DEV) console.error("resolveToolApproval after dialog error failed:", e);
+            });
           });
         } else {
           // Log audit trail for auto-allow
@@ -1636,7 +1673,9 @@ export const useChat = create<ChatState>((set, get) => ({
             decision: "allow",
             source: "auto",
           });
-          void get().resolveToolApproval(tool.id, "approved");
+          get().resolveToolApproval(tool.id, "approved").catch((e) => {
+            if (import.meta.env.DEV) console.error("resolveToolApproval auto-allow failed:", e);
+          });
         }
         break;
       }
@@ -1661,7 +1700,7 @@ export const useChat = create<ChatState>((set, get) => ({
           // the result is orphaned. Search ALL messages (not just last) for the
           // assistant message with matching toolCalls, so it's not lost.
           const found = s.pendingToolCalls.some((tc) => tc.id === event.toolCallId);
-          if (!found && s.pendingToolCalls.length === 0 && s.messages.length > 0) {
+          if (!found && s.messages.length > 0) {
             // Search backwards through all messages to find the matching tool call
             for (let msgIdx = s.messages.length - 1; msgIdx >= 0; msgIdx--) {
               const msg = s.messages[msgIdx];
@@ -1955,7 +1994,7 @@ export const useChat = create<ChatState>((set, get) => ({
                 if (sid2) savePersistedMessages(newSM);
               }
             } catch (err) {
-              console.debug("[Chat] TurnFinalizer summary failed:", err);
+              if (import.meta.env.DEV) console.debug("[Chat] TurnFinalizer summary failed:", err);
             }
           })();
         }
@@ -2007,7 +2046,9 @@ export const useChat = create<ChatState>((set, get) => ({
           ...(activeSession?.workspacePath ? { workspacePath: activeSession.workspacePath } : {}),
         }).then((decision) => {
           if (event.toolCallId) {
-            void get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied");
+            get().resolveToolApproval(event.toolCallId, decision === "allow" || decision === "always" ? "approved" : "denied").catch((e) => {
+              if (import.meta.env.DEV) console.error("resolveToolApproval ask-permission failed:", e);
+            });
           }
           // Persist "always allow" so future tools of the same kind are auto-approved
           if (decision === "always") {
@@ -2025,7 +2066,9 @@ export const useChat = create<ChatState>((set, get) => ({
           if (import.meta.env.DEV) console.error("Permission dialog error:", err);
           // If the dialog was dismissed/closed, deny the tool to unblock the agent loop
           if (event.toolCallId) {
-            void get().resolveToolApproval(event.toolCallId, "denied");
+            get().resolveToolApproval(event.toolCallId, "denied").catch((e) => {
+              if (import.meta.env.DEV) console.error("resolveToolApproval deny after dialog error failed:", e);
+            });
           }
         });
         break;
@@ -2083,11 +2126,15 @@ export const useChat = create<ChatState>((set, get) => ({
           if (_handleContextOverflowRetry(sessionId)) {
             break; // retry initiated
           }
+          // Retries exhausted — _handleContextOverflowRetry already added an error
+          // message and set _sendInProgress: false. Break to avoid duplicate error.
+          break;
         }
 
         let lastUserMsgId: string | undefined;
-        for (let i = get().messages.length - 1; i >= 0; i--) {
-          if (get().messages[i].role === "user") { lastUserMsgId = get().messages[i].id; break; }
+        const msgs = get().messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "user") { lastUserMsgId = msgs[i].id; break; }
         }
         const errorMsg: ChatMessage = {
           id: "err-" + crypto.randomUUID(),
@@ -2209,18 +2256,24 @@ export const useChat = create<ChatState>((set, get) => ({
     if (session) {
       const api = createDalamAPI();
       api.agent.cleanupStream(session.id);
+      delete _streamingParts[session.id];
     }
     // Save terminal state before switching sessions
     const activeSessionId = get().activeSessionId;
     if (activeSessionId) {
       useTerminal.getState().saveForSession(activeSessionId);
     }
-    // Only abort if the current session is actually streaming
-    if (session && isStreaming) void abort(session.id).catch((err) => devWarn("[Store] abort during session switch failed:", err));      if (!id) {
+    // Always abort the old session's sendPrompt to prevent orphaned tool approvals
+    // and stale file writes after switching sessions
+    if (session) void abort(session.id).catch((err) => devWarn("[Store] abort during session switch failed:", err));      if (!id) {
         if (useUI.getState().bottomPanelTab === "terminal") {
           useUI.getState().setBottomPanelOpen(false);
         }
-        _messageQueueRetries.clear();
+    const _oldSid = get().activeSessionId;
+    if (_oldSid) {
+      delete _streamingParts[_oldSid];
+    }
+    _messageQueueRetries.clear();
         set({
         activeSessionId: null,
         session: null,
@@ -2360,8 +2413,6 @@ export const useChat = create<ChatState>((set, get) => ({
     delete _lastCompactionAttempt[id];
     delete _compactionTier[id];
     delete _antiThrashTimestamps[id];
-    _pruneTerminalCache(id);
-    _terminalStateCache.delete(id);
     // Clean up tool cost records to prevent memory leaks
     try {
       const { clearSessionToolCosts } = await import("../lib/toolExecutor");
@@ -2528,7 +2579,7 @@ export const useChat = create<ChatState>((set, get) => ({
         const state = get();
         if (!state.isStreaming && !state._sendInProgress) {
           const executeMsg = `The user approved the plan. Execute it now.\n\nPlan:\n${planContent}`;
-          void state.sendMessage(executeMsg);
+          void state.sendMessage(executeMsg).catch(e => devWarn("[Chat] Plan execution send failed:", e));
         }
       }, 500);
     }
@@ -2596,30 +2647,25 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   steerQueueItem(id) {
-    // Move the item to the front and send it immediately
     const { messageQueue } = get();
     const item = messageQueue.find((q) => q.id === id);
     if (!item) return;
-    // Atomically check streaming state and either move to front or remove+send
-    // This prevents the race where streaming starts between check and removal
-    set((s) => {
-      // Re-check isStreaming inside set to get fresh state
-      if (s.isStreaming) {
-        // Streaming started — move to front instead of sending
-        const filtered = s.messageQueue.filter((q) => q.id !== id);
-        return { messageQueue: [item, ...filtered] };
-      }
-      // Not streaming — remove from queue and send
-      const updatedQueue = s.messageQueue.filter((q) => q.id !== id);
-      return { messageQueue: updatedQueue };
-    });
-    // Send outside of set to avoid race — only if still not streaming
     setTimeout(() => {
+      // Remove from queue and send atomically inside the timeout to avoid race
+      // with a streaming session starting between the state read and the send.
+      set((s) => {
+        if (s.isStreaming) {
+          // Streaming started — move to front instead of removing
+          const filtered = s.messageQueue.filter((q) => q.id !== id);
+          return { messageQueue: [item, ...filtered] };
+        }
+        const updatedQueue = s.messageQueue.filter((q) => q.id !== id);
+        return { messageQueue: updatedQueue };
+      });
       const state = get();
       if (!state.isStreaming) {
         void state.sendMessage(item.content);
       }
-      // If streaming started, item is already at front of queue and will be sent later
     }, 0);
   },
 
@@ -2958,9 +3004,11 @@ export const useChat = create<ChatState>((set, get) => ({
             set((s) => {
               // Re-read LIVE messages inside updater to avoid losing messages
               // that arrived during the LLM summarize call (async gap).
+              // Use message IDs for identification, not array indices, to prevent
+              // removing wrong messages if the array was modified concurrently.
               const currentMessages = s.sessionMessages[sessionId] ?? liveMessages;
-              const currentIndices = new Set(toCompact.map(m => currentMessages.indexOf(m)).filter(i => i >= 0));
-              const toKeepNow = currentMessages.filter((_, i) => !currentIndices.has(i));
+              const compactedIds = new Set(toCompact.map(m => m.id));
+              const toKeepNow = currentMessages.filter(m => !compactedIds.has(m.id));
               const summaryMsg: ChatMessage = {
                 id: "compact-" + crypto.randomUUID(),
                 role: "system",
@@ -3021,7 +3069,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // First, resolve via direct callback if registered (avoids polling races)
     const resolver = _toolCallResolvers.get(toolCallId);
     if (resolver) _toolCallResolvers.delete(toolCallId);
-    const finalDecision = resolver ? await resolver(decision) : undefined;
+    const finalDecision = resolver ? resolver(decision) : undefined;
     // If the resolver already handled the side effects, we may still need
     // to update the store for UI consistency. The resolver returns the
     // effective decision (e.g., "denied" if already resolved).
@@ -3121,6 +3169,7 @@ export const useChat = create<ChatState>((set, get) => ({
     get()._clearAutoRemoveTimers();
     _pendingResolutions.clear();
     _toolCallResolvers.clear();
+    for (const key of Object.keys(_streamingParts)) delete _streamingParts[key];
     const currentTimer = get()._safetyTimer;
     if (currentTimer) clearTimeout(currentTimer);
     // Stop trajectory recording for old session

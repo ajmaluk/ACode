@@ -308,38 +308,56 @@ function queueGeneSave(
 }
 
 async function processGeneSaveQueue(): Promise<void> {
-  if (_saveQueue.length === 0) {
-    _saveTimer = null;
-    return;
-  }
-
-  // Use the latest pool as base, then apply all queued activation counts
-  const basePool = _saveQueue[_saveQueue.length - 1].pool;
-  const mergedCounts = new Map<string, number>();
-
-  for (const entry of _saveQueue) {
-    for (const [geneId, count] of entry.activationCounts) {
-      mergedCounts.set(geneId, (mergedCounts.get(geneId) || 0) + count);
+  try {
+    if (_saveQueue.length === 0) {
+      _saveTimer = null;
+      return;
     }
-  }
 
-  _saveQueue.length = 0;
+    // Capture the latest pool for metadata (version, lastEvolution) before clearing
+    const latestPool = _saveQueue[_saveQueue.length - 1].pool;
 
-  const updatedGenes = basePool.genes.map((gene) => {
-    const count = mergedCounts.get(gene.id) || 0;
-    if (count > 0) {
-      return { ...gene, activationCount: gene.activationCount + count };
+    // Merge all queued pools: take the latest lastActivatedAt for each gene
+    // across all entries, then apply all queued activation counts.
+    const mergedGenes = new Map<string, Gene>();
+    const mergedCounts = new Map<string, number>();
+
+    for (const entry of _saveQueue) {
+      for (const gene of entry.pool.genes) {
+        const existing = mergedGenes.get(gene.id);
+        if (!existing || gene.lastActivatedAt > existing.lastActivatedAt) {
+          mergedGenes.set(gene.id, gene);
+        }
+      }
+      for (const [geneId, count] of entry.activationCounts) {
+        mergedCounts.set(geneId, (mergedCounts.get(geneId) || 0) + count);
+      }
     }
-    return gene;
-  });
 
-  await saveGenePool({ ...basePool, genes: updatedGenes });
+    _saveQueue.length = 0;
 
-  // If new entries were added during await, schedule another save
-  if (_saveQueue.length > 0 && !_saveTimer) {
-    _saveTimer = setTimeout(processGeneSaveQueue, 50);
-  } else {
+    const updatedGenes = Array.from(mergedGenes.values()).map((gene) => {
+      const count = mergedCounts.get(gene.id) || 0;
+      if (count > 0) {
+        return { ...gene, activationCount: gene.activationCount + count };
+      }
+      return gene;
+    });
+
+    await saveGenePool({ ...latestPool, genes: updatedGenes });
+
+    // If new entries were added during await, schedule another save
+    if (_saveQueue.length > 0 && !_saveTimer) {
+      _saveTimer = setTimeout(processGeneSaveQueue, 50);
+    } else {
+      _saveTimer = null;
+    }
+  } catch (err) {
+    console.warn("[Genes] Failed to process gene save queue:", err);
     _saveTimer = null;
+    if (_saveQueue.length > 0) {
+      _saveTimer = setTimeout(processGeneSaveQueue, 50);
+    }
   }
 }
 
@@ -350,10 +368,13 @@ const _geneTriggerCache = new Map<string, RegExp | null>();
 const MAX_GENE_TRIGGER_CACHE = 200;
 
 const MAX_TRIGGER_LENGTH = 200;
-const DANGEROUS_REGEX_PATTERNS = [
-  /(.*a.*){100,}/, // Catastrophic backtracking
-  /\(\?[=!<]/, // Lookahead (?=, (?!) or lookbehind (?<=, (?<!) — expensive
-];
+function isDangerousRegex(trigger: string): boolean {
+  // Check for catastrophic backtracking patterns: nested quantifiers
+  if (/(\.\*\+?\)?\{\d+,\})/.test(trigger)) return true;
+  // Check for expensive lookahead/lookbehind
+  if (/\(\?[=!<]/.test(trigger)) return true;
+  return false;
+}
 
 function getGeneTriggerRegex(trigger: string): RegExp | null {
   const cached = _geneTriggerCache.get(trigger);
@@ -373,14 +394,12 @@ function getGeneTriggerRegex(trigger: string): RegExp | null {
     return null;
   }
 
-  for (const pattern of DANGEROUS_REGEX_PATTERNS) {
-    if (pattern.test(trigger)) {
-      console.warn(
-        `[Genes] Dangerous regex pattern detected, skipping: ${trigger.slice(0, 50)}...`,
-      );
-      _geneTriggerCache.set(trigger, null);
-      return null;
-    }
+  if (isDangerousRegex(trigger)) {
+    console.warn(
+      `[Genes] Dangerous regex pattern detected, skipping: ${trigger.slice(0, 50)}...`,
+    );
+    _geneTriggerCache.set(trigger, null);
+    return null;
   }
 
   try {

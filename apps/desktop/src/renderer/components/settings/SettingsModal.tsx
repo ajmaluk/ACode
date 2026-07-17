@@ -141,6 +141,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
 
 export function SettingsModal() {
   const { openState, close, activeTab, setActiveTab } = useSettingsView();
+  const modalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!openState) return;
@@ -153,6 +154,43 @@ export function SettingsModal() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [openState, close]);
+
+  // Focus trap: when modal is open, trap Tab focus within the modal
+  useEffect(() => {
+    if (!openState || !modalRef.current) return;
+    const modal = modalRef.current;
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    const trapFocus = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const focusable = modal.querySelectorAll<HTMLElement>(focusableSelector);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    // Focus first focusable element on open
+    const firstFocusable = modal.querySelector<HTMLElement>(focusableSelector);
+    firstFocusable?.focus();
+
+    modal.addEventListener("keydown", trapFocus);
+    return () => {
+      modal.removeEventListener("keydown", trapFocus);
+      previouslyFocused?.focus();
+    };
+  }, [openState]);
 
   if (!openState) return null;
 
@@ -168,7 +206,7 @@ export function SettingsModal() {
           className="w-56 flex-shrink-0 border-r border-dalam-border-primary bg-dalam-bg-secondary py-4 flex flex-col"
           aria-label="Settings tabs"
         >
-          <button
+          <button type="button"
             className="mx-4 mb-4 flex items-center gap-2 text-sm text-dalam-text-secondary hover:text-dalam-text-primary transition-colors"
             onClick={close}
           >
@@ -184,7 +222,7 @@ export function SettingsModal() {
               const Icon = t.icon;
               const active = t.id === activeTab;
               return (
-                <button
+                <button type="button"
                   key={t.id}
                   id={`settings-tab-${t.id}`}
                   onClick={() => setActiveTab(t.id)}
@@ -363,7 +401,7 @@ function GeneralTab() {
             placeholder="Leave blank to inherit, e.g. MesloLGS NF, monospace"
             onChange={(e) => setTerminalFont(e.target.value)}
           />
-          <button
+          <button type="button"
             className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors"
             onClick={() => update("terminalFont", terminalFont)}
           >
@@ -410,7 +448,7 @@ function GeneralTab() {
               }
             }}
           />
-          <button
+          <button type="button"
             className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors"
             onClick={() => update("httpProxy", httpProxy)}
           >
@@ -781,7 +819,7 @@ function ModelsTab() {
             {providers
               .filter((p) => p.type === "built-in")
               .map((p) => (
-                <button
+                <button type="button"
                   key={p.id}
                   className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors mb-0.5 ${selectedProviderId === p.id ? "bg-dalam-accent-subtle text-dalam-text-primary" : "text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
                   onClick={() => {
@@ -806,7 +844,7 @@ function ModelsTab() {
             {providers
               .filter((p) => p.type === "custom")
               .map((p) => (
-                <button
+                <button type="button"
                   key={p.id}
                   className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors mb-0.5 ${selectedProviderId === p.id ? "bg-dalam-accent-subtle text-dalam-text-primary" : "text-dalam-text-secondary hover:bg-dalam-bg-hover"}`}
                   onClick={() => {
@@ -823,7 +861,7 @@ function ModelsTab() {
                   />
                 </button>
               ))}
-            <button
+            <button type="button"
               className="w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors mt-1"
               onClick={() => {
                 setShowAdd(true);
@@ -1009,7 +1047,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
           />
         </div>
         {dirty && (
-          <button
+          <button type="button"
             className="px-4 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-lg transition-colors"
             onClick={saveProvider}
           >
@@ -1051,7 +1089,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
                   setTestStatus("idle");
                 }}
               />
-              <button
+              <button type="button"
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
                 onClick={() => setShowApiKey(!showApiKey)}
               >
@@ -1080,7 +1118,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
                 )}
               </button>
             </div>
-            <button
+            <button type="button"
               className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors"
               onClick={testConnection}
               disabled={!apiKey || testStatus === "testing"}
@@ -1114,7 +1152,7 @@ function ProviderDetail({ provider }: { provider: ModelProvider }) {
             <span className="text-sm font-medium text-dalam-text-primary">
               Model list
             </span>
-            <button
+            <button type="button"
               onClick={() => setShowAddModel(true)}
               className="text-xs text-dalam-accent-primary hover:text-dalam-accent-hover transition-colors"
             >
@@ -1209,7 +1247,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
               <span className="text-lg font-semibold text-dalam-text-primary">
                 {provider.name}
               </span>
-              <button
+              <button type="button"
                 onClick={() => setEditingName(true)}
                 className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
               >
@@ -1232,7 +1270,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
             label={`Enable ${provider.name}`}
           />
         </div>
-        <button
+        <button type="button"
           className="text-dalam-text-muted hover:text-dalam-git-deleted transition-colors"
           onClick={() => removeProvider(provider.id)}
           title="Delete provider"
@@ -1299,7 +1337,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
               onChange={(e) => setApiKey(e.target.value)}
               onBlur={() => updateProvider(provider.id, { apiKey })}
             />
-            <button
+            <button type="button"
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
               onClick={() => setShowApiKey(!showApiKey)}
             >
@@ -1368,7 +1406,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
                   }}
                   label={`Enable ${m.name}`}
                 />
-                <button
+                <button type="button"
                   className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
                   title="Copy model ID"
                   onClick={() => {
@@ -1386,7 +1424,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
                     <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
                   </svg>
                 </button>
-                <button
+                <button type="button"
                   className="text-dalam-text-muted hover:text-dalam-git-deleted transition-colors"
                   title="Delete"
                   onClick={() => removeModel(provider.id, m.modelId)}
@@ -1409,7 +1447,7 @@ function CustomProviderDetail({ provider }: { provider: ModelProvider }) {
             No models configured yet.
           </div>
         )}
-        <button
+        <button type="button"
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-lg border border-dalam-border-primary transition-colors"
           onClick={() => setShowAddModel(true)}
         >
@@ -1451,7 +1489,7 @@ function AddModelModal({
           <h2 className="text-lg font-semibold text-dalam-text-primary">
             Add model
           </h2>
-          <button
+          <button type="button"
             className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors"
             onClick={onClose}
           >
@@ -1484,13 +1522,13 @@ function AddModelModal({
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-6">
-          <button
+          <button type="button"
             className="px-4 py-2 text-sm text-dalam-text-secondary hover:text-dalam-text-primary rounded-lg border border-dalam-border-primary transition-colors"
             onClick={onClose}
           >
             Cancel
           </button>
-          <button
+          <button type="button"
             className="px-4 py-2 text-sm bg-dalam-text-primary text-dalam-bg-primary rounded-lg hover:opacity-90 transition-opacity"
             onClick={() => {
               if (!modelId.trim()) return;
@@ -1626,7 +1664,7 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
                     setModels(n);
                   }}
                 />
-                <button
+                <button type="button"
                   className="btn-icon text-dalam-git-deleted"
                   onClick={() => setModels(models.filter((_, j) => j !== i))}
                 >
@@ -1635,7 +1673,7 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
               </div>
             ))}
           </div>
-          <button
+          <button type="button"
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dalam-text-secondary hover:text-dalam-text-primary bg-dalam-bg-active hover:bg-dalam-bg-tertiary rounded-lg border border-dalam-border-primary transition-colors"
             onClick={() =>
               setModels([
@@ -1648,7 +1686,7 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
             Add model
           </button>
         </div>
-        <button
+        <button type="button"
           className="px-4 py-2 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-lg transition-colors"
           onClick={() => {
             if (!name.trim()) {
@@ -1749,9 +1787,8 @@ function SkillsTab() {
     addSkill({
       name,
       description: newDesc.trim(),
-      prompt:
+      content:
         newPrompt.trim() || `Act on the user's request for: ${newDesc.trim()}`,
-      scope: newScope,
     });
     toast({
       kind: "success",
@@ -1788,14 +1825,14 @@ function SkillsTab() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button
+        <button type="button"
           onClick={() => setShowAdd((v) => !v)}
           className="w-8 h-8 flex items-center justify-center rounded-md bg-dalam-bg-tertiary border border-dalam-border-primary text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
           title="Add skill"
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
-        <button
+        <button type="button"
           className="w-8 h-8 flex items-center justify-center rounded-md bg-dalam-bg-tertiary border border-dalam-border-primary text-dalam-text-secondary hover:bg-dalam-bg-hover hover:text-dalam-text-primary transition-colors"
           title="Refresh"
         >
@@ -1879,13 +1916,13 @@ function SkillsTab() {
             />
           </div>
           <div className="flex items-center justify-end gap-2">
-            <button
+            <button type="button"
               onClick={() => setShowAdd(false)}
               className="px-3 py-1.5 text-xs rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
             >
               Cancel
             </button>
-            <button
+            <button type="button"
               onClick={onAdd}
               className="px-3 py-1.5 text-xs rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white transition-colors"
             >
@@ -1924,9 +1961,9 @@ function SkillsTab() {
               </div>
             </div>
             <span className="chip flex-shrink-0">
-              {s.scope === "global" ? "Global" : "Personal"}
+              {s.source === "project" || s.source === "user-workspace" ? "Personal" : "Global"}
             </span>
-            <button
+            <button type="button"
               onClick={() => {
                 if (confirm(`Remove skill "$${s.name}"?`)) removeSkill(s.name);
               }}
@@ -2082,14 +2119,14 @@ function McpTab() {
           MCP Servers
         </h1>
         {view === "list" ? (
-          <button
+          <button type="button"
             onClick={() => setView("add")}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white transition-colors"
           >
             <Plus className="w-3.5 h-3.5" /> Add server
           </button>
         ) : (
-          <button
+          <button type="button"
             onClick={() => {
               reset();
               setView("list");
@@ -2109,7 +2146,7 @@ function McpTab() {
           </p>
 
           {/* Help toggle */}
-          <button
+          <button type="button"
             onClick={() => setShowHelp(!showHelp)}
             className="flex items-center gap-1.5 text-xs text-dalam-accent-primary hover:text-dalam-accent-hover mb-4 transition-colors"
           >
@@ -2172,7 +2209,7 @@ function McpTab() {
                 {MCP_PRESETS.map((preset) => {
                   const Icon = preset.icon;
                   return (
-                    <button
+                    <button type="button"
                       key={preset.name}
                       onClick={() => {
                         setName(preset.name);
@@ -2234,7 +2271,7 @@ function McpTab() {
                 >
                   {m.status}
                 </span>
-                <button
+                <button type="button"
                   onClick={() => {
                     if (confirm(`Remove MCP server "${m.name}"?`))
                       removeMcpServer(m.name);
@@ -2264,13 +2301,13 @@ function McpTab() {
           </p>
 
           <div className="flex items-center gap-1 bg-dalam-bg-tertiary border border-dalam-border-primary rounded-md p-0.5 w-fit mb-5">
-            <button
+            <button type="button"
               onClick={() => setEditMode("form")}
               className={`px-3 py-1 text-xs rounded transition-colors ${editMode === "form" ? "bg-dalam-bg-active text-dalam-text-primary font-medium" : "text-dalam-text-secondary hover:text-dalam-text-primary"}`}
             >
               Form
             </button>
-            <button
+            <button type="button"
               onClick={() => setEditMode("json")}
               className={`px-3 py-1 text-xs rounded transition-colors ${editMode === "json" ? "bg-dalam-bg-active text-dalam-text-primary font-medium" : "text-dalam-text-secondary hover:text-dalam-text-primary"}`}
             >
@@ -2394,7 +2431,7 @@ function McpTab() {
               )}
 
               <div>
-                <button
+                <button type="button"
                   onClick={() => setEnvOpen((v) => !v)}
                   className="flex items-center gap-1.5 text-sm text-dalam-text-primary"
                 >
@@ -2432,7 +2469,7 @@ function McpTab() {
                             )
                           }
                         />
-                        <button
+                        <button type="button"
                           onClick={() =>
                             setEnvEntries((arr) =>
                               arr.filter((_, j) => j !== i),
@@ -2444,7 +2481,7 @@ function McpTab() {
                         </button>
                       </div>
                     ))}
-                    <button
+                    <button type="button"
                       onClick={() =>
                         setEnvEntries((arr) => [...arr, { key: "", value: "" }])
                       }
@@ -2484,7 +2521,7 @@ function McpTab() {
           )}
 
           <div className="flex items-center justify-end gap-2 mt-6">
-            <button
+            <button type="button"
               onClick={() => {
                 reset();
                 setView("list");
@@ -2494,14 +2531,14 @@ function McpTab() {
               Cancel
             </button>
             {editMode === "form" ? (
-              <button
+              <button type="button"
                 onClick={onAdd}
                 className="px-4 py-1.5 text-sm rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium"
               >
                 Add
               </button>
             ) : (
-              <button
+              <button type="button"
                 onClick={onAddFromJson}
                 disabled={!jsonText.trim() || !!jsonError}
                 className="px-4 py-1.5 text-sm rounded-md bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity font-medium disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2593,7 +2630,7 @@ function ConnectorsTab() {
         botToken: tgToken.trim(),
         allowedUsers: tgUsers
           .split(",")
-          .map((s) => parseInt(s.trim()))
+          .map((s) => parseInt(s.trim(), 10))
           .filter((n) => !isNaN(n)),
       },
     };
@@ -2703,13 +2740,13 @@ function ConnectorsTab() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
+              <button type="button"
                 onClick={() => handleToggle(cfg)}
                 className="text-[11px] px-2 py-1 rounded bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors"
               >
                 {cfg.enabled ? "Disable" : "Enable"}
               </button>
-              <button
+              <button type="button"
                 onClick={() => {
                   if (confirm(`Delete "${cfg.name}"? This cannot be undone.`))
                     handleDelete(cfg.id);
@@ -2727,13 +2764,13 @@ function ConnectorsTab() {
         <div className="space-y-3">
           <p className="text-xs text-dalam-text-muted">Add a new connector:</p>
           <div className="flex gap-2">
-            <button
+            <button type="button"
               onClick={() => setAddingType("telegram")}
               className="flex items-center gap-2 text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors"
             >
               <MessageSquare className="w-3.5 h-3.5" /> Telegram
             </button>
-            <button
+            <button type="button"
               onClick={() => setAddingType("whatsapp")}
               className="flex items-center gap-2 text-[12px] px-3 py-1.5 rounded-lg bg-dalam-bg-active hover:bg-dalam-bg-hover text-dalam-text-secondary transition-colors"
             >
@@ -2803,13 +2840,13 @@ function ConnectorsTab() {
             </p>
           </div>
           <div className="flex gap-2 mt-2">
-            <button
+            <button type="button"
               onClick={handleAddTelegram}
               className="btn-primary text-[12px]"
             >
               Add Connector
             </button>
-            <button
+            <button type="button"
               onClick={() => setAddingType(null)}
               className="text-[12px] px-3 py-1.5 rounded text-dalam-text-muted hover:text-dalam-text-primary"
             >
@@ -2887,13 +2924,13 @@ function ConnectorsTab() {
             </p>
           </div>
           <div className="flex gap-2 mt-2">
-            <button
+            <button type="button"
               onClick={handleAddWhatsApp}
               className="btn-primary text-[12px]"
             >
               Add Connector
             </button>
-            <button
+            <button type="button"
               onClick={() => setAddingType(null)}
               className="text-[12px] px-3 py-1.5 rounded text-dalam-text-muted hover:text-dalam-text-primary"
             >
@@ -3042,7 +3079,7 @@ function CommandsTab() {
                   {c.description}
                 </div>
               </div>
-              <button
+              <button type="button"
                 onClick={() => setEditing(c.id)}
                 className="px-2.5 py-1 text-xs font-mono rounded-md bg-dalam-bg-tertiary border border-dalam-border-primary hover:bg-dalam-bg-hover transition-colors"
               >
@@ -3056,7 +3093,7 @@ function CommandsTab() {
         title="Custom commands"
         description="Create your own reusable commands that run agent tasks or scripts."
       >
-        <button
+        <button type="button"
           className="px-4 py-2 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors opacity-50 cursor-not-allowed"
           disabled
         >
@@ -3140,7 +3177,7 @@ function TrajectoryExportCard() {
         </div>
       )}
       <div className="flex items-center gap-3">
-        <button
+        <button type="button"
           className="px-4 py-2 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-md transition-colors"
           disabled={exporting}
           onClick={async () => {
@@ -3268,7 +3305,7 @@ function IndexingTab() {
           value={excludedPatterns}
           onChange={(e) => setExcludedPatterns(e.target.value)}
         />
-        <button
+        <button type="button"
           className="mt-3 px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-sm text-dalam-text-primary rounded-md border border-dalam-border-primary transition-colors"
           onClick={() => update("excludedPatterns", excludedPatterns)}
         >
@@ -3359,7 +3396,7 @@ function InstructionsTab() {
           title="No instruction files found"
           description="Create an DALAM.md file in your project root to get started."
         >
-          <button
+          <button type="button"
             className="px-4 py-2 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-lg transition-colors"
             onClick={async () => {
               try {
@@ -3411,7 +3448,7 @@ function InstructionsTab() {
               key={layer.key}
               className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl overflow-hidden"
             >
-              <button
+              <button type="button"
                 className="w-full flex items-center justify-between px-5 py-4 hover:bg-dalam-bg-hover transition-colors text-left"
                 onClick={() =>
                   setExpandedLayer(
@@ -3498,13 +3535,13 @@ function InstructionsTab() {
                               : "Not tracked"}
                           </span>
                           <div className="flex items-center gap-2">
-                            <button
+                            <button type="button"
                               onClick={() => setEditingLayer(null)}
                               className="px-3 py-1.5 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
                             >
                               Cancel
                             </button>
-                            <button
+                            <button type="button"
                               onClick={async () => {
                                 setSaving(true);
                                 try {
@@ -3548,7 +3585,7 @@ function InstructionsTab() {
                             <pre className="text-xs font-mono leading-relaxed text-dalam-text-secondary whitespace-pre-wrap max-h-[200px] overflow-y-auto bg-dalam-bg-primary rounded-lg p-4 border border-dalam-border-primary">
                               {layer.content || "(empty)"}
                             </pre>
-                            <button
+                            <button type="button"
                               onClick={() => {
                                 setEditingLayer(layer.key);
                                 setEditContent(layer.content);
@@ -3563,7 +3600,7 @@ function InstructionsTab() {
                             <p className="text-sm text-dalam-text-muted mb-3">
                               No instruction file at this layer.
                             </p>
-                            <button
+                            <button type="button"
                               onClick={async () => {
                                 try {
                                   const api = createDalamAPI();
@@ -3776,14 +3813,14 @@ function OnboardTab() {
             ))}
           </div>
           <div className="flex items-center gap-2">
-            <button
+            <button type="button"
               onClick={() => setStep(Math.max(0, step - 1))}
               disabled={step === 0}
               className="px-3 py-1.5 text-sm rounded-md text-dalam-text-secondary hover:bg-dalam-bg-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               Back
             </button>
-            <button
+            <button type="button"
               onClick={() => setStep(Math.min(steps.length - 1, step + 1))}
               disabled={step === steps.length - 1}
               className="px-3 py-1.5 text-sm rounded-md bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
@@ -3807,7 +3844,7 @@ function Toggle({
   label?: string;
 }) {
   return (
-    <button
+    <button type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label || "Toggle setting"}

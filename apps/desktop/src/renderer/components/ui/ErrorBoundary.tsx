@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div className="h-full w-full flex flex-col items-center justify-center bg-dalam-bg-primary p-8 text-center">
-          <AlertOctagon className="w-10 h-10 text-dalam-git-deleted mb-3" />
+          <AlertOctagon className="w-10 h-10 text-dalam-git-deleted mb-3" aria-hidden="true" />
           <h1 className="text-xl font-semibold text-dalam-text-primary mb-1">
             Something went wrong
           </h1>
@@ -35,10 +35,11 @@ export class ErrorBoundary extends Component<Props, State> {
             {this.state.error.message}
           </pre>
           <button
+            type="button"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-xs rounded-md"
             onClick={this.reset}
           >
-            <RefreshCw className="w-3 h-3" />
+            <RefreshCw className="w-3 h-3" aria-hidden="true" />
             Reset surface
           </button>
         </div>

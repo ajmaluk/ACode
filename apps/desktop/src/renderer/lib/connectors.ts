@@ -19,6 +19,18 @@
  * ============================================================
  */
 
+// ─── Helpers ────────────────────────────────────────────────
+
+/** Constant-time string comparison to prevent timing attacks on auth tokens */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 // ─── Types ─────────────────────────────────────────────────
 
 export interface ConnectorMessage {
@@ -118,6 +130,17 @@ export function unregisterConnector(id: string): void {
   }
 }
 
+/**
+ * Unregister all connectors (for workspace close / session teardown).
+ * Prevents leaked state from stale connectors surviving across workspace switches.
+ */
+export function unregisterAllConnectors(): void {
+  for (const [id, connector] of connectors) {
+    connector.stop().catch(() => {});
+  }
+  connectors.clear();
+}
+
 // ─── Built-in Connectors ───────────────────────────────────
 
 // --- HTTP Webhook Connector ---
@@ -191,7 +214,7 @@ export class WebhookConnector implements Connector {
     if (this.authToken) {
       const headers = (payload.headers ?? {}) as Record<string, unknown>;
       const token = headers["x-auth-token"] ?? payload.token;
-      if (token !== this.authToken) {
+      if (typeof token !== "string" || !constantTimeEqual(token, this.authToken)) {
         console.warn("Webhook", "Invalid auth token");
         return;
       }
@@ -452,10 +475,10 @@ export class CronConnector implements Connector {
       }
       // Handle step values like "*/5"
       if (field.startsWith("*/")) {
-        const step = parseInt(field.slice(2));
+        const step = parseInt(field.slice(2), 10);
         return value % step === 0;
       }
-      return parseInt(field) === value;
+      return parseInt(field, 10) === value;
     };
 
     // Use setTimeout to schedule the next occurrence, then reschedule
@@ -484,6 +507,14 @@ export class CronConnector implements Connector {
 
       const targetTime = target.getTime();
       const nowTime = Date.now();
+
+      // Guard against system clock jumps (NTP sync, sleep/wake):
+      // if the computed target is more than 48 hours in the past, recalculate
+      if (targetTime < nowTime - 48 * 60 * 60 * 1000) {
+        // Clock jumped backward — recalculate from current time
+        scheduleNext();
+        return;
+      }
 
       // L-12: Add drift compensation to cron setTimeout
       // If we've drifted past the target, schedule immediately
@@ -552,7 +583,8 @@ export class TelegramConnector implements Connector {
   private allowedUsers: number[];
   private webhookUrl?: string;
   // L-15: Use message ID for deduplication instead of timestamp
-  private processedMessageIds: Set<string> = new Set();
+  // Map<msgId, timestamp> for O(1) eviction of oldest entries
+  private processedMessageIds: Map<string, number> = new Map();
   private maxProcessedIds = 1000;
   // L-14: Rate limiting
   private lastPollTime = 0;
@@ -663,14 +695,15 @@ export class TelegramConnector implements Connector {
         // L-15: Use message ID for deduplication instead of timestamp
         const msgId = String(msg.message_id);
         if (this.processedMessageIds.has(msgId)) continue;
-        this.processedMessageIds.add(msgId);
-        // Cap the set size to prevent memory leak
+        this.processedMessageIds.set(msgId, Date.now());
+        // Cap the map size to prevent memory leak
         if (this.processedMessageIds.size > this.maxProcessedIds) {
-          // Remove oldest entries (first 500)
-          const entries = Array.from(this.processedMessageIds);
-          const toRemove = entries.slice(0, 500);
-          for (const id of toRemove) {
-            this.processedMessageIds.delete(id);
+          // Remove oldest entries (first 500) using insertion-ordered keys
+          const iter = this.processedMessageIds.keys();
+          for (let i = 0; i < 500; i++) {
+            const key = iter.next();
+            if (key.done) break;
+            this.processedMessageIds.delete(key.value);
           }
         }
         const message: ConnectorMessage = {

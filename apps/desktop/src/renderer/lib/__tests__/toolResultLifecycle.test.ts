@@ -334,12 +334,12 @@ describe("diff-proposed binding", () => {
         hunks: [
           {
             oldStart: 1,
-            oldLines: 1,
+            oldCount: 1,
             newStart: 1,
-            newLines: 1,
+            newCount: 1,
             lines: [
-              { type: "remove", content: "old", oldLineNumber: 1 },
-              { type: "add", content: "new", newLineNumber: 1 },
+              { type: "remove", content: "old", oldLineNum: 1, newLineNum: null },
+              { type: "add", content: "new", oldLineNum: null, newLineNum: 1 },
             ],
           },
         ],
@@ -380,11 +380,11 @@ describe("diff-proposed binding", () => {
         hunks: [
           {
             oldStart: 0,
-            oldLines: 0,
+            oldCount: 0,
             newStart: 1,
-            newLines: 1,
+            newCount: 1,
             lines: [
-              { type: "add", content: "new content here", newLineNumber: 1 },
+              { type: "add", content: "new content here", oldLineNum: null, newLineNum: 1 },
             ],
           },
         ],
@@ -419,12 +419,12 @@ describe("diff-proposed binding", () => {
         hunks: [
           {
             oldStart: 1,
-            oldLines: 1,
+            oldCount: 1,
             newStart: 1,
-            newLines: 1,
+            newCount: 1,
             lines: [
-              { type: "remove", content: "a", oldLineNumber: 1 },
-              { type: "add", content: "b", newLineNumber: 1 },
+              { type: "remove", content: "a", oldLineNum: 1, newLineNum: null },
+              { type: "add", content: "b", oldLineNum: null, newLineNum: 1 },
             ],
           },
         ],
@@ -496,12 +496,12 @@ describe("diff-proposed binding", () => {
         hunks: [
           {
             oldStart: 1,
-            oldLines: 1,
+            oldCount: 1,
             newStart: 1,
-            newLines: 1,
+            newCount: 1,
             lines: [
-              { type: "remove", content: "old", oldLineNumber: 1 },
-              { type: "add", content: "new", newLineNumber: 1 },
+              { type: "remove", content: "old", oldLineNum: 1, newLineNum: null },
+              { type: "add", content: "new", oldLineNum: null, newLineNum: 1 },
             ],
           },
         ],

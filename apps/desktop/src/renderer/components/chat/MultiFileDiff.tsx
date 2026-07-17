@@ -53,8 +53,9 @@ function InlineDiffHunks({ diff }: { diff: DiffProposal }) {
         ))}
         {truncated && (
           <button
+            type="button"
             onClick={() => setExpanded(true)}
-            className="w-full px-2 py-0.5 text-dalam-accent hover:underline text-left"
+            className="w-full px-2 py-0.5 text-dalam-accent-primary hover:underline text-left"
           >
             ... {allLines.length - maxLines} more lines
           </button>
@@ -85,8 +86,8 @@ export const MultiFileDiffSummary: React.FC = () => {
         id: tc.id,
         diffId: tc.diffId!,
         filePath: tc.diff?.filePath ?? (tc.args.path as string) ?? "unknown",
-        additions: tc.diff?.hunks?.reduce((n, h) => n + h.newLines, 0) ?? 0,
-        deletions: tc.diff?.hunks?.reduce((n, h) => n + h.oldLines, 0) ?? 0,
+        additions: tc.diff?.hunks?.reduce((n, h) => n + h.newCount, 0) ?? 0,
+        deletions: tc.diff?.hunks?.reduce((n, h) => n + h.oldCount, 0) ?? 0,
         diff: tc.diff,
       }));
   }, [pendingToolCalls]);
@@ -123,6 +124,7 @@ export const MultiFileDiffSummary: React.FC = () => {
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={async () => {
               setBatchResolving(true);
               try {
@@ -137,12 +139,13 @@ export const MultiFileDiffSummary: React.FC = () => {
               }
             }}
             disabled={batchResolving}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-added/80 hover:bg-dalam-git-added text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-dalam-git-added"
           >
             <Check size={12} />
             Approve All
           </button>
           <button
+            type="button"
             onClick={async () => {
               setBatchResolving(true);
               try {
@@ -157,7 +160,7 @@ export const MultiFileDiffSummary: React.FC = () => {
               }
             }}
             disabled={batchResolving}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-dalam-git-deleted/80 hover:bg-dalam-git-deleted text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-dalam-git-deleted"
           >
             <X size={12} />
             Reject All
@@ -176,8 +179,11 @@ export const MultiFileDiffSummary: React.FC = () => {
             >
               <div className="flex items-center justify-between px-3 py-1.5">
                 <button
+                  type="button"
                   onClick={() => toggleFile(diff.id)}
-                  className="flex items-center gap-2 min-w-0 text-left"
+                  aria-expanded={isExpanded}
+                  aria-controls={`diff-content-${diff.id}`}
+                  className="flex items-center gap-2 min-w-0 text-left focus-visible:outline-2 focus-visible:outline-dalam-accent-primary focus-visible:outline-offset-2 rounded"
                 >
                   {diff.diff && diff.diff.hunks.length > 0 ? (
                     isExpanded ? (
@@ -210,15 +216,21 @@ export const MultiFileDiffSummary: React.FC = () => {
                   </span>
                   <div className="flex items-center gap-1">
                     <button
+                      type="button"
+                      aria-label={`Approve ${diff.filePath}`}
                       onClick={() => { void resolveToolApproval(diff.id, "approved"); }}
-                      className="p-0.5 text-dalam-git-added hover:opacity-80 transition-colors"
+                      disabled={batchResolving}
+                      className="min-w-[28px] min-h-[28px] flex items-center justify-center text-dalam-git-added hover:opacity-80 focus-visible:outline-2 focus-visible:outline-dalam-accent-primary focus-visible:outline-offset-2 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Approve"
                     >
                       <Check size={12} />
                     </button>
                     <button
+                      type="button"
+                      aria-label={`Reject ${diff.filePath}`}
                       onClick={() => { void resolveToolApproval(diff.id, "denied"); }}
-                      className="p-0.5 text-dalam-git-deleted hover:opacity-80 transition-colors"
+                      disabled={batchResolving}
+                      className="min-w-[28px] min-h-[28px] flex items-center justify-center text-dalam-git-deleted hover:opacity-80 focus-visible:outline-2 focus-visible:outline-dalam-accent-primary focus-visible:outline-offset-2 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Reject"
                     >
                       <X size={12} />
@@ -226,7 +238,11 @@ export const MultiFileDiffSummary: React.FC = () => {
                   </div>
                 </div>
               </div>
-              {isExpanded && diff.diff && <InlineDiffHunks diff={diff.diff} />}
+              {isExpanded && diff.diff && (
+                <div id={`diff-content-${diff.id}`}>
+                  <InlineDiffHunks diff={diff.diff} />
+                </div>
+              )}
             </div>
           );
         })}

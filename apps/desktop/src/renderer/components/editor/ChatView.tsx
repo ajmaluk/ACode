@@ -129,7 +129,7 @@ function AgentModeSelector() {
 
   return (
     <div className="relative" ref={ref}>
-      <button
+      <button type="button"
         onClick={() => setOpen(!open)}
         className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors hover:bg-dalam-bg-hover ${currentMode.color}`}
         title={currentMode.description}
@@ -144,7 +144,7 @@ function AgentModeSelector() {
       {open && (
         <div className="absolute bottom-full left-0 mb-1 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-xl z-50 min-w-[200px] py-1 animate-fade-in">
           {AGENT_MODES.map((mode) => (
-            <button
+            <button type="button"
               key={mode.name}
               onClick={() => {
                 setActiveAgent(mode.name);
@@ -179,13 +179,15 @@ function AgentModeSelector() {
 // ============================================================================
 
 function QuestionInput() {
-  const { request, resolve } = useQuestion();
+  const { request, queue, currentIndex, resolve, goNext, goPrev } = useQuestion();
   const [selected, setSelected] = useState(0);
   const [customText, setCustomText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const prevRequestIdRef = useRef<string | undefined>(undefined);
   const optionCount = request?.options?.length ?? 0;
+  const questionCount = queue.length;
+  const isSingleQuestion = questionCount <= 1;
 
   const handleSubmit = useCallback(() => {
     if (!request) return;
@@ -241,8 +243,9 @@ function QuestionInput() {
 
   const inputType = request.type === "number" ? "number" : "text";
   const isLastOption = selected >= optionCount;
-  // Next/Submit button is active only when: an option is selected, OR "Other" is selected with text entered
-  const canProceed = selected < optionCount || (isLastOption && customText.trim());
+  const isLastQuestion = currentIndex >= questionCount - 1;
+  // Submit button is active only when: an option is selected, OR "Other" is selected with text entered
+  const canSubmit = selected < optionCount || (isLastOption && customText.trim());
 
   // For "confirm" type, show Yes/No buttons prominently
   if (request.type === "confirm" && optionCount === 0) {
@@ -257,7 +260,7 @@ function QuestionInput() {
               {request.question}
             </span>
           </div>
-          <button
+          <button type="button"
             onClick={() => resolve(null)}
             className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors flex-shrink-0"
             title="Dismiss"
@@ -267,13 +270,13 @@ function QuestionInput() {
           </button>
         </div>
         <div className="flex gap-2 px-4 pb-3">
-          <button
+          <button type="button"
             onClick={() => resolve({ selectedLabel: "Yes" })}
             className="flex-1 px-4 py-2 rounded-lg text-sm font-medium bg-dalam-git-added/15 text-dalam-git-added hover:bg-dalam-git-added/25 transition-colors"
           >
             Yes
           </button>
-          <button
+          <button type="button"
             onClick={() => resolve({ selectedLabel: "No" })}
             className="flex-1 px-4 py-2 rounded-lg text-sm font-medium bg-dalam-git-removed/15 text-dalam-git-removed hover:bg-dalam-git-removed/25 transition-colors"
           >
@@ -286,21 +289,23 @@ function QuestionInput() {
 
   return (
     <div className="flex flex-col animate-fade-in">
-      {/* Header with progress indicator */}
+      {/* Header with question progress */}
       <div className="flex items-start justify-between px-4 pt-3 pb-1.5 gap-3">
         <div className="flex items-start gap-2 min-w-0 flex-1">
           <span className="text-[11px] font-medium text-amber-500 bg-amber-500/10 dark:text-amber-400 dark:bg-amber-400/10 px-2 py-0.5 rounded flex-shrink-0">
             {request.header}
           </span>
+          {!isSingleQuestion && (
+            <span className="text-[10px] text-dalam-text-muted font-mono flex-shrink-0">
+              {currentIndex + 1}/{questionCount}
+            </span>
+          )}
           <span className="text-sm text-dalam-text-primary font-medium break-words">
             {request.question}
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-[10px] text-dalam-text-muted font-mono">
-            {selected + 1}/{optionCount || 1}
-          </span>
-          <button
+          <button type="button"
             onClick={() => resolve(null)}
             className="p-1 rounded hover:bg-dalam-bg-hover text-dalam-text-muted transition-colors"
             title="Dismiss"
@@ -318,7 +323,7 @@ function QuestionInput() {
             const isSelected = selected === idx;
             return (
               <li key={opt.label}>
-                <button
+                <button type="button"
                   onClick={() => setSelected(idx)}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all text-left ${
                     isSelected
@@ -329,7 +334,7 @@ function QuestionInput() {
                   aria-selected={isSelected}
                 >
                   {isSelected ? (
-                    <ChevronRight className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                    <Check className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
                   ) : (
                     <span className="w-3.5 h-3.5 flex-shrink-0 text-dalam-text-muted text-xs font-mono">
                       {idx + 1}.
@@ -342,7 +347,7 @@ function QuestionInput() {
           })}
           {request.allowFreeText !== false && (
             <li>
-              <button
+              <button type="button"
                 onClick={() => { setSelected(optionCount); inputRef.current?.focus(); }}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all text-left ${
                   isLastOption
@@ -353,7 +358,7 @@ function QuestionInput() {
                 aria-selected={isLastOption}
               >
                 {isLastOption ? (
-                  <ChevronRight className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                  <Check className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
                 ) : (
                   <span className="w-3.5 h-3.5 flex-shrink-0 text-dalam-text-muted text-xs font-mono">
                     {optionCount + 1}.
@@ -384,19 +389,21 @@ function QuestionInput() {
 
       {/* Navigation buttons */}
       <div className="flex items-center justify-between px-4 pb-3">
-        <button
-          onClick={() => setSelected(Math.max(0, selected - 1))}
-          disabled={selected === 0}
-          className="px-3 py-1.5 text-xs font-medium text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          ← Prev
-        </button>
-        <button
-          onClick={handleSubmit}
-          disabled={!canProceed}
+        {!isSingleQuestion && currentIndex > 0 && (
+          <button type="button"
+            onClick={goPrev}
+            className="px-3 py-1.5 text-xs font-medium text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-lg transition-colors"
+          >
+            ← Prev
+          </button>
+        )}
+        {isSingleQuestion && <span />}
+        <button type="button"
+          onClick={isLastQuestion ? handleSubmit : goNext}
+          disabled={!canSubmit}
           className="px-4 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25"
         >
-          {isLastOption && request.allowFreeText !== false ? "Submit" : "Next →"}
+          {isLastQuestion ? "Submit" : "Next →"}
         </button>
       </div>
     </div>
@@ -417,6 +424,7 @@ function ChatView() {
   const sendMessage = useChat((s) => s.sendMessage);
   const isStreaming = useChat((s) => s.isStreaming);
   const messages = useChat((s) => s.messages);
+  const streamingContent = useChat((s) => s.streamingContent);
   const selectedModelId = useChat((s) => s.selectedModelId);
   const setSelectedModel = useChat((s) => s.setSelectedModel);
   const chatSessions = useChat((s) => s.chatSessions);
@@ -513,18 +521,24 @@ function ChatView() {
   // Control restore popup visibility
   const [showRestorePopup, setShowRestorePopup] = useState(false);
 
-  // Auto-resize the textareas dynamically based on scrollHeight
+  // Auto-resize the textareas dynamically based on scrollHeight.
+  // Uses requestAnimationFrame to debounce and avoid synchronous forced layouts on every keystroke.
+  const autoResizeRafRef = useRef<number>(0);
   useEffect(() => {
-    const mainTextarea = mainTextareaRef.current;
-    if (mainTextarea) {
-      mainTextarea.style.height = "auto";
-      mainTextarea.style.height = `${Math.min(mainTextarea.scrollHeight, 400)}px`;
-    }
-    const followupTextarea = followupTextareaRef.current;
-    if (followupTextarea) {
-      followupTextarea.style.height = "auto";
-      followupTextarea.style.height = `${Math.min(followupTextarea.scrollHeight, 400)}px`;
-    }
+    cancelAnimationFrame(autoResizeRafRef.current);
+    autoResizeRafRef.current = requestAnimationFrame(() => {
+      const mainTextarea = mainTextareaRef.current;
+      if (mainTextarea) {
+        mainTextarea.style.height = "auto";
+        mainTextarea.style.height = `${Math.min(mainTextarea.scrollHeight, 400)}px`;
+      }
+      const followupTextarea = followupTextareaRef.current;
+      if (followupTextarea) {
+        followupTextarea.style.height = "auto";
+        followupTextarea.style.height = `${Math.min(followupTextarea.scrollHeight, 400)}px`;
+      }
+    });
+    return () => cancelAnimationFrame(autoResizeRafRef.current);
   }, [value]);
 
   // Cleanup both provider hover timeouts on unmount
@@ -562,7 +576,10 @@ function ChatView() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Auto-scroll only if user hasn't scrolled up — debounced via RAF to prevent jitter
+  // Auto-scroll only if user hasn't scrolled up — debounced via RAF to prevent jitter.
+  // Deps include streamingContent to re-evaluate scroll position as streaming text grows,
+  // not just at message boundaries. isUserScrolledUp is a ref so the dep comparison is stable,
+  // but the effect re-reads .current on every invalidation (messages or streamingContent change).
   const scrollRafRef = useRef<number>(0);
   useEffect(() => {
     if (!isUserScrolledUp.current && scrollRef.current) {
@@ -574,7 +591,7 @@ function ChatView() {
       });
     }
     return () => cancelAnimationFrame(scrollRafRef.current);
-  }, [messages, isUserScrolledUp, scrollRef]);
+  }, [messages, streamingContent, isUserScrolledUp, scrollRef]);
 
   const hasMessages = messages.length > 0;
 
@@ -1348,7 +1365,7 @@ Add your project's common commands here so Dalam knows how to build:
               <div className="bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl shadow-2xl">
                 <div className="px-4 pt-2.5 flex items-center gap-3">
                   <div className="relative" ref={workspaceRef}>
-                    <button
+                    <button type="button"
                       className={`flex items-center gap-1.5 text-sm transition-colors ${workspace ? "text-dalam-text-secondary hover:text-dalam-text-primary" : "text-dalam-text-muted hover:text-dalam-text-secondary"}`}
                       onClick={() => {
                         setShowWorkspaceDropdown((v) => !v);
@@ -1400,7 +1417,7 @@ Add your project's common commands here so Dalam knows how to build:
                                   .includes(workspaceSearch.toLowerCase()),
                             )
                             .map((ws) => (
-                              <button
+                              <button type="button"
                                 key={ws.id}
                                 className={`w-full text-left px-3 py-2 flex items-center gap-2 text-sm hover:bg-dalam-bg-hover transition-colors ${ws.id === activeWorkspaceId ? "bg-dalam-bg-hover" : ""}`}
                                 onClick={() => {
@@ -1429,7 +1446,7 @@ Add your project's common commands here so Dalam knows how to build:
                               </div>
                             )}
                           <div className="border-t border-dalam-border-primary">
-                            <button
+                            <button type="button"
                               className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
                               onClick={() => {
                                 void openWorkspace();
@@ -1447,7 +1464,7 @@ Add your project's common commands here so Dalam knows how to build:
                   </div>
                   {gitStatus && (
                     <div className="relative" ref={branchRef}>
-                      <button
+                      <button type="button"
                         className="flex items-center gap-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-secondary transition-colors"
                         onClick={() => {
                           setShowBranchDropdown((v) => !v);
@@ -1462,7 +1479,7 @@ Add your project's common commands here so Dalam knows how to build:
                       </button>
                       {showBranchDropdown && (
                         <div className="absolute top-full left-0 mt-1 w-40 bg-dalam-bg-secondary border border-dalam-border-primary rounded-lg shadow-2xl z-50 overflow-hidden">
-                          <button className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-primary hover:bg-dalam-bg-hover">
+                          <button type="button" className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-primary hover:bg-dalam-bg-hover">
                             <Check className="w-3.5 h-3.5 text-dalam-accent-primary" />
                             {gitStatus.branch}
                           </button>
@@ -1492,7 +1509,7 @@ Add your project's common commands here so Dalam knows how to build:
                           <span className="max-w-[120px] truncate">
                             {att.name}
                           </span>
-                          <button
+                          <button type="button"
                             className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
                             onClick={() => removePendingAttachment(att.id)}
                             title={`Remove ${att.name}`}
@@ -1538,7 +1555,7 @@ Add your project's common commands here so Dalam knows how to build:
                         }
                         side="top"
                       >
-                        <button
+                        <button type="button"
                           className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
                           onClick={() => {
                             setShowModelDropdown((v) => !v);
@@ -1608,7 +1625,7 @@ Add your project's common commands here so Dalam knows how to build:
                               })}
                           </div>
                           <div className="border-t border-dalam-border-primary">
-                            <button
+                            <button type="button"
                               className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
                               onClick={() => {
                                 useSettingsView.getState().open("models");
@@ -1650,7 +1667,7 @@ Add your project's common commands here so Dalam knows how to build:
                       }
                       side="top"
                     >
-                      <button
+                      <button type="button"
                         className="w-8 h-8 flex items-center justify-center rounded-full bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                         disabled={
                           !isStreaming &&
@@ -1732,7 +1749,7 @@ Add your project's common commands here so Dalam knows how to build:
               </div>
             )}
             {showLoadOlder && (
-              <button
+              <button type="button"
                 onClick={() => setShowOlderCount((c) => c + 1)}
                 className="mx-auto block px-4 py-1.5 text-xs text-dalam-text-muted hover:text-dalam-text-primary hover:bg-dalam-bg-active rounded-lg transition-colors"
               >
@@ -1763,13 +1780,13 @@ Add your project's common commands here so Dalam knows how to build:
                   and execute it.
                 </p>
                 <div className="flex gap-2">
-                  <button
+                  <button type="button"
                     onClick={approvePlan}
                     className="px-4 py-1.5 bg-dalam-accent-primary hover:bg-dalam-accent-hover text-white text-sm rounded-lg transition-colors"
                   >
                     Approve & Build
                   </button>
-                  <button
+                  <button type="button"
                     onClick={rejectPlan}
                     className="px-4 py-1.5 bg-dalam-bg-active hover:bg-dalam-bg-tertiary text-dalam-text-primary text-sm rounded-lg border border-dalam-border-primary transition-colors"
                   >
@@ -1844,7 +1861,7 @@ Add your project's common commands here so Dalam knows how to build:
                           <FileText className="w-3.5 h-3.5 text-dalam-text-muted" />
                         )}
                         <span className="max-w-[120px] truncate">{att.name}</span>
-                        <button
+                        <button type="button"
                           className="text-dalam-text-muted hover:text-dalam-text-primary transition-colors ml-0.5"
                           onClick={() => removePendingAttachment(att.id)}
                           title={`Remove ${att.name}`}
@@ -1886,7 +1903,7 @@ Add your project's common commands here so Dalam knows how to build:
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative" ref={followupModelRef}>
-                  <button
+                  <button type="button"
                     className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-dalam-text-secondary hover:bg-dalam-bg-hover rounded-md transition-colors"
                     onClick={() => {
                       setShowFollowupModelDropdown((v) => !v);
@@ -1954,7 +1971,7 @@ Add your project's common commands here so Dalam knows how to build:
                           })}
                       </div>
                       <div className="border-t border-dalam-border-primary">
-                        <button
+                        <button type="button"
                           className="w-full text-left px-3 py-2 flex items-center gap-2 text-sm text-dalam-text-secondary hover:bg-dalam-bg-hover transition-colors"
                           onClick={() => {
                             useSettingsView.getState().open("models");
@@ -1983,7 +2000,7 @@ Add your project's common commands here so Dalam knows how to build:
                     />
                   )}
                 </div>
-                <button
+                <button type="button"
                   className="w-8 h-8 flex items-center justify-center rounded-full bg-dalam-text-primary text-dalam-bg-primary hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
                   disabled={
                     !isStreaming &&

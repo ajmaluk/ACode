@@ -393,9 +393,13 @@ export function buildMemoryGraph(
       const a = catMemories[i];
       const aId = `mem-${a.id}`;
       const similarities: { idx: number; score: number }[] = [];
-      // Only compare within same category, and limit inner loop to first 100
-      const maxJ = Math.min(catMemories.length, 100);
-      for (let j = 0; j < maxJ; j++) {
+      // Compare against up to 100 neighbors offset by index to ensure even distribution.
+      // Using a sliding window prevents the asymmetry where only entries 0-99 get compared:
+      // each entry compares against up to 100 entries centered around its index.
+      const halfWindow = 50;
+      const startJ = Math.max(0, i - halfWindow);
+      const endJ = Math.min(catMemories.length, i + halfWindow);
+      for (let j = startJ; j < endJ; j++) {
         if (i === j) continue;
         const b = catMemories[j];
         const overlap = a.tags.filter((t) => b.tags.includes(t)).length;
@@ -423,11 +427,15 @@ export function buildMemoryGraph(
     categoryGroups.set(cat, group);
   }
   for (const [, group] of categoryGroups) {
-    // Connect each node to 2 others in same category
+    // Connect each node to up to 2 neighbors within the same category.
+    // Use modulo neighborhood for even distribution: node i connects to i+1 and i+2,
+    // wrapping around for the last few nodes so no node has fewer connections.
+    if (group.length < 2) continue;
     for (let i = 0; i < group.length; i++) {
-      for (let j = i + 1; j < Math.min(group.length, i + 3); j++) {
-        addEdgeDeduped(edges, seen, group[i], group[j], "related_to", 0.2);
-      }
+      const j1 = (i + 1) % group.length;
+      const j2 = (i + 2) % group.length;
+      addEdgeDeduped(edges, seen, group[i], group[j1], "related_to", 0.2);
+      addEdgeDeduped(edges, seen, group[i], group[j2], "related_to", 0.2);
     }
   }
 
