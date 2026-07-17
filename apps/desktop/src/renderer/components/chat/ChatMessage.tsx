@@ -31,6 +31,7 @@ import { FileText, Copy, RotateCcw, Info } from "lucide-react";
 import { useChat } from "@/store/useAppStore";
 import { useToast } from "@/components/ui/toastStore";
 import { splitCodeFences, transformRawCodeSegments } from "@/lib/chatUtils";
+import { stripXmlToolCallTags } from "@/store/xmlParser";
 import { CodeBlock, StreamingCodeBlock, MarkdownContent, StreamingContent } from "./ChatRendering";
 import {
   ThinkingBlock,
@@ -66,14 +67,23 @@ export const ChatMessage = React.memo(
     isLast?: boolean;
   }) {
     const toast = useToast();
-    const rawSegments = useMemo(
-      () => splitCodeFences(message.content),
+    // Safety net: strip any remaining XML tool call tags that leaked through streaming.
+    // This catches edge cases where stripInlineXml or parseXmlToolCalls missed tags.
+    // Fast-path: skip the expensive stripXmlToolCallTags when content has no angle brackets.
+    const displayContent = useMemo(
+      () => !message.content.includes("<") ? message.content : stripXmlToolCallTags(message.content),
       [message.content],
+    );
+    const rawSegments = useMemo(
+      () => splitCodeFences(displayContent),
+      [displayContent],
     );
     const segments = useMemo(
       () => transformRawCodeSegments(rawSegments),
       [rawSegments],
     );
+    // Live session todos while streaming (todowrite updates store before message finalizes)
+    const liveTodos = useChat((s) => (pending ? s.todos : EMPTY_ACTIVITIES));
     const pendingActivities = useChat((s) =>
       pending ? s.pendingActivities : EMPTY_ACTIVITIES,
     );
@@ -95,6 +105,10 @@ export const ChatMessage = React.memo(
 
     // System message: styled notification box
     if (message.role === "system") {
+      // Hide internal approval/completion messages — they're for the LLM, not the user
+      if (message.content.startsWith("[File write completed]") || message.content.startsWith("[File write approved]")) {
+        return null;
+      }
       return (
         <div role="alert" className="py-2.5 px-3.5 my-3 bg-dalam-bg-secondary border border-dalam-border-primary rounded-xl text-xs text-dalam-text-secondary flex items-start gap-3 animate-fade-in shadow-sm max-w-2xl mx-auto">
           <Info className="w-4 h-4 text-dalam-accent-primary mt-0.5 flex-shrink-0" aria-hidden="true" />
@@ -184,7 +198,13 @@ export const ChatMessage = React.memo(
     const hasContent = !!(message.content || pending);
     const hasActivities = activities.length > 0;
     const hasToolCalls = !!(message.toolCalls && message.toolCalls.length > 0);
-    const hasTodos = !!(message.todos && message.todos.length > 0);
+    const displayTodos =
+      message.todos && message.todos.length > 0
+        ? message.todos
+        : pending && Array.isArray(liveTodos) && liveTodos.length > 0
+          ? (liveTodos as import("@dalam/shared-types").TodoItem[])
+          : undefined;
+    const hasTodos = !!(displayTodos && displayTodos.length > 0);
     const hasFileChanges = !!(
       message.fileChanges && message.fileChanges.length > 0
     );
@@ -285,8 +305,8 @@ export const ChatMessage = React.memo(
           </div>
         )}
 
-        {/* Tool calls from this AI turn */}
-        {!pending && hasToolCalls && (
+        {/* Live tool calls while streaming (OpenCode-style activity) */}
+        {hasToolCalls && (
           <Suspense
             fallback={
               <div className="text-xs text-dalam-text-muted">
@@ -298,8 +318,8 @@ export const ChatMessage = React.memo(
           </Suspense>
         )}
 
-        {/* Todo checklist */}
-        {!pending && hasTodos && (
+        {/* Todo checklist — show during stream so progress is visible live */}
+        {hasTodos && displayTodos && (
           <Suspense
             fallback={
               <div className="text-xs text-dalam-text-muted">
@@ -307,12 +327,12 @@ export const ChatMessage = React.memo(
               </div>
             }
           >
-            <TodoBlock todos={message.todos!} />
+            <TodoBlock todos={displayTodos} />
           </Suspense>
         )}
 
-        {/* Task plan checklist */}
-        {!pending && message.taskPlan && message.taskPlan.length > 0 && (
+        {/* Task plan checklist — visible during stream */}
+        {message.taskPlan && message.taskPlan.length > 0 && (
           <Suspense
             fallback={
               <div className="text-xs text-dalam-text-muted">

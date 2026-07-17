@@ -72,7 +72,7 @@ describe("phase transitions", () => {
       messageId: "msg-1",
       hasMoreTools: false,
     });
-    expect(state.phase).toBe("streaming");
+    expect(state.phase).toBe("idle");
     expect(state.currentMessageId).toBeNull();
   });
 

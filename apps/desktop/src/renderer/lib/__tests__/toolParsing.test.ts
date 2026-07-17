@@ -430,7 +430,7 @@ describe("stripInlineXml", () => {
 
   it("strips self-closing tool call tags", () => {
     const input = 'Checking: <bash command="git status"/>';
-    expect(stripInlineXml(input)).toBe("Checking: ");
+    expect(stripInlineXml(input)).toBe("Checking:");
   });
 
   it("strips self-closing tag with no attributes", () => {
@@ -641,7 +641,7 @@ describe("stripInlineXml", () => {
     const d3 = '</write_file> Result: <bash command="git status"/>';
     const result = stripInlineXml(d3);
     // bash tag should be stripped
-    expect(result).toBe(" Result: ");
+    expect(result).toBe(" Result:");
   });
 
   // ── Body tag with immediate close in same delta ───────────

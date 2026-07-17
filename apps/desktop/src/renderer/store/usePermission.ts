@@ -121,6 +121,8 @@ type PermissionState = {
   resolve: (decision: "allow" | "always" | "deny") => void;
   cancel: () => void;
   loadFromDisk: () => Promise<void>;
+  /** Reset closure state (for tests). Clears disk-load gate, pending queues, and store. */
+  _reset: () => void;
 };
 
 export const usePermission = create<PermissionState>((set, get) => {
@@ -157,6 +159,13 @@ export const usePermission = create<PermissionState>((set, get) => {
 
   const ask: PermissionState["ask"] = (req) => {
     if (!_loadedFromDisk) {
+      // If no workspace is configured, disk loading is irrelevant — process immediately
+      const ws = useWorkspace.getState();
+      const hasWorkspace = ws.activeWorkspaceId && ws.workspaces.some(w => w.id === ws.activeWorkspaceId);
+      if (!hasWorkspace) {
+        _loadedFromDisk = true;
+        return processAsk(req);
+      }
       return new Promise((resolve) => {
         _pendingAsks.push({ req, resolve });
       });
@@ -164,10 +173,18 @@ export const usePermission = create<PermissionState>((set, get) => {
     return processAsk(req);
   };
 
+  const _reset = () => {
+    pendingQueue.length = 0;
+    _pendingAsks.length = 0;
+    _loadedFromDisk = false;
+    set({ request: null, alwaysAllowed: {} });
+  };
+
   return {
     request: null,
     alwaysAllowed: loadAlwaysAllowed(),
     ask,
+    _reset,
     allowAlways(req) {
       const key = `${req.workspacePath ?? ""}::${req.kind}::${req.command ?? ""}`;
       const next: Record<string, true> = { ...get().alwaysAllowed, [key]: true };

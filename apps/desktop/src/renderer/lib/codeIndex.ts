@@ -138,11 +138,15 @@ export async function indexWorkspace(
       const fullPath = joinPath(dir, entry.name ?? "");
       const fileName = entry.name ?? "";
 
+      // Check if this entry is a directory
+      // Tauri readDir returns { type: "directory" | "file" | "symlink" }
+      const isDir = (entry as { type?: string }).type === "directory" || !!(entry as { isDirectory?: boolean }).isDirectory;
+      
       // Skip excluded directories
-      if (entry.isDirectory && EXCLUDED_DIRS.has(fileName)) continue;
+      if (isDir && EXCLUDED_DIRS.has(fileName)) continue;
       if (EXCLUDED_FILES.has(fileName)) continue;
 
-      if (entry.isDirectory) {
+      if (isDir) {
         await walkDir(fullPath, depth + 1);
         continue;
       }

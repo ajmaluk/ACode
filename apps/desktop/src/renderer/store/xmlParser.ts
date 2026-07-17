@@ -52,6 +52,13 @@ const XML_SKILL_INVOCATION_RE = /<skill_invocation[\s\S]*?<\/skill_invocation>|<
 const XML_STRUCTURED_TAG_RE = /<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*>[\s\S]*?<\/(?:parameter|goal|subgoal|steps|step|constraint|context|scope)>|<\/?(?:parameter|goal|subgoal|steps|step|constraint|context|scope)[^>]*\/>/gi;
 const XML_STRUCTURED_ORPHAN_CLOSE_RE = /<\/(?:parameter|goal|subgoal|steps|step|constraint|context|scope)>/gi;
 
+// Dynamically generated regex for single-word tool tags (e.g. bash, shell, notify)
+// Built from KNOWN_TAG_NAMES at module init so new tools are automatically covered.
+const _singleWordToolNames = KNOWN_TAG_NAMES.filter(n => !n.includes("_"));
+const _singleWordToolTagsRe = _singleWordToolNames.length > 0
+  ? new RegExp(`<\\/?(?:${_singleWordToolNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join("|")})(?:\\s[^>]*)?\\/?>`, "gi")
+  : null;
+
 function decodeXmlEntities(s: string): string {
   return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&#x27;/g, "'");
 }
@@ -110,9 +117,21 @@ export function stripXmlToolCallTags(content: string): string {
     // Short content: only strip if it contains obvious XML-like patterns
     if (!content.includes("<") && !content.includes("question")) return content;
   } else if (!content.includes("<")) {
+    // No XML tags — but check for raw JSON arrays (models that skip XML tool tags)
+    const trimmed = content.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.id && parsed[0]?.content) {
+          return ""; // Strip raw todowrite JSON from display — it was parsed by tool handler
+        }
+      } catch { /* not valid JSON */ }
+    }
     return content;
   }
   let result = content;
+  // Strip CDATA sections (models sometimes emit these)
+  result = result.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
   // Strip opening+content+closing blocks: <tool ...>content</tool>
   // and self-closing tags: <tool .../>
   result = result.replace(XML_STRIP_RE, "");
@@ -176,13 +195,21 @@ export function stripXmlToolCallTags(content: string): string {
   result = _cleanupOrphanToolTags(result);
   // Strip orphaned partial tool name suffixes (e.g. "_navigate url=..." from split "browser")
   // and orphaned XML attribute text at line boundaries (e.g. 'url="http://..." />')
-  // Strip orphaned partial tool name suffixes (e.g. "_navigate url=..." from split "browser")
-  // and orphaned XML attribute text at line boundaries (e.g. 'url="http://..." />')
   const ORPHAN_SUFFIX_RE = /(?:^|\n)\s*(?:[a-z_]+(?:_navigate|_execute|_file|_command|_result|_status|_plan))\s*=?\s*[^<\n]*$/gim;
   result = result.replace(ORPHAN_SUFFIX_RE, "");
   // Also strip orphaned attribute text at line boundaries (url="...", path="...", command="...")
   const ORPHAN_ATTR_RE = /(?:^|\n)\s*(?:url|path|command|pattern|query|content|name|src|href)\s*=\s*"[^"]*"\s*\/?>?\s*$/gim;
   result = result.replace(ORPHAN_ATTR_RE, "");
+  // Strip any remaining stray XML-like tool tags that leaked through all previous passes.
+  // Generic fallback: match <tagname attrs> or </tagname> or <tagname attrs/> for any
+  // tag name that looks like a tool call. Covers both underscore-separated names
+  // (e.g. write_file, run_command) and single-word names (e.g. bash, shell, notify).
+  result = result.replace(/<\/?[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?:\s[^>]*)?\/?>/gi, "");
+  // Single-word tool tags are dynamically generated from KNOWN_TAG_NAMES to avoid
+  // missing new tools when they are added to the registry.
+  if (_singleWordToolTagsRe) {
+    result = result.replace(_singleWordToolTagsRe, "");
+  }
   // Clean up excessive whitespace left behind
   // Collapse 3+ consecutive newlines into 2
   result = result.replace(/\n{3,}/g, "\n\n");
@@ -194,7 +221,7 @@ export function stripXmlToolCallTags(content: string): string {
 
 // ── Stateful streaming: suppress content inside body-bearing XML tags ────────
 // Tags whose body content must be hidden during streaming (file writes, etc.)
-const BODY_TAG_NAMES = new Set(["write_file", "edit_file", "clipboard_write", "memory_save", "browser_execute"]);
+const BODY_TAG_NAMES = new Set(["write_file", "edit_file", "clipboard_write", "memory_save", "browser_execute", "todowrite", "bash", "run_command", "shell", "execute"]);
 
 /**
  * Module-level Map tracking which body tag each session is currently inside.
@@ -273,8 +300,14 @@ export function stripInlineXml(content: string, sessionId?: string): string {
       // Check if the closing tag also exists in this delta
       const closeTag = `</${bodyTag}>`;
       const afterOpen = result.slice(openMatch.index + openMatch[0].length);
-      if (afterOpen.includes(closeTag)) {
-        // Both tags in same delta — strip the whole block (handled by XML_STRIP_RE below)
+      const closeIdx = afterOpen.indexOf(closeTag);
+      if (closeIdx !== -1) {
+        // Both tags in same delta — strip the whole block explicitly
+        const beforeTag = result.slice(0, openMatch.index);
+        const afterClose = afterOpen.slice(closeIdx + closeTag.length);
+        result = beforeTag + afterClose;
+        // Reset and re-check for more tags
+        return stripInlineXml(result, sid);
       } else {
         // Opening tag without closing — we're now inside the body
         _setBodyTag(sid, bodyTag);
@@ -292,6 +325,8 @@ export function stripInlineXml(content: string, sessionId?: string): string {
   result = result.replace(XML_MCP_STRIP_RE, "");
   result = result.replace(XML_MCP_OPENING_TAG_RE, "");
   result = result.replace(XML_MCP_CLOSING_TAG_RE, "");
+  // Strip CDATA sections (models sometimes emit these)
+  result = result.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
   // Strip incomplete tags at end of content (split across SSE boundaries)
   result = result.replace(XML_INCOMPLETE_TAG_RE, "");
   // Strip model output tags
@@ -369,14 +404,17 @@ export function parseXmlToolCalls(content: string): {
       }
     }
 
-    // Skip tool calls that have no meaningful arguments
-    // (e.g., <read_file/> without path, <write_file/> without content)
-    if (!tagContent.trim() && Object.keys(args).length === 0) continue;
+    // Skip empty unknown tags, but keep known zero-arg tools
+    // (git_status, list_dir, screenshot, system_info, clipboard_read, etc.)
+    const isKnownTool = Boolean(TAG_TO_TOOL[tagName]) || KNOWN_TAG_NAMES.includes(tagName);
+    if (!tagContent.trim() && Object.keys(args).length === 0 && !isKnownTool) continue;
 
     // If there's tag content, add it as "content" arg
     if (tagContent.trim()) {
       args.content = tagContent.trim();
     }
+
+    // list_dir without path is valid — path defaults to workspace root at execution
 
     toolCalls.push({
       id: "xml-tc-" + crypto.randomUUID(),

@@ -34,6 +34,7 @@ vi.mock("../database", () => ({
     if (!_mockDbInstance) throw new Error("Database not initialized by beforeAll");
     return _mockDbInstance;
   }),
+  isDatabaseReady: vi.fn(() => _mockDbInstance !== null),
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({

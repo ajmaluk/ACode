@@ -22,8 +22,24 @@ export function formatTime(ts: number): string {
  * - Global `)` not counted (only link-context `)` to avoid prose inflation)
  * - Nested parens inside link URLs: [text](url(with)parens)
  */
+// ── closeIncompleteMarkdown cache (single-entry LRU) ──────────
+let _closeCacheContent = "";
+let _closeCacheResult = "";
+let _closeCacheHits = 0;
+const CLOSE_CACHE_MAX_HITS = 50; // Reset cache after N hits to prevent stale data
+
 export function closeIncompleteMarkdown(text: string): string {
   if (!text) return text;
+  // Cache hit: return cached result for identical content
+  if (text === _closeCacheContent) {
+    _closeCacheHits++;
+    if (_closeCacheHits > CLOSE_CACHE_MAX_HITS) {
+      _closeCacheContent = "";
+      _closeCacheResult = "";
+      _closeCacheHits = 0;
+    }
+    return _closeCacheResult;
+  }
 
   let doubleStarCount = 0;
   let singleStarCount = 0;
@@ -150,7 +166,12 @@ export function closeIncompleteMarkdown(text: string): string {
 
   if (doubleTildeCount % 2 !== 0) suffix += "~~";
 
-  return suffix ? text + suffix : text;
+  const result = suffix ? text + suffix : text;
+  // Update cache
+  _closeCacheContent = text;
+  _closeCacheResult = result;
+  _closeCacheHits = 0;
+  return result;
 }
 
 // ── Fence header language map (module-level, created once) ──────────────────
@@ -260,8 +281,30 @@ function _parseFences(text: string): FenceSegment[] {
           out.push({ type: "text", content: trailingText });
         }
       } else {
-        // Only one fence found — no closing fence, emit as text
-        out.push({ type: "text", content: rest });
+        // Incomplete trailing fence (streaming) — treat as open code block
+        if (firstFence > 0)
+          out.push({ type: "text", content: rest.slice(0, firstFence) });
+        const codePart = afterFirstFence;
+        const newlineIdx = codePart.indexOf("\n");
+        if (newlineIdx !== -1) {
+          const headerLine = codePart.slice(0, newlineIdx).trim();
+          const rawContent = codePart.slice(newlineIdx + 1);
+          const { language, filename } = parseFenceHeader(headerLine);
+          out.push({
+            type: "code",
+            content: rawContent,
+            language: language || undefined,
+            filename: filename || undefined,
+          });
+        } else {
+          const { language, filename } = parseFenceHeader(codePart.trim());
+          out.push({
+            type: "code",
+            content: "",
+            language: language || undefined,
+            filename: filename || undefined,
+          });
+        }
       }
     } else {
       out.push({ type: "text", content: rest });

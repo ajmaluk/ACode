@@ -11,7 +11,7 @@ interface SqlDatabase {
     sql: string,
     bindValues?: unknown[],
   ): Promise<{ rowsAffected: number }>;
-  select(sql: string, bindValues?: unknown[]): Promise<unknown[]>;
+  select<R = unknown>(sql: string, bindValues?: unknown[]): Promise<R[]>;
   close(): Promise<void>;
 }
 

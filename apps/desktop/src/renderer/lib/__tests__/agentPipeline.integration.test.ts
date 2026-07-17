@@ -218,7 +218,8 @@ describe("Agent Runtime State Machine", () => {
       messageId: "msg-1",
       hasMoreTools: false,
     });
-    expect(state.phase).toBe("streaming");
+    // hasMoreTools=false ends the turn → idle (message id cleared)
+    expect(state.phase).toBe("idle");
     expect(state.currentMessageId).toBeNull();
   });
 

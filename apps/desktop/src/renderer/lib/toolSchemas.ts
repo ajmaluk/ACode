@@ -45,7 +45,11 @@ export const EditFileArgsSchema = z.object({
 });
 
 export const ListDirArgsSchema = z.object({
-  path: z.string().min(1, "path is required"),
+  // Optional — defaults to workspace root at execution time
+  path: z
+    .string()
+    .optional()
+    .transform((v) => (!v || v.trim() === "" ? "." : v)),
 });
 
 export const GrepFileArgsSchema = z.object({
@@ -167,7 +171,30 @@ export const TaskArgsSchema = z.object({
   prompt: z.string().min(1, "prompt is required"),
   subagent_type: z.string().optional().default("general"),
   description: z.string().optional(),
+  background: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .optional()
+    .transform((v) => v === true || v === "true"),
+  task_id: z.string().optional(),
 });
+
+/** Single todo item for todowrite tool (OpenCode-compatible) */
+export const TodoItemSchema = z.object({
+  id: z.string().min(1),
+  content: z.string().min(1),
+  status: z
+    .enum(["pending", "in_progress", "completed", "failed", "cancelled"])
+    .default("pending"),
+});
+
+export const TodoWriteArgsSchema = z.object({
+  // Accept either a JSON string of todos or a pre-parsed array via content
+  todos: z.string().optional(),
+  content: z.string().optional(),
+}).refine(
+  (v) => Boolean(v.todos?.trim() || v.content?.trim()),
+  { message: "todowrite requires todos JSON (or content body with JSON array)" },
+);
 
 export const OpenPanelArgsSchema = z.object({
   panel: z.enum(["git", "diff", "review", "browser", "progress", "terminal"]),
@@ -285,7 +312,7 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   read_file: { schema: ReadFileArgsSchema, requiredFields: ["path"] },
   write_file: { schema: WriteFileArgsSchema, requiredFields: ["path"] },
   edit_file: { schema: EditFileArgsSchema, requiredFields: ["path"] },
-  list_dir: { schema: ListDirArgsSchema, requiredFields: ["path"] },
+  list_dir: { schema: ListDirArgsSchema, requiredFields: [] },
   grep_file: {
     schema: GrepFileArgsSchema,
     requiredFields: ["path", "pattern"],
@@ -326,6 +353,7 @@ const TOOL_SCHEMAS: Record<string, ToolSchemaEntry> = {
   memory_export: { schema: MemoryExportArgsSchema, requiredFields: [] },
   memory_import: { schema: MemoryImportArgsSchema, requiredFields: [] },
   task: { schema: TaskArgsSchema, requiredFields: ["prompt"] },
+  todowrite: { schema: TodoWriteArgsSchema, requiredFields: [] },
   open_panel: { schema: OpenPanelArgsSchema, requiredFields: ["panel"] },
   screenshot: { schema: ScreenshotArgsSchema, requiredFields: [] },
   browser_navigate: {
@@ -737,6 +765,7 @@ export const TOOL_REGISTRY: ToolRegistryEntry[] = [
 
   // Agent & UI
   { tag: "task", tool: "task", category: "read" },
+  { tag: "todowrite", tool: "todowrite", category: "other" },
   { tag: "create_task_plan", tool: "create_task_plan", category: "other" },
   { tag: "open_panel", tool: "open_panel", category: "read" },
   { tag: "screenshot", tool: "screenshot", category: "read" },
@@ -768,6 +797,9 @@ export const TOOL_REGISTRY: ToolRegistryEntry[] = [
   // Terminal
   { tag: "new_terminal", tool: "new_terminal", category: "bash" },
   { tag: "terminal_write", tool: "terminal_write", category: "bash" },
+
+  // Catch-all for invalid tool calls (OpenCode parity: feeds error back to model)
+  { tag: "invalid", tool: "invalid", category: "other" },
 ];
 
 // Derived registries from the single source of truth

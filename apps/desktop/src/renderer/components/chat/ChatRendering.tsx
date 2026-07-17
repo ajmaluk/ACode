@@ -304,7 +304,13 @@ export const StreamingContent = React.memo(function StreamingContent({
 }) {
   // Close incomplete markdown markers so bold/italic render correctly during streaming
   const safeContent = closeIncompleteMarkdown(content);
-  return <MarkdownContent content={safeContent} />;
+  // Limit rendered content size to prevent lag on very large streaming output
+  // Show only the last 50KB of content during streaming (final message shows full)
+  const MAX_STREAM_RENDER = 50000;
+  const renderContent = safeContent.length > MAX_STREAM_RENDER
+    ? "..." + safeContent.slice(-MAX_STREAM_RENDER)
+    : safeContent;
+  return <MarkdownContent content={renderContent} />;
 });
 
 function openInReview(filename: string | undefined, content: string) {
@@ -478,7 +484,9 @@ export const StreamingCodeBlock = React.memo(function StreamingCodeBlock({
 
   // Escaped text only — no highlight.js during streaming.
   // This eliminates the synchronous parsing that caused frame drops on large code blocks.
-  const escaped = React.useMemo(() => escapeHtml(content), [content]);
+  // Limit rendered content to prevent lag on very large streaming output
+  const MAX_STREAM_CODE = 30000;
+  const escaped = React.useMemo(() => escapeHtml(content.length > MAX_STREAM_CODE ? content.slice(-MAX_STREAM_CODE) : content), [content]);
 
   return (
     <div className="my-2 bg-dalam-bg-primary border border-dalam-border-primary rounded-lg overflow-hidden relative">

@@ -21,7 +21,6 @@ function getEncoder(model: string) {
   // GPT-4o family uses o200k_base
   if (
     model.includes("gpt-4o") ||
-    model.includes("gpt-4-mini") ||
     model.includes("o1") ||
     model.includes("o3")
   ) {

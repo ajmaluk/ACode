@@ -19,7 +19,7 @@ const _debugLog = (...args: unknown[]) => {
       console.log("[DALAM]", ...args);
     }
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[DALAM] if (typeof window !== \"undefined\" && (window as un:", e);
+    if (import.meta.env.DEV) console.warn("[DALAM] debug log init:", e);
   }
 };
 import { loadGenePool, expressGenes, formatGenesForPrompt } from "./genes";
@@ -226,13 +226,21 @@ function getStoredSettings(): AppSettings {
     const raw = localStorage.getItem(STORAGE_KEYS.settings);
     if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[DALAM] const raw = localStorage.getItem(STORAGE_KEYS.sett:", e);
+    if (import.meta.env.DEV) console.warn("[DALAM] Failed to load settings from localStorage:", e);
   }
   return { ...DEFAULT_SETTINGS };
 }
 
 function storeSettings(s: AppSettings) {
-  localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(s));
+  try {
+    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(s));
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      console.warn("[DALAM] localStorage quota exceeded saving settings — data may not persist across restarts");
+    } else {
+      console.warn("[DALAM] Failed to save settings:", e);
+    }
+  }
 }
 
 function getProviderConfig(providerId: string): { baseUrl: string; apiKey: string; apiFormat: string } | null {
@@ -249,7 +257,7 @@ function getProviderConfig(providerId: string): { baseUrl: string; apiKey: strin
       return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiFormat: provider.apiFormat };
     }
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[DALAM] const raw = localStorage.getItem(`dalam.provider.$:", e);
+    if (import.meta.env.DEV) console.warn("[DALAM] Failed to load provider config:", e);
   }
   return null;
 }
@@ -519,7 +527,7 @@ function _emitToolCallXml(tcName: string, parsedArgs: Record<string, unknown>): 
     .filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
       .map(([k, v]) => `${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&apos;')}"`)
     .join(" ");
-  const bodyTools = ["write_file", "clipboard_write", "memory_save"];
+  const bodyTools = ["write_file", "clipboard_write", "memory_save", "todowrite"];
   if (bodyTools.includes(tcName) && parsedArgs.content) {
     const contentStr = typeof parsedArgs.content === "string" ? parsedArgs.content : "";
     const escapedContent = contentStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -640,12 +648,16 @@ async function* streamOpenAI(
           if (json.error) {
             const errMsg = typeof json.error === "string" ? json.error : (json.error.message || JSON.stringify(json.error));
             _debugLog(`[streamOpenAI] Provider error: ${errMsg}`);
-            throw new ProviderError(errMsg, "provider");
+            // Detect rate limits and credit errors specifically
+            const isRateLimit = errMsg.includes("429") || errMsg.includes("rate") || errMsg.includes("Too Many");
+            const isCredit = errMsg.includes("402") || errMsg.includes("credit") || errMsg.includes("quota");
+            throw new ProviderError(errMsg, isCredit ? "credit" : isRateLimit ? "provider" : "provider");
           }
           if (json.object === "error" || (json.code && json.message)) {
             const errMsg = json.message || JSON.stringify(json);
             _debugLog(`[streamOpenAI] API error: ${errMsg}`);
-            throw new ProviderError(errMsg, "provider");
+            const isRateLimit = errMsg.includes("429") || errMsg.includes("rate") || errMsg.includes("Too Many");
+            throw new ProviderError(errMsg, isRateLimit ? "provider" : "provider");
           }
           const delta = json.choices?.[0]?.delta;
           if (delta?.content) yield { type: "message-delta", messageId: json.id || "", content: delta.content };
@@ -945,7 +957,7 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
   try {
     entries = await readDir(dirPath);
   } catch (e) {
-    if (import.meta.env.DEV) console.warn("[DALAM] readDir(dirPath);:", e);
+    if (import.meta.env.DEV) console.warn("[DALAM] Failed to read directory:", e);
     return [];
   }
   const nodes: FileNode[] = [];
@@ -965,7 +977,7 @@ async function readDirRecursive(dirPath: string, maxDepth: number = 20, maxFiles
           continue;
         }
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[DALAM] stat(fullPath);:", e);
+        if (import.meta.env.DEV) console.warn("[DALAM] Failed to stat file:", e);
         // if stat fails, skip to be safe
         continue;
       }
@@ -1044,7 +1056,7 @@ const dalamAPI: DalamAPI = {
           }
         }
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+        if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
       }
     },
     async renamePath(path, newName) {
@@ -1054,7 +1066,7 @@ const dalamAPI: DalamAPI = {
       try {
         await rename(path, newPath);
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[DALAM] rename(path, newPath);:", e);
+        if (import.meta.env.DEV) console.warn("[DALAM] Failed to rename file:", e);
         const bytes = await readFile(path);
         await fsWriteFile(newPath, bytes);
         await fsRemove(path);
@@ -1067,7 +1079,7 @@ const dalamAPI: DalamAPI = {
         closeTab(path);
         if (wasActive) setActiveFile(newPath);
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+        if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
       }
     },
     async watchPath(path: string, sessionId?: string) {
@@ -1386,25 +1398,55 @@ const dalamAPI: DalamAPI = {
         // Compact tool documentation — full version always included; if context is tight, use minimal
         const toolsDocumentation = `
 === TOOLS ===
-Output XML tags to use tools. Multiple tools in one response execute in parallel.
+Output XML tags to use tools. Multiple independent tools in one response execute in parallel.
+Paths may be absolute or relative to the workspace (relative paths are resolved automatically).
 
-FILE OPS: <read_file path="..."/> | <write_file path="...">content</write_file> | <list_dir path="..."/>
-EDIT: <edit_file path="..."><search>old</search><replace>new</replace></edit_file> (occurrence="N" for Nth match, 0-indexed: 0=first, 1=second)
-SEARCH: <grep_file path="..." pattern="..." regex="false"/> | <search_files pattern="..." glob="**/*.ts"/>
-SHELL: <run_command command="..."/> | <bash command="..."/>
-GIT: <git_status/> | <git_log/> | <git_branch/> | <git_commit message="..."/> | <git_checkout branch="..."/> | <git_diff_file path="..."/>
-MEMORY: <memory_save category="project" tier="medium" summary="...">content</memory_save> | <memory_search query="..."/> | <memory_delete id="..."/> | <memory_stats/> | <memory_maintain/> | <memory_extract/> | <memory_export/> | <memory_import/>
-BROWSER: <browser_navigate url="..."/> | <browser_execute script="..."/> | <screenshot/> | <run_preview command="..." port="..."/>
-SYSTEM: <clipboard_read/> | <clipboard_write>text</clipboard_write> | <notify title="..." body="..."/> | <system_info/> | <open_url url="..."/> | <launch_app name="..." args="..."/>
-UI: <open_panel panel="..."/> | <set_theme theme="light|dark|system"/> | <set_view_mode mode="editor|chat"/>
-SUB-AGENT: <task prompt="..." subagent_type="general" description="..."/>
-PLAN: <create_task_plan tasks="..."/>
-QUESTION: <question question="..." options="opt1,opt2,..."/>
-TASK: <todowrite>...</todowrite>
-PREVIEW: <run_preview command="..." port="..."/>
-NEW_TERMINAL: <new_terminal cwd="..." shell="bash"/>
-WRITE_TERMINAL: <terminal_write command="..."/>
-ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
+FILE OPS:
+  <read_file path="src/app.ts"/>
+  <write_file path="src/app.ts">full file content</write_file>
+  <list_dir path="."/>   (path optional — defaults to workspace root)
+  <edit_file path="src/app.ts"><search>exact old text</search><replace>new text</replace></edit_file>
+  occurrence="N" on edit_file targets the Nth match (0-indexed)
+
+SEARCH:
+  <grep_file path="src" pattern="TODO" regex="false"/>
+  <search_files pattern="export function" glob="**/*.{ts,tsx}"/>
+
+SHELL:
+  <run_command command="npm test"/>
+  <bash command="ls -la"/>
+
+GIT:
+  <git_status/> <git_log/> <git_branch/>
+  <git_commit message="feat: ..."/>
+  <git_checkout branch="main"/>
+  <git_diff_file path="src/app.ts"/>
+
+TASK MANAGEMENT (use for multi-step work):
+  <todowrite>[{"id":"1","content":"Create files","status":"in_progress"},{"id":"2","content":"Add tests","status":"pending"}]</todowrite>
+  Statuses: pending | in_progress | completed | failed | cancelled
+  Keep exactly ONE item in_progress. Update status as you go — do not batch all completions at the end.
+  <create_task_plan>step one\\nstep two</create_task_plan>
+
+SUB-AGENTS (for parallel research / isolated work):
+  <task prompt="detailed task" subagent_type="explore|general" description="short label"/>
+  explore = read-only search; general = full tools. Prefer explore for codebase search to save context.
+
+MEMORY: <memory_save category="project" tier="medium" summary="...">content</memory_save>
+  <memory_search query="..."/> <memory_delete id="..."/> <memory_stats/>
+
+BROWSER/PREVIEW:
+  <browser_navigate url="..."/> <browser_execute script="..."/> <screenshot/>
+  <run_preview command="npm run dev" port="5173"/>
+
+SYSTEM/UI:
+  <clipboard_read/> <clipboard_write>text</clipboard_write>
+  <notify title="..." body="..."/> <system_info/> <open_url url="..."/>
+  <question question="..." options="a,b,c"/>
+  <open_panel panel="git|diff|browser|progress|terminal"/>
+  <new_terminal cwd="..."/> <terminal_write command="..."/>
+
+Workspace root: ${workspacePath || "."}
 `;
 
         // Genes (SQLite-backed, per-workspace persistence)
@@ -1438,25 +1480,69 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               browserContextBlock = `\n\n=== BROWSER CONTEXT ===\nThe user referenced @browser but no matching tab is found.\nOpen tabs: ${ui.browserTabs.length}\nUse <browser_navigate url="..."/> to open a page first.\n========================`;
             }
           } catch (e) {
-            if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+            if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
           }
         }
 
+        // System prompt modeled on OpenCode defaults: proactive coding agent that uses tools correctly
         const systemPrompt =
-          "You are Dalam, an AI coding assistant. You MUST use XML tool tags to read, create, and modify files. " +
-          "NEVER output file content as markdown code blocks — they do NOT create files. " +
-          "NEVER describe what you will do or summarize what you did — just emit the tool tag with complete content and nothing else. " +
-          "Be extremely concise: output ONLY the tool tag, no preamble, no explanation, no summary.\n\n" +
-          "Rules:\n" +
-          "1. CREATE: <write_file path=\"/abs/path\">full content</write_file>\n" +
-          "2. EDIT (preferred): <edit_file path=\"/abs/path\"><search>exact old lines</search><replace>new lines</replace></edit_file>\n" +
-          "   Only change what's needed — never rewrite the whole file.\n" +
-          "3. READ: <read_file path=\"/abs/path\"/> or <read_file path=\"/abs/path\" offset=\"100\" limit=\"50\"/>\n" +
-          "4. Workspace path: " + (workspacePath || ".") + "\n" +
-          "5. Complex tasks: plan with <create_task_plan>, then execute each step.\n" +
-          "6. Need input? <question> with options.\n" +
-          "7. After creating files, <run_preview> then <screenshot> to verify.\n" +
-          "8. TO COMPLETE A TASK: After reading context, output the edit/write tool tag. Do NOT just read and stop."
+          "You are Dalam, an AI coding assistant embedded in a desktop IDE. " +
+          "You help users with software engineering: build apps, fix bugs, refactor, explain code, run tests.\n\n" +
+
+          "# Tone and style\n" +
+          "You should be concise, direct, and to the point. When you run a non-trivial bash command, " +
+          "explain what the command does and why you are running it.\n" +
+          "Only use emojis if the user explicitly requests it.\n" +
+          "IMPORTANT: You should minimize output tokens as much as possible while maintaining helpfulness.\n" +
+          "Do NOT add unnecessary preamble or postamble unless the user asks.\n" +
+          "Keep responses short — fewer than 4 lines unless user asks for detail.\n\n" +
+
+          "# Code style\n" +
+          "- IMPORTANT: DO NOT ADD ***ANY*** COMMENTS unless asked\n" +
+          "- Follow existing project conventions (package manager, framework, style)\n" +
+          "- NEVER assume that a given library is available. Check existing code first.\n" +
+          "- When creating a new component, look at existing components first.\n" +
+          "- Always follow security best practices. Never expose secrets or keys.\n\n" +
+
+          "# CRITICAL — tool usage\n" +
+          "- To create or modify files you MUST emit XML tool tags. Markdown code fences do NOT create files.\n" +
+          "- Relative paths are resolved against the workspace root automatically.\n" +
+          "- Prefer <edit_file> for existing files (surgical changes). Use <write_file> for new files or full rewrites.\n" +
+          "- You can call multiple independent tools in one response (they run in parallel when safe).\n" +
+          "- After reading context, CONTINUE with write/edit tools — do not stop after only reading.\n" +
+          "- NEVER invent tool results. Wait for real tool output before deciding next steps.\n" +
+          "- Batch parallel tool calls together for optimal performance.\n\n" +
+
+          "# Workflow for implementation tasks\n" +
+          "1. Understand the request. For multi-step work (3+ steps), create a todo list with <todowrite>.\n" +
+          "2. Explore the workspace (list_dir / search_files / read_file) before inventing structure.\n" +
+          "3. Implement with write_file / edit_file. Write complete, working content — no placeholders like TODO or ...\n" +
+          "4. Verify with run_command (tests, typecheck, or a quick smoke run) when applicable.\n" +
+          "5. Mark todos completed as you finish each step. Leave a brief final summary for the user.\n" +
+          "6. VERY IMPORTANT: When you have completed a task, run lint and typecheck if available.\n" +
+          "NEVER commit changes unless the user explicitly asks you to.\n\n" +
+
+          "# Doing tasks\n" +
+          "The user will primarily request you perform software engineering tasks. " +
+          "Use the available search tools to understand the codebase and the user's query. " +
+          "Implement the solution using all tools available to you. " +
+          "Verify the solution if possible with tests.\n\n" +
+
+          "# Tool usage policy\n" +
+          "When doing file search, prefer to use the <task> tool in order to reduce context usage.\n" +
+          "You have the capability to call multiple tools in a single response. " +
+          "When multiple independent pieces of information are requested, batch your tool calls together.\n\n" +
+
+          "# Code References\n" +
+          "When referencing specific functions or pieces of code include the pattern `file_path:line_number`.\n\n" +
+
+          "Examples:\n" +
+          "CREATE: <write_file path=\"index.html\"><!DOCTYPE html>...</write_file>\n" +
+          "EDIT: <edit_file path=\"src/App.tsx\"><search>const x = 1</search><replace>const x = 2</replace></edit_file>\n" +
+          "READ: <read_file path=\"package.json\"/>\n" +
+          "LIST: <list_dir path=\".\"/>\n" +
+          "TODOS: <todowrite>[{\"id\":\"1\",\"content\":\"Scaffold app\",\"status\":\"in_progress\"},{\"id\":\"2\",\"content\":\"Add features\",\"status\":\"pending\"}]</todowrite>\n" +
+          "Workspace: " + (workspacePath || ".")
           + workspaceMemoryBlock
           + sqliteMemoriesBlock
           + workspaceRulesBlock
@@ -1870,7 +1956,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               const agentState = useAgents.getState();
               for (const tc of toolCallMetas) {
                 const isBashTool = ["shell", "bash", "execute", "run_command", "launch_app"].includes(tc.name);
-                const isReadTool = ["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "memory_export", "memory_import", "task", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab", "webfetch", "websearch", "grep", "search", "question"].includes(tc.name);
+                const isReadTool = ["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log", "git_branch", "git_diff_file", "clipboard_read", "system_info", "memory_search", "memory_stats", "memory_extract", "memory_export", "memory_import", "task", "todowrite", "create_task_plan", "open_panel", "screenshot", "notify", "get_env", "get_screen_info", "list_processes", "get_disk_space", "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode", "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab", "webfetch", "websearch", "grep", "search", "question"].includes(tc.name);
                 const permissionKey = isBashTool ? "bash" : isReadTool ? "read" : "edit";
                 const canonicalPattern = tc.name;
                 const action = agentState.evaluatePermission(permissionKey, canonicalPattern);
@@ -1879,7 +1965,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                 }
               }
             } catch (e) {
-              if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+              if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
             }
 
             // Execute tools with approval — parallel for read-only, sequential for write tools
@@ -1925,7 +2011,18 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                   try {
                     let result: string;
                     if (tc.name === "task") {
-                      result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                      // Depth limit: prevent infinite recursive sub-agent spawning
+                      const currentDepth = _subAgentDepth.get(sessionId) ?? 0;
+                      if (currentDepth >= SUB_AGENT_DEPTH_LIMIT) {
+                        result = `[Error: Sub-agent depth limit reached (${SUB_AGENT_DEPTH_LIMIT}). Cannot spawn deeper sub-agents.]`;
+                      } else {
+                        _subAgentDepth.set(sessionId, currentDepth + 1);
+                        try {
+                          result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                        } finally {
+                          _subAgentDepth.set(sessionId, currentDepth);
+                        }
+                      }
                     } else {
                       result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved, ac.signal);
                     }
@@ -1972,6 +2069,13 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               } else {
                 // Multiple read-only tools: execute in parallel
                 _debugLog(`[sendPrompt] Turn ${loopCount}: executing ${batch.length} read-only tools in parallel`);
+                // Pre-increment depth for all task tools in this batch to prevent race conditions
+                const taskToolsInBatch = batchMetas.filter(tc => tc.name === "task");
+                const depthBeforeBatch = _subAgentDepth.get(sessionId) ?? 0;
+                const depthAfterBatch = depthBeforeBatch + taskToolsInBatch.length;
+                if (taskToolsInBatch.length > 0) {
+                  _subAgentDepth.set(sessionId, depthAfterBatch);
+                }
                 const parallelResults = await Promise.allSettled(
                   batchMetas.map(async (tc) => {
                     const decision = await waitForToolApproval(tc.id, ac.signal);
@@ -1989,7 +2093,17 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                     try {
                       let result: string;
                       if (tc.name === "task") {
-                        result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                        // Depth limit: prevent infinite recursive sub-agent spawning
+                        const currentDepth = _subAgentDepth.get(sessionId) ?? 0;
+                        if (currentDepth >= SUB_AGENT_DEPTH_LIMIT) {
+                          result = `[Error: Sub-agent depth limit reached (${SUB_AGENT_DEPTH_LIMIT}). Cannot spawn deeper sub-agents.]`;
+                        } else {
+                          try {
+                            result = await executeSubAgentTask(tc.args, sessionId, workspacePath || ".", emit, ac.signal);
+                          } finally {
+                            // Depth was pre-incremented for the batch; don't decrement per-tool
+                          }
+                        }
                       } else {
                       result = await executeTool(tc.name, tc.args, workspacePath || ".", emit, isAutoApproved, ac.signal);
                       }
@@ -2027,6 +2141,10 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                   }
                   executedToolIds.add(batchMetas[ri]!.id);
                   executedToolCount++;
+                }
+                // Restore depth after batch completes
+                if (taskToolsInBatch.length > 0) {
+                  _subAgentDepth.set(sessionId, depthBeforeBatch);
                 }
                 if (ac.signal.aborted) {
                   abortedMidBatch = true;
@@ -2128,7 +2246,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                 "normal",
               );
             } catch (e) {
-              if (import.meta.env.DEV) console.warn("[DALAM] import(\"./safetyTimer\");:", e);
+              if (import.meta.env.DEV) console.warn("[DALAM] Failed to import safetyTimer:", e);
             }
 
             sessionRateLimitErrors.set(sessionId, 0);
@@ -2214,7 +2332,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           const { useChat } = await import("../store/useAppStore");
           messageCount = useChat.getState().sessionMessages[sessionId]?.length ?? 0;
         } catch (e) {
-          if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+          if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
         }
 
         if (err instanceof ProviderError) {
@@ -2294,7 +2412,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
                 emit({ type: "message-end", messageId: sessionId });
               }
             } catch (e) {
-            if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+            if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
           }
         }
         // Clean up stream listener cleanup functions — execute the cleanup to release streamCallbacks
@@ -2321,7 +2439,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         const sessionMessages = useChat.getState().sessionMessages[sessionId];
         messageCount = sessionMessages?.length ?? 0;
       } catch (e) {
-        if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+        if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
       }
       // Only emit SessionEnd if we're the ones cleaning up (not sendPrompt's finally)
       if (activeControllers.has(sessionId) && !emittedSessionEnds.has(sessionId)) {
@@ -2425,8 +2543,8 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
           if (msgs) {
             const approvalMsg: import("@dalam/shared-types").ChatMessage = {
               id: "diff-approval-" + crypto.randomUUID(),
-              role: "user",
-              content: `User approved the file write. ${pending.filePath} has been updated (${pending.hunks.reduce((n, h) => n + h.newCount, 0)} lines added, ${pending.hunks.reduce((n, h) => n + h.oldCount, 0)} removed). Continue with your task.`,
+              role: "system",
+              content: `[File write completed] ${pending.filePath} has been written successfully (${pending.hunks.reduce((n, h) => n + h.newCount, 0)} lines added, ${pending.hunks.reduce((n, h) => n + h.oldCount, 0)} removed). Do NOT re-write this file. Continue with the next step of your task.`,
               timestamp: Date.now(),
             };
             const newMsgs = [...msgs, approvalMsg];
@@ -2436,7 +2554,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
             });
           }
         } catch (e) {
-          if (import.meta.env.DEV) console.warn("[DALAM] import(\"../store/useAppStore\");:", e);
+          if (import.meta.env.DEV) console.warn("[DALAM] Failed to import useAppStore:", e);
         }
       }
     },
@@ -2448,6 +2566,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
         // Clear the diffId and mark the tool call as failed in the store.
         try {
           const { useChat } = await import("../store/useAppStore");
+          const { savePersistedMessages } = await import("../store/persistence");
           const chatState = useChat.getState();
           const updatedToolCalls = chatState.pendingToolCalls.map(tc =>
             (tc as { diffId?: string }).diffId === diffId
@@ -2455,6 +2574,20 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
               : tc
           );
           useChat.setState({ pendingToolCalls: updatedToolCalls });
+          // Notify the LLM that the change was rejected so it doesn't retry
+          const sessionId = chatState.activeSessionId;
+          if (sessionId) {
+            const rejectMsg: ChatMessage = {
+              id: "msg-" + crypto.randomUUID(),
+              role: "user",
+              content: `[User rejected the change to ${pending.filePath}. Do not re-apply this change. Continue with the next step.]`,
+              timestamp: Date.now(),
+            };
+            const newMessages = [...chatState.messages, rejectMsg];
+            const newSessionMessages = { ...chatState.sessionMessages, [sessionId]: [...(chatState.sessionMessages[sessionId] ?? []), rejectMsg] };
+            useChat.setState({ messages: newMessages, sessionMessages: newSessionMessages });
+            savePersistedMessages(newSessionMessages);
+          }
         } catch (e) {
           if (import.meta.env.DEV) console.warn("[DALAM] rejectDiff store update:", e);
         }
@@ -2475,6 +2608,7 @@ ABSOLUTE PATHS required. Workspace: ${workspacePath || "."}
     cleanupStream(sessionId) {
       const cleanup = streamCleanups.get(sessionId);
       if (cleanup) cleanup();
+      _subAgentDepth.delete(sessionId);
     },
   },
 
@@ -2695,13 +2829,15 @@ export function parseAttributes(tagStr: string): Record<string, string> {
  */
 export const KNOWN_TOOL_NAMES = new Set([
   "read_file", "write_file", "edit_file", "create_file", "list_dir", "grep_file", "search_files",
-  "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_diff_file",
+  "run_command", "git_status", "git_commit", "git_log", "git_branch", "git_checkout", "git_create_branch", "git_diff_file",
   "clipboard_read", "clipboard_write", "notify", "system_info", "open_url",
   "launch_app", "reveal_in_finder",
   "get_env", "get_screen_info", "list_processes", "kill_process", "get_disk_space",
   "memory_save", "memory_search", "memory_delete", "memory_stats",
   "memory_maintain", "memory_extract", "memory_export", "memory_import",
   "task", "open_panel", "screenshot", "browser_navigate", "run_preview", "browser_execute", "create_task_plan", "question",
+  "webfetch", "websearch",
+  "todowrite",
   // UI control tools
   "set_theme", "toggle_theme", "set_view_mode", "toggle_view_mode",
   "toggle_right_panel", "toggle_bottom_panel", "set_right_panel_tab", "set_bottom_panel_tab",
@@ -2760,7 +2896,10 @@ const REGEX_READ_FILE = /<read_file\s+path=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/
 const REGEX_WRITE_FILE = /<write_file\s+path=["']([^"']+)["']\s*>([\s\S]*)<\/write_file>/gi;
 // Use greedy match for edit_file content to handle replacement text containing </edit_file>
 const REGEX_EDIT_FILE = /<edit_file\s+path=["']([^"']+)["'](?:\s+(?:occurrence|occurence)=["'](\d+)["']?)?\s*>([\s\S]*)<\/edit_file>/gi;
-const REGEX_LIST_DIR = /<list_dir\s+path=["']([^"']+)["']\s*\/?>/gi;
+// list_dir: path optional (defaults to workspace root)
+const REGEX_LIST_DIR = /<list_dir(?:\s+path=["']([^"']+)["'])?\s*\/?>/gi;
+const REGEX_TODOWRITE = /<todowrite(?:\s+[^>]*)?>([\s\S]*?)<\/todowrite>/gi;
+const REGEX_TODOWRITE_ATTR = /<todowrite\s+todos=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
 const REGEX_GREP_FILE = /<grep_file\s+path=["']([^"']+)["']\s+pattern=["']([^"']+)["'](?:\s+[^>]*)?\s*\/?>/gi;
 const REGEX_SEARCH_FILES = /<search_files\s+([^>]*)\/?>/gi;
 const REGEX_RUN_COMMAND = /<run_command\s+command=(?:"([^"]*)"|'([^']*)')\s*\/?>/gi;
@@ -2805,10 +2944,29 @@ const REGEX_GET_SCREEN_INFO = /<get_screen_info\s*\/?>/gi;
 const REGEX_LIST_PROCESSES = /<list_processes\s*\/?>/gi;
 const REGEX_KILL_PROCESS = /<kill_process\s+([^>]*)\/?>/gi;
 const REGEX_GET_DISK_SPACE = /<get_disk_space\s+([^>]*)\/?>/gi;
+const REGEX_WEBFETCH = /<webfetch\s+([^>]*)\/?>/gi;
+const REGEX_WEBSEARCH = /<websearch\s+([^>]*)\/?>/gi;
 
 export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   // Fast path: no XML angle brackets means no tool calls
-  if (!text.includes('<')) return [];
+  // BUT: also check for raw JSON arrays (models that don't use XML tags)
+  const hasXml = text.includes('<');
+
+  // Fallback: detect raw JSON array that looks like todowrite data
+  // e.g. [{"id":"1","content":"Check workspace","status":"in_progress"},...]
+  if (!hasXml) {
+    const trimmed = text.trim();
+    const jsonMatch = trimmed.match(/^(\[[\s\S]*\])\s*$/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.id && parsed[0]?.content) {
+          return [{ name: "todowrite", args: { content: jsonMatch[1], todos: jsonMatch[1] }, raw: trimmed }];
+        }
+      } catch { /* not valid JSON, skip */ }
+    }
+    return [];
+  }
 
   const toolCalls: ParsedToolCall[] = [];
   let match: RegExpExecArray | null;
@@ -2826,6 +2984,22 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
   REGEX_WRITE_FILE.lastIndex = 0;
   while ((match = REGEX_WRITE_FILE.exec(text)) !== null) {
     toolCalls.push({ name: "write_file", args: { path: match[1], content: match[2] }, raw: match[0] });
+  }
+
+  // 2b. todowrite — body is JSON array of todos (OpenCode pattern)
+  REGEX_TODOWRITE.lastIndex = 0;
+  while ((match = REGEX_TODOWRITE.exec(text)) !== null) {
+    const body = (match[1] || "").trim();
+    if (body) {
+      toolCalls.push({ name: "todowrite", args: { content: body, todos: body }, raw: match[0] });
+    }
+  }
+  REGEX_TODOWRITE_ATTR.lastIndex = 0;
+  while ((match = REGEX_TODOWRITE_ATTR.exec(text)) !== null) {
+    const todosJson = match[1] ?? match[2] ?? "";
+    if (todosJson) {
+      toolCalls.push({ name: "todowrite", args: { todos: todosJson, content: todosJson }, raw: match[0] });
+    }
   }
 
   // 3. edit_file — support optional occurrence attribute
@@ -2850,10 +3024,10 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
-  // 4. list_dir
+  // 4. list_dir — path optional (defaults to workspace root at execution)
   REGEX_LIST_DIR.lastIndex = 0;
   while ((match = REGEX_LIST_DIR.exec(text)) !== null) {
-    toolCalls.push({ name: "list_dir", args: { path: match[1] }, raw: match[0] });
+    toolCalls.push({ name: "list_dir", args: { path: match[1] || "." }, raw: match[0] });
   }
 
   // 5. grep_file — new regex directly captures path and pattern
@@ -3205,6 +3379,24 @@ export async function parseToolCalls(text: string): Promise<ParsedToolCall[]> {
     }
   }
 
+  // 42. webfetch
+  REGEX_WEBFETCH.lastIndex = 0;
+  while ((match = REGEX_WEBFETCH.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.url) {
+      toolCalls.push({ name: "webfetch", args: { url: attrs.url, format: attrs.format ?? "markdown" }, raw: match[0] });
+    }
+  }
+
+  // 43. websearch
+  REGEX_WEBSEARCH.lastIndex = 0;
+  while ((match = REGEX_WEBSEARCH.exec(text)) !== null) {
+    const attrs = parseAttributes(match[1]);
+    if (attrs.query) {
+      toolCalls.push({ name: "websearch", args: { query: attrs.query }, raw: match[0] });
+    }
+  }
+
   // 25. Generic MCP Tool calls
   // Server names may contain underscores, so we match the full mcp_ prefix + greedy body
   // and later split against known MCP server names
@@ -3480,6 +3672,7 @@ const TOOL_TIMEOUTS: Record<string, number> = {
   browser_execute: 30_000,
   run_preview: 120_000,
   create_task_plan: 30_000,
+  todowrite: 10_000,
   kill_process: 10_000,
   memory_save: 10_000,
   memory_search: 10_000,
@@ -3513,6 +3706,13 @@ const TOOL_RESULT_LIMITS = {
   sub_agent: 15_000,
   read_file: 100_000,
 } as const;
+
+// ─── Sub-Agent Depth Limit ────────────────────────────────────
+// Prevents infinite recursive spawning: sub-agent spawns sub-agent, etc.
+// Value of 3 means max 4 levels deep (parent → sub → sub → sub).
+const SUB_AGENT_DEPTH_LIMIT = 3;
+// Per-session depth tracker: sessionId → current nesting depth
+const _subAgentDepth = new Map<string, number>();
 
 function truncateToolResult(result: string, toolName: string): string {
   const limit = (TOOL_RESULT_LIMITS as Record<string, number>)[toolName] ?? TOOL_RESULT_LIMITS.default;
@@ -3554,9 +3754,42 @@ async function executeWithTimeout<T>(
   }
 }
 
+/**
+ * Resolve a tool path against the workspace root (OpenCode pattern).
+ * Absolute paths (Unix / or Windows drive letter) are left unchanged.
+ * Relative paths and bare filenames join onto workspacePath.
+ */
+function resolveWorkspacePath(rawPath: string | undefined, workspacePath: string): string {
+  const path = (rawPath ?? "").trim() || ".";
+  // Absolute Unix or Windows (C:\ or C:/)
+  if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) {
+    return path;
+  }
+  const root = (workspacePath || "").trim() || ".";
+  if (path === "." || path === "./") return root;
+  // Strip leading ./ for cleaner join
+  const rel = path.startsWith("./") ? path.slice(2) : path;
+  return joinPathUtil(root, rel);
+}
+
+/** Path-bearing tool argument keys that should be workspace-resolved */
+const PATH_ARG_KEYS = new Set(["path", "filePath", "file_path", "cwd"]);
+
 async function executeTool(name: string, args: Record<string, string>, workspacePath: string, emit: (event: StreamEvent) => void, autoApprove = false, abortSignal?: AbortSignal): Promise<string> {
+  // Resolve relative paths before validation so security checks see absolute paths
+  const resolvedArgs: Record<string, string> = { ...args };
+  for (const key of PATH_ARG_KEYS) {
+    if (typeof resolvedArgs[key] === "string" && resolvedArgs[key]) {
+      resolvedArgs[key] = resolveWorkspacePath(resolvedArgs[key], workspacePath);
+    }
+  }
+  // list_dir with missing/empty path → workspace root
+  if (name === "list_dir" && !resolvedArgs.path) {
+    resolvedArgs.path = resolveWorkspacePath(".", workspacePath);
+  }
+
   const { validateToolArgs } = await import("./toolSchemas");
-  const validation = validateToolArgs(name, args);
+  const validation = validateToolArgs(name, resolvedArgs);
   if (!validation.valid) {
     return `Error: ${validation.error}`;
   }
@@ -3646,12 +3879,34 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     } catch (e) {
       if (import.meta.env.DEV) console.warn("[DALAM] fsReadFile(args.path);:", e);
     }
-    const newContent = args.content;
+    // Strip CDATA wrappers from content (models sometimes emit these)
+    let newContent = args.content;
+    const cdataMatch = newContent.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+    if (cdataMatch) {
+      newContent = cdataMatch[1];
+    }
+    // Also strip any CDATA markers within the content
+    newContent = newContent.replace(/<!\[CDATA\[/g, "").replace(/\]\]>/g, "");
 
     // When auto-approved (permission already granted), write directly without diff proposal
     if (autoApprove) {
       if (abortSignal?.aborted) return "Error: Tool execution aborted";
-      await writeFile(args.path, new TextEncoder().encode(newContent));
+      try {
+        await writeFile(args.path, new TextEncoder().encode(newContent));
+      } catch (writeErr) {
+        const errMsg = (writeErr as Error)?.message ?? String(writeErr);
+        return `Error: Failed to write ${args.path}: ${errMsg}`;
+      }
+      // Verify file was actually written
+      try {
+        const verifyBytes = await fsReadFile(args.path);
+        const verifyContent = new TextDecoder().decode(verifyBytes);
+        if (verifyContent !== newContent) {
+          return `Error: File write verification failed for ${args.path} — content mismatch`;
+        }
+      } catch (verifyErr) {
+        return `Error: File write verification failed for ${args.path}: ${(verifyErr as Error)?.message ?? String(verifyErr)}`;
+      }
       // Record change for undo support
       try {
         const { recordChange: rc } = await import("./changeStack");
@@ -3810,8 +4065,79 @@ async function executeToolInner(name: string, args: Record<string, string>, work
   }
 
   if (name === "list_dir") {
-    const nodes = await dalamAPI.fs.listDir(args.path);
+    const dirPath = args.path || workspacePath || ".";
+    const nodes = await dalamAPI.fs.listDir(dirPath);
     return JSON.stringify(nodes.map(n => ({ name: n.name, path: n.path, type: n.type })), null, 2);
+  }
+
+  // OpenCode-style structured todo list for multi-step agent work
+  if (name === "todowrite") {
+    const raw = (args.todos || args.content || "").trim();
+    if (!raw) {
+      return "Error: todowrite requires a JSON array of todos. Example: <todowrite>[{\"id\":\"1\",\"content\":\"Create app\",\"status\":\"in_progress\"}]</todowrite>";
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Allow newline-separated plain text as a convenience fallback
+      const lines = raw.split("\n").map((l) => l.replace(/^[-*\[\]\sxX]+\s*/, "").trim()).filter(Boolean);
+      if (lines.length === 0) {
+        return `Error: todowrite could not parse todos. Expected JSON array, got: ${raw.slice(0, 200)}`;
+      }
+      parsed = lines.map((content, i) => ({
+        id: String(i + 1),
+        content,
+        status: i === 0 ? "in_progress" : "pending",
+      }));
+    }
+    if (!Array.isArray(parsed)) {
+      return "Error: todowrite expects a JSON array of {id, content, status} objects.";
+    }
+    type TodoStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+    const validStatuses = new Set<TodoStatus>(["pending", "in_progress", "completed", "failed", "cancelled"]);
+    const todos = parsed.map((item, i) => {
+      const obj = (item && typeof item === "object") ? item as Record<string, unknown> : {};
+      const statusRaw = String(obj.status ?? "pending").toLowerCase();
+      const status: TodoStatus = validStatuses.has(statusRaw as TodoStatus)
+        ? (statusRaw as TodoStatus)
+        : "pending";
+      return {
+        id: String(obj.id ?? `todo-${i + 1}`),
+        content: String(obj.content ?? obj.title ?? obj.text ?? `Task ${i + 1}`),
+        status,
+      };
+    }).filter((t) => t.content.trim().length > 0);
+
+    if (todos.length === 0) {
+      return "Error: todowrite produced an empty todo list.";
+    }
+
+    // Soft rule: prefer exactly one in_progress when work remains
+    const inProgress = todos.filter((t) => t.status === "in_progress");
+    const hasOpen = todos.some((t) => t.status === "pending" || t.status === "in_progress");
+    if (hasOpen && inProgress.length === 0) {
+      const firstPending = todos.find((t) => t.status === "pending");
+      if (firstPending) firstPending.status = "in_progress";
+    }
+
+    emit({ type: "todo-update", todos });
+    try {
+      const { useChat } = await import("../store/useAppStore");
+      useChat.getState().setTodos(todos);
+      // Surface progress panel so users see the checklist
+      const { useUI } = await import("../store/useAppStore");
+      useUI.getState().setRightPanelTab("progress");
+      useUI.getState().setRightPanelOpen(true);
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn("[DALAM] todowrite store update:", e);
+    }
+
+    const completed = todos.filter((t) => t.status === "completed").length;
+    const summary = todos
+      .map((t) => `- [${t.status}] ${t.id}: ${t.content}`)
+      .join("\n");
+    return `Updated todo list (${completed}/${todos.length} completed):\n${summary}`;
   }
 
   if (name === "grep_file") {
@@ -4020,6 +4346,13 @@ async function executeToolInner(name: string, args: Record<string, string>, work
     if (!branch) return "Error: git_checkout requires a 'branch' argument";
     await dalamAPI.git.checkout(workspacePath, branch);
     return `Checked out branch: ${branch}`;
+  }
+
+  if (name === "git_create_branch") {
+    const branch = args.branch;
+    if (!branch) return "Error: git_create_branch requires a 'branch' argument";
+    await dalamAPI.git.createBranch(workspacePath, branch);
+    return `Created branch: ${branch}`;
   }
 
   if (name === "git_diff_file") {
@@ -5081,7 +5414,18 @@ async function executeToolInner(name: string, args: Record<string, string>, work
   }
 
   if (name === "websearch") {
-    return `[websearch] Web search is not directly available. Use webfetch with a search engine URL like "https://www.google.com/search?q=QUERY".`;
+    const query = String(args.query ?? args.q ?? "").trim();
+    if (!query) return "Error: websearch requires a 'query' argument";
+    // Use webfetch to search via a search engine and return results
+    try {
+      const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=5`;
+      const result = await executeToolInner("webfetch", { url: searchUrl, format: "text" }, workspacePath, emit, true);
+      // Extract relevant snippets from the search results page
+      const lines = result.split("\n").filter((l: string) => l.trim().length > 20).slice(0, 20);
+      return `[websearch results for "${query}"]\n${lines.join("\n") || "(No results found)"}`;
+    } catch (err) {
+      return `[websearch] Search failed: ${(err as Error)?.message ?? String(err)}. Use webfetch with a search engine URL instead.`;
+    }
   }
 
   if (name === "create_file") {
@@ -5104,52 +5448,83 @@ export async function executeSubAgentTask(
   signal: AbortSignal,
 ): Promise<string> {
   const prompt = String(args.prompt ?? "");
-  const subagentType = String(args.subagent_type ?? "general");
+  const subagentType = String(args.subagent_type ?? "general").toLowerCase();
   const description = String(args.description ?? "Sub-agent task");
 
   if (!prompt) return "[Error: task prompt is required]";
 
-  const subAgentId = "sub-" + crypto.randomUUID();
+  // Allow resume of a prior sub-agent session via task_id (OpenCode parity)
+  const resumeTaskId = args.task_id ? String(args.task_id) : "";
+  const subAgentId = resumeTaskId || ("sub-" + crypto.randomUUID());
 
   // Emit sub-agent lifecycle events for UI visibility (accordion tracking)
   emit({ type: "sub-agent-start", subAgentId, prompt, description, subagentType });
 
-  // Build sub-agent system prompt based on type
+  const ws = workspacePath || ".";
+  // Build sub-agent system prompt based on type (OpenCode explore/general pattern)
   const subToolsDoc = `
-TOOLS: Use XML tags to invoke tools. Output the tag directly in your response.
-<read_file path="absolute_path"/>
-<write_file path="absolute_path">content</write_file>
-<edit_file path="absolute_path"><search>text</search><replace>new text</replace></edit_file>
-<list_dir path="absolute_path"/>
-<grep_file path="absolute_path" pattern="text"/>
-<search_files path="workspace_path" pattern="text" glob="*.ts"/>
+TOOLS — emit XML tags directly (never describe tools in prose):
+<read_file path="rel/or/abs"/>
+<write_file path="rel/or/abs">full content</write_file>
+<edit_file path="rel/or/abs"><search>exact old</search><replace>new</replace></edit_file>
+<list_dir path="."/>
+<grep_file path="." pattern="text"/>
+<search_files pattern="text" glob="**/*.{ts,tsx,js,py}"/>
 <run_command command="shell command"/>
-Workspace: ${workspacePath || "."}`;
+Paths may be relative to workspace. Workspace root: ${ws}
+When done, return a concise final answer summarizing findings or what you changed. No tool tags in the final message.`;
 
   let subSystemPrompt: string;
   switch (subagentType) {
     case "explore":
-      subSystemPrompt = `You are a Dalam explore sub-agent. Search and analyze the codebase to answer questions. Be concise. Output XML tool tags directly.
-<read_file path="absolute_path"/>
-<list_dir path="absolute_path"/>
-<grep_file path="absolute_path" pattern="text"/>
-<search_files path="workspace_path" pattern="text" glob="*.ts"/>
-Do NOT edit files. Workspace: ${workspacePath || "."}`;
+    case "search":
+    case "research":
+      subSystemPrompt = `You are a Dalam explore sub-agent (read-only). Thoroughly search and analyze the codebase.
+Strengths: glob/grep/read patterns, finding definitions, summarizing architecture.
+Rules:
+- Use list_dir, search_files, grep_file, read_file only. Do NOT write or run shell that modifies state.
+- Prefer parallel searches. Return absolute or workspace-relative file paths.
+- Final message: clear findings only — no tool tags.
+Workspace: ${ws}`;
+      break;
+    case "plan":
+      subSystemPrompt = `You are a Dalam plan sub-agent. Produce a concrete implementation plan.
+Use read-only tools to inspect the codebase, then output a structured step-by-step plan.
+Do NOT modify files. Workspace: ${ws}
+${subToolsDoc}`;
       break;
     case "general":
+    case "build":
+    case "code":
     default:
-      subSystemPrompt = `You are a Dalam general sub-agent. Complete the assigned task autonomously using tools. Output XML tags directly — NEVER output tool names in backticks.${subToolsDoc}`;
+      subSystemPrompt = `You are a Dalam general sub-agent. Complete the assigned task autonomously.
+Write complete working code — no placeholders. Prefer edit_file for existing files, write_file for new ones.
+Verify with run_command when useful. Be concise in final output.
+${subToolsDoc}`;
       break;
   }
 
-  // Run a mini conversation loop for the sub-agent (max 10 iterations, 2 min timeout)
-  const subHistory: Array<{ role: string; content: string }> = [
-    { role: "system", content: subSystemPrompt },
-    { role: "user", content: prompt },
-  ];
-  const MAX_SUB_ITERATIONS = 10;
-  const SUB_TIMEOUT_MS = 2 * 60 * 1000;
-  const SUB_ITERATION_TIMEOUT_MS = 30_000;
+  // Run a mini conversation loop for the sub-agent (max 15 iterations, 3 min timeout)
+  // Check if resuming a previous sub-agent session via task_id
+  const _g = globalThis as Record<string, unknown>;
+  if (!_g.__dalamSubAgentHistories) {
+    _g.__dalamSubAgentHistories = new Map<string, Array<{ role: string; content: string }>>();
+  }
+  const _subHistories = _g.__dalamSubAgentHistories as Map<string, Array<{ role: string; content: string }>>;
+  let subHistory: Array<{ role: string; content: string }>;
+  if (resumeTaskId && _subHistories.has(resumeTaskId)) {
+    // Resume: restore previous conversation and append new prompt
+    subHistory = [..._subHistories.get(resumeTaskId)!];
+    subHistory.push({ role: "user", content: prompt });
+  } else {
+    subHistory = [
+      { role: "system", content: subSystemPrompt },
+      { role: "user", content: prompt },
+    ];
+  }
+  const MAX_SUB_ITERATIONS = 15;
+  const SUB_TIMEOUT_MS = 3 * 60 * 1000;
+  const SUB_ITERATION_TIMEOUT_MS = 45_000;
   const subStartTime = Date.now();
   let subResult = "";
   let subFailed = false;
@@ -5235,13 +5610,20 @@ Do NOT edit files. Workspace: ${workspacePath || "."}`;
       // (NOT raw tool-call events, which would leak into parent's pendingToolCalls)
       subHistory.push({ role: "assistant", content: fullContent });
       // Enforce tool restrictions based on sub-agent type
-      const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "grep_file", "search_files", "git_status", "git_log"]);
+      const READ_ONLY_TOOLS = new Set([
+        "read_file", "list_dir", "grep_file", "search_files", "grep", "search",
+        "git_status", "git_log", "git_branch", "git_diff_file",
+        "memory_search", "memory_stats", "webfetch", "websearch",
+        "system_info", "get_env",
+      ]);
+      const isReadOnlyAgent = subagentType === "explore" || subagentType === "search"
+        || subagentType === "research" || subagentType === "plan";
       let iterationToolError = false;
       for (const st of subTools) {
         if (signal.aborted) break;
-        // Explore sub-agents are read-only — reject write tools
-        if (subagentType === "explore" && !READ_ONLY_TOOLS.has(st.name)) {
-          const rejectResult = `Error: Explore sub-agents cannot use ${st.name}. Read-only tools only.`;
+        // Explore/plan sub-agents are read-only — reject write tools
+        if (isReadOnlyAgent && !READ_ONLY_TOOLS.has(st.name)) {
+          const rejectResult = `Error: ${subagentType} sub-agents cannot use ${st.name}. Read-only tools only.`;
           subHistory.push({ role: "user", content: `[Tool error for ${st.name}]\n${rejectResult}` });
           continue;
         }
@@ -5319,7 +5701,7 @@ Please try a different approach or summarize your progress so far.` });
   }
   if (!subFailed && Date.now() - subStartTime > SUB_TIMEOUT_MS) {
     subFailed = true;
-    subError = "Sub-agent timed out after 2 minutes";
+    subError = "Sub-agent timed out after 3 minutes";
   }
 
   // Emit sub-agent completion
@@ -5331,5 +5713,29 @@ Please try a different approach or summarize your progress so far.` });
     ...(subError ? { error: subError } : {}),
   });
 
-  return subResult || "(Sub-agent completed with no output)";
+  // OpenCode-style structured task result with reusable task_id
+  const resultBody = subResult || (subFailed ? `(Sub-agent failed: ${subError ?? "unknown"})` : "(Sub-agent completed with no output)");
+  const tag = finalStatus === "failed" ? "task_error" : "task_result";
+
+  // Save sub-agent history for future resumption via task_id
+  if (finalStatus === "completed" && subHistory.length > 2) {
+    // Cap history at 50 messages to prevent unbounded memory growth
+    const cappedHistory = subHistory.length > 50 ? subHistory.slice(-50) : subHistory;
+    _subHistories.set(subAgentId, cappedHistory);
+    // Cap total stored histories at 100
+    if (_subHistories.size > 100) {
+      const firstKey = _subHistories.keys().next().value;
+      if (firstKey !== undefined) _subHistories.delete(firstKey);
+    }
+  }
+
+  return [
+    `<task id="${subAgentId}" state="${finalStatus === "failed" ? "error" : "completed"}">`,
+    description ? `<summary>${description}</summary>` : "",
+    `<${tag}>`,
+    resultBody,
+    `</${tag}>`,
+    `</task>`,
+    `task_id=${subAgentId} (pass as task_id on a future <task> to resume this sub-agent)`,
+  ].filter(Boolean).join("\n");
 }

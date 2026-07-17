@@ -49,7 +49,7 @@ export async function proposeSkillFromSession(
     (store.session?.id === sessionId ? store.session : null);
   if (!session) return;
 
-  const messages: ChatMessage[] = store.sessionMessages[sessionId] || [];
+  const messages: ChatMessage[] = (store.sessionMessages && store.sessionMessages[sessionId]) || [];
 
   // Count tool outputs to estimate complexity
   const toolsExecuted = messages.filter(

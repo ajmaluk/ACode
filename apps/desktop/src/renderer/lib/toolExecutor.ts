@@ -40,6 +40,7 @@ const TOOL_DEPENDENCIES: Record<string, ToolDependency> = {
   memory_export: { tool: "memory_export", dependsOn: [], readOnly: true },
   memory_import: { tool: "memory_import", dependsOn: [], readOnly: true },
   question: { tool: "question", dependsOn: [], readOnly: true },
+  todowrite: { tool: "todowrite", dependsOn: [], readOnly: false },
   get_env: { tool: "get_env", dependsOn: [], readOnly: true },
   bash: { tool: "bash", dependsOn: [], readOnly: false },
   shell: { tool: "shell", dependsOn: [], readOnly: false },

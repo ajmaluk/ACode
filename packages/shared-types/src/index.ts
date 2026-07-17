@@ -70,6 +70,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   selectedProvider: "",
   maxTokens: 4096,
   doomLoopThreshold: 5,
+  // New defaults for configuration management
+  indexingEnabled: true,
+  autoIndex: true,
+  maxFileSize: 1048576, // 1MB
+  excludedPatterns: "node_modules,.git,dist,.next,build,target",
+  customShortcuts: {},
+  modelProfiles: [],
+  autoRouteModels: true,
 };
 
 export type FileNode = {
@@ -478,7 +486,7 @@ export type FileChange = {
 export type TodoItem = {
   id: string;
   content: string;
-  status: "pending" | "in_progress" | "completed" | "failed";
+  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
 };
 
 /** The surface exposed by `contextBridge` to the renderer. */

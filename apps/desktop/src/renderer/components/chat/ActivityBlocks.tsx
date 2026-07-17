@@ -1541,20 +1541,40 @@ export const TodoBlock = React.memo(function TodoBlock({
 }) {
   if (!todos.length) return null;
   const completed = todos.filter((t) => t.status === "completed").length;
+  const cancelled = todos.filter((t) => t.status === "cancelled").length;
   const total = todos.length;
+  const openCount = todos.filter(
+    (t) => t.status === "pending" || t.status === "in_progress",
+  ).length;
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const current = todos.find((t) => t.status === "in_progress");
 
   return (
     <ActivityRow
-      label="Progress"
+      label={
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="font-medium">Tasks</span>
+          {current && (
+            <span className="text-dalam-accent-primary/90 text-[11px] italic truncate max-w-[280px]">
+              {current.content}
+            </span>
+          )}
+          {openCount === 0 && completed === total && (
+            <span className="text-dalam-git-added text-[10px] font-medium">
+              All done
+            </span>
+          )}
+        </span>
+      }
       meta={
         <span className="flex items-center gap-2">
-          <span className="tabular-nums">
+          <span className="tabular-nums text-[11px]">
             {completed}/{total}
+            {cancelled > 0 ? ` · ${cancelled} cancelled` : ""}
           </span>
-          <span className="h-1 w-16 bg-dalam-bg-secondary/60 rounded-full overflow-hidden flex-shrink-0">
+          <span className="h-1.5 w-20 bg-dalam-bg-secondary/70 rounded-full overflow-hidden flex-shrink-0 border border-dalam-border-primary/40">
             <span
-              className="block h-full bg-dalam-accent-primary"
+              className="block h-full bg-dalam-accent-primary transition-[width] duration-300 ease-out"
               style={{ width: `${pct}%` }}
             />
           </span>
@@ -1562,29 +1582,39 @@ export const TodoBlock = React.memo(function TodoBlock({
       }
       defaultOpen
     >
-      <ul className="space-y-0.5">
+      <ul className="space-y-1 py-0.5">
         {todos.map((t) => {
           const done = t.status === "completed";
           const inFlight = t.status === "in_progress";
           const failed = t.status === "failed";
+          const isCancelled = t.status === "cancelled";
           return (
-            <li key={t.id} className="flex items-start gap-1.5 text-[12px]">
+            <li
+              key={t.id}
+              className={`flex items-start gap-2 text-[12px] px-1 py-0.5 rounded-md ${
+                inFlight
+                  ? "bg-dalam-accent-primary/8 border border-dalam-accent-primary/15"
+                  : ""
+              }`}
+            >
               {done ? (
-                <CheckCircle2 className="w-3 h-3 text-dalam-git-added flex-shrink-0 mt-0.5" />
-              ) : failed ? (
-                <X className="w-3 h-3 text-dalam-git-deleted flex-shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-3.5 h-3.5 text-dalam-git-added flex-shrink-0 mt-0.5" />
+              ) : failed || isCancelled ? (
+                <X className="w-3.5 h-3.5 text-dalam-git-deleted flex-shrink-0 mt-0.5" />
               ) : inFlight ? (
-                <Loader2 className="w-3 h-3 text-dalam-accent-primary animate-spin flex-shrink-0 mt-0.5" />
+                <Loader2 className="w-3.5 h-3.5 text-dalam-accent-primary animate-spin flex-shrink-0 mt-0.5" />
               ) : (
-                <span className="w-3 h-3 rounded-full border border-dalam-text-muted/40 flex-shrink-0 mt-0.5" />
+                <span className="w-3.5 h-3.5 rounded-full border border-dalam-text-muted/40 flex-shrink-0 mt-0.5" />
               )}
               <span
                 className={
                   done
-                    ? "line-through opacity-70"
-                    : failed
-                      ? "line-through opacity-50"
-                      : ""
+                    ? "line-through opacity-70 text-dalam-text-secondary"
+                    : failed || isCancelled
+                      ? "line-through opacity-50 text-dalam-text-muted"
+                      : inFlight
+                        ? "text-dalam-text-primary font-medium"
+                        : "text-dalam-text-secondary"
                 }
               >
                 {t.content}

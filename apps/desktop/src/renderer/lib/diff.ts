@@ -429,7 +429,9 @@ export function computeDiff(
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
 
-  if (oldLines.length + newLines.length > 50000) {
+  // Guard against OOM: Myers DP allocates (n+1)*(m+1) elements.
+  // 25000×25001 = 625M elements ~ 5GB. Cap at 10M total DP cells.
+  if (oldLines.length * newLines.length > 10_000_000) {
     return computeSimpleDiff(oldLines, newLines);
   }
 

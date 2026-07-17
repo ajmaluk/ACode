@@ -654,6 +654,30 @@ export function getAgent(name: string): AgentInfo | undefined {
   return ALL_AGENTS.find((a) => a.name === name);
 }
 
+/**
+ * Derive permissions for a sub-agent's session when spawned via the task tool.
+ * Matches OpenCode's deriveSubagentSessionPermission pattern:
+ * 1. Parent's deny rules and external_directory rules carry over
+ * 2. Default todowrite:deny and task:deny unless the sub-agent explicitly permits them
+ */
+export function deriveSubagentPermissions(
+  parentPermissions: PermissionRuleset,
+  subagent: AgentInfo,
+): PermissionRuleset {
+  const canTask = subagent.permission.some(r => r.permission === "task");
+  const canTodo = subagent.permission.some(r => r.permission === "todowrite");
+
+  return [
+    // Parent's deny rules and external_directory rules carry over
+    ...parentPermissions.filter(
+      r => r.action === "deny" || r.permission === "external_directory",
+    ),
+    // Default denials unless sub-agent explicitly allows
+    ...(canTodo ? [] : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
+    ...(canTask ? [] : [{ permission: "task" as const, pattern: "*" as const, action: "deny" as const }]),
+  ];
+}
+
 export function getPrimaryAgent(name: PrimaryAgentName): AgentInfo {
   const a = getAgent(name);
   if (!a) throw new Error(`Unknown primary agent: ${name}`);

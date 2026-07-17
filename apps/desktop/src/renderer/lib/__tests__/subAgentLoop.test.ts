@@ -107,8 +107,10 @@ describe("abort race guard (Fix #2)", () => {
       ac.signal,
     );
 
-    // Should return fallback string (no iterations ran)
-    expect(result).toBe("(Sub-agent completed with no output)");
+    // Structured task wrapper (OpenCode-style) with error state when aborted pre-start
+    expect(result).toContain('<task');
+    expect(result).toContain('state="error"');
+    expect(result).toMatch(/Sub-agent (completed with no output|failed)/);
 
     // Should have emitted sub-agent-start and sub-agent-end
     const startEvents = emit.mock.calls.filter(
@@ -180,9 +182,12 @@ describe("subResult cleanup (Fix #3)", () => {
 
     expect(result).toContain("Hello from sub-agent");
     expect(result).toContain("I found the answer");
-    // No XML tool tags in clean output
-    expect(result).not.toContain("<");
-    expect(result).not.toContain(">");
+    // Structured task wrapper for parent agent (OpenCode pattern)
+    expect(result).toContain("<task");
+    expect(result).toContain("<task_result>");
+    expect(result).toContain("task_id=");
+    // Must not contain tool-call XML (read_file etc.) in the result body
+    expect(result).not.toMatch(/<read_file|<write_file|<run_command/);
   });
 
   it("strips XML tool tags from accumulated output", async () => {
@@ -247,9 +252,9 @@ describe("subResult cleanup (Fix #3)", () => {
     expect(result).toContain("There it is.");
     expect(result).toContain("Here is the result.");
 
-    // XML tool tags should be stripped
+    // XML tool tags should be stripped from the task result body
     expect(result).not.toContain("<read_file");
-    expect(result).not.toContain("/>");
+    expect(result).toContain("<task_result>");
   });
 });
 

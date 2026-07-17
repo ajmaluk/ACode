@@ -53,6 +53,13 @@ export interface DreamCycleResult {
 const activeDreams = new Set<string>();
 
 /**
+ * Active dream cycle timeout IDs for cancellation support.
+ * Maps workspacePath to the timeout ID so each workspace can be cancelled independently.
+ * MUST be defined before runDreamCycle() since it's referenced in the finally block.
+ */
+const activeDreamTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
  * Runs a full memory dream consolidation cycle using the active LLM.
  * Proposals are scored and routed: auto-accept applies immediately,
  * user-review proposals are surfaced via notifyFn, low-score are rejected.
@@ -374,16 +381,17 @@ export async function runDreamCycle(
           }
 
           // First pass: handle simple patterns without LLM
-          const preprocessed = dateCandidates.map(m => ({
-            ...m,
-            content: replaceSimplePatterns(m.content),
-            _needsLLM: relativeTimeWords.test(
-              replaceSimplePatterns(m.content)
-            ),
-          }));
+          const preprocessed = dateCandidates.map(m => {
+            const updatedContent = replaceSimplePatterns(m.content);
+            return {
+              ...m,
+              content: updatedContent,
+              _needsLLM: relativeTimeWords.test(updatedContent),
+            };
+          });
 
           // Re-check if any still need LLM adjustment
-          const needsLLM = preprocessed.filter((m: { _needsLLM: boolean }) => m._needsLLM);
+          const needsLLM = preprocessed.filter((m) => (m as { _needsLLM: boolean })._needsLLM);
           if (needsLLM.length === 0) {
             dateAdjustedCount = preprocessed.length;
           }
@@ -668,12 +676,6 @@ export async function runDreamCycle(
     activeDreamTimeouts.delete(workspacePath);
   }
 }
-
-/**
- * Active dream cycle timeout IDs for cancellation support.
- * Maps workspacePath to the timeout ID so each workspace can be cancelled independently.
- */
-const activeDreamTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
  * Cancel a pending or running dream cycle for a specific workspace.

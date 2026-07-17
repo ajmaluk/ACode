@@ -210,7 +210,11 @@ async function migrateFromLocalStorage(): Promise<void> {
         tx.onerror = () => reject(tx.error);
       });
 
-      localStorage.removeItem(lsKey); // Free space after successful migration
+      // Only remove from localStorage AFTER successful IndexedDB write
+      // and BEFORE the migration marker is set. If the app crashes here,
+      // the data is in IndexedDB but the marker isn't set, so migration
+      // will re-run on next startup (idempotent — just overwrites).
+      localStorage.removeItem(lsKey);
     } catch (e) {
       console.warn(`[IndexedDB] Migration failed for ${lsKey}:`, e);
     }

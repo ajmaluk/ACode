@@ -115,6 +115,14 @@ function createCodeIndexDb(): { db: SqlDatabase; nativeDb: Database.Database } {
 
   const db: SqlDatabase = {
     async execute(sql: string, bindValues?: unknown[]) {
+      // Handle non-parameterized SQL (BEGIN/COMMIT/ROLLBACK) via exec()
+      if (!bindValues || bindValues.length === 0) {
+        const trimmed = sql.trim().toUpperCase();
+        if (trimmed === 'BEGIN TRANSACTION' || trimmed === 'BEGIN' || trimmed === 'COMMIT' || trimmed === 'ROLLBACK') {
+          nativeDb.exec(sql);
+          return { rowsAffected: 0 };
+        }
+      }
       const stmt = nativeDb.prepare(sql);
       const result = stmt.run(...(bindValues ?? []));
       return { rowsAffected: result.changes };

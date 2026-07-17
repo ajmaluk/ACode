@@ -502,7 +502,7 @@ export function reflectOnSession(
           activationCount: 0,
           successCount: 0,
           createdAt: Date.now(),
-          lastActivatedAt: 0,
+          lastActivatedAt: Date.now(),
           source: "reflection",
           tags: ["error", "recovery", errorType],
         });
@@ -731,7 +731,7 @@ export async function solidifyGene(
     ...candidate,
     id: `gene-${Date.now().toString(36)}-${crypto.randomUUID()}`,
     createdAt: Date.now(),
-    lastActivatedAt: 0,
+    lastActivatedAt: Date.now(), // Fix: use current time so new genes don't immediately decay
   };
 
   const newPool = await addGene(pool, gene);

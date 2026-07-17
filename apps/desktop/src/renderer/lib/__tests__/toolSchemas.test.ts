@@ -542,9 +542,16 @@ describe("validateToolArgs", () => {
       if (result.valid) expect(result.args.path).toBe("src/components");
     });
 
-    it("rejects empty path", () => {
+    it("normalizes empty path to workspace root (.)", () => {
       const result = validateToolArgs("list_dir", { path: "" });
-      expect(result.valid).toBe(false);
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.path).toBe(".");
+    });
+
+    it("accepts omitted path", () => {
+      const result = validateToolArgs("list_dir", {});
+      expect(result.valid).toBe(true);
+      if (result.valid) expect(result.args.path).toBe(".");
     });
 
     it("rejects path traversal", () => {

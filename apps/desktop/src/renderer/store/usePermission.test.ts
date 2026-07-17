@@ -3,12 +3,8 @@ import { usePermission } from "./useAppStore";
 
 // Reset the store before each test to avoid cross-test contamination
 beforeEach(() => {
-  usePermission.setState({
-    request: null,
-    alwaysAllowed: {},
-  });
-  // Clear any pending resolve/reject callbacks
-  usePermission.getState().cancel();
+  // _reset clears both store state and closure variables (_loadedFromDisk, pending queues)
+  usePermission.getState()._reset();
 });
 
 describe("usePermission — ask / resolve / cancel flow", () => {

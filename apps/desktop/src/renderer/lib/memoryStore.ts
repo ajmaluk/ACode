@@ -127,11 +127,10 @@ export async function saveMemory(
               console.warn(`[MemoryStore] Per-ID lock exhausted for ${e.id} after ${MAX_PER_ID_LOCK_RETRIES} retries, proceeding with update`);
             } else {
               // Release the hash mutex BEFORE retrying to avoid circular promise
-              // resolution (the recursive saveMemory call would return the outer
-              // promise via the hash mutex, creating a self-resolution cycle that
-              // causes the promise to hang permanently).
+              // resolution. Use iterative retry (not recursion) to prevent deadlock.
               _saveMemoryLocks.delete(hash);
               await new Promise(r => setTimeout(r, 50 * (_retryCount + 1)));
+              // Iterative retry: re-enter the function directly without recursion
               return saveMemory(entry, workspacePath, _retryCount + 1);
             }
           }
@@ -209,6 +208,7 @@ export async function saveMemory(
  * markStale() — Soft delete. Dream agent does actual cleanup.
  */
 export async function markStale(id: string): Promise<void> {
+  if (!isDatabaseReady()) return;
   const db = getDb();
   await db.execute(
     `UPDATE memories SET stale=1, updated_at=? WHERE id=?`,
@@ -222,6 +222,7 @@ export async function markStale(id: string): Promise<void> {
  * FIX 4.6: Dynamic imports at top of function only once.
  */
 export async function purgeStale(workspacePath?: string): Promise<number> {
+  if (!isDatabaseReady()) return 0;
   const db = getDb();
 
   // First, query the IDs of stale entries so we can clean up their markdown files
@@ -288,6 +289,7 @@ export async function searchMemories(
     updateAccessCount?: boolean; // Set to false for system calls (dream agent) to avoid artificial inflation
   } = {}
 ): Promise<MemoryEntry[]> {
+  if (!isDatabaseReady()) return [];
   const db = getDb();
   const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true, updateAccessCount = true } = opts;
 
@@ -357,6 +359,7 @@ async function searchMemoriesFallback(
   query: string,
   opts: { category?: MemoryCategory; tier?: MemoryTier; limit?: number; excludeStale?: boolean } = {}
 ): Promise<MemoryEntry[]> {
+  if (!isDatabaseReady()) return [];
   const db = getDb();
   const { category, limit = CTX.MEMORY_SEARCH_LIMIT, excludeStale = true } = opts;
 
@@ -435,6 +438,7 @@ export async function getMemoryStats(): Promise<{
     total: 0, byCategory: {}, byTier: {}, byCategoryTier: {}, staleCount: 0
   };
   try {
+    if (!isDatabaseReady()) return fallback;
     const db = getDb();
 
     // Combined query with ROLLUP: returns total, per-category, per-tier, per-category-tier counts
@@ -663,6 +667,7 @@ export async function processPendingWrites(): Promise<void> {
     // Store dead letters in SQLite kv_store as persistent fallback — uses DeadLetterPayload wrapper
     if (deadLetters.length > 0) {
       try {
+        if (!isDatabaseReady()) return;
         const db = getDb();
         // Check total dead-letter count before storing more (FIX: prevent unbounded growth)
         const countResult = await db.select(
@@ -767,6 +772,7 @@ export async function rebuildFromMarkdown(workspacePath: string): Promise<number
   let count = 0;
 
   // FIX 5.4: Get db handle once before the loop (workspace switches don't happen mid-loop)
+  if (!isDatabaseReady()) return 0;
   const db = getDb();
 
   for (const entry of entries) {
